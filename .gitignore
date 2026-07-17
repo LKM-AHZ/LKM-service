@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Development environment files
+.env
+DeveloperLog.md
