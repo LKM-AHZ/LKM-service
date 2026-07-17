@@ -12,3 +12,6 @@ wheels/
 # Development environment files
 .env
 DeveloperLog.md
+
+# database when developing locally
+lkm.db

@@ -1,3 +1,4 @@
+import inspect
 import functools
 from enum import IntEnum
 
@@ -67,14 +68,26 @@ def respond(func):
     - (ErrCode, dict)     -> given errcode, dict as data
     """
 
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        result = func(*args, **kwargs)
-        if isinstance(result, tuple) and isinstance(result[0], ErrCode):
-            errcode, payload = result
-            if isinstance(payload, str):
-                return resp_json(errcode, detail=payload)
-            return resp_json(errcode, data=payload)
-        return resp_json(ErrCode.OK, data=result)
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            return _wrap_result(result)
 
-    return wrapper
+        return async_wrapper
+
+    @functools.wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        return _wrap_result(result)
+
+    return sync_wrapper
+
+
+def _wrap_result(result):
+    if isinstance(result, tuple) and isinstance(result[0], ErrCode):
+        errcode, payload = result
+        if isinstance(payload, str):
+            return resp_json(errcode, detail=payload)
+        return resp_json(errcode, data=payload)
+    return resp_json(ErrCode.OK, data=result)
