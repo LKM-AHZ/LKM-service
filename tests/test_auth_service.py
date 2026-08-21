@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
+from app.core.err import BizError
 from app.db.models import User, expires_at
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.models import RefreshToken
@@ -33,14 +33,26 @@ async def _reg_normal(
     email: str = "bob@example.com",
     phone: str = "13800001111",
 ) -> dict[str, Any]:
-    from app.modules.auth.schemas import UserRegNormal
+    """创建带邮箱/手机号的 normal 账户（测试辅助）。
 
-    return await _service().register_normal_with_password(
-        db,
-        UserRegNormal(username=username, password=password, email=email, phone=phone),
-        email_verified=True,
-        phone_verified=True,
+    走 ``register_local`` + 手动补充 contact，避免依赖已过时的一次性
+    ``register_normal_with_password`` 注册 API。
+    """
+    from app.db.models import User
+    from app.modules.auth.schemas import UserRegLocal
+
+    result = await _service().register_local(
+        db, UserRegLocal(username=username, password=password)
     )
+    user = await _get(db, User, User.id == result["user_id"])
+    if email is not None:
+        user.email = email
+    if phone is not None:
+        user.phone = phone
+    if email or phone:
+        user.account_level = "normal"
+    await db.flush()
+    return result
 
 
 async def _login(db: AsyncSession, account: str, password: str) -> dict[str, Any]:
@@ -91,48 +103,6 @@ class TestRegisterLocal:
         with pytest.raises(BizError) as exc:
             await _reg_local(db, username="alice", password="other1234567")
         assert exc.value.errcode == AuthErr.ALREADY_REGISTERED
-
-
-# ===================================================================
-# TestRegisterNormal
-# ===================================================================
-
-
-class TestRegisterNormal:
-    async def should_create_normal_user_with_verified_email_and_phone(
-        self, db: AsyncSession
-    ):
-        from app.db.models import User
-
-        result = await _reg_normal(
-            db, username="bob", email="bob@example.com", phone="13800001111"
-        )
-        assert result["user_id"] == 1
-
-        user = await _get(db, User, User.id == result["user_id"])
-        assert user.username == "bob"
-        assert user.email == "bob@example.com"
-        assert user.phone == "13800001111"
-        assert user.account_level == "normal"
-        assert "$" in user.hashed_password
-
-    async def should_reject_if_email_and_phone_not_verified(self, db: AsyncSession):
-        from app.modules.auth.schemas import UserRegNormal
-
-        svc = _service()
-        with pytest.raises(BizError) as exc:
-            await svc.register_normal_with_password(
-                db,
-                UserRegNormal(
-                    username="bob",
-                    password="secret123456",
-                    email="bob@example.com",
-                    phone="13800001111",
-                ),
-                email_verified=False,
-                phone_verified=True,
-            )
-        assert exc.value.errcode == CommonErr.INVALID_INPUT
 
 
 # ===================================================================

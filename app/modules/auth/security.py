@@ -88,15 +88,24 @@ def create_access_token(
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
+    # 先读 payload（不验 aud）判断 token 类型：
+    # 若本身不是 access token（例如 temp token），直接抛明确类型错误，而不是被
+    # audience 校验提前拦截成 InvalidAudienceError（那样类型检查永远是死代码）。
     payload = jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_aud": False},
+    )
+    if payload.get("type") != _ACCESS_TYPE:
+        raise ValueError("non-access token")
+    # 类型匹配后再严格校验 audience（lkm:web）。
+    return jwt.decode(
         token,
         settings.jwt_secret,
         algorithms=[settings.jwt_algorithm],
         audience=_AUD_WEB,
     )
-    if payload.get("type") != _ACCESS_TYPE:
-        raise ValueError("non-access token")
-    return payload
 
 
 _TEMP_EXPIRE_SECONDS = 60
@@ -120,15 +129,23 @@ def create_temp_token(
 
 
 def decode_temp_token(token: str) -> dict[str, Any]:
+    # 先读 payload（不验 aud）判断 token 类型；非 temp token 抛明确类型错误，
+    # 避免被 audience 校验提前拦成 InvalidAudienceError 掩盖类型检查。
     payload = jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_aud": False},
+    )
+    if payload.get("type") != _TEMP_TYPE:
+        raise ValueError("non-temp token")
+    # 类型匹配后再严格校验 audience（lkm:temp）。
+    return jwt.decode(
         token,
         settings.jwt_secret,
         algorithms=[settings.jwt_algorithm],
         audience=_AUD_TEMP,
     )
-    if payload.get("type") != _TEMP_TYPE:
-        raise ValueError("non-temp token")
-    return payload
 
 
 _TOTP_DIGITS = 6

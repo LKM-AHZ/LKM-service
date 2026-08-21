@@ -341,18 +341,6 @@ async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: int) -> None:
     await db.flush()
 
 
-async def get_attempt(db: AsyncSession, attempt_id: int, user_id: int) -> ExamAttempt:
-    attempt = await get_or_raise(
-        db,
-        ExamAttempt,
-        ExamErr.ATTEMPT_NOT_FOUND,
-        ExamAttempt.id == attempt_id,
-    )
-    if attempt.user_id != user_id:
-        raise BizError(CommonErr.FORBIDDEN)
-    return attempt
-
-
 async def list_certificates(db: AsyncSession, user_id: int) -> list[CertificateOut]:
     rows = (
         await db.execute(

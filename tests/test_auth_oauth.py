@@ -97,14 +97,12 @@ class TestOAuthState:
             await consume_oauth_state(db, state, "bind")
 
 
-class TestOauthRouterRedirect:
-    """Github callback 重定向到前端（302）—— 携带令牌 / temp_token / 绑定结果。"""
+class TestOauthRouterCallback:
+    """Github 回调的 JSON 响应 —— 回调端点经 @respond 返回 ApiResp JSON（data 携带令牌/绑定结果）。"""
 
-    async def should_redirect_login_callback_with_tokens(self, db: AsyncSession):
+    async def should_return_access_and_refresh_tokens(self, db: AsyncSession):
+        import json
         from unittest.mock import AsyncMock, patch
-        from urllib.parse import parse_qs, urlparse
-
-        from fastapi.responses import RedirectResponse
 
         from app.modules.auth import router_oauth
 
@@ -125,19 +123,13 @@ class TestOauthRouterRedirect:
         ):
             resp = await router_oauth.github_callback(code="c", state="s", db=db)
 
-        assert isinstance(resp, RedirectResponse)
-        assert resp.status_code in (302, 307)
-        # 令牌通过 URL fragment 回传，不进 query，避免泄露
-        qs = parse_qs(urlparse(resp.headers["location"]).fragment)
-        assert qs["access_token"] == ["acc123"]
-        assert qs["refresh_token"] == ["ref123"]
-        assert "temp_token" not in qs
+        data = json.loads(resp.body.decode())["data"]
+        assert data["access_token"] == "acc123"
+        assert data["refresh_token"] == "ref123"
 
-    async def should_redirect_login_callback_with_temp_token_when_2fa(
-        self, db: AsyncSession
-    ):
+    async def should_return_temp_token_when_2fa(self, db: AsyncSession):
+        import json
         from unittest.mock import AsyncMock, patch
-        from urllib.parse import parse_qs, urlparse
 
         from app.modules.auth import router_oauth
 
@@ -158,16 +150,14 @@ class TestOauthRouterRedirect:
         ):
             resp = await router_oauth.github_callback(code="c", state="s", db=db)
 
-        qs = parse_qs(urlparse(resp.headers["location"]).fragment)
-        assert qs["temp_token"] == ["tmp999"]
-        assert qs["requires_2fa"] == ["true"]
-        assert "access_token" not in qs
+        data = json.loads(resp.body.decode())["data"]
+        assert data["temp_token"] == "tmp999"
+        assert data["requires_2fa"] is True
+        assert data["access_token"] is None
 
-    async def should_redirect_bind_callback_on_success(self, db: AsyncSession):
+    async def should_bind_callback_returns_message(self, db: AsyncSession):
+        import json
         from unittest.mock import AsyncMock, patch
-        from urllib.parse import parse_qs, urlparse
-
-        from fastapi.responses import RedirectResponse
 
         from app.modules.auth import router_oauth
 
@@ -178,16 +168,11 @@ class TestOauthRouterRedirect:
         ):
             resp = await router_oauth.github_bind_callback(code="c", state="s", db=db)
 
-        assert isinstance(resp, RedirectResponse)
-        # 绑定回调结果经 URL fragment 回传
-        qs = parse_qs(urlparse(resp.headers["location"]).fragment)
-        assert qs["success"] == ["1"]
+        data = json.loads(resp.body.decode())["data"]
+        assert data["message"] == "Github account bound"
 
-    async def should_redirect_bind_callback_on_biz_error(self, db: AsyncSession):
+    async def should_bind_callback_propagate_biz_error(self, db: AsyncSession):
         from unittest.mock import patch
-        from urllib.parse import parse_qs, urlparse
-
-        from fastapi.responses import RedirectResponse
 
         from app.core.err import BizError
         from app.modules.auth import router_oauth
@@ -196,13 +181,13 @@ class TestOauthRouterRedirect:
         async def _boom(db: AsyncSession, code: str, state: str) -> None:
             raise BizError(AuthErr.OAUTH_EMAIL_TAKEN)
 
-        with patch.object(router_oauth.service_oauth, "bind_github", new=_boom):
-            resp = await router_oauth.github_bind_callback(code="c", state="s", db=db)
+        with (
+            patch.object(router_oauth.service_oauth, "bind_github", new=_boom),
+            pytest.raises(BizError) as exc,
+        ):
+            await router_oauth.github_bind_callback(code="c", state="s", db=db)
 
-        assert isinstance(resp, RedirectResponse)
-        qs = parse_qs(urlparse(resp.headers["location"]).fragment)
-        assert qs["success"] == ["0"]
-        assert qs["error"] == ["OAUTH_EMAIL_TAKEN"]
+        assert exc.value.errcode == AuthErr.OAUTH_EMAIL_TAKEN
 
 
 class TestOAuthEmailAutoBind:

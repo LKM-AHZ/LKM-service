@@ -211,11 +211,11 @@ class TestCheckRecoveryMethods:
 
 
 # ===================================================================
-# recover_by_phone
+# recover_by_contact（手机号通道）
 # ===================================================================
 
 
-class TestRecoverByPhone:
+class TestRecoverByContactPhone:
     async def should_reset_password_with_valid_code(self, db: AsyncSession):
         user = await _mk_normal(
             db, username="bob", password="old123", phone="13800001111"
@@ -223,7 +223,7 @@ class TestRecoverByPhone:
         orig_hash = user.hashed_password
 
         code, _ = await _create_phone_code(db, "13800001111", "reset")
-        result = await _svc().recover_by_phone(db, "13800001111", code, "newpwd456")
+        result = await _svc().recover_by_contact(db, "13800001111", code, "newpwd456")
         assert result["message"] == "Password reset successful"
 
         # Password was changed
@@ -240,7 +240,7 @@ class TestRecoverByPhone:
         await _create_phone_code(db, "13800001111", "reset")
 
         with pytest.raises(BizError) as exc:
-            await _svc().recover_by_phone(db, "13800001111", "000000", "newpwd456")
+            await _svc().recover_by_contact(db, "13800001111", "000000", "newpwd456")
         assert exc.value.errcode == AuthErr.VERIFICATION_CODE_INVALID
 
     async def should_reject_local_user(self, db: AsyncSession):
@@ -258,7 +258,7 @@ class TestRecoverByPhone:
         code, _ = await _create_phone_code(db, "13800003333", "reset")
 
         with pytest.raises(BizError) as exc:
-            await _svc().recover_by_phone(db, "13800003333", code, "newpwd456")
+            await _svc().recover_by_contact(db, "13800003333", code, "newpwd456")
         assert exc.value.errcode == AuthErr.RECOVERY_NOT_SUPPORTED
 
     async def should_reset_failed_login_attempts_and_lock(self, db: AsyncSession):
@@ -271,7 +271,7 @@ class TestRecoverByPhone:
         await db.flush()
 
         code, _ = await _create_phone_code(db, "13800001111", "reset")
-        await _svc().recover_by_phone(db, "13800001111", code, "newpwd456")
+        await _svc().recover_by_contact(db, "13800001111", code, "newpwd456")
 
         await db.refresh(user)
         assert user.failed_login_attempts == 0
@@ -295,18 +295,18 @@ class TestRecoverByPhone:
         assert tok.revoked_at is None
 
         code, _ = await _create_phone_code(db, "13800001111", "reset")
-        await _svc().recover_by_phone(db, "13800001111", code, "newpwd456")
+        await _svc().recover_by_contact(db, "13800001111", code, "newpwd456")
 
         await db.refresh(tok)
         assert tok.revoked_at is not None
 
 
 # ===================================================================
-# recover_by_email_code
+# recover_by_contact（邮箱通道）
 # ===================================================================
 
 
-class TestRecoverByEmailCode:
+class TestRecoverByContactEmail:
     async def should_reset_password_with_valid_code(self, db: AsyncSession):
         user = await _mk_normal(
             db, username="bob", password="old123", email="bob@example.com"
@@ -314,7 +314,7 @@ class TestRecoverByEmailCode:
         orig_hash = user.hashed_password
 
         code, _ = await _create_email_code(db, "bob@example.com", "reset")
-        result = await _svc().recover_by_email_code(
+        result = await _svc().recover_by_contact(
             db, "bob@example.com", code, "newpwd456"
         )
         assert result["message"] == "Password reset successful"
@@ -331,7 +331,7 @@ class TestRecoverByEmailCode:
         await _create_email_code(db, "bob@example.com", "reset")
 
         with pytest.raises(BizError) as exc:
-            await _svc().recover_by_email_code(
+            await _svc().recover_by_contact(
                 db, "bob@example.com", "000000", "newpwd456"
             )
         assert exc.value.errcode == AuthErr.VERIFICATION_CODE_INVALID
@@ -350,7 +350,7 @@ class TestRecoverByEmailCode:
         code, _ = await _create_email_code(db, "alice@example.com", "reset")
 
         with pytest.raises(BizError) as exc:
-            await _svc().recover_by_email_code(
+            await _svc().recover_by_contact(
                 db, "alice@example.com", code, "newpwd456"
             )
         assert exc.value.errcode == AuthErr.RECOVERY_NOT_SUPPORTED
@@ -365,7 +365,7 @@ class TestRecoverByEmailCode:
         await db.flush()
 
         code, _ = await _create_email_code(db, "bob@example.com", "reset")
-        await _svc().recover_by_email_code(db, "bob@example.com", code, "newpwd456")
+        await _svc().recover_by_contact(db, "bob@example.com", code, "newpwd456")
 
         await db.refresh(user)
         assert user.failed_login_attempts == 0
@@ -388,7 +388,7 @@ class TestRecoverByEmailCode:
         assert tok.revoked_at is None
 
         code, _ = await _create_email_code(db, "bob@example.com", "reset")
-        await _svc().recover_by_email_code(db, "bob@example.com", code, "newpwd456")
+        await _svc().recover_by_contact(db, "bob@example.com", code, "newpwd456")
 
         await db.refresh(tok)
         assert tok.revoked_at is not None

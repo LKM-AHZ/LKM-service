@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from app.db.models import ExamQuestion
 
 
 class QuestionCreate(BaseModel):
@@ -32,24 +29,6 @@ class QuestionOut(BaseModel):
     difficulty: int
     score: int
     sort_order: int
-
-    @classmethod
-    def from_model(cls, q: ExamQuestion) -> QuestionOut:
-        """从 ORM 对象构造。因 ``options`` 在 DB 是 JSON 文本列，不能用
-        ``model_validate`` 自动转换（会把字符串塞进 list 报错），改显式 dict。"""
-        import json
-
-        return cls(
-            id=q.id,
-            kind=q.kind,
-            content=q.content,
-            options=json.loads(q.options or "[]"),
-            answer=q.answer,
-            analysis=q.analysis,
-            difficulty=q.difficulty,
-            score=q.score,
-            sort_order=q.sort_order,
-        )
 
 
 class ExamCreate(BaseModel):

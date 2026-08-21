@@ -284,12 +284,6 @@ async def _titles_for(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
     return {uid: _title_from_keys(keys) for uid, keys in unlocked_by_user.items()}
 
 
-async def _user_title(db: AsyncSession, user_id: int) -> str:
-    """按已解锁成就返回单个用户稳定 title key（供上层单查场景复用）。"""
-    keys = await _titles_for(db, [user_id])
-    return keys.get(user_id, "active")
-
-
 async def _fill_titles(db: AsyncSession, items: list[dict[str, Any]]) -> None:
     """就地给榜单 items 每项补 title（一次批量查询），为空列表时直接跳过。"""
     if not items:

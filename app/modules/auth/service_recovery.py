@@ -97,20 +97,6 @@ async def recover_by_contact(
     return {"message": "Password reset successful"}
 
 
-async def recover_by_phone(
-    db: AsyncSession, phone: str, code: str, new_password: str | None = None
-) -> dict[str, Any]:
-    """兼容入口：手机号验证码重置。"""
-    return await recover_by_contact(db, phone, code, new_password)
-
-
-async def recover_by_email_code(
-    db: AsyncSession, email: str, code: str, new_password: str | None = None
-) -> dict[str, Any]:
-    """兼容入口：邮箱验证码重置。"""
-    return await recover_by_contact(db, email, code, new_password)
-
-
 async def recover_by_magic_link(
     db: AsyncSession, token: str, new_password: str | None = None
 ) -> dict[str, Any]:

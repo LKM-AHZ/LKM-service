@@ -31,7 +31,6 @@ from app.modules.auth.providers.base import EmailProvider
 from app.modules.auth.schemas import (
     UserLoginPassword,
     UserRegLocal,
-    UserRegNormal,
 )
 from app.modules.auth.security import (
     create_access_token,
@@ -282,62 +281,6 @@ async def _login_or_error(
     await upgrade_to_normal(db, user)
     await db.flush()
     return user
-
-
-async def register_normal_with_password(
-    db: AsyncSession,
-    info: UserRegNormal,
-    email_verified: bool = False,
-    phone_verified: bool = False,
-) -> dict[str, Any]:
-    """创建一个带密码的 ``normal`` 账户，若已存在且密码正确则自动登录。"""
-    has_email = info.email is not None
-    has_phone = info.phone is not None
-    if not has_email and not has_phone:
-        raise BizError(CommonErr.INVALID_INPUT, "email or phone must be provided")
-    if has_email and not email_verified:
-        raise BizError(CommonErr.INVALID_INPUT, "email must be verified")
-    if has_phone and not phone_verified:
-        raise BizError(CommonErr.INVALID_INPUT, "phone must be verified")
-
-    username = _normalize_username(info.username)
-    email_normalized = _normalize_email(info.email) if info.email else None
-
-    existing = (
-        (
-            await db.execute(
-                select(User)
-                .where(
-                    (User.username == username)
-                    | ((User.email == email_normalized) if email_normalized else False)
-                    | (User.phone == info.phone)
-                )
-                .options(selectinload(User.profile))
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if existing:
-        await _login_or_error(
-            db,
-            existing,
-            info.password,
-            email=email_normalized,
-            phone=info.phone,
-        )
-        return await _create_auth_response(db, existing)
-
-    user = await create_user_with_profile(
-        db,
-        username=username,
-        hashed_password=await hashpwd(info.password),
-        email=email_normalized,
-        phone=info.phone,
-        account_level="normal",
-    )
-
-    return await _create_auth_response(db, user)
 
 
 async def register_by_verify(
