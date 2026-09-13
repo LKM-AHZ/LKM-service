@@ -6,7 +6,7 @@
 - ``cleanup_expired_uploads``：消费 cron.cleanup（scheduler 每小时整点发布），
   清扫过期未确认的直传随机 key 及标记。
 
-两任务的订阅不同（notify / jobs），各自经 ``register_subscription`` + ``register_task`` 注册。
+两任务分属不同订阅（notify / jobs），各自经 ``register_task`` 注册到订阅名。
 """
 
 import json
@@ -14,20 +14,9 @@ import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 
-from app.core.messaging import (
-    RKEY_CLEANUP,
-    RKEY_NOTIFY,
-    SUB_JOBS,
-    SUB_NOTIFY,
-    TOPIC_CRON,
-    TOPIC_NOTIFY,
-)
+from app.core.messaging import RKEY_CLEANUP, SUB_JOBS, SUB_NOTIFY
 from app.core.redis import get_redis
-from app.core.task_registry import (
-    register_cron_job,
-    register_subscription,
-    register_task,
-)
+from app.core.task_registry import register_cron_job, register_task
 from app.db.session import new_session
 from app.modules.files.service import (
     _UPLOAD_TTL,
@@ -38,12 +27,6 @@ from app.modules.files.service import (
 from app.ws.broker import publish_upload_bound
 
 logger = logging.getLogger(__name__)
-
-# notify 订阅：直传对象登记
-register_subscription(SUB_NOTIFY.name, TOPIC_NOTIFY, [RKEY_NOTIFY])
-
-# jobs 订阅：周期性清扫（cron.cleanup），与 blog 的 cron.reconcile 同订阅
-register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_CLEANUP])
 
 _MATCH = "upload:*"
 

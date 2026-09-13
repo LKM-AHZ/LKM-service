@@ -1,8 +1,8 @@
 """Pulsar worker：注册表驱动的订阅消费（M4）。
 
 每个 worker 进程常驻消费一个（或一组）Pulsar 订阅，按 payload.fn 从注册表分发 handler。
-订阅声明由各模块 ``tasks.py`` 经 ``task_registry.register_subscription`` + ``register_task``
-完成；**新增任务不再改本文件**。
+各模块 ``tasks.py`` 经 ``task_registry.register_task`` 把 handler 注册到订阅名下（订阅本身
+定义在 ``core.messaging.SUBSCRIPTIONS``）；**新增任务不再改本文件**。
 
 - 死信：Pulsar DeadLetterPolicy 在消费失败重投超限后投到 ``system/dlq`` topic，
   由 ``worker_dlq`` 消费落库（见 app/core/worker_dlq.py）。

@@ -12,20 +12,14 @@ Pulsar 同一 topic ``biz/points.apply`` 挂三个 Shared subscription，各收�
 """
 
 from app.core.messaging import (
-    RKEY_POINTS,
     SUB_POINTS_REWARD,
     SUB_POINTS_STATS,
     SUB_POINTS_TASKS,
-    TOPIC_POINTS,
 )
-from app.core.task_registry import register_subscription, register_task
+from app.core.task_registry import register_task
 from app.db.session import new_session
 from app.modules.points.rules import RULE_DELTAS
 from app.modules.points.service import reward
-
-register_subscription(SUB_POINTS_REWARD.name, TOPIC_POINTS, [RKEY_POINTS])
-register_subscription(SUB_POINTS_STATS.name, TOPIC_POINTS, [RKEY_POINTS])
-register_subscription(SUB_POINTS_TASKS.name, TOPIC_POINTS, [RKEY_POINTS])
 
 
 async def apply_point_reward(user_id: int, event: str, ref_id: str) -> None:

@@ -16,19 +16,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.messaging import RKEY_RECONCILE, SUB_JOBS, TOPIC_CRON
+from app.core.messaging import RKEY_RECONCILE, SUB_JOBS
 from app.core.redis import get_redis
-from app.core.task_registry import (
-    register_cron_job,
-    register_subscription,
-    register_task,
-)
+from app.core.task_registry import register_cron_job, register_task
 from app.db.session import new_session
 from app.modules.blog.models import BlogRepoQuarantine, BlogSeries
 
 logger = logging.getLogger(__name__)
-
-register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_RECONCILE])
 
 _QUARANTINE_DAYS = 7  # 隔离保留天数，之后才物理删除
 _LOCK_KEY = "blog:reconcile:lock"

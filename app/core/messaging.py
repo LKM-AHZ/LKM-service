@@ -146,20 +146,16 @@ TOPIC_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
-def topic_for(routing_key: str) -> str | None:
-    """逻辑 routing_key 映射到 Pulsar topic；未知返回 None。"""
-    return ROUTING_KEY_TOPICS.get(routing_key)
-
-
-def subscription_for(name: str) -> Subscription | None:
-    """按订阅名取订阅定义；未知返回 None。"""
-    return SUBSCRIPTIONS.get(name)
+def _encode_event(obj: Any) -> bytes:
+    """事件 JSON 编码（发布与 schema.encode 共用，保证线上格式一致）。"""
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
 
 
 # ---- 自定义 JSON Schema（承载裸 JSON Schema 定义，走 Pulsar schema registry）----
 # Pulsar 的 JsonSchema(record_cls) 要求 avro Record dataclass，而本项目事件 args 为混合
 # 类型列表（int/str 混排），无法用 dataclass 精确表达。故子类化 Schema，schema_type=JSON，
 # schema_definition 直接用 EVENT_SCHEMA，encode/decode 走标准 json。
+# 不缓存实例：Schema 会经 attach_client 持有 client 引用，缓存会与之生命周期耦合。
 
 
 def make_event_schema(topic: str) -> Any:
@@ -175,7 +171,7 @@ def make_event_schema(topic: str) -> Any:
             super().__init__(dict, schema_type, definition, "EVENT_JSON")
 
         def encode(self, obj: Any) -> bytes:
-            return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+            return _encode_event(obj)
 
         def decode(self, data: bytes) -> Any:
             return json.loads(data)
@@ -211,7 +207,8 @@ class Transport(Protocol):
 _transport: Transport | None = None
 _client: Any = None
 _producers: dict[str, Any] = {}
-_producer_lock = asyncio.Lock()
+# 单一线程锁保护 client/producer 创建：Pulsar 同步 API 在线程中调用；用 threading.Lock 而非
+# asyncio.Lock，避免跨事件循环（多 loop 测试/多次 asyncio.run）绑定报错。
 _client_lock = threading.Lock()
 
 
@@ -221,31 +218,41 @@ def set_transport(transport: Transport | None) -> None:
     _transport = transport
 
 
-def _get_client_sync() -> Any:
-    """懒建单例 Pulsar Client（同步，须在线程中调用）。"""
+def _client_locked() -> Any:
+    """取/建单例 Pulsar Client；调用方须持 ``_client_lock``。"""
     global _client
-    import pulsar
+    if _client is None:
+        import pulsar
 
-    with _client_lock:
-        if _client is None:
-            _client = pulsar.Client(
-                settings.pulsar_url,
-                operation_timeout_seconds=settings.pulsar_operation_timeout_s,
-            )
+        _client = pulsar.Client(
+            settings.pulsar_url,
+            operation_timeout_seconds=settings.pulsar_operation_timeout_s,
+        )
     return _client
 
 
-def _create_producer_sync(topic: str) -> Any:
-    return _get_client_sync().create_producer(topic, schema=make_event_schema(topic))
+def _get_client_sync() -> Any:
+    with _client_lock:
+        return _client_locked()
+
+
+def _create_producer_cached(topic: str) -> Any:
+    """取/建该 topic 的 producer（加锁去重；须在线程中调用）。"""
+    with _client_lock:
+        producer = _producers.get(topic)
+        if producer is None:
+            producer = _client_locked().create_producer(
+                topic, schema=make_event_schema(topic)
+            )
+            _producers[topic] = producer
+        return producer
 
 
 async def _get_producer(topic: str) -> Any:
-    async with _producer_lock:
-        producer = _producers.get(topic)
-        if producer is None:
-            producer = await asyncio.to_thread(_create_producer_sync, topic)
-            _producers[topic] = producer
+    producer = _producers.get(topic)
+    if producer is not None:
         return producer
+    return await asyncio.to_thread(_create_producer_cached, topic)
 
 
 async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
@@ -260,7 +267,7 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         logger.error("未知 routing_key=%s，丢弃发布", routing_key)
         return False
 
-    data = json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+    data = _encode_event(dict(payload))
     props: dict[str, str] = {"routing_key": routing_key}
     fn = payload.get("fn")
     if isinstance(fn, str):
@@ -289,7 +296,6 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
 
 
 # ---- 消费（同步 client 的线程桥接）----
-_consumers: dict[str, Any] = {}
 
 
 def _create_consumer_sync(sub: Subscription) -> Any:
@@ -339,9 +345,7 @@ def _handle_message(
     except Exception:
         redelivery_count = 0
     meta = MessageMeta(
-        topic=SUBSCRIPTIONS[sub_name].topic
-        if sub_name in SUBSCRIPTIONS
-        else (properties.get("routing_key", "")),
+        topic=SUBSCRIPTIONS[sub_name].topic,
         subscription=sub_name,
         properties=properties,
         redelivery_count=redelivery_count,
@@ -372,7 +376,6 @@ def _receive_loop(
     except Exception:
         logger.exception("pulsar consumer 创建失败 subscription=%s", sub.name)
         return
-    _consumers[sub.name] = consumer
     logger.info("pulsar 订阅启动 subscription=%s topic=%s", sub.name, sub.topic)
     try:
         while not stop.is_set():
@@ -388,7 +391,6 @@ def _receive_loop(
     finally:
         with suppress(Exception):
             consumer.close()
-        _consumers.pop(sub.name, None)
         logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
 
 
@@ -429,14 +431,14 @@ async def run_subscription(
 async def close() -> None:
     """幂等收尾：关闭 producer 缓存与客户端（应用 shutdown / 测试复位）。"""
     global _client
-    async with _producer_lock:
+    with _client_lock:
         producers = list(_producers.values())
         _producers.clear()
+        client = _client
+        _client = None
     for producer in producers:
         with suppress(Exception):
             await asyncio.to_thread(producer.close)
-    client = _client
-    _client = None
     if client is not None:
         with suppress(Exception):
             await asyncio.to_thread(client.close)

@@ -39,9 +39,9 @@ def test_routing_key_topic_map_covers_all_events() -> None:
     assert set(messaging.ROUTING_KEY_TOPICS) == expected
 
 
-def test_registry_subscription_topology() -> None:
-    task_registry.import_task_modules()
-    topo = task_registry.subscription_topology()
+def test_subscription_definitions() -> None:
+    """订阅定义（唯一源 messaging.SUBSCRIPTIONS）：名 → 关注 routing_key。"""
+    topo = {s.name: list(s.routing_keys) for s in messaging.SUBSCRIPTIONS.values()}
     assert topo["send"] == [messaging.RKEY_SEND_CODE, messaging.RKEY_SEND_MAGIC]
     assert messaging.RKEY_NOTIFY in topo["notify"]
     assert messaging.RKEY_CLEANUP in topo["jobs"]

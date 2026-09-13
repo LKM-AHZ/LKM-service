@@ -36,20 +36,25 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
     headers: dict[str, str] = {}
     if settings.pulsar_admin_token:
         headers["Authorization"] = f"Bearer {settings.pulsar_admin_token}"
+    # 同一 topic 可有多个订阅（points 三订阅扇出）：按 topic 去重，一次 stats 覆盖该 topic 全部订阅。
+    subs_by_topic: dict[str, list[str]] = {}
     for sub in SUBSCRIPTIONS.values():
+        subs_by_topic.setdefault(sub.topic, []).append(sub.name)
+    for topic, names in subs_by_topic.items():
         try:
-            resp = await client.get(_stats_path(sub.topic), headers=headers)
+            resp = await client.get(_stats_path(topic), headers=headers)
             resp.raise_for_status()
             body = cast(dict[str, Any], resp.json())
             subscriptions = cast(dict[str, Any], body.get("subscriptions") or {})
-            entry = cast(dict[str, Any], subscriptions.get(sub.name) or {})
-            backlog = int(entry.get("msgBacklog", 0))
-            pulsar_subscription_backlog.labels(
-                subscription=sub.name, topic=sub.topic
-            ).set(backlog)
+            for name in names:
+                entry = cast(dict[str, Any], subscriptions.get(name) or {})
+                backlog = int(entry.get("msgBacklog", 0))
+                pulsar_subscription_backlog.labels(
+                    subscription=name, topic=topic
+                ).set(backlog)
         except Exception:
-            # 单个订阅拉取失败不中断其它订阅，也不影响主流程（保留上次 gauge 值）。
-            logger.warning("lag 拉取失败 subscription=%s", sub.name, exc_info=True)
+            # 单个 topic 拉取失败不中断其它 topic，也不影响主流程（保留上次 gauge 值）。
+            logger.warning("lag 拉取失败 topic=%s", topic, exc_info=True)
 
 
 async def _run() -> None:

@@ -32,9 +32,8 @@ _SUB_NAMES = (
 def test_three_subscriptions_same_topic_distinct_handlers() -> None:
     """三订阅同 topic、同 fn，但 handler 实现互异（扇出核心断言，无需 broker/DB）。"""
     task_registry.import_task_modules()
-    assert {task_registry.subscription_topic(n) for n in _SUB_NAMES} == {
-        messaging.TOPIC_POINTS
-    }
+    topics = {messaging.SUBSCRIPTIONS[n].topic for n in _SUB_NAMES}
+    assert topics == {messaging.TOPIC_POINTS}
     handlers = [task_registry.handlers_for(n)["apply_point_event"] for n in _SUB_NAMES]
     assert handlers[0] is apply_point_reward
     assert handlers[1] is apply_point_stats

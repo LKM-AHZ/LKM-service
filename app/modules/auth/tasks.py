@@ -21,40 +21,10 @@ worker.py 不再手写 handler 表。
 
 import logging
 
-from app.core.messaging import (
-    RKEY_RECONCILE,
-    RKEY_SEND_CODE,
-    RKEY_SEND_MAGIC,
-    RKEY_USER_BANNED,
-    RKEY_USER_SESSION_REVOKE,
-    RKEY_USER_UPDATED,
-    SUB_JOBS,
-    SUB_SEND,
-    SUB_USER_INVALIDATE,
-    TOPIC_CRON,
-    TOPIC_EMAIL,
-    TOPIC_USER_EVENTS,
-)
-from app.core.task_registry import (
-    register_cron_job,
-    register_subscription,
-    register_task,
-)
+from app.core.messaging import RKEY_RECONCILE, SUB_JOBS, SUB_SEND, SUB_USER_INVALIDATE
+from app.core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger("lkm.auth.tasks")
-
-# 发送类订阅（send worker 进程消费）
-register_subscription(SUB_SEND.name, TOPIC_EMAIL, [RKEY_SEND_CODE, RKEY_SEND_MAGIC])
-
-# 用户快照失效订阅（jobs worker 并行消费 auth 三变更事件）
-register_subscription(
-    SUB_USER_INVALIDATE.name,
-    TOPIC_USER_EVENTS,
-    [RKEY_USER_UPDATED, RKEY_USER_BANNED, RKEY_USER_SESSION_REVOKE],
-)
-
-# jobs 订阅：本模块贡献 cron.reconcile（周期增量对账）
-register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_RECONCILE])
 
 
 async def send_code(channel_key: str, contact: str, code: str) -> None:
