@@ -29,12 +29,18 @@ def _routes() -> dict[str, dict]:
 
 def test_config_yaml_standalone() -> None:
     cfg = _load("config.yaml")
-    assert cfg["deployment"]["role"] == "traditional"
-    assert cfg["deployment"]["role_traditional"]["config_provider"] == "yaml"
+    # standalone(无 etcd)正确形态是 data_plane；role_traditional 只接受 etcd
+    assert cfg["deployment"]["role"] == "data_plane"
+    assert cfg["deployment"]["role_data_plane"]["config_provider"] == "yaml"
     assert cfg["apisix"]["node_listen"] == 9080
     ssl_listen = cfg["apisix"]["ssl"]["listen"]
     assert any(item["port"] == 9443 for item in ssl_listen)
-    assert cfg["apisix"]["dns_resolver"] == "127.0.0.11"
+    # APISIX schema 要求数组；曾因写成裸字符串导致启动即校验失败、而旧断言同错故"假绿"
+    assert cfg["apisix"]["dns_resolver"] == ["127.0.0.11"]
+    # discovery 模块须显式初始化，否则 discovery_type: dns 运行时 503
+    assert cfg["discovery"]["dns"]["servers"] == ["127.0.0.11"]
+    # 容器内 ssl 听 9443（非 root 不能听 443），对外重定向端口须显式 443，否则 Location 带 :9443
+    assert cfg["plugin_attr"]["redirect"]["https_port"] == 443
 
 
 def test_dual_domain_hosts_covered() -> None:
@@ -67,10 +73,21 @@ def test_graphql_websocket_enabled() -> None:
     assert routes["graphql-exact"]["upstream"]["service_name"].startswith("backend:")
 
 
+def test_realtime_ws_endpoint_upgrade_enabled() -> None:
+    """/api/v1/ws/events 走 api-prefix，必须开 upgrade（旧 nginx 未开→后端收普通 GET 404）。"""
+    route = _routes()["api-prefix"]
+    assert route["enable_websocket"] is True
+    assert route["upstream"]["service_name"].startswith("backend:")
+
+
 def test_minio_presign_host_rewrite() -> None:
     route = _routes()["minio"]
     assert route["uri"] == "/lkm/*"
-    assert route["plugins"]["proxy-rewrite"]["host"] == "lkm-ahz.ltd"
+    # pass_host=rewrite 的 Host 必须落 upstream.upstream_host；用 proxy-rewrite.host 会被
+    # pass_host 逻辑以 nil 覆盖 → 空 Host → MinIO 400（真机验收暴露）
+    assert "plugins" not in route
+    assert route["upstream"]["pass_host"] == "rewrite"
+    assert route["upstream"]["upstream_host"] == "lkm-ahz.ltd"
     assert route["upstream"]["service_name"].startswith("minio:")
 
 
@@ -105,6 +122,18 @@ def test_global_gzip_and_login_rate_limit() -> None:
     limit = _routes()["auth-login"]["plugins"]["limit-count"]
     assert limit["policy"] == "local"
     assert limit["rejected_code"] == 429
+
+
+def test_global_forwarded_headers_parity_nginx() -> None:
+    """旧 nginx proxy-common-headers.conf 设 X-Real-IP/XFF/Proto；APISIX 默认不设，需 global rule 补齐。"""
+    data = _load("apisix.yaml")
+    set_headers: dict[str, str] = {}
+    for rule in data["global_rules"]:
+        pr = rule["plugins"].get("proxy-rewrite", {})
+        set_headers.update(pr.get("headers", {}).get("set", {}))
+    assert set_headers["X-Real-IP"] == "$remote_addr"
+    assert set_headers["X-Forwarded-For"] == "$remote_addr"
+    assert set_headers["X-Forwarded-Proto"] == "$scheme"
 
 
 def test_http_to_https_redirect_and_acme_precedence() -> None:
