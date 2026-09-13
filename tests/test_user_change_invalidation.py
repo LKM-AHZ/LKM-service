@@ -5,16 +5,16 @@
 ``del + epoch bump`` 失效（A7 调用口），保证下次 ``get_user_snapshot`` 从 DB 拉到新值、
 陈旧缓存不复活。
 
-为何分三层（settings.rabbit_url 单测默认空 → ``enqueue_outbox`` fail-open 直接不入队，
+为何分三层（settings.pulsar_url 单测默认空 → ``enqueue_outbox`` fail-open 直接不入队，
 无真 relay/E2E；见 brief）：
-1) 真 outbox 行断言：monkeypatch rabbit_url 非空，走**真实写点**（update_profile /
+1) 真 outbox 行断言：monkeypatch pulsar_url 非空，走**真实写点**（update_profile /
    upgrade_to_normal / _reset_password / notify_user_banned_committed）后 commit，查
    ``OutboxMessage`` 的 routing_key + payload.args 断言落对源事件。
 2) consumer 契约：直接调 ``auth.tasks.invalidate_user_snap``（worker 分派会跑的 handler），
    断言缓存被 del/epoch bump、幂等可重跑。
 3) HARD 新鲜度（profile 变更）：真 Profile 编改(update_profile) → 经上面同样机制失效 →
    ``get_user_snapshot`` 回到 DB 拉到**新 nickname**（绝非改前缓存的旧值）。此步走真实缝，
-   确定性、无需 rabbit worker（失效 handler 在进程内直接驱动，等价 worker 分派）。
+   确定性、无需消息总线 worker（失效 handler 在进程内直接驱动，等价 worker 分派）。
 """
 
 from collections.abc import AsyncIterator
@@ -103,7 +103,7 @@ async def _dim_sync_throwaway(monkeypatch, _fused_realm) -> None:
 
 @pytest.fixture(autouse=True)
 async def reset_redis_globals() -> AsyncIterator[None]:
-    """复位 redis 模块单例 + 复位 rabbit_url，杜绝跨测试残留（repo 范式的 autouse reset）。"""
+    """复位 redis 模块单例 + 复位消息总线配置，杜绝跨测试残留（repo 范式的 autouse reset）。"""
     await redis_mod.close_redis()
     redis_mod._client = None
     redis_mod._client_pool = None
@@ -126,9 +126,9 @@ def _enable_fake_redis(monkeypatch: Any) -> None:
     monkeypatch.setattr(redis_mod.Redis, "from_url", classmethod(_from_url))
 
 
-def _enable_rabbit(monkeypatch: Any) -> None:
+def _enable_bus(monkeypatch: Any) -> None:
     """打开 outbox 门控：单测才真正把事件行落库（生产 relay/worker 才消费，此处断言行即可）。"""
-    monkeypatch.setattr(settings, "rabbit_url", "amqp://guest:guest@localhost:5672/")
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://localhost:6650")
 
 
 async def _enabled() -> Any:
@@ -170,7 +170,7 @@ class TestMutationSitesEmitOutboxEvents:
     async def test_profile_edit_emits_user_updated(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _enable_rabbit(monkeypatch)
+        _enable_bus(monkeypatch)
         uid = await _mk_user(db, "prof_edit")
         await update_profile(db, uid, ProfileUpdate(nickname="新名"))
         await db.commit()
@@ -184,7 +184,7 @@ class TestMutationSitesEmitOutboxEvents:
     async def test_upgrade_to_normal_emits_user_updated(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _enable_rabbit(monkeypatch)
+        _enable_bus(monkeypatch)
         uid = await _mk_user(db, "up_level", account_level="local")
         from sqlalchemy.orm import selectinload
 
@@ -207,7 +207,7 @@ class TestMutationSitesEmitOutboxEvents:
     async def test_password_reset_emits_user_session_revoke(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _enable_rabbit(monkeypatch)
+        _enable_bus(monkeypatch)
         uid = await _mk_user(db, "pwd_reset")
         from sqlalchemy.orm import selectinload
 
@@ -234,7 +234,7 @@ class TestMutationSitesEmitOutboxEvents:
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """自动锁定路径独立提交 banned 事件（自建会话指向测试库）。"""
-        _enable_rabbit(monkeypatch)
+        _enable_bus(monkeypatch)
         uid = await _mk_user(db, "lock_user")
         # 沿用 files.notify 测法：把新的 own-session 指向测试 db，事件行落同一库便于断言。
         monkeypatch.setattr(
@@ -333,7 +333,7 @@ class TestLoginUnlockInvalidatesSnap:
         from app.modules.auth.snapshot import get_user_snapshot
 
         _enable_fake_redis(monkeypatch)
-        _enable_rabbit(monkeypatch)
+        _enable_bus(monkeypatch)
         password = "secret12345!"
         uid = await self._mk_locked_user(db, "unlockme", password)
 

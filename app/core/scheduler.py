@@ -1,7 +1,7 @@
-"""APScheduler 独立调度进程：cron 到点发布 cron.* 消息到 RabbitMQ。
+"""APScheduler 独立调度进程：cron 到点发布 cron.* 消息到消息总线（system/cron topic）。
 
-不直接执行任务——只把触发作为普通消息发布，由 DEFAULT_QUEUE worker 消费。
-与消息系统解耦，Rabbit 不可用时发布 fail-open（日志+跳过），下次整点再触发。
+不直接执行任务——只把触发作为普通消息发布，由 jobs 订阅 worker 消费。
+与消息系统解耦，消息总线不可用时发布 fail-open（日志+跳过），下次整点再触发。
 
 cron 任务清单由各模块 ``tasks.py`` 经 ``task_registry.register_cron_job`` 声明，
 本模块从注册表聚合构建调度器——**加 cron 任务不再改本文件**。
@@ -16,13 +16,13 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.core import amqp, task_registry
+from app.core import messaging, task_registry
 
 logger = logging.getLogger("lkm.scheduler")
 
 
 async def _fire(routing_key: str, fn: str) -> None:
-    ok = await amqp._publish(routing_key, {"fn": fn})
+    ok = await messaging.publish(routing_key, {"fn": fn})
     if not ok:
         logger.warning("cron %s 发布失败(fail-open), fn=%s", routing_key, fn)
 

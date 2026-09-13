@@ -29,7 +29,8 @@
 │   │   ├── err.py             # ErrCode / BizError / ERRTABLE / respond
 │   │   ├── apm.py             # Sentry 可观测(DSN 空则跳过)
 │   │   ├── redis.py / redis_limiter.py / throttle.py  # Redis 客户端与共享限流
-│   │   └── worker*.py         # arq 队列定义与 send/default/notify/points 各入口
+│   │   ├── messaging.py       # 消息总线抽象（routing_key→Pulsar topic、JSON schema、Transport seam）
+│   │   └── worker*.py         # Pulsar 订阅入口（send/notify/jobs/user-invalidate/points 三订阅/dlq/outbox）
 │   ├── db/
 │   │   ├── models.py          # users/profiles/columns 等主模型
 │   │   ├── init_db.py         # 开发环境自动建表

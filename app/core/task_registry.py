@@ -22,7 +22,12 @@ logger = logging.getLogger("lkm.task_registry")
 # 单一事实源：queue_name -> 该队列绑定的 routing key 列表（用于拓扑声明）
 _QUEUE_ROUTING: dict[str, list[str]] = {}
 
-# 单一事实源：queue_name -> {fn: handler}
+# M4 Pulsar：订阅名 -> 该订阅关注的 routing key 列表（worker 消费隔离单元，同 topic 可多订阅）
+_SUBSCRIPTION_ROUTING: dict[str, list[str]] = {}
+# 订阅名 -> Pulsar topic（发布侧由 core.messaging 映射表给出，此处留痕供校验/断言）
+_SUBSCRIPTION_TOPICS: dict[str, str] = {}
+
+# 单一事实源：queue_name / subscription_name -> {fn: handler}
 _TASK_HANDLERS: dict[str, dict[str, Callable[..., Any]]] = {}
 
 # 单一事实源：cron 任务声明（scheduler 聚合消费），供 APScheduler 构建
@@ -66,9 +71,37 @@ def import_task_modules() -> None:
 
 def ensure_tasks_registered() -> None:
     """确保已注册（guard 幂等，重复调用不重复触发）。"""
-    if _QUEUE_ROUTING or _TASK_HANDLERS or _CRON_JOBS:
+    if _QUEUE_ROUTING or _SUBSCRIPTION_ROUTING or _TASK_HANDLERS or _CRON_JOBS:
         return
     import_task_modules()
+
+
+def register_subscription(name: str, topic: str, routing_keys: list[str]) -> None:
+    """声明一个 Pulsar 订阅（消费隔离单元，M4）。幂等，重复声明取并集。
+
+    ``name`` 同时是消费幂等 scope（见 app/db/event_processed.py）与发布侧对应订阅；
+    ``topic`` 为该订阅消费的 Pulsar topic；同一 topic 可有多个订阅（points 三订阅扇出）。
+    """
+    keys = _SUBSCRIPTION_ROUTING.setdefault(name, [])
+    for rk in routing_keys:
+        if rk not in keys:
+            keys.append(rk)
+    _SUBSCRIPTION_TOPICS[name] = topic
+
+
+def subscriptions() -> list[str]:
+    """当前已声明的订阅名列表。"""
+    return list(_SUBSCRIPTION_ROUTING)
+
+
+def subscription_topic(name: str) -> str | None:
+    """订阅对应的 Pulsar topic（未声明返回 None）。"""
+    return _SUBSCRIPTION_TOPICS.get(name)
+
+
+def subscription_topology() -> Mapping[str, list[str]]:
+    """订阅名 → 关注 routing key 列表（幂等拓扑声明/断言的数据源）。"""
+    return {name: list(keys) for name, keys in _SUBSCRIPTION_ROUTING.items()}
 
 
 def register_queue(queue: str, routing_keys: list[str]) -> None:

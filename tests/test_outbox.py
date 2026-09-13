@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool, StaticPool
 
 import app.db.outbox  # noqa: F401  # 确保 OutboxMessage 已入 Base.metadata
-from app.core import outbox_relay, worker
+from app.core import messaging, outbox_relay, worker
 from app.core.config import settings
 from app.db.base import Base
 from app.db.event_processed import EventProcessed, already_processed, record_processed
@@ -75,9 +75,9 @@ async def fact(engine: AsyncEngine):
 
 
 @pytest.fixture(autouse=True)
-def _rabbit_on(monkeypatch) -> None:
-    """本文件默认当“配置了 Rabbit”，放行 enqueue gate。"""
-    monkeypatch.setattr(settings, "rabbit_url", "amqp://ci:5672")
+def _bus_on(monkeypatch) -> None:
+    """本文件默认当“配置了消息总线”，放行 enqueue gate。"""
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://ci:6650")
 
 
 async def _seed_one(fact, **row_kw) -> None:
@@ -110,7 +110,7 @@ async def test_enqueue_persists_then_relay_publishes(fact, monkeypatch) -> None:
         sent.append((rk, dict(payload)))
         return True
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _pub)
+    monkeypatch.setattr(messaging, "publish", _pub)
 
     await _seed_one(fact)
     done = await outbox_relay.relay_poll(session_factory=fact)
@@ -128,8 +128,8 @@ async def test_enqueue_persists_then_relay_publishes(fact, monkeypatch) -> None:
     assert row.published_at is not None
 
 
-async def test_enqueue_skips_when_rabbit_blank(fact, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "rabbit_url", "")
+async def test_enqueue_skips_when_bus_blank(fact, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "pulsar_url", "")
     db = await fact()
     try:
         assert await enqueue_outbox(db, _RK, _PAYLOAD) is False
@@ -172,7 +172,7 @@ async def test_relay_failure_backoff_then_recovery(fact, monkeypatch) -> None:
         calls["n"] += 1
         return calls["n"] >= 2  # 第 1 次失败、第 2 次成功
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _pub)
+    monkeypatch.setattr(messaging, "publish", _pub)
 
     await _seed_one(fact)
     first = await outbox_relay.relay_poll(session_factory=fact)
@@ -201,7 +201,7 @@ async def test_relay_folds_to_event_failure_at_max_tries(fact, monkeypatch) -> N
     async def _fail(_rk: str, _payload: dict) -> bool:
         return False
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _fail)
+    monkeypatch.setattr(messaging, "publish", _fail)
 
     # 预置 near-max（此刻即就绪）；一次失败后累到 MAX → 折叠归档进 event_failures，
     # 从 outbox_events 迁出（不再挤占后续轮 / pending 窗口 / 积压 gauge）。
@@ -246,7 +246,7 @@ async def test_relay_reports_zero_gauge_after_full_drain(fact, monkeypatch) -> N
     async def _ok(_rk: str, _payload: dict) -> bool:
         return True
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _ok)
+    monkeypatch.setattr(messaging, "publish", _ok)
 
     await _seed_one(fact)
     done = await outbox_relay.relay_poll(session_factory=fact)
@@ -261,7 +261,7 @@ async def test_relay_reports_backlog_when_event_remains_pending(
     async def _fail(_rk: str, _payload: dict) -> bool:
         return False
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _fail)
+    monkeypatch.setattr(messaging, "publish", _fail)
 
     await _seed_one(fact)
     done = await outbox_relay.relay_poll(session_factory=fact)
@@ -274,7 +274,7 @@ async def test_relay_folds_backlogged_event_at_max_tries(fact, monkeypatch) -> N
     async def _fail(_rk: str, _payload: dict) -> bool:
         return False
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _fail)
+    monkeypatch.setattr(messaging, "publish", _fail)
 
     db = await fact()
     m = OutboxMessage(
@@ -331,7 +331,7 @@ async def test_relay_payload_carries_event_id(fact, monkeypatch) -> None:
         sent.append(payload)
         return True
 
-    monkeypatch.setattr(outbox_relay.amqp, "_publish", _pub)
+    monkeypatch.setattr(messaging, "publish", _pub)
     db = await fact()
     try:
         await enqueue_outbox(db, "event.notify_upload", {"fn": "n", "args": ["u"]})

@@ -1,4 +1,4 @@
-"""compose worker-scheduler 服务入口：跑 APScheduler（cron 触发投递到 RabbitMQ）。"""
+"""compose worker-scheduler 服务入口：跑 APScheduler（cron 触发投递到消息总线）。"""
 
 import asyncio
 import logging

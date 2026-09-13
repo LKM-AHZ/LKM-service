@@ -1,7 +1,7 @@
 """blog 模块队列任务：孤儿博客 git 仓库周对账。
 
 隔离/回收无 blog_series 记录的裸仓库。每周四 04:00 由 scheduler 发布 cron.reconcile
-到 jobs 队列，本任务消费执行（§6.2 注册）。
+到 system/cron topic，本任务经 jobs 订阅消费执行。
 
 任务无请求上下文，自建独立会话（模块级 ``_session_factory`` seam，测试可替换
 为 conftest 的内存会话）。Redis 锁防自相竞争，删前复查 blog_series 存在性防误删。
@@ -16,17 +16,19 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.messaging import RKEY_RECONCILE, SUB_JOBS, TOPIC_CRON
 from app.core.redis import get_redis
-from app.core.task_registry import register_cron_job, register_queue, register_task
+from app.core.task_registry import (
+    register_cron_job,
+    register_subscription,
+    register_task,
+)
 from app.db.session import new_session
 from app.modules.blog.models import BlogRepoQuarantine, BlogSeries
 
 logger = logging.getLogger(__name__)
 
-QUEUE = "lkm.jobs"  # jobs 队列（cron 发布），与 files 的 cron.cleanup 同队列
-ROUTING_KEYS = ["cron.reconcile"]
-
-register_queue(QUEUE, ROUTING_KEYS)
+register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_RECONCILE])
 
 _QUARANTINE_DAYS = 7  # 隔离保留天数，之后才物理删除
 _LOCK_KEY = "blog:reconcile:lock"
@@ -106,10 +108,10 @@ async def reconcile_blog_repos() -> None:
             await redis.delete(_LOCK_KEY)
 
 
-register_task(QUEUE, "reconcile_blog_repos", reconcile_blog_repos)
+register_task(SUB_JOBS.name, "reconcile_blog_repos", reconcile_blog_repos)
 register_cron_job(
     job_id="reconcile_blog_repos",
     cron="0 4 * * 4",  # 每周四 04:00
-    routing_key="cron.reconcile",
+    routing_key=RKEY_RECONCILE,
     fn="reconcile_blog_repos",
 )

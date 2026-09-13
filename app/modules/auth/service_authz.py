@@ -8,7 +8,7 @@ auth 行**而必须外移到 auth 的写面（Phase 4 接线，把业务侧改�
 
 不变量（与 service_auth/events 同落位）：升权写面应在 auth 进程的 auth 独立库事务内执行；
 真实提升发生时递增 ``token_version`` 使旧令牌失效并按需入队 ``notify_user_updated`` 失效快照
-（经 outbox；未配 Rabbit 时门控直返 fail-open）。调用方负责 commit/close。
+（经 outbox；未配消息总线时门控直返 fail-open）。调用方负责 commit/close。
 """
 
 from __future__ import annotations

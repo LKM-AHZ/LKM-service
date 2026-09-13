@@ -1,0 +1,442 @@
+"""消息总线抽象（M4）：逻辑 routing_key → Pulsar topic，业务发布/消费无感。
+
+迁移后 RabbitMQ 下线，Apache Pulsar 为唯一 broker。本模块是**唯一事实源**：
+
+- ``ROUTING_KEY_TOPICS``：逻辑 routing_key → ``persistent://{tenant}/{ns}/{name}`` 映射，
+  业务侧只认 routing_key（send_code / notify_upload / apply_point / user.* / cron.*），
+  不感知命名空间与 topic 名。
+- ``SUBSCRIPTIONS``：订阅清单（订阅名 → topic + 关注 routing_key 列表）。订阅名同时是
+  消费幂等 scope（见 ``app/db/event_processed.py``）与故障隔离单元。
+- JSON Schema：每个 topic 挂同一 envelope JSON Schema，经 Pulsar 自带 schema registry 校验；
+  envelope 为 ``{"fn": str, "args": list, "event_id"?: str}``，故用自定义 ``Schema`` 子类承载
+  裸 JSON Schema（Pulsar ``JsonSchema`` 强制 avro ``Record`` dataclass，无法表达混合类型 args）。
+
+发布/消费哲学沿用旧 ``amqp`` 层：**fail-open**——未配置 broker 或投递异常时不阻塞请求
+（返回 False 由调用方降级），异常计数 ``notify_failed_total``。
+
+Pulsar 官方 Python 客户端是**同步阻塞** API，故：
+- 发布侧：producer 懒建缓存，``producer.send`` 经 ``asyncio.to_thread`` 执行。
+- 消费侧：每个订阅一个 daemon 线程跑 ``consumer.receive``，消息经
+  ``asyncio.run_coroutine_threadsafe`` 桥回主事件循环执行 async handler；成功 ack、
+  异常负确认（触发 redelivery / 死信）。
+
+测试 seam：``set_transport(InMemoryTransport())`` 注入内存替身，默认套件不依赖真实 broker。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import json
+import logging
+import threading
+import time
+from collections.abc import Callable, Coroutine, Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from app.core.config import settings
+from app.core.metrics import notify_failed_total
+
+logger = logging.getLogger("lkm.messaging")
+
+# 单任务执行上限（秒）：与迁移前 worker.JOB_TIMEOUT_S 对齐，超时视为消费失败 → 负确认。
+JOB_TIMEOUT_S = 120
+
+# ---- routing_key 常量（业务唯一入口；原 core/jobs.py、core/worker.py 的 RKEY_* 迁此）----
+RKEY_SEND_CODE = "event.send_code"
+RKEY_SEND_MAGIC = "event.send_magic_link"
+RKEY_NOTIFY = "event.notify_upload"
+RKEY_POINTS = "event.apply_point"
+RKEY_USER_UPDATED = "event.user.updated"
+RKEY_USER_BANNED = "event.user.banned"
+RKEY_USER_SESSION_REVOKE = "event.user.session_revoke"
+RKEY_CLEANUP = "cron.cleanup"
+RKEY_RECONCILE = "cron.reconcile"
+
+# ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
+
+
+def _topic(namespace: str, name: str) -> str:
+    return f"persistent://{settings.pulsar_tenant}/{namespace}/{name}"
+
+
+TOPIC_EMAIL = _topic("auth", "email")
+TOPIC_USER_EVENTS = _topic("auth", "user.events")
+TOPIC_NOTIFY = _topic("biz", "notify.upload")
+TOPIC_POINTS = _topic("biz", "points.apply")
+TOPIC_CRON = _topic("system", "cron")
+TOPIC_DLQ = _topic("system", "dlq")
+
+# 逻辑 routing_key → topic（发布唯一查表口）
+ROUTING_KEY_TOPICS: dict[str, str] = {
+    RKEY_SEND_CODE: TOPIC_EMAIL,
+    RKEY_SEND_MAGIC: TOPIC_EMAIL,
+    RKEY_USER_UPDATED: TOPIC_USER_EVENTS,
+    RKEY_USER_BANNED: TOPIC_USER_EVENTS,
+    RKEY_USER_SESSION_REVOKE: TOPIC_USER_EVENTS,
+    RKEY_NOTIFY: TOPIC_NOTIFY,
+    RKEY_POINTS: TOPIC_POINTS,
+    RKEY_CLEANUP: TOPIC_CRON,
+    RKEY_RECONCILE: TOPIC_CRON,
+}
+
+
+@dataclass(frozen=True)
+class Subscription:
+    """一个 Pulsar 订阅（消费隔离单元）。
+
+    ``name`` 同时是消费幂等 scope（多订阅消费同一 topic 时，各自独立记账，互不跳过）。
+    ``routing_keys`` 为该订阅关注的逻辑事件集合（启动校验与文档用途）。
+    """
+
+    name: str
+    topic: str
+    routing_keys: tuple[str, ...] = ()
+
+
+# 订阅清单：与部署 worker 进程一一对应（points 三订阅同 topic 实现扇出）。
+SUB_SEND = Subscription("send", TOPIC_EMAIL, (RKEY_SEND_CODE, RKEY_SEND_MAGIC))
+SUB_NOTIFY = Subscription("notify", TOPIC_NOTIFY, (RKEY_NOTIFY,))
+SUB_POINTS_REWARD = Subscription("points-reward", TOPIC_POINTS, (RKEY_POINTS,))
+SUB_POINTS_STATS = Subscription("points-stats", TOPIC_POINTS, (RKEY_POINTS,))
+SUB_POINTS_TASKS = Subscription("points-tasks", TOPIC_POINTS, (RKEY_POINTS,))
+SUB_USER_INVALIDATE = Subscription(
+    "user-invalidate",
+    TOPIC_USER_EVENTS,
+    (RKEY_USER_UPDATED, RKEY_USER_BANNED, RKEY_USER_SESSION_REVOKE),
+)
+SUB_JOBS = Subscription("jobs", TOPIC_CRON, (RKEY_CLEANUP, RKEY_RECONCILE))
+SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
+
+SUBSCRIPTIONS: dict[str, Subscription] = {
+    s.name: s
+    for s in (
+        SUB_SEND,
+        SUB_NOTIFY,
+        SUB_POINTS_REWARD,
+        SUB_POINTS_STATS,
+        SUB_POINTS_TASKS,
+        SUB_USER_INVALIDATE,
+        SUB_JOBS,
+        SUB_DLQ,
+    )
+}
+
+# 事件 envelope JSON Schema（Pulsar schema registry 校验用）。
+EVENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fn": {"type": "string"},
+        "args": {"type": "array"},
+        "event_id": {"type": "string"},
+    },
+    "required": ["fn"],
+}
+
+# 每个 topic 一份 schema（envelope 形态一致；集中定义便于审计 schema 演化）。
+TOPIC_SCHEMAS: dict[str, dict[str, Any]] = {
+    TOPIC_EMAIL: EVENT_SCHEMA,
+    TOPIC_USER_EVENTS: EVENT_SCHEMA,
+    TOPIC_NOTIFY: EVENT_SCHEMA,
+    TOPIC_POINTS: EVENT_SCHEMA,
+    TOPIC_CRON: EVENT_SCHEMA,
+    TOPIC_DLQ: EVENT_SCHEMA,
+}
+
+
+def topic_for(routing_key: str) -> str | None:
+    """逻辑 routing_key 映射到 Pulsar topic；未知返回 None。"""
+    return ROUTING_KEY_TOPICS.get(routing_key)
+
+
+def subscription_for(name: str) -> Subscription | None:
+    """按订阅名取订阅定义；未知返回 None。"""
+    return SUBSCRIPTIONS.get(name)
+
+
+# ---- 自定义 JSON Schema（承载裸 JSON Schema 定义，走 Pulsar schema registry）----
+# Pulsar 的 JsonSchema(record_cls) 要求 avro Record dataclass，而本项目事件 args 为混合
+# 类型列表（int/str 混排），无法用 dataclass 精确表达。故子类化 Schema，schema_type=JSON，
+# schema_definition 直接用 EVENT_SCHEMA，encode/decode 走标准 json。
+
+
+def make_event_schema(topic: str) -> Any:
+    """构造该 topic 的 Pulsar JSON Schema 实例（延迟 import，避免测试无 pulsar 时加载）。"""
+    from pulsar.schema import Schema
+
+    # _pulsar 为 C 扩展、无类型 stub，用动态 import 规避静态解析失败。
+    schema_type = importlib.import_module("_pulsar").SchemaType.JSON
+    definition = TOPIC_SCHEMAS.get(topic, EVENT_SCHEMA)
+
+    class _EventJsonSchema(Schema):
+        def __init__(self) -> None:
+            super().__init__(dict, schema_type, definition, "EVENT_JSON")
+
+        def encode(self, obj: Any) -> bytes:
+            return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+        def decode(self, data: bytes) -> Any:
+            return json.loads(data)
+
+    return _EventJsonSchema()
+
+
+# ---- 发布 ----
+@dataclass(frozen=True)
+class MessageMeta:
+    """消费消息的元数据（业务 payload 之外的随消息信息）。
+
+    - ``routing_key`` / ``fn`` 从发布时写入的 properties 还原（死信落库需 routing_key）。
+    - ``redelivery_count``：Pulsar 重投次数，死信落库作 attempts。
+    """
+
+    topic: str
+    subscription: str
+    properties: dict[str, str]
+    redelivery_count: int = 0
+
+
+# 消费回调类型：async 函数，返回 coroutine（供 run_coroutine_threadsafe 调度）。
+MessageHandler = Callable[[dict[str, Any], MessageMeta], Coroutine[Any, Any, None]]
+
+
+class Transport(Protocol):
+    """发布 transport 测试 seam：内存替身经 ``set_transport`` 注入。"""
+
+    async def publish(self, topic: str, data: bytes, props: dict[str, str]) -> None: ...
+
+
+_transport: Transport | None = None
+_client: Any = None
+_producers: dict[str, Any] = {}
+_producer_lock = asyncio.Lock()
+_client_lock = threading.Lock()
+
+
+def set_transport(transport: Transport | None) -> None:
+    """注入/清除发布 transport（测试用；None 恢复真实 Pulsar 路径）。"""
+    global _transport
+    _transport = transport
+
+
+def _get_client_sync() -> Any:
+    """懒建单例 Pulsar Client（同步，须在线程中调用）。"""
+    global _client
+    import pulsar
+
+    with _client_lock:
+        if _client is None:
+            _client = pulsar.Client(
+                settings.pulsar_url,
+                operation_timeout_seconds=settings.pulsar_operation_timeout_s,
+            )
+    return _client
+
+
+def _create_producer_sync(topic: str) -> Any:
+    return _get_client_sync().create_producer(topic, schema=make_event_schema(topic))
+
+
+async def _get_producer(topic: str) -> Any:
+    async with _producer_lock:
+        producer = _producers.get(topic)
+        if producer is None:
+            producer = await asyncio.to_thread(_create_producer_sync, topic)
+            _producers[topic] = producer
+        return producer
+
+
+async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
+    """发布一条事件到 routing_key 对应 topic。fail-open：不可用/异常 → False。
+
+    - transport 已注入（测试）→ 走替身，异常计 ``notify_failed_total``。
+    - 未配置消息总线（pulsar_url 空）→ False 不计数（对齐迁移前 ch None 语义）。
+    - 真实 Pulsar：producer 懒建缓存，``send`` 经 ``asyncio.to_thread``（同步 API 不阻塞循环）。
+    """
+    topic = ROUTING_KEY_TOPICS.get(routing_key)
+    if topic is None:
+        logger.error("未知 routing_key=%s，丢弃发布", routing_key)
+        return False
+
+    data = json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+    props: dict[str, str] = {"routing_key": routing_key}
+    fn = payload.get("fn")
+    if isinstance(fn, str):
+        props["fn"] = fn
+
+    transport = _transport
+    if transport is not None:
+        try:
+            await transport.publish(topic, data, props)
+            return True
+        except Exception:
+            logger.exception("transport publish failed rk=%s", routing_key)
+            notify_failed_total.inc()
+            return False
+
+    if not settings.message_bus_enabled:
+        return False
+    try:
+        producer = await _get_producer(topic)
+        await asyncio.to_thread(producer.send, data, properties=props)
+        return True
+    except Exception:
+        logger.exception("pulsar publish failed rk=%s topic=%s", routing_key, topic)
+        notify_failed_total.inc()
+        return False
+
+
+# ---- 消费（同步 client 的线程桥接）----
+_consumers: dict[str, Any] = {}
+
+
+def _create_consumer_sync(sub: Subscription) -> Any:
+    """建订阅消费者（Shared + 死信策略）——同步，须在线程中调用。"""
+    import pulsar
+
+    return _get_client_sync().subscribe(
+        sub.topic,
+        sub.name,
+        consumer_type=pulsar.ConsumerType.Shared,
+        schema=make_event_schema(sub.topic),
+        dead_letter_policy=pulsar.ConsumerDeadLetterPolicy(
+            max_redeliver_count=settings.pulsar_dlq_max_redeliver,
+            dead_letter_topic=TOPIC_DLQ,
+        ),
+    )
+
+
+def _handle_message(
+    consumer: Any,
+    msg: Any,
+    handler: MessageHandler,
+    loop: asyncio.AbstractEventLoop,
+    sub_name: str,
+) -> None:
+    """处理一条消息：解析 → 桥回主循环执行 async handler → ack / negative_ack。
+
+    非法 JSON 直接 ack 丢弃（避免死信风暴）；handler 异常/超时 → 负确认，累计重投超限后
+    由 Pulsar 投死信 topic。注意超时后协程可能仍在执行，副作用靠 handler 自身幂等兜底。
+    """
+    try:
+        payload = json.loads(msg.data())
+        if not isinstance(payload, dict):
+            raise ValueError("payload 非 JSON 对象")
+    except Exception:
+        logger.warning("非法消息丢弃 subscription=%s body=%r", sub_name, msg.data())
+        with suppress(Exception):
+            consumer.acknowledge(msg)
+        return
+
+    try:
+        properties = dict(msg.properties() or {})
+    except Exception:
+        properties = {}
+    try:
+        redelivery_count = int(msg.redelivery_count())
+    except Exception:
+        redelivery_count = 0
+    meta = MessageMeta(
+        topic=SUBSCRIPTIONS[sub_name].topic
+        if sub_name in SUBSCRIPTIONS
+        else (properties.get("routing_key", "")),
+        subscription=sub_name,
+        properties=properties,
+        redelivery_count=redelivery_count,
+    )
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(handler(payload, meta), loop)
+        future.result(timeout=JOB_TIMEOUT_S)
+    except Exception:
+        logger.exception("消费失败→负确认 subscription=%s", sub_name)
+        with suppress(Exception):
+            consumer.negative_acknowledge(msg)
+        return
+
+    with suppress(Exception):
+        consumer.acknowledge(msg)
+
+
+def _receive_loop(
+    sub: Subscription,
+    handler: MessageHandler,
+    loop: asyncio.AbstractEventLoop,
+    stop: threading.Event,
+) -> None:
+    """订阅专用 daemon 线程主循环：receive(timeout) → 处理，收到 stop 后退出并关消费者。"""
+    try:
+        consumer = _create_consumer_sync(sub)
+    except Exception:
+        logger.exception("pulsar consumer 创建失败 subscription=%s", sub.name)
+        return
+    _consumers[sub.name] = consumer
+    logger.info("pulsar 订阅启动 subscription=%s topic=%s", sub.name, sub.topic)
+    try:
+        while not stop.is_set():
+            try:
+                msg = consumer.receive(timeout_millis=1000)
+            except Exception:
+                if stop.is_set():
+                    break
+                logger.exception("pulsar receive 异常 subscription=%s", sub.name)
+                time.sleep(1.0)
+                continue
+            _handle_message(consumer, msg, handler, loop, sub.name)
+    finally:
+        with suppress(Exception):
+            consumer.close()
+        _consumers.pop(sub.name, None)
+        logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
+
+
+async def run_subscription(
+    name: str,
+    handler: MessageHandler,
+) -> None:
+    """常驻消费一个订阅，直到任务被取消。未配置消息总线 → 记录并空转退出。
+
+    handler 为 async 回调（worker 侧注入 task_registry 分派 + 幂等记账）；本函数负责
+    线程生命周期与消息 ack 语义。
+    """
+    if not settings.message_bus_enabled and _transport is None:
+        logger.error("消息总线未配置，订阅 %s 无法启动", name)
+        return
+    sub = SUBSCRIPTIONS.get(name)
+    if sub is None:
+        logger.error("未知订阅名 %s", name)
+        return
+    loop = asyncio.get_running_loop()
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=_receive_loop,
+        args=(sub, handler, loop, stop),
+        name=f"pulsar-{name}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        raise
+    finally:
+        stop.set()
+        await asyncio.to_thread(thread.join, 5.0)
+
+
+async def close() -> None:
+    """幂等收尾：关闭 producer 缓存与客户端（应用 shutdown / 测试复位）。"""
+    global _client
+    async with _producer_lock:
+        producers = list(_producers.values())
+        _producers.clear()
+    for producer in producers:
+        with suppress(Exception):
+            await asyncio.to_thread(producer.close)
+    client = _client
+    _client = None
+    if client is not None:
+        with suppress(Exception):
+            await asyncio.to_thread(client.close)

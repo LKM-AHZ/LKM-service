@@ -95,7 +95,7 @@ async def _enqueue_upload(upload_id: str) -> None:
     webhook 回调本身无业务事务，故自建会话把该 upload 的投递期望落库；relay 推给
     notify worker 登记。注册语义保持原 fire-and-forget：入队异常不影响回执(打日志)。
     """
-    if not settings.rabbit_url:
+    if not settings.message_bus_enabled:
         return  # dev/无 broker：outbox 门控等价直发被跳过，不落积压不影响回执
     db = await new_session()
     try:

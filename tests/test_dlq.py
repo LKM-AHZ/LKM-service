@@ -1,47 +1,42 @@
-import json
 from typing import Any
 
 from sqlalchemy import select
 
-from app.core import worker_dlq
+from app.core import messaging, worker_dlq
 from app.modules.admin.models import DlqMessage
 
 
-def test_make_model_maps_json_body() -> None:
-    """坏 JSON → raw 兜底；好 JSON → payload 结构。"""
+def test_make_model_maps_payload() -> None:
+    """死信消息（payload dict + properties 还原 meta）映射为 DlqMessage。"""
     payload = {"fn": "send_code", "args": ["email", "a@b.com", "123456"]}
     m = worker_dlq._make_model(
         routing_key="event.send_code",
-        body=json.dumps(payload).encode(),
+        payload=payload,
         attempts=2,
-        reason="nack",
+        reason="dead-lettered",
         status="pending",
+        topic=messaging.TOPIC_DLQ,
     )
     assert m.routing_key == "event.send_code"
     assert m.payload_json["payload"] == payload
     assert m.attempts == 2
     assert m.status == "pending"
-    # 坏 JSON 兜底
-    bad = worker_dlq._make_model(
-        routing_key="event.x", body=b"not-json", attempts=0, reason="", status="pending"
-    )
-    assert "raw" in bad.payload_json["payload"]
+    assert m.exchange == messaging.TOPIC_DLQ
 
 
 async def test_persist_writes_row(db: Any) -> None:
     """_persist 把模型落库到 db 表。"""
     m = worker_dlq._make_model(
         routing_key="event.send_code",
-        body=json.dumps({"fn": "send_code", "args": ["e", "c", "123"]}).encode(),
+        payload={"fn": "send_code", "args": ["e", "c", "123"]},
         attempts=1,
         reason="dead-lettered",
         status="pending",
+        topic=messaging.TOPIC_DLQ,
     )
     db.add(m)
     await db.commit()
-    fetched = (
-        (await db.execute(select(DlqMessage))).scalars().one()
-    )
+    fetched = (await db.execute(select(DlqMessage))).scalars().one()
     assert fetched.routing_key == "event.send_code"
 
 
@@ -53,10 +48,11 @@ async def test_requeue_publishes_and_marks_requeued(db: Any, monkeypatch: Any) -
         published.append((rk, payload))
         return True
 
-    monkeypatch.setattr(worker_dlq.amqp, "_publish", fake_pub)
+    monkeypatch.setattr(messaging, "publish", fake_pub)
+    # worker_dlq 经 `from app.core import messaging` 引用同一模块对象，patch 其 publish 即生效。
 
     m = DlqMessage(
-        routing_key="event.point",
+        routing_key=messaging.RKEY_POINTS,
         payload_json={
             "payload": {
                 "fn": "apply_point_event",
@@ -73,5 +69,5 @@ async def test_requeue_publishes_and_marks_requeued(db: Any, monkeypatch: Any) -
     await db.refresh(m)
     assert m.status == "requeued"
     assert m.requeued_at is not None
-    assert published[0][0] == "event.point"
+    assert published[0][0] == messaging.RKEY_POINTS
     assert published[0][1]["fn"] == "apply_point_event"

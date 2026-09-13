@@ -1,36 +1,52 @@
-"""任务入队封装：Rabbit 可用则入队；否则降级同步发送（fail-open，不丢）。
+"""任务入队封装：消息总线可用则入队；否则降级同步发送（fail-open，不丢）。
 
-对象事件通知入队为 fire-and-forget：无同步等价物，Rabbit 不可用时静默 no-op
+对象事件通知入队为 fire-and-forget：无同步等价物，消息总线不可用时静默 no-op
 （事件侧可经确认/重建恢复，遇故障宁可丢弃也不阻塞回调 200 时序）。
+
+routing_key 常量统一定义在 ``core.messaging``（唯一事实源），此处 re-export 供既有
+业务模块 import。
 """
 
 import asyncio
 import logging
 from typing import Any
 
-from app.core import amqp
+from app.core import messaging
+from app.core.messaging import (
+    RKEY_NOTIFY,
+    RKEY_POINTS,
+    RKEY_SEND_CODE,
+    RKEY_SEND_MAGIC,
+    RKEY_USER_BANNED,
+    RKEY_USER_SESSION_REVOKE,
+    RKEY_USER_UPDATED,
+)
 
 logger = logging.getLogger("lkm.jobs")
 
-RKEY_SEND_CODE = "event.send_code"
-RKEY_SEND_MAGIC = "event.send_magic_link"
-RKEY_NOTIFY = "event.notify_upload"
-RKEY_POINTS = "event.apply_point"
-# auth 用户快照失效事件（A7）：变更后投递给 consumer → 反陈旧失效 user:snap
-RKEY_USER_UPDATED = "event.user.updated"
-RKEY_USER_BANNED = "event.user.banned"
-RKEY_USER_SESSION_REVOKE = "event.user.session_revoke"
+__all__ = [
+    "RKEY_NOTIFY",
+    "RKEY_POINTS",
+    "RKEY_SEND_CODE",
+    "RKEY_SEND_MAGIC",
+    "RKEY_USER_BANNED",
+    "RKEY_USER_SESSION_REVOKE",
+    "RKEY_USER_UPDATED",
+    "enqueue_upload_notify",
+    "send_code",
+    "send_magic_link",
+]
 
 # 降级同步发送的上限时长（同旧实现）。
 _SEND_TIMEOUT_S = 10.0
 
 
 async def _enqueue(fn: str, *args: Any, routing_key: str) -> bool:
-    """发 JSON 消息到 lkm.events。不可用/异常返回 False（由调用方降级）。"""
+    """发 JSON 消息到消息总线。不可用/异常返回 False（由调用方降级）。"""
     try:
-        return await amqp._publish(routing_key, {"fn": fn, "args": list(args)})
+        return await messaging.publish(routing_key, {"fn": fn, "args": list(args)})
     except Exception:
-        # amqp._publish 内已 fail-open 捕获异常返回 False；此处兜底以防极少数
+        # messaging.publish 内已 fail-open 捕获异常返回 False；此处兜底以防极少数
         # 直接抛出的情况（如测试注入），保持一致：异常视为入队失败 → 降级。
         logger.exception("enqueue %s failed", fn)
         return False

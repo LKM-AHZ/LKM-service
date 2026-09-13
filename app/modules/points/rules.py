@@ -24,7 +24,7 @@ async def enqueue_points_event(
 ) -> None:
     """把用户行为事件排进 outbox（与业务同事务落库，relay 会投给 points worker 入账）。
 
-    未配置 Rabbit → outbox 门控直返（不落积压），维持 dev 下 fire-and-forget 的无害性；
+    未配置消息总线 → outbox 门控直返（不落积压），维持 dev 下 fire-and-forget 的无害性；
     配置生效后该事件关联业务自身 commit 一并持久，达「DB 成、事件必达」。
     """
     await enqueue_outbox(

@@ -3,7 +3,7 @@
 relay 对某事件投递反复失败、`attempt_count` 达 `MAX_TRIES` 上限后不再重投：把该行从
 `outbox_events` **摘除**迁此表（`status=failed` 终态不再滞留原表、不再挤占 relay 领取
 窗口/积压 gauge），留一份审计副本供排查与未来人工重放。与消费侧 DMQ(`dlq_messages`)
-故障域隔离：本表只管「relay 发布侧反复失败致投不出」，消费侧失败仍走 Rabbit DLX→DLQ。
+故障域隔离：本表只管「relay 发布侧反复失败致投不出」，消费侧失败仍进 Pulsar 死信 topic（system/dlq）。
 """
 
 from __future__ import annotations

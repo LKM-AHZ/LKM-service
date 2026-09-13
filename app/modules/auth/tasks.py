@@ -6,43 +6,55 @@ providers/security→db 拉整棵 auth 树，缩短 worker 启动路径。
 任务经 ``register_task`` 注册（§6.2），worker 启动时导入本模块即触发注册，
 worker.py 不再手写 handler 表。
 
-- 发送类（send_code / send_magic_link）注册到 send 队列（send worker 进程消费）。
-- 快照失效类（invalidate_user_snap）注册到 jobs 队列（jobs worker 消费），绑定 auth
-  变更事件路由键；consumer 退化到 ``core.user_cache.invalidate_user_snap`` = del + epoch
-  bump 的反陈旧失效原语（A6/A7），天然幂等，绝不在失效侧写缓存值。
-- **B0.2 事件主路**：同一 jobs worker 消费 auth 变更事件时，「失效在线缓存」的同时按
-  单 user 刷新离线宽表 ``user_dim``（``user_dim_sync.refresh_user_dim_event``）。它自开
-  独立会话、天然幂等、正常跑；异常时**失效先于一切已完成**，dim 刷新仅记日志放行
-  （离线副本可滞后一点，由 R 侧周期增量对账 ``reconcile_user_dim`` 兜回）——绝不让 ETL
-  的临时故障反过来影响在线失效语义（B0.2 离线写，永不作在线热路径阻塞点）。
+- 发送类（send_code / send_magic_link）注册到 send 订阅（send worker 进程消费）。
+- 快照失效类（invalidate_user_snap）注册到 user-invalidate 订阅（jobs/default worker
+  并行消费），绑定 auth 变更事件；consumer 退化到 ``core.user_cache.invalidate_user_snap``
+  = del + epoch bump 的反陈旧失效原语（A6/A7），天然幂等，绝不在失效侧写缓存值。
+- **B0.2 事件主路**：消费 auth 变更事件时，「失效在线缓存」的同时按单 user 刷新离线宽表
+  ``user_dim``（``user_dim_sync.refresh_user_dim_event``）。它自开独立会话、天然幂等、
+  正常跑；异常时**失效先于一切已完成**，dim 刷新仅记日志放行（离线副本可滞后一点，由
+  R 侧周期增量对账 ``reconcile_user_dim`` 兜回）——绝不让 ETL 的临时故障反过来影响在线
+  失效语义（B0.2 离线写，永不作在线热路径阻塞点）。
 - **周期增量对账（crash-safety 网）**：``reconcile_user_dim`` 经 cron 定时发布到
-  ``lkm.jobs`` 消费（低频，见 register_cron_job），批扫 + 批量 upsert（恒命令数）。
+  ``system/cron`` topic，由 jobs 订阅消费（低频，见 register_cron_job），批扫 + 批量 upsert。
 """
 
 import logging
 
-from app.core.jobs import (
+from app.core.messaging import (
+    RKEY_RECONCILE,
+    RKEY_SEND_CODE,
+    RKEY_SEND_MAGIC,
     RKEY_USER_BANNED,
     RKEY_USER_SESSION_REVOKE,
     RKEY_USER_UPDATED,
+    SUB_JOBS,
+    SUB_SEND,
+    SUB_USER_INVALIDATE,
+    TOPIC_CRON,
+    TOPIC_EMAIL,
+    TOPIC_USER_EVENTS,
 )
-from app.core.task_registry import register_cron_job, register_queue, register_task
+from app.core.task_registry import (
+    register_cron_job,
+    register_subscription,
+    register_task,
+)
 
 logger = logging.getLogger("lkm.auth.tasks")
 
-QUEUE = "lkm.send"  # 发送类任务归属队列（send worker 进程消费）
-ROUTING_KEYS = ["event.send_code", "event.send_magic_link"]
+# 发送类订阅（send worker 进程消费）
+register_subscription(SUB_SEND.name, TOPIC_EMAIL, [RKEY_SEND_CODE, RKEY_SEND_MAGIC])
 
-# 快照失效归属队列：jobs worker（现有部署集中运行），消费 auth 三变更事件路由键。
-QUEUE_SNAP = "lkm.jobs"
-ROUTING_KEYS_SNAP = [
-    RKEY_USER_UPDATED,
-    RKEY_USER_BANNED,
-    RKEY_USER_SESSION_REVOKE,
-]
+# 用户快照失效订阅（jobs worker 并行消费 auth 三变更事件）
+register_subscription(
+    SUB_USER_INVALIDATE.name,
+    TOPIC_USER_EVENTS,
+    [RKEY_USER_UPDATED, RKEY_USER_BANNED, RKEY_USER_SESSION_REVOKE],
+)
 
-register_queue(QUEUE, ROUTING_KEYS)
-register_queue(QUEUE_SNAP, ROUTING_KEYS_SNAP)
+# jobs 订阅：本模块贡献 cron.reconcile（周期增量对账）
+register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_RECONCILE])
 
 
 async def send_code(channel_key: str, contact: str, code: str) -> None:
@@ -95,16 +107,15 @@ async def reconcile_user_dim() -> None:
     await reconcile_user_dim_periodic()
 
 
-register_task(QUEUE, "send_code", send_code)
-register_task(QUEUE, "send_magic_link", send_magic_link)
-register_task(QUEUE_SNAP, "invalidate_user_snap", invalidate_user_snap)
-register_task(QUEUE_SNAP, "reconcile_user_dim", reconcile_user_dim)
+register_task(SUB_SEND.name, "send_code", send_code)
+register_task(SUB_SEND.name, "send_magic_link", send_magic_link)
+register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_snap)
+register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 # 低频 crash-safety 网：周期增量对账（非新鲜度主路；主路是上面的 user.* 事件）。每日 03:10
-# 由 scheduler 发布 cron.reconcile→jobs worker。routing/cron 复用既有 cron.reconcile 键/队列，
-# 零新队列零新进程（jobs worker 已消费该键）。
+# 由 scheduler 发布 cron.reconcile→jobs 订阅。routing/cron 复用既有 cron.reconcile 键/订阅。
 register_cron_job(
     job_id="reconcile_user_dim",
     cron="10 3 * * *",  # 每日 03:10
-    routing_key="cron.reconcile",
+    routing_key=RKEY_RECONCILE,
     fn="reconcile_user_dim",
 )

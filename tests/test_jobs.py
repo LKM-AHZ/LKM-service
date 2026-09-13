@@ -1,22 +1,23 @@
-"""jobs 入队封装测试：入队优先，Rabbit 不可用/失败降级同步发送。"""
+"""jobs 入队封装测试：入队优先，消息总线不可用/失败降级同步发送。"""
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
-from app.core import amqp, jobs
+from app.core import jobs, messaging
 
 
 @pytest.fixture(autouse=True)
-async def reset_amqp() -> Any:
-    """每用例前复位共享 amqp 连接，避免跨测试复用同一 fake/broken 状态。"""
-    await amqp.close_amqp()
+def reset_transport() -> Iterator[None]:
+    """每用例前复位 transport，避免跨测试复用同一 fake/broken 状态。"""
+    messaging.set_transport(None)
     yield
-    await amqp.close_amqp()
+    messaging.set_transport(None)
 
 
 async def _patch_publish(monkeypatch: Any, *, fail: bool = False) -> list[tuple]:
-    """monkeypatch amqp._publish 返回可检查的列表。"""
+    """monkeypatch messaging.publish 返回可检查的列表。"""
     published: list[tuple] = []
 
     async def fake_pub(rk: str, payload: dict) -> bool:
@@ -25,7 +26,7 @@ async def _patch_publish(monkeypatch: Any, *, fail: bool = False) -> list[tuple]
         published.append((rk, payload))
         return True
 
-    monkeypatch.setattr(amqp, "_publish", fake_pub)
+    monkeypatch.setattr(messaging, "publish", fake_pub)
     return published
 
 
@@ -49,7 +50,7 @@ async def test_send_code_falls_back_when_publish_false(monkeypatch: Any) -> None
 
     from app.modules.auth import channels as ch
 
-    monkeypatch.setattr(amqp, "_publish", fake_pub)
+    monkeypatch.setattr(messaging, "publish", fake_pub)
     monkeypatch.setattr(ch, "CHANNELS", {"email": _Fake()})
     await jobs.send_code("email", "a@b.com", "123456")
     assert sent == [("a@b.com", "123456")]
@@ -68,7 +69,7 @@ async def test_send_code_falls_back_when_publish_raises(monkeypatch: Any) -> Non
 
     from app.modules.auth import channels as ch
 
-    monkeypatch.setattr(amqp, "_publish", broken_pub)
+    monkeypatch.setattr(messaging, "publish", broken_pub)
     monkeypatch.setattr(ch, "CHANNELS", {"email": _Fake()})
     await jobs.send_code("email", "a@b.com", "123456")  # 应降级、不抛
     assert called
@@ -86,7 +87,7 @@ async def test_send_magic_link_falls_back(monkeypatch: Any) -> None:
 
     from app.modules.auth import deps
 
-    monkeypatch.setattr(amqp, "_publish", fake_pub)
+    monkeypatch.setattr(messaging, "publish", fake_pub)
     monkeypatch.setattr(deps, "get_email_provider", lambda: _Fake())
     await jobs.send_magic_link("e@x.com", "https://link")
     assert sent == [("e@x.com", "https://link")]

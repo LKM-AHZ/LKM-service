@@ -14,13 +14,14 @@ from strawberry.fastapi import BaseContext, GraphQLRouter
 
 from app.api.graphql import build_schema
 from app.api.router import api_router
-from app.core import amqp as _amqp
 from app.core import logging as logger
+from app.core import messaging
 from app.core import redis as redis_client
 from app.core.apm import init_sentry
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
+from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
 from app.db.init_db import init_db
 from app.db.session import (
     AsyncSession,
@@ -63,6 +64,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
 
+    # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
+    start_lag_reporter()
+
     yield
 
     cleanup_task.cancel()
@@ -72,8 +76,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 收尾 WebSocket 事件的 Redis 订阅 task，避免泄漏连接
     await manager.close()
 
-    # 收尾 AMQP 入队共享 channel（若曾发布过），避免连接泄漏
-    await _amqp.close_amqp()
+    # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
+    await stop_lag_reporter()
+    await messaging.close()
     await redis_client.close_redis()
     await dispose_engine()
 

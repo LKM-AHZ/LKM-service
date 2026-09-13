@@ -111,23 +111,27 @@ _PROCESSED_KEY = "processed_events"
 
 
 async def _already_processed(
-    db: AsyncSession, user_id: int, event: str, ref_id: str
+    db: AsyncSession, user_id: int, event: str, ref_id: str, *, namespace: str = "legacy"
 ) -> bool:
-    """该事件 (event, ref_id) 是否已消费过？仅由 apply_event_side_effects 经行锁调用。"""
+    """该 (namespace, event, ref_id) 是否已消费过？仅由各副作用入口经行锁调用。
+
+    ``namespace``：M4 points 拆订阅后各订阅用独立命名空间（stats/tasks），避免同一事件
+    被一个订阅标记后其它订阅误跳过；保留整入口用 ``legacy`` 命名空间。
+    """
     stat = await _get_or_create_stats(db, user_id, for_update=True)
     processed = stat.stats.get(_PROCESSED_KEY)
-    return isinstance(processed, dict) and f"{event}:{ref_id}" in processed
+    return isinstance(processed, dict) and f"{namespace}:{event}:{ref_id}" in processed
 
 
 async def _mark_processed(
-    db: AsyncSession, user_id: int, event: str, ref_id: str
+    db: AsyncSession, user_id: int, event: str, ref_id: str, *, namespace: str = "legacy"
 ) -> None:
-    """记录该事件已消费，与副作用同一事务原子落库。"""
+    """记录该 (namespace, event, ref_id) 已消费，与副作用同一事务原子落库。"""
     stat = await _get_or_create_stats(db, user_id, for_update=True)
     processed = stat.stats.get(_PROCESSED_KEY)
     if not isinstance(processed, dict):
         processed = {}
-    processed = {**processed, f"{event}:{ref_id}": True}
+    processed = {**processed, f"{namespace}:{event}:{ref_id}": True}
     stat.stats = {**stat.stats, _PROCESSED_KEY: processed}
 
 
@@ -161,6 +165,45 @@ async def apply_event_side_effects(
         await _recheck_achievements(db, user_id, stat_key)
     # 2. 每日任务推进
     await _advance_tasks(db, user_id, event, today=tday)
+
+
+async def apply_stats_side_effects(
+    db: AsyncSession, user_id: int, event: str, ref_id: str
+) -> None:
+    """points-stats 订阅入口：仅行为计数 + 成就重算（独立幂等命名空间 stats）。
+
+    M4 把 points 拆为 reward/stats/tasks 三订阅扇出：本函数只做统计维度，与 tasks 订阅
+    同事件各跑各的互不影响。幂等键带 ``stats:`` 命名空间，与整入口 legacy 命名空间隔离。
+    """
+    stat_key = EVENT_STAT_KEY.get(event)
+    if not stat_key:
+        return
+    if await _already_processed(db, user_id, event, ref_id, namespace="stats"):
+        return
+    await _mark_processed(db, user_id, event, ref_id, namespace="stats")
+    await _bump_count(db, user_id, stat_key)
+    await _recheck_achievements(db, user_id, stat_key)
+
+
+async def apply_task_side_effects(
+    db: AsyncSession,
+    user_id: int,
+    event: str,
+    ref_id: str,
+    *,
+    today: str | None = None,
+) -> None:
+    """points-tasks 订阅入口：仅每日任务推进（独立幂等命名空间 tasks）。
+
+    达标额外发分（``_advance_tasks`` 内 reward）归本订阅职责；reward 本身靠 ledger 唯一
+    约束幂等，与本订阅的 ``tasks:`` 标记双重守约。
+    """
+    if EVENT_TASK_KEY.get(event) is None:
+        return
+    if await _already_processed(db, user_id, event, ref_id, namespace="tasks"):
+        return
+    await _mark_processed(db, user_id, event, ref_id, namespace="tasks")
+    await _advance_tasks(db, user_id, event, today=today or _today())
 
 
 async def _progress_for(db: AsyncSession, user_id: int, type_: str) -> int:

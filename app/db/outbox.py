@@ -1,9 +1,9 @@
 """事务发件箱(outbox)模型与入队辅助（M1.1）。
 
 业务把"想可靠投递到消息总线的异步事件"与自身写入放同一事务（将行加入当前会话 commit），
-relay（`app/core/outbox_relay.py`）另行新会话领取并投 RabbitMQ(`lkm.events`)后改
-`published`，达成「DB 成、事件必达」的一致性。仅当 ``settings.rabbit_url`` 非空（生产/有
-broker）才入队；未配置(dev/测试)直返 False，维持既有 fail-open 语义、不留积压。
+relay（`app/core/outbox_relay.py`）另行新会话领取并经 `core.messaging.publish` 投 Pulsar 后
+改 `published`，达成「DB 成、事件必达」的一致性。仅当 ``settings.pulsar_url`` 非空（生产/有
+broker）才入队；未配置(dev/测试)直返 False，维持 fail-open 语义、不留积压。
 """
 
 from __future__ import annotations
@@ -83,14 +83,14 @@ async def enqueue_outbox(
 ) -> bool:
     """把一次将投递事件加入当前事务（不 commit；由业务会话统一提交/回滚）。
 
-    - 未配置 Rabbit（settings.rabbit_url 空）→ 直接 False：维持 fail-open，dev/测试不产生积压。
+    - 未配置消息总线（settings.pulsar_url 空）→ 直接 False：维持 fail-open，dev/测试不产生积压。
     - 提供显式 event_id 幂等：若该 id 已存在且仍 pending/published → 视为重复并跳过（不重复入队）。
       失败(failed)项允许以新的投递在后续业务调用再入队。
     - payload 须为 worker 可直接分派的完整 dict（含 "fn"/"args"）。
 
     返回 True=本次已 join 进事务待提交；False=被 gate 跳过或幂等已存在。
     """
-    if not settings.rabbit_url:
+    if not settings.message_bus_enabled:
         return False
 
     eid = event_id or uuid.uuid4().hex

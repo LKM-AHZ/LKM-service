@@ -77,9 +77,23 @@ class Settings(BaseSettings):
     redis_url: str = (
         ""  # 空串 = 未启用 Redis；非空走 redis://[user:pass@]host:port[/db]
     )
-    rabbit_url: str = (
-        ""  # 空串 = 未启用 RabbitMQ；非空走 amqp://[user:pass@]host[:port][/vhost]
-    )
+
+    # ---- 消息总线（Apache Pulsar，M4 全量迁移）----
+    # 空串 = 未启用消息总线（发布 fail-open 返回 False、outbox 不入队、relay 空转）。
+    # 非空走 pulsar://host:6650（或 pulsar+ssl://）。
+    pulsar_url: str = ""
+    # Pulsar Admin REST 基址（如 http://pulsar:8080），供 lag 上报拉取订阅 stats。
+    pulsar_admin_url: str = ""
+    # Admin REST 鉴权令牌（standalone 本地可空；生产设置）。
+    pulsar_admin_token: str = ""
+    # 租户名：topic 形如 persistent://{tenant}/{namespace}/{name}
+    pulsar_tenant: str = "lkm"
+    # 消费失败重投上限：超过后进死信 topic persistent://{tenant}/system/dlq
+    pulsar_dlq_max_redeliver: int = 1
+    # lag 上报周期（秒）；API 进程统计各订阅 msgBacklog 到 Prometheus gauge
+    pulsar_lag_interval_s: float = 30.0
+    # Pulsar 客户端操作超时（秒）
+    pulsar_operation_timeout_s: float = 30.0
 
     # outbox relay（app/core/outbox_relay.py run_outbox_loop）
     outbox_relay_interval_s: float = 2.0  # relay 轮询周期（含 follower 重试等待间隔）
@@ -189,6 +203,14 @@ class Settings(BaseSettings):
         生产（如 LKM_ENV=production）为 True，要求 https 传输 cookie。
         """
         return (self.env or "").strip().lower() not in _PERMISSIVE_ENVS
+
+    @property
+    def message_bus_enabled(self) -> bool:
+        """消息总线是否启用（pulsar_url 非空）。
+
+        发布 fail-open、outbox 入队 gate、relay 空转判定统一引用此属性。
+        """
+        return bool(self.pulsar_url)
 
     @property
     def database_url(self) -> str:

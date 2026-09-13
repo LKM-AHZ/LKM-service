@@ -6,7 +6,7 @@
 - ``cleanup_expired_uploads``：消费 cron.cleanup（scheduler 每小时整点发布），
   清扫过期未确认的直传随机 key 及标记。
 
-两任务的队列不同（notify / jobs），各自经 ``register_queue`` + ``register_task`` 注册（§6.2）。
+两任务的订阅不同（notify / jobs），各自经 ``register_subscription`` + ``register_task`` 注册。
 """
 
 import json
@@ -14,8 +14,20 @@ import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 
+from app.core.messaging import (
+    RKEY_CLEANUP,
+    RKEY_NOTIFY,
+    SUB_JOBS,
+    SUB_NOTIFY,
+    TOPIC_CRON,
+    TOPIC_NOTIFY,
+)
 from app.core.redis import get_redis
-from app.core.task_registry import register_cron_job, register_queue, register_task
+from app.core.task_registry import (
+    register_cron_job,
+    register_subscription,
+    register_task,
+)
 from app.db.session import new_session
 from app.modules.files.service import (
     _UPLOAD_TTL,
@@ -27,13 +39,11 @@ from app.ws.broker import publish_upload_bound
 
 logger = logging.getLogger(__name__)
 
-# notify 队列：直传对象登记
-QUEUE_NOTIFY = "lkm.notify"
-register_queue(QUEUE_NOTIFY, ["event.notify_upload"])
+# notify 订阅：直传对象登记
+register_subscription(SUB_NOTIFY.name, TOPIC_NOTIFY, [RKEY_NOTIFY])
 
-# jobs 队列：周期性清扫（cron.cleanup），与 blog 的 cron.reconcile 同队列
-QUEUE_JOBS = "lkm.jobs"
-register_queue(QUEUE_JOBS, ["cron.cleanup"])
+# jobs 订阅：周期性清扫（cron.cleanup），与 blog 的 cron.reconcile 同订阅
+register_subscription(SUB_JOBS.name, TOPIC_CRON, [RKEY_CLEANUP])
 
 _MATCH = "upload:*"
 
@@ -135,11 +145,11 @@ async def cleanup_expired_uploads() -> None:
         await redis.delete(marker)
 
 
-register_task(QUEUE_NOTIFY, "notify_upload", notify_upload)
-register_task(QUEUE_JOBS, "cleanup_expired_uploads", cleanup_expired_uploads)
+register_task(SUB_NOTIFY.name, "notify_upload", notify_upload)
+register_task(SUB_JOBS.name, "cleanup_expired_uploads", cleanup_expired_uploads)
 register_cron_job(
     job_id="cleanup_expired_uploads",
     cron="0 * * * *",  # 每小时整点
-    routing_key="cron.cleanup",
+    routing_key=RKEY_CLEANUP,
     fn="cleanup_expired_uploads",
 )

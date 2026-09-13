@@ -3,10 +3,9 @@
 多副本 leader 选举（M1.2）：`run_outbox_loop` 在 Redis 可用时，以租约键（SET NX EX）维护
 「同一时刻仅持租约副本 poll」，其余副本记录 `[follower] 不轮询` 并按周期重试；失联副本
 租约 TTL 到期即被接管、事件无缝续投。Redis 未启用（单 owner 开发）时退化为原始单进程
-串行 poller，与改动前一致。投递语义=`amqp._publish` 成功即 published（无 broker
-publish-confirm，publisher-confirm 后续增强）。未配置 Rabbit → enqueue 已被
-`app/db/outbox.enqueue_outbox` gate 掉不会入队，因此本 poll 也空转退出，与现有 worker
-"无 rabbit 降级空转返回" 一致。
+串行 poller，与改动前一致。投递语义=`messaging.publish` 成功即 published。
+未配置消息总线 → enqueue 已被 `app/db/outbox.enqueue_outbox` gate 掉不会入队，因此本
+poll 也空转退出，与 worker "无 broker 降级空转返回" 一致。
 
 `relay_poll` 刻意收敛为**纯函数**（不启动任何循环/会话生命周期），单测经 monkeypatch /
 session_factory seam 注入即可直接驱动；租约判定只出现在 `run_outbox_loop` 运行层。
@@ -23,7 +22,7 @@ from redis import WatchError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import amqp
+from app.core import messaging
 from app.core import redis as redis_client
 from app.core.config import settings
 from app.core.metrics import outbox_pending_count
@@ -50,7 +49,7 @@ async def relay_poll(
 
     语义：
     - 领取窗口 = `status=pending AND next_retry_at<=now`，按 attempt 升序（少重试者在先）。
-    - 投递（`amqp._publish(routing_key, parsed)`）成功 → `published_at=now, status=published`。
+    - 投递（`messaging.publish(routing_key, parsed)`）成功 → `published_at=now, status=published`。
     - 失败/异常 → `attempt_count += 1`；达 `MAX_TRIES` 置 `failed`（不再投），否则指数退避
       `next_retry_at = now + 2**attempt s`（cap 1h）保持 pending 待下轮。
     - 每事件独立 flush/commit，单条失败不影响其余。
@@ -61,7 +60,7 @@ async def relay_poll(
       （预留 locked_at/locked_by 列）。
     - 可观测（M0.5.2）：每轮末尾统计表内仍 `status=pending`（含退避等待下一轮）件数
       set 到 `outbox_pending_count` gauge 供积压看板。投递失败计数不在此重复——提交经
-      `amqp._publish`，其抛出/不可用路径已由 amqp 层自身计 `notify_failed_total`。
+      `messaging.publish`，其抛出/不可用路径已由 messaging 层自身计 `notify_failed_total`。
     """
     factory = session_factory or new_session
     db = await factory()
@@ -90,7 +89,7 @@ async def relay_poll(
                 # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
                 # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留，多余键对 handler 无害。
                 payload = {**payload, "event_id": msg.event_id}
-                ok = await amqp._publish(msg.routing_key, payload)
+                ok = await messaging.publish(msg.routing_key, payload)
             except Exception:
                 logger.exception(
                     "outbox publish exception id=%s rk=%s", msg.id, msg.routing_key
@@ -206,9 +205,9 @@ async def _release_lease(redis: Any, token: str) -> None:
 
 
 async def run_outbox_loop() -> None:
-    """独立进程主循环：周期 poll outbox（未配置 rabbit 空转退出，语义同 worker）。
+    """独立进程主循环：周期 poll outbox（未配置消息总线空转退出，语义同 worker）。
 
-    - 未配置 Rabbit：空转退出（enqueue 已被 gate，无事件可 poll）。
+    - 未配置消息总线：空转退出（enqueue 已被 gate，无事件可 poll）。
     - Redis 未启用/不可用（单 owner 开发）：直接串行 poll，等同改动前 M1.1 行为。
     - Redis 可用：以租约维持 leader 权。每个 tick 先 reconcile：仍是 leader 则续约 poll；
       已让出/未持有则尝试 NX 抢占——占不到说明被别的副本持有，记 `[follower] 不轮询`
@@ -216,8 +215,8 @@ async def run_outbox_loop() -> None:
       上界 ≈`outbox_leader_ttl_s`。ttl(60s) 远大于 interval(2s)，故每 tick 续一次足额，
       不会抖动抢主。
     """
-    if not settings.rabbit_url:
-        logger.error("rabbitmq 不可用，outbox relay 空转退出")
+    if not settings.message_bus_enabled:
+        logger.error("消息总线不可用，outbox relay 空转退出")
         return
     interval = settings.outbox_relay_interval_s
     logger.info(

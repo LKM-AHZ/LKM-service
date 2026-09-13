@@ -27,18 +27,26 @@ post_created_total = Counter(
     "全内容产出：统一 content_items / 专栏原生发帖成功落库后 +1（label content_type）",
     ("content_type",),
 )
-# AMQP 投递失败（publish 抛错 / 不可用），供过渡期错误率看板；未配置 Rabbit（ch None）
-# 属 fail-open 不计。由 amqp._publish 唯一计数：outbox relay 经同一 _publish 投递，其
-# 抛出路径已被此处捕获，relay 不再重复 inc（防同一异常 double-count）。
+# 消息总线投递失败（publish 抛错 / 不可用），供错误率看板；未配置 broker 属 fail-open
+# 不计。由 messaging.publish 唯一计数：outbox relay 经同一 publish 投递，其抛出路径已
+# 被此处捕获，relay 不再重复 inc（防同一异常 double-count）。
 notify_failed_total = Counter(
     "notify_failed_total",
-    "AMQP 投递失败次数（publish 抛错 / 不可用，unified at amqp._publish）",
+    "消息总线投递失败次数（publish 抛错 / 不可用，unified at messaging.publish）",
 )
 # outbox 积压量：outbox relay 每轮 poll 结束后统计仍是 pending（含指数退避等待下一轮）的
-# 事件数 set 到此，供积压看板；未配置 Rabbit 时 relay 空转不调用，本 gauge 保持初始 0。
+# 事件数 set 到此，供积压看板；未配置消息总线时 relay 空转不调用，本 gauge 保持初始 0。
 outbox_pending_count = Gauge(
     "outbox_pending_count",
     "outbox_events 中 status=pending 的积压事件数（relay 每轮末尾上报）",
+)
+# Pulsar 各订阅 lag（msgBacklog）：由 API 进程的 lag 上报器（app/core/pulsar_lag.py）
+# 周期从 Pulsar Admin REST 拉取后 set，供「某订阅故障/消费滞后」隔离看板。worker 进程
+# 不暴露 /metrics，故只在 API 进程上报。标签 = (subscription, topic)。
+pulsar_subscription_backlog = Gauge(
+    "pulsar_subscription_backlog",
+    "Pulsar 订阅积压消息数 msgBacklog（API 进程周期上报）",
+    ("subscription", "topic"),
 )
 
 

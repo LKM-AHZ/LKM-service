@@ -9,7 +9,7 @@ redis 侧失效，保证下次 ``get_user_snapshot`` 拉到的是 DB 新值、�
 
 - **同事务入队**（默认）：``notify_user_updated/notify_user_banned`` 把事件行 join 到传入
   的 ``db`` 会话当前事务，随业务会话的 commit 一并持久——镜像 ``points.rules.enqueue_``
-  与 ``files.notify._enqueue_upload`` 的落位约定。未配置 Rabbit → ``enqueue_outbox``
+  与 ``files.notify._enqueue_upload`` 的落位约定。未配置消息总线 → ``enqueue_outbox``
   门控直返 False（fail-open，dev/测试不产生积压）。
 - **自建会话独立投递**：``notify_user_banned_committed`` 供「锁定本身用 savepoint 隔离提交、
   而外部请求事务将要回滚」的路径使用——此时事件必须独立提交到独立事务才不与锁定错位
