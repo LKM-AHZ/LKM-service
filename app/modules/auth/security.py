@@ -16,6 +16,7 @@ from argon2.exceptions import VerificationError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.core.config import settings
+from app.core.secrets import reveal
 
 _ph = PasswordHasher()
 # 虚拟哈希，防枚举
@@ -84,7 +85,9 @@ def create_access_token(
         "iat": now,
         "exp": now + settings.access_token_expire_minutes * 60,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
+    )
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -92,7 +95,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
     # 之前先读"不验 aud"看类型、再"验 aud"验第二遍，导致每次调用重复验签(HMAC)两次。
     payload = jwt.decode(
         token,
-        settings.jwt_secret,
+        reveal(settings.jwt_secret),
         algorithms=[settings.jwt_algorithm],
         audience=_AUD_WEB,
     )
@@ -118,14 +121,16 @@ def create_temp_token(
     }
     if txn_id:
         payload["txn_id"] = txn_id
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
+    )
 
 
 def decode_temp_token(token: str) -> dict[str, Any]:
     # 单次验签：同时校验 audience(lkm:temp) 与类型标记(temp)。
     payload = jwt.decode(
         token,
-        settings.jwt_secret,
+        reveal(settings.jwt_secret),
         algorithms=[settings.jwt_algorithm],
         audience=_AUD_TEMP,
     )
@@ -182,7 +187,7 @@ def hash_recovery_code(plain: str) -> str:
     裸哈希在明文空间可离线枚举（恢复码熵 80-bit 虽低，但带 pepper 可挡离线彩虹表/暴力），
     与验证码哈希一致（见 service_verify.hash_code）。
     """
-    pepper = settings.verification_code_pepper.encode()
+    pepper = reveal(settings.verification_code_pepper).encode()
     return hmac.new(pepper, plain.encode(), hashlib.sha256).hexdigest()
 
 
@@ -202,7 +207,7 @@ def generate_recovery_codes(n: int = 10) -> list[tuple[str, str]]:
 
 def _derive_key() -> bytes:
     """32-byte AES-256 key from SHA-256."""
-    return hashlib.sha256(settings.totp_encryption_key.encode()).digest()
+    return hashlib.sha256(reveal(settings.totp_encryption_key).encode()).digest()
 
 
 def encrypt_secret(plain: str) -> str:

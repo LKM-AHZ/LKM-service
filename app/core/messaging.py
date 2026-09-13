@@ -36,6 +36,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.core import tracing
 from app.core.config import settings
 from app.core.metrics import notify_failed_total
 
@@ -267,32 +268,41 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         logger.error("未知 routing_key=%s，丢弃发布", routing_key)
         return False
 
-    data = _encode_event(dict(payload))
-    props: dict[str, str] = {"routing_key": routing_key}
-    fn = payload.get("fn")
-    if isinstance(fn, str):
-        props["fn"] = fn
+    # 发布 span（M5 7.2.2）：未启用 tracing 时为 no-op；traceparent 注入 props 供消费端续链
+    with tracing.tracer("lkm.messaging").start_as_current_span(
+        "pulsar.publish"
+    ) as span:
+        with suppress(Exception):
+            span.set_attribute("messaging.system", "pulsar")
+            span.set_attribute("messaging.destination.name", topic)
+            span.set_attribute("messaging.pulsar.routing_key", routing_key)
+        data = _encode_event(dict(payload))
+        props: dict[str, str] = {"routing_key": routing_key}
+        fn = payload.get("fn")
+        if isinstance(fn, str):
+            props["fn"] = fn
+        tracing.inject_context(props)
 
-    transport = _transport
-    if transport is not None:
+        transport = _transport
+        if transport is not None:
+            try:
+                await transport.publish(topic, data, props)
+                return True
+            except Exception:
+                logger.exception("transport publish failed rk=%s", routing_key)
+                notify_failed_total.inc()
+                return False
+
+        if not settings.message_bus_enabled:
+            return False
         try:
-            await transport.publish(topic, data, props)
+            producer = await _get_producer(topic)
+            await asyncio.to_thread(producer.send, data, properties=props)
             return True
         except Exception:
-            logger.exception("transport publish failed rk=%s", routing_key)
+            logger.exception("pulsar publish failed rk=%s topic=%s", routing_key, topic)
             notify_failed_total.inc()
             return False
-
-    if not settings.message_bus_enabled:
-        return False
-    try:
-        producer = await _get_producer(topic)
-        await asyncio.to_thread(producer.send, data, properties=props)
-        return True
-    except Exception:
-        logger.exception("pulsar publish failed rk=%s topic=%s", routing_key, topic)
-        notify_failed_total.inc()
-        return False
 
 
 # ---- 消费（同步 client 的线程桥接）----
@@ -312,6 +322,14 @@ def _create_consumer_sync(sub: Subscription) -> Any:
             dead_letter_topic=TOPIC_DLQ,
         ),
     )
+
+
+async def _run_handler(
+    handler: MessageHandler, payload: dict[str, Any], meta: MessageMeta
+) -> None:
+    """在主循环内带消费 span 执行 handler（从 meta.properties 续父链，M5 7.2.2）。"""
+    with tracing.consume_span(meta.properties, meta.topic, meta.subscription):
+        await handler(payload, meta)
 
 
 def _handle_message(
@@ -352,7 +370,9 @@ def _handle_message(
     )
 
     try:
-        future = asyncio.run_coroutine_threadsafe(handler(payload, meta), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            _run_handler(handler, payload, meta), loop
+        )
         future.result(timeout=JOB_TIMEOUT_S)
     except Exception:
         logger.exception("消费失败→负确认 subscription=%s", sub_name)

@@ -7,13 +7,15 @@
 import logging
 
 from app.core.config import settings
+from app.core.secrets import reveal
 
 logger = logging.getLogger(__name__)
 
 
 def init_sentry() -> None:
     """按 settings.sentry_dsn 初始化 Sentry；空 DSN 直返不做任何事（幂等）。"""
-    if not settings.sentry_dsn:
+    dsn = reveal(settings.sentry_dsn)
+    if not dsn:
         logger.info("Sentry DSN 未配置，跳过初始化（可观测可选）")
         return
     try:
@@ -22,7 +24,7 @@ def init_sentry() -> None:
         from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
         sentry_sdk.init(
-            dsn=settings.sentry_dsn,
+            dsn=dsn,
             environment=settings.env or "unknown",
             traces_sample_rate=settings.sentry_traces_sample_rate,
             integrations=[

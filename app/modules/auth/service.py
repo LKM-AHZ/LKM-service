@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.err import BizError
+from app.core.secrets import reveal
 from app.db.repo import get_or_raise
 from app.modules.auth import events
 from app.modules.auth.errors import AuthErr
@@ -67,8 +68,8 @@ def _get_storage() -> StorageBackend:
         settings.s3_endpoint_url,
         settings.s3_region,
         settings.s3_bucket,
-        settings.s3_access_key,
-        settings.s3_secret_key,
+        reveal(settings.s3_access_key),
+        reveal(settings.s3_secret_key),
         settings.s3_prefix,
     )
     if sig != _storage_sig:

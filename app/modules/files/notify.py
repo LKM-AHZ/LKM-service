@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.jobs import RKEY_NOTIFY
+from app.core.secrets import reveal
 from app.db.outbox import enqueue_outbox
 from app.db.session import new_session
 
@@ -51,7 +52,7 @@ def _normalize_upload_key(key: str) -> str | None:
 
 def _authorized(authorization: str | None) -> bool:
     """校验 Bearer 令牌与 ``files_notify_token`` 一致；令牌未配置则拒绝一切。"""
-    token = settings.files_notify_token
+    token = reveal(settings.files_notify_token)
     if not token:
         return False
     if not authorization:

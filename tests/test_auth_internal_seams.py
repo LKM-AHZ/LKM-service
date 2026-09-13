@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.auth.router_authz  # noqa: F401  # 确保 ROUTERS 已装好 router_authz
 from app.core.config import settings
+from app.core.secrets import reveal
 from app.db.auth_session import get_auth_session
 from app.main import app as _app
 from app.modules.auth.models import Profile, User
@@ -32,6 +33,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 @pytest.fixture(autouse=True)
 async def _bind_internal_auth_session(db: DB):
     """内部端点 S5 拆库后走 get_auth_session（auth 库），覆盖到本测 auth schema。"""
+
     async def _override() -> AsyncGenerator[AsyncSession]:
         yield db
 
@@ -50,7 +52,7 @@ def _reset_settings_token():
 
 
 def _auth_headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {settings.auth_http_token}"}
+    return {"Authorization": f"Bearer {reveal(settings.auth_http_token)}"}
 
 
 async def _mk_user(
@@ -214,9 +216,7 @@ async def test_authz_primitives_idempotent(db: DB) -> None:
     """授权原语第二次调用（无更高目标）为 no-op，token_version 不再 bump。"""
     uid = await _mk_user(db, "frank", account_level="admin", role="author")
     await db.commit()
-    ch1 = await grant_exam_unlock(
-        db, uid, unlock_level="admin", unlock_role="author"
-    )
+    ch1 = await grant_exam_unlock(db, uid, unlock_level="admin", unlock_role="author")
     assert ch1 == 0  # 已是目标 → 无动作
     lvl, role, tv = await _level(db, uid)
     assert (lvl, role, tv) == ("admin", "author", 0)

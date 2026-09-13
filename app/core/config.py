@@ -1,8 +1,10 @@
 import urllib.parse
 from typing import ClassVar
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.secrets import reveal
 
 # 存在即安全的非生产占位桶：仅当显式认领 dev/local/test 才允许占位密钥。
 # 刻意不包含 ""/None —— LKM_ENV 缺失（含显式设为空串）一律按生产 fail-fast，
@@ -30,7 +32,7 @@ class Settings(BaseSettings):
     db_port: int = 5432
     db_name: str = "lkm"
     db_user: str = "postgres"
-    db_password: str = ""
+    db_password: SecretStr = SecretStr("")
 
     # 连接池（PostgreSQL/asyncpg 生效）
     db_pool_size: int = 10
@@ -39,7 +41,9 @@ class Settings(BaseSettings):
     db_pool_pre_ping: bool = True
 
     # JWT 签名密钥 — 所有非测试环境必须覆盖此值
-    jwt_secret: str = "change-me-to-a-random-secret-thats-at-least-32-bytes-long"
+    jwt_secret: SecretStr = SecretStr(
+        "change-me-to-a-random-secret-thats-at-least-32-bytes-long"
+    )
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
@@ -53,16 +57,18 @@ class Settings(BaseSettings):
     login_window_seconds: int = 60
 
     # TOTP / 敏感数据加密密钥 — 必须与 jwt_secret 分开设置
-    totp_encryption_key: str = "change-me-totp-encryption-key-at-least-32-bytes"
+    totp_encryption_key: SecretStr = SecretStr(
+        "change-me-totp-encryption-key-at-least-32-bytes"
+    )
 
     # 验证码 HMAC 盐值 — 必须与 totp_encryption_key 和 jwt_secret 分开设置
-    verification_code_pepper: str = (
+    verification_code_pepper: SecretStr = SecretStr(
         "change-me-verification-code-pepper-at-least-32-bytes"
     )
 
     # OAuth (GitHub)
     github_client_id: str = ""
-    github_client_secret: str = ""
+    github_client_secret: SecretStr = SecretStr("")
     github_redirect_uri: str = "http://localhost:8000/api/v1/auth/oauth/github/callback"
     frontend_callback: str = "http://localhost:5173/login/success"
 
@@ -74,7 +80,7 @@ class Settings(BaseSettings):
     blog_repo_dir: str = "blog_repos"
     files_store_dir: str = "files_store"
     max_upload_bytes: int = 100 * 1024 * 1024  # 单文件上传上限 100MB
-    redis_url: str = (
+    redis_url: SecretStr = SecretStr(
         ""  # 空串 = 未启用 Redis；非空走 redis://[user:pass@]host:port[/db]
     )
 
@@ -102,7 +108,7 @@ class Settings(BaseSettings):
     # Pulsar Admin REST 基址（如 http://pulsar:8080），供 lag 上报拉取订阅 stats。
     pulsar_admin_url: str = ""
     # Admin REST 鉴权令牌（standalone 本地可空；生产设置）。
-    pulsar_admin_token: str = ""
+    pulsar_admin_token: SecretStr = SecretStr("")
     # 租户名：topic 形如 persistent://{tenant}/{namespace}/{name}
     pulsar_tenant: str = "lkm"
     # 消费失败重投上限：超过后进死信 topic persistent://{tenant}/system/dlq
@@ -120,7 +126,7 @@ class Settings(BaseSettings):
 
     # MinIO/S3 对象事件回调共享令牌：空串 = 未启用（回调端点一律 401）。
     # 生产必须设置固定随机值，供桶通知 webhook 的 Authorization: Bearer 头校验。
-    files_notify_token: str = ""
+    files_notify_token: SecretStr = SecretStr("")
 
     # AUTH 读面 HTTP seam（M3 B1.2）：单体单用户快照 miss 回填可跨进程改走 AUTH 读端点。
     #   auth_http_url:   AUTH 进程/服务基址（如 http://auth:8001，不带 api_prefix；本仓库
@@ -131,7 +137,7 @@ class Settings(BaseSettings):
     #   auth_http_timeout_s: 单次 internal read 超时；AUTH 不可达/超时 → client 抛 → seam
     #                     fail-open 回落本进程 DB（读不被某死/慢 AUTH 楔住）。见 B1.2 report。
     auth_http_url: str = ""
-    auth_http_token: str = ""
+    auth_http_token: SecretStr = SecretStr("")
     auth_http_timeout_s: float = 3.0
 
     # AUTH 独立库：auth 自持数据在专属第二个 PostgreSQL（独立 schema/engine）。
@@ -140,7 +146,7 @@ class Settings(BaseSettings):
     auth_db_port: int = 5432
     auth_db_name: str = "lkm_auth"
     auth_db_user: str = "postgres"
-    auth_db_password: str = ""
+    auth_db_password: SecretStr = SecretStr("")
     auth_db_pool_size: int = 10
     auth_db_pool_max_overflow: int = 20
     auth_db_pool_pre_ping: bool = True
@@ -155,7 +161,7 @@ class Settings(BaseSettings):
     use_alembic: bool = False
 
     # Sentry APM：空串 = 不加载（dev/test 默认关闭，避免拖启动）；配置 DSN 才接入
-    sentry_dsn: str = ""
+    sentry_dsn: SecretStr = SecretStr("")
     # Sentry 性能采样率（0~1）；仅 DSN 非空时才生效
     sentry_traces_sample_rate: float = 1.0
 
@@ -165,6 +171,21 @@ class Settings(BaseSettings):
     # /metrics 暴露根路径（不经 api_prefix，供 Prometheus 探抓）
     metrics_endpoint: str = "/metrics"
 
+    # ---- 链路追踪（OpenTelemetry，M5 7.2.2）----
+    # 默认关：dev/test 不埋点、不依赖 collector；生产置 true 且给 OTLP endpoint 才生效。
+    # 全程 fail-open：初始化/导出异常只记日志，绝不阻塞启动或请求。
+    otel_enabled: bool = False
+    # service.name 覆盖；空则用 app_name（+ auth 进程后缀 -auth）
+    otel_service_name: str = ""
+    # OTLP/HTTP traces 端点，如 http://otel-collector:4318/v1/traces（指向外部 SigNoz 亦然）
+    otel_exporter_otlp_endpoint: str = ""
+    # 额外导出头（逗号分隔 k=v，如 SigNoz ingestion key）；空则不带
+    otel_exporter_otlp_headers: str = ""
+    # 单次导出超时（秒）：collector 不可达时据此快速失败，不拖 shutdown
+    otel_exporter_timeout_s: float = 2.0
+    # 采样率（0~1）；低流量可置 1.0
+    otel_sample_ratio: float = 0.1
+
     # ---- 存储后端 ----
     storage_backend: str = "local"  # local | s3
     s3_endpoint_url: str = ""  # 留空=云 S3 默认 endpoint；填了=MinIO 本地(容器内连接用)
@@ -173,8 +194,8 @@ class Settings(BaseSettings):
     )
     s3_region: str = ""
     s3_bucket: str = "lkm"
-    s3_access_key: str = ""
-    s3_secret_key: str = ""
+    s3_access_key: SecretStr = SecretStr("")
+    s3_secret_key: SecretStr = SecretStr("")
     s3_prefix: str = "files"  # 桶内 key 前缀
 
     @model_validator(mode="after")
@@ -193,18 +214,37 @@ class Settings(BaseSettings):
             "placeholder",
         ]
         insecure: list[str] = []
+
+        def _bad(v: str) -> bool:
+            return not v or any(p in v.lower() for p in placeholders)
+
         for name, value in (
             ("jwt_secret", self.jwt_secret),
             ("totp_encryption_key", self.totp_encryption_key),
             ("verification_code_pepper", self.verification_code_pepper),
         ):
-            v = value or ""
-            if not v or any(p in v.lower() for p in placeholders):
+            v = reveal(value)
+            if _bad(v):
                 insecure.append(name)
             elif name in ("jwt_secret", "totp_encryption_key") and len(v) < 32:
                 insecure.append(f"{name}(too short)")
-        if self.jwt_secret == self.totp_encryption_key:
+        if reveal(self.jwt_secret) == reveal(self.totp_encryption_key):
             insecure.append("jwt_secret==totp_encryption_key")
+
+        # 注：不在此强制 db_password/redis_url —— 各 worker 进程 env 集不同（如
+        # worker-scheduler 不接 DB/Redis），按进程强校验会误杀。仅在「用到了才校验」的
+        # 条件字段上补强（storage_backend=s3 的 S3 键、配了 AUTH URL 的 seam token）。
+        if self.storage_backend == "s3":
+            for name, value in (
+                ("s3_access_key", self.s3_access_key),
+                ("s3_secret_key", self.s3_secret_key),
+            ):
+                if _bad(reveal(value)):
+                    insecure.append(name)
+        # AUTH seam 配齐 URL 即须成对给 token（否则端点一律 401，身份读全线降级）
+        if self.auth_http_url and _bad(reveal(self.auth_http_token)):
+            insecure.append("auth_http_token(missing while auth_http_url set)")
+
         if insecure:
             raise ValueError(
                 "Insecure secrets in production (set LKM_ENV to a non-dev value but secrets "
@@ -231,7 +271,7 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        password = urllib.parse.quote_plus(self.db_password)
+        password = urllib.parse.quote_plus(reveal(self.db_password))
         return (
             f"postgresql+asyncpg://{self.db_user}:{password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
@@ -240,7 +280,7 @@ class Settings(BaseSettings):
     @property
     def auth_database_url(self) -> str:
         """AUTH 独立库的 PostgreSQL(asyncpg) 连接 URL。"""
-        password = urllib.parse.quote_plus(self.auth_db_password)
+        password = urllib.parse.quote_plus(reveal(self.auth_db_password))
         return (
             f"postgresql+asyncpg://{self.auth_db_user}:{password}"
             f"@{self.auth_db_host}:{self.auth_db_port}/{self.auth_db_name}"

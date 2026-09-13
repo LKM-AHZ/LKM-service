@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr, resp_json
+from app.core.secrets import reveal
 from app.db.auth_session import get_auth_session
 from app.db.base import now_iso
 from app.db.repo import consume_once, get_or_raise
@@ -75,7 +76,7 @@ def _current_mfa_trust(request: Request) -> tuple[bool, int | None]:
     try:
         payload = jwt.decode(
             token,
-            settings.jwt_secret,
+            reveal(settings.jwt_secret),
             algorithms=[settings.jwt_algorithm],
             audience=_ADMIN_AUD,
         )
@@ -137,9 +138,7 @@ def _admin_user_dict(user: User) -> dict[str, Any]:
 
 
 # -- 2FA step-up 需先确认当前会话是合法 admin（复用 admin_session 基元，本地裁决于 auth 库）--
-async def _require_admin_from_cookie(
-    request: Request, db: AsyncSession
-) -> User:
+async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User:
     """按 admin access cookie 识别当前登录管理员（auth 库自足复刻 get_current_admin 语义）。
 
     相比单体现行依赖业务 admin deps 的 seam 裁决，此处**直连 current DBA=false 只在 auth
@@ -152,7 +151,7 @@ async def _require_admin_from_cookie(
 
     payload = jwt.decode(
         token,
-        settings.jwt_secret,
+        reveal(settings.jwt_secret),
         algorithms=[settings.jwt_algorithm],
         audience=_ADMIN_AUD,
     )
@@ -195,7 +194,9 @@ async def admin_login(
 
     频控两把锁（方案 §8.4）：用户名级 5/5min + 真实 IP 级 20/5min；IP 源 request.client.host。
     """
-    await check_code_rate_limit(f"admin:login:user:{body.username}", max_count=5, window=300)
+    await check_code_rate_limit(
+        f"admin:login:user:{body.username}", max_count=5, window=300
+    )
     ip = request.client.host if request.client else "unknown"
     await check_code_rate_limit(f"admin:login:ip:{ip}", max_count=20, window=300)
 
@@ -213,7 +214,9 @@ async def admin_login(
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
     # 会话体在 commit 前快照（避免 commit 后 expire 引发的异步重载）
-    access_token = create_admin_access_token(user)  # 读 id/account_level/token_version（已加载）
+    access_token = create_admin_access_token(
+        user
+    )  # 读 id/account_level/token_version（已加载）
     payload = _admin_user_dict(user)  # 读 created_at 等（已加载）
 
     raw_refresh = generate_refresh_token()
@@ -269,7 +272,9 @@ async def admin_refresh(
     if stored.expires_at <= now:
         return resp_json(CommonErr.FORBIDDEN, detail="会话已过期")
 
-    user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == stored.user_id)
+    user = await get_or_raise(
+        db, User, AuthErr.USER_NOT_FOUND, User.id == stored.user_id
+    )
     if user.account_level != "admin":
         return resp_json(CommonErr.FORBIDDEN, detail="会话无效")
 

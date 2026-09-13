@@ -11,6 +11,7 @@ from app.core.err import (
     BizError,
 )
 from app.core.redis_limiter import RedisRateLimiter
+from app.core.secrets import reveal
 
 
 async def check_password_login_rate_limit(ip_address: str) -> None:
@@ -20,7 +21,7 @@ async def check_password_login_rate_limit(ip_address: str) -> None:
     不放开防爆破面；未配置 Redis 时无分布式限流依赖可失败，放行保持原语义。
     """
     # 未配置 Redis：无分布式限流可失败，放行（那类部署靠 DB 级账号锁定兜底）。
-    if not settings.redis_url:
+    if not reveal(settings.redis_url):
         return
     limiter = RedisRateLimiter()
     if not await limiter.check(

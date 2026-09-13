@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.secrets import reveal
 
 # 冻结只读字段（与 auth.snapshot.UserSnapshot 完全一致）；缺任一字段即判畸形 → fail-open。
 # raw nickname 已加入快照缝冻结字段（M3.A 残项），HTTP OFF/ON 两侧 `_SNAP_FIELDS` 须同源，
@@ -54,7 +55,7 @@ class UserHttpUnavailable(Exception):
 
 def enabled() -> bool:
     """seam 开关：URL 与 token 都配齐才启用（默认双双为空 → False，保持既有直读 DB 行为）。"""
-    return bool(settings.auth_http_url and settings.auth_http_token)
+    return bool(settings.auth_http_url and reveal(settings.auth_http_token))
 
 
 def _endpoint_path(user_id: int) -> str:
@@ -81,7 +82,7 @@ async def fetch_user_http_payload(
     """
     url = f"{settings.auth_http_url}{_endpoint_path(user_id)}"
     headers = {
-        "Authorization": f"Bearer {settings.auth_http_token}",
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
     try:
@@ -156,7 +157,7 @@ async def authorize_via_seam(
     """
     url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/authz"
     headers = {
-        "Authorization": f"Bearer {settings.auth_http_token}",
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
     body = {
@@ -172,7 +173,9 @@ async def authorize_via_seam(
         raise UserHttpUnavailable(f"auth_http authz request failed: {exc}") from None
 
     if resp.status_code != 200:
-        raise UserHttpUnavailable(f"auth_http authz unexpected status {resp.status_code}")
+        raise UserHttpUnavailable(
+            f"auth_http authz unexpected status {resp.status_code}"
+        )
 
     payload = _coerce_json(resp)
     for f in _AUTHZ_FIELDS:
@@ -214,7 +217,7 @@ async def grant_via_seam(
     """
     url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/grant"
     headers = {
-        "Authorization": f"Bearer {settings.auth_http_token}",
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
     body: dict[str, object] = {"kind": kind, "user_id": int(user_id)}

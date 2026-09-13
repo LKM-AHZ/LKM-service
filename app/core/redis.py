@@ -7,6 +7,7 @@ from typing import Any
 from redis.asyncio import Redis
 
 from app.core.config import settings
+from app.core.secrets import reveal
 
 _client: Redis | None = None
 _client_pool: Any = None  # 底层池引用（测试替换为 fakeredis）
@@ -16,7 +17,7 @@ _PING_TIMEOUT = 0.2  # 秒
 
 def _is_enabled() -> bool:
     """未配置 redis_url 即视为关闭。"""
-    return bool(settings.redis_url)
+    return bool(reveal(settings.redis_url))
 
 
 def is_enabled() -> bool:
@@ -39,7 +40,7 @@ async def get_redis() -> Redis | None:
             return _client
         try:
             _client_pool = Redis.from_url(
-                settings.redis_url,
+                reveal(settings.redis_url),
                 decode_responses=True,
                 # 每次命令的 socket 超时：Redis 半挂（网络黑洞）时命令最多等
                 # 0.5s 即抛错，由调用方 fail-open 兜底，避免无限挂起拖死事件循环。

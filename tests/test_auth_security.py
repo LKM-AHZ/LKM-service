@@ -4,6 +4,7 @@ import jwt
 import pytest
 
 from app.core.config import settings
+from app.core.secrets import reveal
 from app.modules.auth.security import (
     create_access_token,
     create_temp_token,
@@ -52,7 +53,7 @@ class TestAccessToken:
             "exp": now - 3600,  # expired 1 hour ago
         }
         token = jwt.encode(
-            payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
+            payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
         )
         with pytest.raises(jwt.exceptions.ExpiredSignatureError):
             decode_access_token(token)

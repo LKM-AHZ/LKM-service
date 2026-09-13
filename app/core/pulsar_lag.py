@@ -20,6 +20,7 @@ import httpx
 from app.core.config import settings
 from app.core.messaging import SUBSCRIPTIONS
 from app.core.metrics import pulsar_subscription_backlog
+from app.core.secrets import reveal
 
 logger = logging.getLogger("lkm.pulsar_lag")
 
@@ -34,8 +35,8 @@ def _stats_path(topic: str) -> str:
 
 async def _collect_once(client: httpx.AsyncClient) -> None:
     headers: dict[str, str] = {}
-    if settings.pulsar_admin_token:
-        headers["Authorization"] = f"Bearer {settings.pulsar_admin_token}"
+    if reveal(settings.pulsar_admin_token):
+        headers["Authorization"] = f"Bearer {reveal(settings.pulsar_admin_token)}"
     # 同一 topic 可有多个订阅（points 三订阅扇出）：按 topic 去重，一次 stats 覆盖该 topic 全部订阅。
     subs_by_topic: dict[str, list[str]] = {}
     for sub in SUBSCRIPTIONS.values():
@@ -49,9 +50,9 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
             for name in names:
                 entry = cast(dict[str, Any], subscriptions.get(name) or {})
                 backlog = int(entry.get("msgBacklog", 0))
-                pulsar_subscription_backlog.labels(
-                    subscription=name, topic=topic
-                ).set(backlog)
+                pulsar_subscription_backlog.labels(subscription=name, topic=topic).set(
+                    backlog
+                )
         except Exception:
             # 单个 topic 拉取失败不中断其它 topic，也不影响主流程（保留上次 gauge 值）。
             logger.warning("lag 拉取失败 topic=%s", topic, exc_info=True)
@@ -73,7 +74,9 @@ def start_lag_reporter() -> None:
         return
     if _task is None or _task.done():
         _task = asyncio.create_task(_run())
-        logger.info("Pulsar lag 上报已启动 interval=%ss", settings.pulsar_lag_interval_s)
+        logger.info(
+            "Pulsar lag 上报已启动 interval=%ss", settings.pulsar_lag_interval_s
+        )
 
 
 async def stop_lag_reporter() -> None:

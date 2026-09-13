@@ -32,6 +32,24 @@ def get_request_id() -> str:
     return _request_id.get()
 
 
+def current_trace_ids() -> tuple[str, str] | None:
+    """读取当前 OTel span 的 (trace_id, span_id)；无埋点/无活动 span 返回 None。
+
+    惰性 import + 全程 try/except：未装/未启用 OpenTelemetry 时静默返回 None，
+    日志基座不因可观测可选件缺失而受影响（fail-open）。trace_id 为 32 位、span_id 16 位
+    小写十六进制（OTel 规范），供日志与 SigNoz 链路对齐。
+    """
+    try:
+        from opentelemetry import trace as otel_trace
+
+        ctx = otel_trace.get_current_span().get_span_context()
+    except Exception:
+        return None
+    if ctx is None or not ctx.is_valid:
+        return None
+    return format(ctx.trace_id, "032x"), format(ctx.span_id, "016x")
+
+
 class JsonFormatter(logging.Formatter):
     """把 LogRecord 序列化为单行 JSON，携带 request_id 与结构化字段。"""
 
@@ -45,6 +63,9 @@ class JsonFormatter(logging.Formatter):
         request_id = get_request_id()
         if request_id:
             payload["request_id"] = request_id
+        trace_ids = current_trace_ids()
+        if trace_ids is not None:
+            payload["trace_id"], payload["span_id"] = trace_ids
         extra_fields = getattr(record, "extra_fields", None)
         if isinstance(extra_fields, dict):
             payload.update(extra_fields)

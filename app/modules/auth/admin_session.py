@@ -24,6 +24,7 @@ import jwt
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
+from app.core.secrets import reveal
 
 COOKIE_NAME = "admin_session"
 REFRESH_NAME = "admin_refresh"
@@ -65,7 +66,9 @@ def create_admin_access_token(
             (now + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES)).timestamp()
         ),
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
+    )
 
 
 def decode_admin_access(token: str) -> dict[str, Any]:
@@ -77,7 +80,7 @@ def decode_admin_access(token: str) -> dict[str, Any]:
     try:
         payload = jwt.decode(
             token,
-            settings.jwt_secret,
+            reveal(settings.jwt_secret),
             algorithms=[settings.jwt_algorithm],
             audience=_ADMIN_AUD,
         )

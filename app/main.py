@@ -22,10 +22,16 @@ from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
 from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
+from app.core.tracing import (
+    instrument_sqlalchemy,
+    setup_tracing,
+    shutdown_tracing,
+)
 from app.db.init_db import init_db
 from app.db.session import (
     AsyncSession,
     dispose_engine,
+    get_async_engine,
 )
 from app.db.session import (
     get_read_session as get_graphql_session,  # GraphQL 仅 Query(纯读)，避免空提交
@@ -56,8 +62,11 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 可观测基座：结构化日志 + Sentry APM（均幂等；DSN 空则不加载）
     logger.setup_logging()
     init_sentry()
+    # 链路追踪（M5 7.2.2）：默认关；开启时埋 FastAPI/httpx，SQLAlchemy 待引擎建好再挂
+    setup_tracing(_app)
 
     await init_db()
+    instrument_sqlalchemy(get_async_engine())
 
     # 启动即探测 Redis，便于日志暴露其状态（未配置/不可用时静默降级为 None）
     await redis_client.get_redis()
@@ -86,6 +95,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     await stop_lag_reporter()
     await messaging.close()
     await redis_client.close_redis()
+    # 收尾链路追踪（限时 flush），先于引擎释放
+    shutdown_tracing()
     await dispose_engine()
 
 

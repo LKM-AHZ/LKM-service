@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.err import BizError
 from app.core.redis_limiter import RedisRateLimiter
+from app.core.secrets import reveal
 from app.db.base import now_iso
 from app.db.repo import consume_once, isolated_update
 from app.modules.auth.errors import AuthErr
@@ -28,7 +29,7 @@ def generate_code() -> str:
 
 
 def hash_code(raw: str, purpose: str = "", contact: str = "", nonce: str = "") -> str:
-    pepper = settings.verification_code_pepper.encode()
+    pepper = reveal(settings.verification_code_pepper).encode()
     msg = f"{raw}:{purpose}:{contact}:{nonce}".encode()
     return hmac.new(pepper, msg, hashlib.sha256).hexdigest()
 
@@ -162,7 +163,7 @@ async def check_code_rate_limit(
     限流依赖可失败，放行保持原语义（那种部署本就不靠 Redis 防爆破，靠 DB 级锁定兜底）。
     """
     # 未配置 Redis：无分布式限流可失败，非"运行期抖动"，按原行为放行。
-    if not settings.redis_url:
+    if not reveal(settings.redis_url):
         return
     if not await RedisRateLimiter().check(key, max_count, window, fail_open=False):
         raise BizError(AuthErr.VERIFICATION_CODE_RATE_LIMIT)

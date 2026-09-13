@@ -18,6 +18,7 @@ from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.config import settings
 from app.core.err import BizError
 from app.core.redis import get_redis
+from app.core.secrets import reveal
 from app.db.repo import get_or_raise
 from app.modules.auth.deps import CurrentUser
 from app.modules.auth.snapshot import get_user_snapshot_batch
@@ -246,8 +247,8 @@ def _get_storage() -> StorageBackend:
         settings.s3_endpoint_url,
         settings.s3_region,
         settings.s3_bucket,
-        settings.s3_access_key,
-        settings.s3_secret_key,
+        reveal(settings.s3_access_key),
+        reveal(settings.s3_secret_key),
         settings.s3_prefix,
     )
     if sig != _storage_sig:

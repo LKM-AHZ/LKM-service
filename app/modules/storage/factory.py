@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.secrets import reveal
 from app.modules.storage.base import StorageBackend
 from app.modules.storage.local import LocalStorage
 from app.modules.storage.s3 import S3Storage
@@ -19,7 +20,7 @@ def get_storage() -> StorageBackend:
             endpoint_url=settings.s3_endpoint_url,
             public_endpoint_url=settings.s3_public_endpoint_url,
             region_name=settings.s3_region,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
+            aws_access_key_id=reveal(settings.s3_access_key),
+            aws_secret_access_key=reveal(settings.s3_secret_key),
         )
     return LocalStorage(root_dir=Path(settings.files_store_dir))

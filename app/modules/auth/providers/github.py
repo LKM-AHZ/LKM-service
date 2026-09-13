@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.err import BizError
+from app.core.secrets import reveal
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.providers.oauth import OAuthUserInfo, register_provider
 
@@ -38,7 +39,7 @@ class GithubOAuth:
                     "https://github.com/login/oauth/access_token",
                     data={
                         "client_id": settings.github_client_id,
-                        "client_secret": settings.github_client_secret,
+                        "client_secret": reveal(settings.github_client_secret),
                         "code": code,
                     },
                     headers={"Accept": "application/json"},

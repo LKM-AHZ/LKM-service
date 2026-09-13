@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.secrets import reveal
 from app.db.auth_session import get_auth_session
 from app.modules.auth import snapshot as snap_mod
 
@@ -40,7 +41,7 @@ def _require_internal_token(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> None:
     """内部共享令牌鉴权：未配置/缺/错 都 401（fail-closed，此缝不成为公网面）。"""
-    token = settings.auth_http_token
+    token = reveal(settings.auth_http_token)
     if not token:
         raise HTTPException(status_code=401, detail="internal read not configured")
     if not authorization:

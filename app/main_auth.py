@@ -34,6 +34,7 @@ import app.health_auth as health_auth
 from app.core import redis as redis_client
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
+from app.core.tracing import setup_tracing, shutdown_tracing
 from app.db.auth_session import dispose_auth_engine
 from app.db.init_db import init_auth_db
 from app.db.session import dispose_engine
@@ -74,10 +75,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # Base.metadata，无其他进程会建它们，故是 auth 进程的职责；业务库 schema 仍由
     # backend 进程的 init_db 负责，二者分库、各自的 Alembic 链与迁移锁互不干扰。
     await init_auth_db()
+    # 链路追踪（M5 7.2.2）：auth 进程独立 service 名，默认关
+    setup_tracing(_app, service_suffix="-auth")
     try:
         yield
     finally:
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
+        shutdown_tracing()
         await dispose_auth_engine()
         await dispose_engine()
         await redis_client.close_redis()

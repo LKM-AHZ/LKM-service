@@ -30,6 +30,10 @@ RUN mkdir -p /data
 ENV LKM_BLOG_REPO_DIR=/data/blog_repos \
     LKM_FILES_STORE_DIR=/data/files_store
 
+# 统一入口(M5 7.2.3):按需从 Infisical 拉密钥注入环境后 exec 原 command;默认关闭时不触网
+RUN chmod +x /app/deploy/docker-entrypoint.sh
+ENTRYPOINT ["/app/deploy/docker-entrypoint.sh"]
+
 EXPOSE 8000
 # 多 worker：默认单 worker（语义不变），设 LKM_WEB_WORKERS=N 水平跑满 CPU。
 # uvicorn(0.51) `--workers N` 用 multiprocess spawn(ASGI worker)，无需 gunicorn/worker-class。

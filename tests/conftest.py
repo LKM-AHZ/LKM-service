@@ -29,6 +29,8 @@ os.environ["PYTEST_RUNNING"] = "1"
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from hypothesis import HealthCheck
+from hypothesis import settings as _hypothesis_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -49,6 +51,26 @@ from app.main import app
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
 Client = Annotated[AsyncClient, pytest.fixture]
+
+
+# ───────────────────────────────────────────────────────────────────────
+# hypothesis 属性测试 profile（M5 7.2.1）
+#
+# 属性测试落在同步 @given 里自建 PG schema 引擎（见 tests/prop_pg.py），fixture 为
+# 函数作用域、schema 建表慢，故统一放宽 deadline、压低 examples、抑制相关 health check；
+# 否则会撞 filterwarnings=["error"] 与默认 200ms deadline。--hypothesis-seed 仍可复现。
+# ───────────────────────────────────────────────────────────────────────
+_hypothesis_settings.register_profile(
+    "lkm",
+    deadline=None,
+    max_examples=50,
+    suppress_health_check=[
+        HealthCheck.too_slow,
+        HealthCheck.function_scoped_fixture,
+        HealthCheck.data_too_large,
+    ],
+)
+_hypothesis_settings.load_profile("lkm")
 
 
 @pytest.fixture(autouse=True)
