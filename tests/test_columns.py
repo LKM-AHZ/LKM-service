@@ -6,7 +6,7 @@
 - HTTP 路由用例额外注入 ``auth_seam_realm``(deps 跨 realm 裁 current user role/level)。
 权限点(columns.application_create / columns.*) 仍落业务 realm RolePermission，符合生产。
 
-真双 PG(lkm / lkm_auth) schema-per-test 跑绿；sqlite 双库分裂复刻同 realm 亦可。
+真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
 from typing import Any

@@ -8,8 +8,9 @@
 - ``readiness``：依赖就绪。聚合 DB(SELECT 1) + Redis(ping)，供 service 依赖序判定。
   细粒度复合/合并生产端点是 B1.3 的活，此处先给出干净、可被 healthcheck 单独命中的探测缝。
 
-跨文件 import 保持极简：只依赖 ``app.core.redis`` 与 ``app.db.session`` 的
-``get_async_engine``，均属 infra 且为 auth 进程必要的只读底座，不引业务模块。
+跨文件 import 保持极简：只依赖 ``app.core.redis`` 与 ``app.db.auth_session`` 的
+``get_auth_engine``，均属 infra 且为 auth 进程必要的只读底座，不引业务模块。**探的是 auth
+独立库**（auth 进程自持的 users/profiles 库），而非业务库——业务库 schema 不属本进程职责。
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.core import redis as redis_client
-from app.db.session import get_async_engine
+from app.db.auth_session import get_auth_engine
 
 router = APIRouter(tags=["auth-health"])
 
@@ -48,8 +49,14 @@ class AuthReadyData(BaseModel):
 
 
 async def probe_db() -> AuthDepStatus:
-    """探 DB：get_async_engine 未初始化→disabled；否则 SELECT 1 校验连通。"""
-    engine = get_async_engine()
+    """探 DB：auth 专属引擎（auth_session.get_auth_engine）SELECT 1 校验连通。
+
+    get_auth_engine 惰性建引擎、不会返 None（建引擎不建连接）；连接失败 → error。
+    """
+    try:
+        engine = get_auth_engine()
+    except Exception as exc:  # 配置错误（URL 构建失败等）也按 error 回报，不 500
+        return AuthDepStatus(status="error", detail=str(exc))
     if engine is None:
         return AuthDepStatus(status="disabled", detail="engine 未初始化")
     try:

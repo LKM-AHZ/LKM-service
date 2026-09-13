@@ -1,7 +1,7 @@
 """M3.B 基建回归：auth 独立库 realm、config、双 metadata 语义。
 
 只验证“基础设施可构造且与主库解耦”，不含对特定业务迁移的断言。全为真实 PostgreSQL
-（主库 + auth 独立库 schema-per-test），无本地 sqlite 兜底。
+（主库 + auth 独立库 schema-per-test）。
 """
 
 from sqlalchemy import text

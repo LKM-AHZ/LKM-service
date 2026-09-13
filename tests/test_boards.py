@@ -6,7 +6,7 @@ users/profiles 迁 auth 库(AuthBase)。凡 service 需要用户身份的用例�
   业务行 owner_id/applicant_id/reviewer/user_id（业务库只存裸 int，不存 User）。
 这些 boards.* service 纯按 int user_id 行事（属主/申请/审核/禁言比对 id + 业务 realm
 RolePermission 权限点），不跨 realm 读展示名，故**无需** auth_seam_realm。
-真双 PG(lkm / lkm_auth) schema-per-test 跑绿；sqlite 双库分裂复刻同 realm 亦可。
+真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
 import pytest

@@ -169,3 +169,108 @@ async def test_fail_open_when_redis_disabled(monkeypatch) -> None:
     monkeypatch.setattr(init_db_mod, "_run_upgrade", _fake_ide)
     await init_db_mod.init_db()
     assert ran == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTH 独立库 schema 初始化（M3.B 拆库后 auth 进程自持；见 init_auth_db）
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_init_auth_db_create_all_channel(monkeypatch) -> None:
+    """use_alembic=False → 走 AuthBase.create_all 通道，不触第二迁移链。"""
+    monkeypatch.setattr(settings, "use_alembic", False)
+    calls: list[str] = []
+
+    async def _fake_create() -> None:
+        calls.append("create_all")
+
+    def _fake_upgrade() -> None:
+        calls.append("upgrade")
+
+    monkeypatch.setattr(init_db_mod, "_create_auth_all", _fake_create)
+    monkeypatch.setattr(init_db_mod, "_run_auth_upgrade", _fake_upgrade)
+    await init_db_mod.init_auth_db()
+    assert calls == ["create_all"]
+
+
+async def test_init_auth_db_alembic_channel_uses_auth_lock(monkeypatch) -> None:
+    """use_alembic=True → 走 alembic_auth 第二链，且用独立的 auth 迁移锁。"""
+    fake = await _enable_fake_redis(monkeypatch)
+    monkeypatch.setattr(settings, "use_alembic", True)
+    calls: list[str] = []
+
+    async def _fake_create() -> None:
+        calls.append("create_all")
+
+    def _fake_upgrade() -> None:
+        calls.append("upgrade")
+
+    monkeypatch.setattr(init_db_mod, "_create_auth_all", _fake_create)
+    monkeypatch.setattr(init_db_mod, "_run_auth_upgrade", _fake_upgrade)
+    await init_db_mod.init_auth_db()
+    assert calls == ["upgrade"]
+    # 锁已释放；且业务链 key 未被本通道占用/误删
+    assert await fake.get(init_db_mod._AUTH_MIGRATION_LOCK_KEY) is None
+
+
+async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
+    """通道落库：AuthBase.create_all 在 auth 库建出全部 18 张 auth 表。"""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    import app.db.auth_session as auth_session_mod
+    from app.db.auth_base import auth_metadata
+
+    schema = "s_auth_init"
+    engine = create_async_engine(settings.auth_database_url, poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        await conn.execute(text(f'SET search_path TO "{schema}"'))
+
+    # _create_auth_all 内部 import get_auth_engine → patch 模块属性即生效
+    monkeypatch.setattr(auth_session_mod, "get_auth_engine", lambda: engine)
+    try:
+        await init_db_mod._create_auth_all()
+        async with engine.connect() as conn:
+            n = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = :s AND table_type = 'BASE TABLE'"
+                    ),
+                    {"s": schema},
+                )
+            ).scalar_one()
+        assert n == len(auth_metadata.tables) == 18
+    finally:
+        await engine.dispose()
+        clean = create_async_engine(settings.auth_database_url)
+        async with clean.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await clean.dispose()
+
+
+async def test_auth_metadata_disjoint_from_business_base() -> None:
+    """拆库不变量：auth 表（users/profiles…）只挂 AuthBase，不进业务 Base.metadata。"""
+    from app.db.auth_base import auth_metadata
+    from app.db.base import Base
+    from app.db.model_registry import ensure_all_models
+
+    ensure_all_models()
+    assert set(auth_metadata.tables).isdisjoint(Base.metadata.tables)
+    assert "users" in auth_metadata.tables
+    assert "users" not in Base.metadata.tables
+
+
+def test_auth_alembic_chain_baseline_head() -> None:
+    """alembic_auth 第二链存在唯一基线 head（空 versions 目录会让 upgrade 空跑）。"""
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
+    assert script.get_current_head() == "a0b1c2d3e4f5"

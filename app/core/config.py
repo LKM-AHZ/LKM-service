@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     auth_http_timeout_s: float = 3.0
 
     # AUTH 独立库：auth 自持数据在专属第二个 PostgreSQL（独立 schema/engine）。
-    # auth_* 键与 monolith 的 db_* 正交，统一标准只用 PostgreSQL(asyncpg)，无 sqlite 逃生分支。
+    # auth_* 键与 monolith 的 db_* 正交，统一标准只用 PostgreSQL(asyncpg)。
     auth_db_host: str = "localhost"
     auth_db_port: int = 5432
     auth_db_name: str = "lkm_auth"

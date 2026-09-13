@@ -112,14 +112,15 @@ async def cleanup_expired_challenges() -> None:
     import asyncio
     import logging
 
-    from app.db.session import new_session
+    from app.db.auth_session import get_auth_session
 
     _log = logging.getLogger("passkey.cleanup")
 
     while True:
         await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         try:
-            db = await new_session()
+            # S5 拆库后 PasskeyChallenge 在 auth 独立库 → 必须用 auth 会话，不能用业务 new_session。
+            db = await get_auth_session()
             try:
                 from sqlalchemy import delete as sa_delete
                 from sqlalchemy import or_
@@ -261,7 +262,7 @@ async def complete_passkey_registration(
     cred_raw = verified.credential_id
     # credential_id 列语义 = base64url 文本串（异于 raw bytes；登录侧浏览器 rawId 亦为
     # base64url-unpadded 文本）。Duwab 顶层 verify 返回的 credential_id 是原始 bytes，
-    # 直接入库/比较会把 PG varchar 列变成 bytea 比较而爆（sqlite 弱类型掩盖）。统一编码。
+    # 直接入库/比较会把 PG varchar 列变成 bytea 比较而爆。统一编码。
     cred_id = _b64(cred_raw) if isinstance(cred_raw, (bytes, bytearray)) else str(cred_raw)
     public_key_bytes = verified.credential_public_key
 

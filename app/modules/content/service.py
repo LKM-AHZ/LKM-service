@@ -259,7 +259,7 @@ async def get_item_by_slug(db: AsyncSession, slug: str) -> ContentItemInfo:
 async def _require_unique_slug(db: AsyncSession, slug: str | None) -> None:
     if not slug:
         return
-    # 应用层唯一校验（兼容 SQLite 多 NULL unique 差异；Postgres 走部分唯一索引）
+    # 应用层唯一校验，返回领域错误码 SLUG_TAKEN（DB 侧唯一索引兜底）
     existing = (
         (
             await db.execute(

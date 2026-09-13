@@ -249,7 +249,7 @@ class TestNotifyTask:
 
             # PG 强外键：register 的 LibraryFile.uploader_id 必须指向真实 user。
             # 标记里的 uploader_id=7 是断言契约（row.uploader_id==7），故让本 schema 第 7 个
-            # user 的自增 id==7（两引擎同序，sqlite 默认不强制外键故此前裸 id 可通）。
+            # user 的自增 id==7。
             from app.modules.auth.models import User
 
             for i in range(1, 8):

@@ -7,7 +7,7 @@ auth realm 稳定裸 int。凡"需要作者身份 / 读回作者名 author_name 
   author_name（display），须 seam 开 (指本测 auth_db) 才能读到——否则业务端直查 users 报错。
 显示名回填 seam 已开启 → ``author_name == nickname``。
 
-真双 PG(lkm/lkm_auth) schema-per-test 跑绿；sqlite 双库分裂复刻同 realm 亦可。
+真双 PG(lkm/lkm_auth) schema-per-test 跑绿。
 
 覆盖：
 - 讨论帖 discussion 创建 / 列表按板过滤 / 详情 bump_view

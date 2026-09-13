@@ -3,7 +3,7 @@
 定位：auth 拆独立库后，业务进程不会再本地动 users/profiles；一切**身份状态的变更**（解锁考试、
 纳入成员）与**凭证校验**（blog git_http 等需要验密）都收口到 auth。本 router 只挂 ``/auth/internal``，
 与 router_read 共用同一内部 Bearer 共享令牌（未配置即 fail-closed 401，不成公网面），并操作 auth 侧
-自持库会话（S2 蓝绿阶段沿用主库 get_session；S5 切独立库后改 auth session）。
+自持库会话——S5 拆库后统一走 ``get_auth_session``（auth 库），不再用业务 ``get_session``。
 
 装配：并入 auth 域 ROUTERS（auth 进程与 monolith 都挂载本 router——同一进程内直接走实现亦无碍）。
 跨库语义在 Phase 4 接线：业务 → 内部 client → 打到 auth 内部端点，由 auth 进程落库并发 user 事件失效。
@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_session
+from app.db.auth_session import get_auth_session
 from app.modules.auth.models import User
 from app.modules.auth.router_read import _require_internal_token
 from app.modules.auth.security import verifypwd
@@ -60,7 +60,7 @@ class _VerifyPasswordIn(BaseModel):
 async def internal_authz(
     body: _AuthzIn,
     _auth: None = Depends(_require_internal_token),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, object]:
     """auth 权威裁决：会话是否存活 + 返回当前 account_level/role。返回内部信封：
 
@@ -80,7 +80,7 @@ async def internal_authz(
 async def internal_grant(
     body: _GrantIn,
     _auth: None = Depends(_require_internal_token),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, int]:
     """按 kind 执行 auth 侧单向升权（解锁考试 / 纳入成员）。返回 ``{"changed": 0|1}``。
 
@@ -103,7 +103,7 @@ async def internal_grant(
 async def internal_verify_password(
     body: _VerifyPasswordIn,
     _auth: None = Depends(_require_internal_token),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, bool]:
     """校验用户名+密码（凭证例外路径，如 blog/git_http）。返回 ``{"ok": bool}``。
 

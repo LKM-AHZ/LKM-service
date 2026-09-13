@@ -15,6 +15,10 @@
 
 即用即作废 DB 直读权威（不绕 cache、不起 side-effect）：本端点永远从 DB 拉最新快照 + 来源版本，
 返回给调用方的既是真值也是可作缓存 CAS 的真实 sv。
+
+会话归属：S5 拆库后 users/profiles 在 **auth 独立库**，故本端点用 ``get_auth_session``（auth 库）
+而非业务的 ``get_session``——否则会对业务库不存在的 users 表查询（UndefinedTable）。monolith 与
+AUTH 进程都挂本 router，两进程的 ``get_auth_session`` 都指向各自配置的 auth 库。
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.session import get_session
+from app.db.auth_session import get_auth_session
 from app.modules.auth import snapshot as snap_mod
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
@@ -50,7 +54,7 @@ def _require_internal_token(
 async def internal_user_snapshot(
     user_id: int,
     _auth: None = Depends(_require_internal_token),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """经内部缝按 id 拉单用户快照（冻结字段）+ 来源版本 sv。
 

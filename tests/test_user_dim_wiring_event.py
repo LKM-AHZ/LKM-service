@@ -67,8 +67,10 @@ async def dim_db() -> AsyncIterator[tuple[Any, Any, Any]]:
 
 
 def _use_seam(monkeypatch: pytest.MonkeyPatch, maker: Any) -> None:
-    async def _factory() -> AsyncSession:
-        return maker()
+    async def _factory() -> tuple[AsyncSession, AsyncSession]:
+        # 融合 schema：源(auth)与目标(user_dim)同库，双会话均指向同一 maker（同一会话对亦可）。
+        s = maker()
+        return s, s
 
     monkeypatch.setattr("app.modules.auth.user_dim_sync._session_factory", _factory)
 

@@ -15,7 +15,10 @@ owner-leaf，其 router 只依赖 core + db.session + auth 内部，故可干净
 一个可被 compose/后续编排单独探活的自足进程。
 
 同名但独立：DB 引擎/Redis client 由本进程内 realm 各自 lazy 自持（同库同数据源，
-进程隔离）。lifespan 不起 alembic 迁移（避免与单体并发迁移）；仅做退出清理。
+进程隔离）。lifespan 负责**本进程自持的 auth 独立库 schema 初始化**（``init_auth_db``：
+非 alembic 走 AuthBase.create_all，alembic 走 ``alembic_auth`` 第二链）——auth 表已物理迁出
+单体 ``Base.metadata``，单体不再建它们，故由 auth 进程按「进程=库边界」自建，不再是「与单体
+并发迁移」（业务库迁移仍归 backend 进程）。
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ import app.health_auth as health_auth
 from app.core import redis as redis_client
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
+from app.db.auth_session import dispose_auth_engine
+from app.db.init_db import init_auth_db
 from app.db.session import dispose_engine
 from app.modules.auth import (
     admin_router,
@@ -65,12 +70,15 @@ _AUTH_ROUTERS = [
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    # 只读/认证读进程：DB 引擎与 Redis 均 lazy 自持，不起 alembic 迁移
-    # （迁移由单体的 backend 进程负责，避免 auth 进程与其并发 migrate）。
+    # 启动：初始化本进程自持的 auth 独立库 schema（AuthBase）。auth 表已迁出单体
+    # Base.metadata，无其他进程会建它们，故是 auth 进程的职责；业务库 schema 仍由
+    # backend 进程的 init_db 负责，二者分库、各自的 Alembic 链与迁移锁互不干扰。
+    await init_auth_db()
     try:
         yield
     finally:
-        # 退出清理：dispose engine / close redis，进程收尾不泄漏连接
+        # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
+        await dispose_auth_engine()
         await dispose_engine()
         await redis_client.close_redis()
 

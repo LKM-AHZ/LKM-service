@@ -507,8 +507,8 @@ class TestRefreshKindIsolation:
             refresh_access_token,
         )
 
-        # 先落一个真实用户（Pg 强制外键；孤儿 user_id=1 在 sqlite 因未开 FK pragma 可插，
-        # 在 PostgreSQL 会 IntegrityError）。token 宿主身份与语意无关，只要存在即可。
+        # 先落一个真实用户（PG 强制外键，裸插 user_id=1 孤儿会 IntegrityError）。
+        # token 宿主身份与语意无关，只要存在即可。
         owner = User(username="tkowner_adminkind", hashed_password="x")
         db.add(owner)
         await db.flush()

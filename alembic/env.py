@@ -63,7 +63,7 @@ def run_migrations_online() -> None:
     """Run migrations in 'online' (live-database) mode.
 
     Creates an Engine and associates a connection with the context.
-    统一 PostgreSQL 目标，无 SQLite batch_alter_table 需求。
+    统一 PostgreSQL 目标。
     """
     config.set_main_option("sqlalchemy.url", _sync_url(settings.database_url))
     connectable = engine_from_config(

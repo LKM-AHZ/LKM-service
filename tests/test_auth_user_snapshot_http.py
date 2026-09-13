@@ -211,6 +211,21 @@ class TestFlagOnUsesTransport:
 
 # ---- internal 读端点（公网 blast 面检查）：令牌鉴权 ----
 class TestInternalEndpointAuth:
+    @pytest.fixture(autouse=True)
+    async def _bind_internal_auth_session(self, db: DB):
+        """内部读端点 S5 拆库后走 get_auth_session（auth 库），覆盖到本测 auth schema。"""
+        from app.db.auth_session import get_auth_session
+        from app.main import app as _app
+
+        async def _override() -> AsyncIterator[AsyncSession]:
+            yield db
+
+        _app.dependency_overrides[get_auth_session] = _override
+        try:
+            yield
+        finally:
+            _app.dependency_overrides.pop(get_auth_session, None)
+
     @pytest.fixture
     async def snap_user(self, db: DB) -> int:
         return await _mk_user(db, "epuser", nickname="EP")

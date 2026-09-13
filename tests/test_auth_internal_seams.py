@@ -7,12 +7,16 @@
 - auth 侧的授权原语（grant_exam_unlock/grant_incubation）直接以 service 层覆盖单向提升与幂等。
 """
 
+from collections.abc import AsyncGenerator
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.auth.router_authz  # noqa: F401  # 确保 ROUTERS 已装好 router_authz
 from app.core.config import settings
+from app.db.auth_session import get_auth_session
+from app.main import app as _app
 from app.modules.auth.models import Profile, User
 from app.modules.auth.security import hashpwd
 from app.modules.auth.service_authz import grant_exam_unlock
@@ -23,6 +27,19 @@ from tests.conftest import DB, Client
 async def db(auth_db: AsyncSession) -> AsyncSession:
     """auth 内部 seam 用 auth 独立库（User/Profile/token_version 等 auth 表）。"""
     return auth_db
+
+
+@pytest.fixture(autouse=True)
+async def _bind_internal_auth_session(db: DB):
+    """内部端点 S5 拆库后走 get_auth_session（auth 库），覆盖到本测 auth schema。"""
+    async def _override() -> AsyncGenerator[AsyncSession]:
+        yield db
+
+    _app.dependency_overrides[get_auth_session] = _override
+    try:
+        yield
+    finally:
+        _app.dependency_overrides.pop(get_auth_session, None)
 
 
 @pytest.fixture(autouse=True)

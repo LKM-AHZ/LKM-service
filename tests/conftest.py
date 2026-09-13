@@ -201,7 +201,7 @@ async def client(
 ) -> AsyncGenerator[AsyncClient]:
     """官方异步 HTTP 客户端：httpx.AsyncClient + ASGITransport。
 
-    不触发 lifespan（避免 init_db 触碰真实控制面/lkm.db），并把 get_session/get_read_session
+    不触发 lifespan（避免 init_db 触碰真实控制面/真实数据库），并把 get_session/get_read_session
     覆盖到 ``db`` 会话（使同一测试内 HTTP 请求与测试体的 service 直呼共享同一长活事务，
     得以 flush 未 commit 即 POST→GET 同见）。S5-A2 Step2 起 admin **数据面 reader**端点依赖
     一个 auth 库只读会话（``users_router.get_admin_auth_read_session``），这里同步覆盖到本测

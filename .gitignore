@@ -18,9 +18,5 @@ DeveloperLog.md
 AUTH_DESIGN.md
 SQLALCHEMY_MIGRATION.md
 
-# database when developing locally
-lkm.db
-auth_lkm.db
-
 # blog git repos (bare repos generated at runtime)
 blog_repos/

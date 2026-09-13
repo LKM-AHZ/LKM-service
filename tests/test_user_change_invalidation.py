@@ -92,8 +92,10 @@ async def db(_fused_realm) -> AsyncSession:
 async def _dim_sync_throwaway(monkeypatch, _fused_realm) -> None:
     _engine, maker = _fused_realm
 
-    async def _factory() -> AsyncSession:
-        return maker()
+    async def _factory() -> tuple[AsyncSession, AsyncSession]:
+        # 融合 schema：源(auth)与目标(user_dim)同库，双会话指向同一 maker。
+        s = maker()
+        return s, s
 
     monkeypatch.setattr(
         "app.modules.auth.user_dim_sync._session_factory", _factory

@@ -639,8 +639,8 @@ async def hard_delete_article(db: AsyncSession, slug: str) -> None:
     # 级联删关联。article_tag/article_comments/article_likes 对 article 的外键在模型层
     # 声明 ondelete="CASCADE"，交给数据库在删 article 时级联清子行。ORM 的
     # cascade/delete-orphan 只对挂进 relationship 集合的对象生效，而本服务以
-    # ``db.add(<独立关联对象>)`` 落盘子行，追不到——若不加 DB 级 CASCADE，真 FK 库(PG)
-    # 下 DELETE articles 会被 NO ACTION 外键拦截（sqlite 默认不强制外键故此前静默、遗下孤儿）。
+    # ``db.add(<独立关联对象>)`` 落盘子行，追不到——若不加 DB 级 CASCADE，PG 下
+    # DELETE articles 会被 NO ACTION 外键拦截、遗下孤儿。
     await db.delete(article)
     await db.flush()
     await _invalidate_article_cache(db, slug)

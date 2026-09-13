@@ -53,7 +53,7 @@ async def _mk_post(db: DB) -> tuple[int, int]:
     """建真实 board + 真实作者 user，返回 (post_id, author_id)。
 
     content_items.board_id/author_id 是强 FK（board NOT NULL）；裸插 board_id=1 / author_id=7
-    在 PG 是孤儿 FK 会失败，sqlite 不强制故此前宽松。返回落库自增 id，属主判定用真实作者 id。
+    在 PG 是孤儿 FK 会失败。返回落库自增 id，属主判定用真实作者 id。
     """
     board = Board(slug="b", title="Board", description="")
     db.add(board)

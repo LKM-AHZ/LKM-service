@@ -1,6 +1,6 @@
 # LKM Service
 
-理科迷社区后端服务，基于 FastAPI、SQLAlchemy、PostgreSQL 与 Apache Pulsar（本地开发可退回 SQLite）。
+理科迷社区后端服务，基于 FastAPI、SQLAlchemy、PostgreSQL 与 Apache Pulsar。
 
 ## 当前能力
 
@@ -114,6 +114,15 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 
 所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由鉴权依赖解析；身份/展示读经 AUTH 读缝（`app/modules/auth/snapshot.py` / `user_http.py`），业务库不直连 `users` 表。
 
+> **部署要求**：S5 拆库后 `users/profiles` 只在 auth 独立库，业务库已无 `users` 表。生产必须同时配置
+> `LKM_AUTH_HTTP_URL`（compose 默认 `http://auth:8001`）与 `LKM_AUTH_HTTP_TOKEN`（backend 与 auth 两侧同值）；
+> 缺任一项 seam 关闭，`snapshot` 会回落业务库直查已迁出的 `users` 表而 `UndefinedTable`，身份展示读、
+> 考试解锁/项目纳入等升权写将全线失败（本地默认 `LKM_ENV` 非 production 时 url+token 未配同样会关闭 seam）。
+>
+> 另外 **jobs worker**（`worker` 服务，跑 `auth.tasks` 的 user_dim 离线 ETL）需配 `LKM_AUTH_DB_*` 直连
+> auth 库读源（User/Profile），再写业务库 `user_dim`——ETL 为跨 realm 双会话
+> （`user_dim_sync` 入口接收 `(source_db, target_db)`），不可单会话跨库 join。
+
 Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 响应结构
@@ -150,7 +159,7 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 ## 数据库与迁移
 
 - 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 增量迁移（现有 12 个版本，含 outbox、event_processed/event_failure、user_dim 等）。
-- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase），迁移入口 `alembic_auth/`（`alembic.auth.ini`），`versions/` 待补正式 migration；库初始化脚本 `deploy/initdb/01-auth-db.sh`。
+- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase，18 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `a0b1c2d3e4f5`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 ## 运行
 

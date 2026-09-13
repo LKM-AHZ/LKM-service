@@ -29,8 +29,8 @@ async def _discussion_created(db: AsyncSession, author_id: int | None = None) ->
     """直接调统一 content/service.create_item 成功建一帖（真实计数链路之一）。
 
     content_items.board_id(强 FK)+author_id(设了就需存在) 在 PG 是被校验的外键：
-    裸 board_id=1 / author_id=1 而 schema 无真实 board/user 会被 FK 拦截
-    （sqlite 默认不强制外键故此前可静默通过）。这里先落真实 board + 作者，取自增 id 作父。
+    裸 board_id=1 / author_id=1 而 schema 无真实 board/user 会被 FK 拦截。
+    这里先落真实 board + 作者，取自增 id 作父。
     """
     from app.modules.auth.models import User
     from app.modules.content.models import Board

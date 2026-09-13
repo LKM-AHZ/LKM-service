@@ -10,7 +10,7 @@
   绝不落业务 db 查 User（拆库后业务 realm 无 users，直读会 UndefinedTable）。
 - RBAC 权限点（files.upload/files.download）仍落业务 realm（RolePermission，符合生产）。
 
-真双 PG(lkm / lkm_auth) schema-per-test 各建 schema即可跑绿；sqlite 双库分裂复刻同 realm 亦可。
+真双 PG(lkm / lkm_auth) schema-per-test 各建 schema即可跑绿。
 """
 
 import asyncio

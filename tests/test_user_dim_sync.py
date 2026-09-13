@@ -11,7 +11,11 @@ B0.3(报表读侧)与在线一致性(user:snap)都不在此测，且本文件绝
 
 领域断言：全列字节镜像（nickname/role 来自 profiles，缺失 None；is_banned = bool(is_locked)
 与在线缝 snapshot 同义）；upsert 幂等可重跑且改源后更到同 PK 行；离线纪律：sync 只写
-user_dim 绝不动源；reconcile 增量收敛、批式命令恒定 3。
+user_dim 绝不动源；reconcile 增量收敛、跨库批式命令恒定 4（无候选 2）。
+
+跨 realm 说明：S5 真拆库后源在 auth 库、user_dim 在业务库，入口接收 (source_db, target_db)
+双会话；本文件的融合 schema 下传入同一会话两次即可（等价旧融合态），另见
+``test_user_dim_split_realm.py`` 对物理双库路径的验收。
 """
 
 from __future__ import annotations
@@ -155,7 +159,7 @@ async def test_refresh_materializes_row_bytes(DB) -> None:
     )
     await session.commit()
 
-    assert (await refresh_user_dim(session, user_id=u.id)) == 1
+    assert (await refresh_user_dim(session, session, user_id=u.id)) == 1
     row = await _dim_row(session, u.id)
     assert row is not None
     assert row.user_id == u.id
@@ -174,7 +178,7 @@ async def test_refresh_without_profile_is_null_nickname_and_role(DB) -> None:
     _e, session = DB
     u = await _mk_user(session, "noprof", nickname=None)  # 无 Profile 行
     await session.commit()
-    await refresh_user_dim(session, user_id=u.id)
+    await refresh_user_dim(session, session, user_id=u.id)
     row = await _dim_row(session, u.id)
     assert row is not None and row.nickname is None and row.role is None
 
@@ -186,7 +190,7 @@ async def test_refresh_updates_in_place_incl_banned_flip(DB) -> None:
     engine, session = DB
     u = await _mk_user(session, "bob", nickname="老昵称")
     await session.commit()
-    assert (await refresh_user_dim(session, user_id=u.id)) == 1
+    assert (await refresh_user_dim(session, session, user_id=u.id)) == 1
     assert await _dim_count(session) == 1
 
     # 纯 Profile 改(A6 盲区：不抬 User.updated_at) → 事件主路仍须刷新 dim 昵称(同一PK 行更)
@@ -197,7 +201,7 @@ async def test_refresh_updates_in_place_incl_banned_flip(DB) -> None:
     prof.nickname = "新昵称"
     await w1.commit()
     r1 = await _make_session(engine)
-    assert (await refresh_user_dim(r1, user_id=u.id)) == 1
+    assert (await refresh_user_dim(r1, r1, user_id=u.id)) == 1
     assert await _dim_count(r1) == 1  # 同 PK 行，不新增
     r1r = await _dim_row(r1, u.id)
     assert r1r is not None and r1r.nickname == "新昵称"
@@ -210,7 +214,7 @@ async def test_refresh_updates_in_place_incl_banned_flip(DB) -> None:
     u2.is_locked = True
     await w2.commit()
     r2 = await _make_session(engine)
-    await refresh_user_dim(r2, user_id=u.id)
+    await refresh_user_dim(r2, r2, user_id=u.id)
     flipped = await _dim_row(r2, u.id)
     assert flipped is not None and flipped.is_banned is True
     await w2.close()
@@ -222,7 +226,7 @@ async def test_sync_never_mutates_source(DB) -> None:
     _e, session = DB
     u = await _mk_user(session, "carol", nickname="Car")
     await session.commit()
-    await sync_dim_for_ids(session, [u.id])
+    await sync_dim_for_ids(session, session, [u.id])
     await session.commit()
     src = (await session.execute(select(User).where(User.id == u.id))).scalar_one()
     assert src.username == "carol"
@@ -251,7 +255,7 @@ async def test_sync_batch_command_count_constant() -> None:
         await session.commit()
 
         count["n"] = 0
-        nw = await sync_dim_for_ids(session, [u.id for u in users])
+        nw = await sync_dim_for_ids(session, session, [u.id for u in users])
         stmts = count["n"]
         assert nw == 200
         assert stmts == 2, (
@@ -269,18 +273,18 @@ async def test_sync_batch_idempotent_reupdate(DB) -> None:
     count = _counting(engine)
     u = await _mk_user(session, "dup", nickname="D")
     await session.commit()
-    await sync_dim_for_ids(session, [u.id])
+    await sync_dim_for_ids(session, session, [u.id])
     await session.commit()
     # 建 2 个 id 批量(含不存在 id, 应被 join 丢弃只 upd 真存在者)
     count["n"] = 0
-    assert (await sync_dim_for_ids(session, [u.id, 999999])) == 1
+    assert (await sync_dim_for_ids(session, session, [u.id, 999999])) == 1
     assert count["n"] == 2
     p = (
         await session.execute(select(Profile).where(Profile.user_id == u.id))
     ).scalar_one()
     p.nickname = "D2"
     await session.commit()
-    await sync_dim_for_ids(session, [u.id])
+    await sync_dim_for_ids(session, session, [u.id])
     assert (await _dim_row(session, u.id)).nickname == "D2"
     assert await _dim_count(session) == 1
 
@@ -293,14 +297,14 @@ async def test_reconcile_catches_new_and_stale_then_converges(DB) -> None:
     newbie = await _mk_user(session, "n1", nickname="N1")
     await session.commit()
     # 先物化 untouched/stale → 其 sync_ts≈now；newbie 刻意留作"未物化"
-    await sync_dim_for_ids(session, [untouched.id, stale.id])
+    await sync_dim_for_ids(session, session, [untouched.id, stale.id])
     await session.commit()
     # 对 stale 改纯 User 列(username)抬 updated_at，制造源变更
     su = (await session.execute(select(User).where(User.id == stale.id))).scalar_one()
     su.username = "s1_renamed"
     await session.commit()
 
-    await reconcile_user_dim_incremental(session, window=10)
+    await reconcile_user_dim_incremental(session, session, window=10)
     stale_row = await _dim_row(session, stale.id)
     assert stale_row is not None
     assert stale_row.username == "s1_renamed"
@@ -311,7 +315,7 @@ async def test_reconcile_catches_new_and_stale_then_converges(DB) -> None:
     assert untouched_row.nickname == "T1"
 
     # 收敛：无"变更/未物化"者，再来返 0
-    assert (await reconcile_user_dim_incremental(session, window=10)) == 0
+    assert (await reconcile_user_dim_incremental(session, session, window=10)) == 0
 
 
 # (7) reconcile 批式命令计数恒定(=3)于真实内存库；空集直接返回只发 1 条候选 SELECT
@@ -323,18 +327,18 @@ async def test_reconcile_command_count_constant() -> None:
         for i in range(60):
             await _mk_user(session, f"r{i}", nickname=f"R{i}")
         await session.commit()
-        # 60 个全未物化：首拍 window=50 补 50，命令恒定 3(候选 SELECT + sync 的读/写 2 条)
+        # 60 个全未物化：首拍 window=50 补 50，命令恒定 4(跨库双扫描 + sync 的读/写 2 条)
         count["n"] = 0
-        assert (await reconcile_user_dim_incremental(session, window=50)) == 50
-        assert count["n"] == 3, f"reconcile 批式应恒 3 命令, 实得 {count['n']}"
-        # 余 10 个仍 3 命令
+        assert (await reconcile_user_dim_incremental(session, session, window=50)) == 50
+        assert count["n"] == 4, f"reconcile 跨库批式应恒 4 命令, 实得 {count['n']}"
+        # 余 10 个仍 4 命令
         count["n"] = 0
-        assert (await reconcile_user_dim_incremental(session, window=50)) == 10
-        assert count["n"] == 3
-        # 全收敛：候选为空 → 直接返回 0，只有 1 条候选 SELECT 查询判定
+        assert (await reconcile_user_dim_incremental(session, session, window=50)) == 10
+        assert count["n"] == 4
+        # 全收敛：候选为空 → 直接返回 0，只有 2 条扫描(auth + 业务)查询判定
         count["n"] = 0
-        assert (await reconcile_user_dim_incremental(session, window=50)) == 0
-        assert count["n"] == 1
+        assert (await reconcile_user_dim_incremental(session, session, window=50)) == 0
+        assert count["n"] == 2
     finally:
         await session.close()
         await engine.dispose()

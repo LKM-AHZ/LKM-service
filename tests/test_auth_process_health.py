@@ -1,7 +1,7 @@
 """B1.1 AUTH 独立进程：main_auth 可导入装配 + 专属 liveness/readiness 健康缝。
 
 不依赖真实 DB/Redis（liveness 本就零外部依赖；readiness 用 monkeypatch 替换探子成
-up/disabled 回报，保持 hermetic，不触碰真实 lkm.db / 外部 redis）。
+up/disabled 回报，保持 hermetic，不触碰真实数据库 / 外部 redis）。
 """
 
 from collections.abc import AsyncGenerator
@@ -81,3 +81,37 @@ async def test_readiness_ok_when_both_up(auth_client, monkeypatch) -> None:
     assert p["status"] == "ok"
     assert p["db"]["status"] == "up"
     assert p["redis"]["status"] == "up"
+
+
+async def test_probe_db_uses_auth_engine(monkeypatch) -> None:
+    """probe_db 探的是 auth 独立库引擎（get_auth_engine），绝不是业务引擎。"""
+    from app.db import auth_session, session
+
+    assert health_auth.get_auth_engine is auth_session.get_auth_engine
+    assert health_auth.get_auth_engine is not session.get_async_engine
+
+    class _Conn:
+        async def __aenter__(self) -> "_Conn":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def execute(self, *_a: object, **_k: object) -> None:
+            return None
+
+    class _Engine:
+        def connect(self) -> "_Conn":
+            return _Conn()
+
+    calls = 0
+
+    def _fake_get_auth_engine() -> object:
+        nonlocal calls
+        calls += 1
+        return _Engine()
+
+    monkeypatch.setattr(health_auth, "get_auth_engine", _fake_get_auth_engine)
+    status = await health_auth.probe_db()
+    assert status.status == "up"
+    assert calls == 1

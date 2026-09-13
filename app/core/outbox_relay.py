@@ -53,7 +53,7 @@ async def relay_poll(
     - 失败/异常 → `attempt_count += 1`；达 `MAX_TRIES` 置 `failed`（不再投），否则指数退避
       `next_retry_at = now + 2**attempt s`（cap 1h）保持 pending 待下轮。
     - 每事件独立 flush/commit，单条失败不影响其余。
-    - 多副本注（M1 gate review 收钝）：领取 `FOR UPDATE`（SQLite no-op、PG 生效）收窄
+    - 多副本注（M1 gate review 收钝）：领取 `FOR UPDATE` 行级锁收窄
       「同批 pending 被双 poller 各取走」窗；同刻唯一 poll 仍由 leader 租约(M1.2)保证。
       因每事件独立 commit 周期放行锁，本锁非全串行兜底，最外正确性靠消费端 event_id 幂等
       + handler 硬次级幂等(points ref 唯一 / notify GETDEL)；故不再叠加 claim-marker

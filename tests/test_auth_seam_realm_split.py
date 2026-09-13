@@ -9,7 +9,7 @@
    走 ``fetch_user_http_payload`` 替身读 auth_db（全新 `_retrieve_fields_batch` 缝路径），
    业务 realm 无 users 也绝不 UndefinedTable。
 
-真双 PG（monolith=lkm / auth=lkm_auth）各建 schema 亦可跑；sqlite 双库已复刻同 realm 分裂。
+真双 PG（monolith=lkm / auth=lkm_auth）各建 schema 亦可跑。
 """
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError

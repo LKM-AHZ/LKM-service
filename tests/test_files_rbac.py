@@ -9,7 +9,7 @@
   users。RBAC 权限点 RolePermission 仍落在业务 realm(Base, 符合生产) 由 db 直插。
 - 纯“(无身份)拒绝”用例可仅 db/client(seam 无关)。
 
-真双 PG(lkm / lkm_auth)各建 schema 可跑；sqlite 双库复刻同 realm 分裂亦可。
+真双 PG(lkm / lkm_auth)各建 schema 可跑。
 """
 
 import io
