@@ -35,6 +35,37 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
     """2FA/TOTP/User 表在 auth 独立库（S5 拆后）；本文件默认走 auth 面。"""
     return auth_db
 
+
+@pytest.fixture
+async def fused_front_client(fused_db_session: AsyncSession) -> Any:
+    """前台业务路由 + auth 身份同 fused schema 的 HTTP 客户端。
+
+    业务删除路由要读业务库 ``role_permissions``/``content_items``，同时要 auth 身份裁决；
+    仅 override auth 会话（``auth_front_client``）会让业务会话落默认库而表不存在。这里把
+    ``get_session``/``get_read_session``/``get_auth_session`` 三处都指到 fused（auth+业务
+    同 schema），供需要业务权限表的前台用例使用。"""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.db.auth_session import get_auth_session
+    from app.db.session import get_read_session, get_session
+    from app.main import app
+
+    async def _override():
+        yield fused_db_session
+
+    app.dependency_overrides[get_session] = _override
+    app.dependency_overrides[get_read_session] = _override
+    app.dependency_overrides[get_auth_session] = _override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+        app.dependency_overrides.pop(get_read_session, None)
+        app.dependency_overrides.pop(get_auth_session, None)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -509,7 +540,7 @@ class TestDeleteNot2FAGated:
     """普通用户删除自己的内容不再要求 2FA（danger 2FA 仅保留给管理员代删/删passkey）。"""
 
     async def should_not_gate_user_delete_with_mfa(
-        self, auth_front_client: Any, db: AsyncSession
+        self, fused_db_session: AsyncSession, fused_front_client: Any
     ):
         """有有效 token 即可删除：删除不由 2FA 门禁拦截（不再返回 401 code=4）。
 
@@ -517,14 +548,14 @@ class TestDeleteNot2FAGated:
         content.owner_delete 且非属主时，对不存在的内容也统一返回 403 以免泄露资源
         存在性），故此处断言 403 而非旧的 404——核心意图仍是非 2FA 门禁。
 
-        经 auth_front_client：前台 /auth 端点与会话(CurrentUser 裁决)绑 auth 库(auth_db)，
-        用 auth realm 种子的用户 + token 请求即可命中鉴权，不再要求 biz 库有 users。
+        拆库后该路由同时要 auth 身份与业务库 role_permissions/content_items，故用 fused
+        （auth+业务同 schema）统一三处会话，令鉴权、权限判定、内容查询都可见。
         """
-        user = await _create_user(db, username="delete_nogate")
+        user = await _create_user(fused_db_session, username="delete_nogate")
         token = create_access_token(
             user_id=user.id, account_level="normal", role="member"
         )
-        resp = await auth_front_client.delete(
+        resp = await fused_front_client.delete(
             "/api/v1/content/items/999999", headers=_auth(token)
         )
         # 能走到权限判定（而非被 2FA 门禁拦住）→ 不再是 401 code=4

@@ -1,7 +1,10 @@
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.modules.content import service as content_service
 from app.modules.content.models import Board, ContentItem, ContentStatus, ContentType
 
 
@@ -11,6 +14,20 @@ async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> An
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")
     return body["data"]
+
+
+@pytest.fixture(autouse=True)
+async def _write_session_on_test_db(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    """content 浏览计数的独立写会话默认走全局 ``new_session()``（连默认库，测试 schema
+    无 content_items）。绑到本测 db 的 engine，令 ``bump_item_view`` 落同一测试 schema。
+    （同 tests/test_content.py 的 ``_new_write_session`` patch 范式。）
+    """
+
+    async def _new_session():
+        factory = async_sessionmaker(db.bind, expire_on_commit=False)
+        return factory()
+
+    monkeypatch.setattr(content_service, "_new_write_session", _new_session)
 
 
 class TestContentGraphQL:

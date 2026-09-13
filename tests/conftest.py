@@ -513,3 +513,22 @@ async def auth_seam_fused(
     无需额外 auth_db/schema；business 路由仍靠 client 的 biz db + auth seam 一同满足。
     """
     _install_user_seam(fused_db_session, monkeypatch)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# 全局 engine 跨 loop 清理
+#
+# app/db/session.py 与 app/db/auth_session.py 各有一枚模块级惰性 engine 单例：一旦在
+# 某个测试的 event loop 内被 ``new_session()``/后台任务/未 override 的会话路径建立，就被
+# 绑定到那个 loop。后续测试用新 loop 复用连接池时会抛 asyncpg
+# 「got Future attached to a different loop」。每测后 dispose 两个单例，令各测试都在
+# 自身 loop 内重建引擎，消除跨 loop 复用（conftest 自建的 schema 引擎为独立实例，不受影响）。
+# ───────────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+async def _reset_global_engines() -> AsyncGenerator[None]:
+    yield
+    from app.db.auth_session import dispose_auth_engine
+    from app.db.session import dispose_engine
+
+    await dispose_engine()
+    await dispose_auth_engine()

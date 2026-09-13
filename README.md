@@ -1,19 +1,18 @@
 # LKM Service
 
-理科迷社区后端服务，基于 FastAPI、SQLAlchemy 和 SQLite/PostgreSQL。
+理科迷社区后端服务，基于 FastAPI、SQLAlchemy、PostgreSQL 与 Apache Pulsar（本地开发可退回 SQLite）。
 
 ## 当前能力
 
-- 用户系统：本地账号、普通账号、邮箱/手机号注册、密码登录、验证码登录、魔法链接登录。
-- Token 体系：JWT access token、refresh token、登出时吊销 refresh token。
-- 账号安全：账号等级、锁定状态、登录失败计数、登录限流。
-- 2FA：TOTP 设置、验证、恢复码确认、禁用。
-- OAuth：GitHub 登录与账号绑定。
-- Passkey：WebAuthn 注册、登录、凭据列表和删除。
-- 账号恢复：用户恢复、管理员恢复、邮箱/手机号/魔法链接恢复流程。
-- 专栏系统：专栏申请、审核、自动创建专栏、专栏文章发布与查询。
-- 博客系统：Git 仓库托管博客系列、文章文件读取、星标收藏、评论。
-- 数据库：开发环境自动建表；生产环境预期使用 Alembic 管理迁移。
+- 认证与账号：本地/普通/邮箱/手机号注册，密码/验证码/魔法链接登录，JWT access+refresh 与登出吊销，账号等级/锁定/失败计数/限流，2FA（TOTP + 恢复码），OAuth（GitHub），Passkey（WebAuthn），账号恢复（自助 + 管理员），邮箱/手机号绑定，Onboarding 引导。
+- 认证独立服务（M3/S5 拆库）：`users/profiles` 物理迁出业务库，AUTH 独立 ASGI 进程（`app/main_auth.py`）独立部署；业务域仅经 `auth.snapshot` 读缝 + `user:snap` 缓存读身份，边界由 import-linter 强制。
+- 内容域（content 聚合根）：社区帖子/评论/点赞（同事务维护冗余计数）、分科板块（负责人/禁言/准入）、专栏（申请/审核/文章）、问答、官方文章；只读 GraphQL 聚合。
+- 信息流域（feed）：关注用户/板块 + 时间线（分页 + `X-Total`）。
+- 其他业务域：博客（Git 托管/星标/评论/Git HTTP）、文件库（上传/审核/下载）、积分/成就/排行榜（事件规则引擎）、考试认证、项目广场、StarHope AI 学习助手。
+- 消息与一致性（M1/M4）：Pulsar 全站消息总线、事务发件箱（outbox）+ relay、按 `event_id` 幂等消费、死信（`system/dlq`）+ 重投、订阅 lag 上报；points 三订阅扇出隔离。
+- 缓存与报表：`user:snap` cache-through（版本 CAS + 失效 epoch 防复活）、AUTH 变更事件失效；`user_dim` 离线宽表 ETL 供后台/运营报表（与在线读隔离）。
+- 可观测：`/metrics`（prometheus-fastapi-instrumentator）+ Sentry（DSN 为空则跳过）。
+- 数据库：开发环境自动建表；生产使用 Alembic 迁移（业务库 `alembic/`，auth 库 `alembic_auth/`）。
 
 ## 项目结构
 
@@ -21,42 +20,39 @@
 .
 ├── main.py                    # 兼容入口：uvicorn main:app
 ├── app/
-│   ├── main.py                # create_app(), lifespan, 异常处理器, 启动安全检查
-│   ├── api/router.py          # 统一挂载全部模块 REST 路由
+│   ├── main.py                # create_app()：单体(业务域 + 前台 auth 面), lifespan/异常处理/启动安全检查
+│   ├── main_auth.py           # AUTH 独立 ASGI 进程入口(auth-only, compose 服务 auth)
+│   ├── health_auth.py         # AUTH 进程专属 liveness/readiness
+│   ├── api/
+│   │   ├── router.py          # 由 registry.MODULES 驱动挂载全部模块 REST 路由
+│   │   └── graphql.py         # GraphQL 装配(只读聚合)
 │   ├── ws/                    # WebSocket(broker/manager/router), Redis 订阅推送
-│   ├── core/
-│   │   ├── config.py          # Settings，读取 LKM_ 前缀环境变量
-│   │   ├── err.py             # ErrCode / BizError / ERRTABLE / respond
-│   │   ├── apm.py             # Sentry 可观测(DSN 空则跳过)
-│   │   ├── redis.py / redis_limiter.py / throttle.py  # Redis 客户端与共享限流
-│   │   ├── messaging.py       # 消息总线抽象（routing_key→Pulsar topic、JSON schema、Transport seam）
-│   │   └── worker*.py         # Pulsar 订阅入口（send/notify/jobs/user-invalidate/points 三订阅/dlq/outbox）
-│   ├── db/
-│   │   ├── models.py          # users/profiles/columns 等主模型
-│   │   ├── init_db.py         # 开发环境自动建表
-│   │   └── session.py         # SQLAlchemy engine/session 依赖
+│   ├── core/                  # 确定性共享层(不得依赖 modules)
+│   │   ├── config.py / err.py / common.py / logging.py / apm.py
+│   │   ├── cache.py / user_cache.py                        # L2 缓存 / user:snap(版本 CAS + epoch)
+│   │   ├── messaging.py / outbox_relay.py / pulsar_lag.py  # 总线抽象 / 发件箱 relay / lag 指标
+│   │   ├── jobs.py / task_registry.py / scheduler.py       # 任务注册与调度
+│   │   ├── worker*.py         # Pulsar 订阅进程(send/notify/jobs/points 三订阅/dlq/outbox/scheduler/default)
+│   │   └── redis.py / redis_limiter.py / throttle.py       # Redis 客户端与共享限流
+│   ├── db/                    # 基础设施层(不得反向依赖 modules)
+│   │   ├── base.py / session.py / repo.py / model_registry.py
+│   │   ├── auth_base.py / auth_session.py  # auth 独立库 metadata / 会话
+│   │   ├── models.py / outbox.py / event_processed.py / event_failure.py / user_dim.py
+│   │   └── init_db.py         # 开发环境自动建表
 │   └── modules/
-│       ├── common.py          # ApiResp, ListData, ModuleStatus
-│       ├── auth/              # 注册/登录/token/me、2FA、OAuth、Passkey、恢复、绑定
-│       ├── admin/             # 后台(auth/content/data/reports + moderation 见下)
-│       ├── articles/          # 官方文章/新闻只读端点
+│       ├── registry.py        # 模块注册表(路由/模型/任务统一出口)
+│       ├── auth/              # 认证自有域:登录/2FA/OAuth/Passkey/恢复/authz/onboarding
+│       │                      #   + snapshot 读缝、user_http seam、events 失效、user_dim_sync ETL
+│       ├── content/           # 内容聚合根:models/router/service/graphql + boards/columns/qa 子包
+│       ├── feed/              # 信息流域:关注 + 时间线 + GraphQL
+│       ├── admin/             # 后台(users/content/reports/auth/dlq + moderation + dim_report)
 │       ├── blog/              # 博客系列、Git 文件读取、星标、评论、Git HTTP
-│       ├── boards/            # 分科板块(已实现:板块/负责人/禁言/准入)
-│       ├── columns/           # 专栏申请、专栏、专栏文章
-│       ├── exam/              # 考试认证(板块解锁)
 │       ├── files/             # 文件库(上传/审核/下载/对象事件 notify)
-│       ├── follow/            # 关注(用户/板块)
-│       ├── forum/             # 社区帖子/评论/点赞 + GraphQL schema
-│       ├── health/            # 健康检查
-│       ├── moderation/        # 后台审核(内容/板块)
 │       ├── points/            # 积分/成就/排行榜(事件规则引擎)
-│       ├── projects/          # 项目广场
-│       ├── qa/                # 问答
-│       ├── rbac/              # 权限点/RBAC 统一
-│       ├── starhope/          # StarHope AI 学习助手
-│       ├── storage/           # Local/S3 对象存储抽象
-│       └── timeline/          # 时间线
-├── alembic/                   # Alembic 环境配置与迁移文件(LKM_USE_ALEMBIC=true 时启用)
+│       ├── projects/ exam/ articles/ starhope/
+│       └── rbac/ storage/ health/   # 权限点/对象存储抽象/健康检查
+├── alembic/                   # 业务库 Alembic 环境与迁移(LKM_USE_ALEMBIC=true 时启用)
+├── alembic_auth/              # auth 独立库 Alembic 环境与迁移
 ├── tests/
 ├── pyproject.toml
 └── uv.lock
@@ -83,35 +79,40 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 
 | 模块 | 前缀 | 说明 |
 |------|------|------|
-| Health | `/health` | 健康检查 |
+| Health | `/health` | 健康检查（复合 DB/Redis/AUTH） |
 | Auth | `/auth` | 注册（local/normal/phone/email）、登录（password/code/magic-link）、Token 刷新与吊销、用户资料 |
 | Auth 2FA | `/auth/2fa` | TOTP 设置、验证、禁用、恢复码确认 |
 | Auth OAuth | `/auth/oauth` | GitHub 登录与账号绑定 |
 | Auth Passkey | `/auth/passkey` | WebAuthn 注册、登录、凭据管理 |
 | Auth Settings | `/auth/settings` | 邮箱/手机号绑定 |
 | Auth Recovery | `/auth/recover` | 用户自助恢复 + 管理员恢复流程 |
+| Auth Onboarding | `/auth/onboarding` | 新人引导流程 |
+| Auth Internal | `/auth/internal` | AUTH 进程内部读缝（业务进程跨进程读身份 / user:snap 回填） |
+| Content | `/content` | 内容聚合：社区帖子/评论/点赞（同事务冗余计数） |
+| Boards | `/content/boards`、`/boards` | 分科板块（板块组织、负责人流程、禁言与发言准入） |
 | Columns | `/columns` | 专栏申请、审核、文章发布 |
-| Forum | `/forum` | 社区帖子分页浏览、发布、点赞、删除，评论（含回复与楼层号） |
+| QA | `/qa` | 问答提问 / 回答 / 浏览 |
+| Articles | `/articles` | 官方文章 / 新闻只读端点 |
+| Timeline | `/timeline` | 关注流 / 时间线（分页 + `X-Total`） |
+| Follow | `/users` | 关注用户（板块关注见 Boards） |
 | Files | `/files` | 文件库上传（pending 待审核）、列表筛选排序、详情浏览计数、下载计数 |
 | Blog | `/blog` | 博客系列 CRUD、Git 文件读取、星标、评论 |
 | Blog Git | `/blog/git` | Git HTTP 后端（仓库读写，Basic Auth 认证） |
-| Boards | `/boards` | 分科板块（已实现：板块组织、负责人流程、禁言与发言准入） |
-| Follow | `/users`、`/boards` | 关注用户 / 板块 |
-| Timeline | `/timeline` | 关注流 / 时间线（分页 + `X-Total`） |
 | Files Notify | `/notify` | 文件对象事件回调（对象存储 Webhook） |
-| Articles | `/articles` | 官方文章 / 新闻只读端点 |
 | Exam | `/exam` | 考试认证（解锁板块） |
 | Projects | `/projects` | 项目广场 CRUD / 审核 |
-| QA | `/qa` | 问答提问 / 回答 / 浏览 |
 | Points | `/points` | 积分 / 成就 / 排行榜（事件规则引擎） |
 | StarHope | `/starhope` | StarHope AI 学习助手 |
-| Admin | `/admin` | 后台（登录、用户/内容/举报/文档管理） |
-| Moderation | `/admin/moderation` | 后台审核（内容 / 板块） |
+| Admin | `/admin` | 后台（登录、用户管理） |
+| Admin Auth | `/admin/auth` | 后台认证管理 |
+| Admin Content | `/admin/content` | 后台内容管理 |
+| Admin Moderation | `/admin/moderation` | 后台审核（内容 / 板块） |
+| Admin DLQ | `/admin/dlq` | 死信队列查看 / 重投 |
 | WS | `/ws` | WebSocket（Redis 订阅推送、上传登记等） |
 
 ## 身份认证
 
-所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由 `get_current_user` 解析。
+所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由鉴权依赖解析；身份/展示读经 AUTH 读缝（`app/modules/auth/snapshot.py` / `user_http.py`），业务库不直连 `users` 表。
 
 Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
@@ -148,15 +149,8 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 数据库与迁移
 
-开发环境启动时会执行：
-
-```python
-Base.metadata.create_all(bind=engine)
-```
-
-因此 SQLite 本地开发可以自动建表。
-
-生产/有历史数据库的环境需显式设 `LKM_USE_ALEMBIC=true` 走 Alembic 增量迁移；本地从零开发用默认 `false`（`create_all` 自动建表）。（当前 `alembic/versions/` 尚为空，若要在已有库上升级需先补充正式 migration。）
+- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 增量迁移（现有 12 个版本，含 outbox、event_processed/event_failure、user_dim 等）。
+- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase），迁移入口 `alembic_auth/`（`alembic.auth.ini`），`versions/` 待补正式 migration；库初始化脚本 `deploy/initdb/01-auth-db.sh`。
 
 ## 运行
 
@@ -164,6 +158,8 @@ Base.metadata.create_all(bind=engine)
 uv sync
 uvicorn main:app --reload
 ```
+
+生产 / 完整栈（含 Pulsar、AUTH 独立服务、各 worker）用仓库根目录 `docker-compose.yml` 编排启动。
 
 ## 测试
 

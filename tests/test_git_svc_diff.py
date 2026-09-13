@@ -25,8 +25,11 @@ def _make_repo(repo_dir: str, repo_name: str, files: dict[str, str]) -> str:
     （Linux git 会自动初始化，Windows 不会）。
     """
     bare = f"{repo_dir}/{repo_name}.git"
+    # 显式 -b master：git init 的 HEAD 默认分支受全局 init.defaultBranch 影响，
+    # 而下面 update-ref 固定写 refs/heads/master；不显式指定时在 main 默认的机器上
+    # HEAD 会悬空、rev-parse HEAD 取到空。
     subprocess.run(
-        ["git", "init", "--bare", bare],
+        ["git", "init", "--bare", "-b", "master", bare],
         capture_output=True,
         check=True,
     )

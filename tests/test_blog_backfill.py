@@ -56,6 +56,13 @@ async def _owner_user(db, username: str = "owner", email: str = "owner@example.c
 
 
 @pytest.fixture
+async def db(fused_db_session):
+    """S5 拆库后 users 在 auth 独立库；本文件要建 owner(User/Profile)+业务表，需两者同
+    schema → 复用 fused（Base+AuthBase 同 schema 建表）。"""
+    return fused_db_session
+
+
+@pytest.fixture
 async def series(db):
     owner_id = await _owner_user(db)
     s = BlogSeries(owner_id=owner_id, title="t", repo_name="repo-standard", description=None)

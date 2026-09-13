@@ -39,6 +39,22 @@ async def _seam_for_admin(auth_seam_fused) -> None:
     """/admin/users 端点解析/读 user PII 走 auth seam → fused 里 auth 表。"""
 
 
+@pytest.fixture(autouse=True)
+async def _admin_reader_on_fused(
+    fused_db_session: AsyncSession, client: AsyncClient
+) -> None:
+    """拆库后 ``client`` 把 admin 数据面 auth reader override 到独立 ``auth_db``，而本测
+    用户建在 ``fused`` → reader 读不到用户（列表空）。这里把该 reader 也指回 fused，令
+    端点内的业务会话与身份读会话同 schema。`client` teardown 会 pop 该键，无需自清。"""
+    from app.main import app
+    from app.modules.admin.users_router import get_admin_auth_read_session
+
+    async def _override():
+        yield fused_db_session
+
+    app.dependency_overrides[get_admin_auth_read_session] = _override
+
+
 async def _create_user(
     db: AsyncSession,
     username: str,
