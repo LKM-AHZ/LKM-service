@@ -49,8 +49,12 @@ from typing import Any
 from redis import WatchError
 from redis.asyncio import Redis as _AsyncRedis
 
+import app.core.local_cache as local_cache
 import app.core.redis as redis_client
+import app.core.user_cache_events as user_cache_events
 from app.core.cache import TTL_ITEM_S, make_key
+from app.core.config import settings
+from app.core.metrics import user_snap_cache_total
 
 logger = logging.getLogger("lkm.user_cache")
 
@@ -71,6 +75,11 @@ def _epoch_key(user_id: int) -> str:
 def get_user_cache_key(user_id: int) -> str:
     """单用户快照的缓存键（导出，测试/观测断言用）。"""
     return _snap_key(user_id)
+
+
+def _l1_on() -> bool:
+    """L1 是否启用：配置开关且 Redis 已配置（Redis 关闭则 L1 一并关闭，避免无法跨实例失效）。"""
+    return settings.user_snap_l1_enabled and redis_client.is_enabled()
 
 
 def version_of_updated_at(updated_at: datetime) -> int:
@@ -111,22 +120,47 @@ def _to_int(raw: Any) -> int:
 
 
 async def read_snap(user_id: int) -> dict[str, Any] | None:
-    """读缓存命中返回快照数据 dict；未命中/Redis 故障 → None（miss 由 DB 兜底）。"""
+    """读快照数据 dict（L1 本地 → L2 Redis）；未命中/Redis 故障 → None（miss 由 DB 兜底）。
+
+    L1 命中直接返回（免 L2 往返）；L1 miss 才查 L2，L2 命中后按 L1 TTL 回填本地。L1 条目
+    仅作镜像，脏形态（非 dict）即删，不放大既有 ``_from_cache_dict`` 的脏缓存问题。
+    """
     redis = await _get_redis()
     if redis is None:
         return None
     key = _snap_key(user_id)
+    if _l1_on():
+        entry = local_cache.l1_get(key)
+        if isinstance(entry, dict):
+            data = entry.get("data")
+            if isinstance(data, dict):
+                user_snap_cache_total.labels("l1", "hit").inc()
+                return data
+            local_cache.l1_delete(key)
+        user_snap_cache_total.labels("l1", "miss").inc()
     try:
         raw = await redis.get(key)
     except Exception:
         logger.debug("user_cache get fail-open uid=%s", user_id)
         return None
     if raw is None:
+        user_snap_cache_total.labels("l2", "miss").inc()
         logger.debug("user_cache miss uid=%s", user_id)
         return None
+    user_snap_cache_total.labels("l2", "hit").inc()
     try:
-        data = json.loads(raw).get("data")
-        return data if isinstance(data, dict) else None
+        payload = json.loads(raw)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+        if _l1_on():
+            sv = payload.get("sv")
+            local_cache.l1_set(
+                key,
+                {"sv": _to_int(sv) if sv is not None else None, "data": data},
+                settings.user_snap_l1_ttl_s,
+            )
+        return data
     except Exception:
         return None
 
@@ -134,19 +168,37 @@ async def read_snap(user_id: int) -> dict[str, Any] | None:
 async def read_snap_with_version(
     user_id: int,
 ) -> tuple[int | None, dict[str, Any] | None]:
-    """读缓存返回 `(sv, data)`（测试断言存内源版本用）；未命中/故障返回 `(None, None)`。"""
+    """读缓存返回 `(sv, data)`（测试断言存内源版本用）；未命中/故障返回 `(None, None)`。
+
+    同 :func:`read_snap` 走 L1 → L2，L2 命中回填 L1（信封含 sv，供版本断言）。
+    """
     redis = await _get_redis()
     if redis is None:
         return None, None
+    key = _snap_key(user_id)
+    if _l1_on():
+        entry = local_cache.l1_get(key)
+        if isinstance(entry, dict):
+            data = entry.get("data")
+            if isinstance(data, dict):
+                sv = entry.get("sv")
+                return (int(sv) if sv is not None else None), data
+            local_cache.l1_delete(key)
     try:
-        raw = await redis.get(_snap_key(user_id))
+        raw = await redis.get(key)
     except Exception:
         return None, None
     if raw is None:
         return None, None
     try:
         p = json.loads(raw)
-        return _to_int(p.get("sv")) if p.get("sv") is not None else None, p.get("data")
+        sv = _to_int(p.get("sv")) if p.get("sv") is not None else None
+        data = p.get("data")
+        if _l1_on() and isinstance(data, dict):
+            local_cache.l1_set(
+                key, {"sv": sv, "data": data}, settings.user_snap_l1_ttl_s
+            )
+        return sv, data
     except Exception:
         return None, None
 
@@ -191,6 +243,14 @@ async def write_if_newer(
                     pipe.multi()
                     pipe.set(key, value, ex=TTL_ITEM_S)
                     await pipe.execute()
+                    # L2 CAS 成功（权威已接受）才镜像进 L1；拒绝/异常一律不碰 L1，
+                    # 避免用陈旧值覆盖本地更新值。
+                    if _l1_on():
+                        local_cache.l1_set(
+                            key,
+                            {"sv": source_version, "data": data},
+                            settings.user_snap_l1_ttl_s,
+                        )
                     return True
                 except WatchError:
                     await pipe.reset()
@@ -209,10 +269,13 @@ def _extract_sv(raw_snap: str) -> int | None:
 
 
 async def invalidate_user_snap(user_id: int) -> None:
-    """失效单用户快照 —— **A7 的调用口**：INCR epoch + DEL snap 原子一步。
+    """失效单用户快照 —— **A7 的调用口**：INCR epoch + DEL snap 原子一步，再清 L1 并广播。
 
     INCR 让改动前捕获旧 epoch 的在途回填在写时判不匹配拒写 → 缓存保持空、陈旧不复活；
     DEL 让缓存立即 miss → 下个读必经 DB 拉当前实况。Redis 不可用静默跳过。
+
+    L1（本地内存）无法被 L2 DEL 波及，故 L2 提交成功后**先删本地 L1，再广播**让其他实例
+    删各自 L1（订阅方只删 L1、不 DEL L2，避免误删他实例刚回填的新值）。
     """
     redis = await _get_redis()
     if redis is None:
@@ -227,3 +290,7 @@ async def invalidate_user_snap(user_id: int) -> None:
             await pipe.execute()
     except Exception:
         logger.debug("user_cache invalidate skip uid=%s", user_id)
+        return
+    if _l1_on():
+        local_cache.l1_delete(key)
+        await user_cache_events.publish_invalidate(key)

@@ -15,7 +15,7 @@ from strawberry.fastapi import BaseContext, GraphQLRouter
 from app.api.graphql import build_schema
 from app.api.router import api_router
 from app.core import logging as logger
-from app.core import messaging
+from app.core import messaging, user_cache_events
 from app.core import redis as redis_client
 from app.core.apm import init_sentry
 from app.core.config import settings
@@ -62,6 +62,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 启动即探测 Redis，便于日志暴露其状态（未配置/不可用时静默降级为 None）
     await redis_client.get_redis()
 
+    # L1 本地缓存失效广播订阅（Redis 未配置则空转退避，不阻塞启动）
+    await user_cache_events.start()
+
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
 
     # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
@@ -75,6 +78,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     # 收尾 WebSocket 事件的 Redis 订阅 task，避免泄漏连接
     await manager.close()
+
+    # 收尾 L1 失效广播订阅 task（须在 close_redis 前，避免关连接竞态）
+    await user_cache_events.stop()
 
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await stop_lag_reporter()

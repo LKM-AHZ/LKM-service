@@ -49,6 +49,21 @@ pulsar_subscription_backlog = Gauge(
     ("subscription", "topic"),
 )
 
+# user:snap 双级缓存（L1 本地 / L2 Redis）命中与未命中；供 roadmap §7.2「启用前后命中率
+# /延迟对比」取数。label: layer=l1|l2, result=hit|miss。
+user_snap_cache_total = Counter(
+    "user_snap_cache_total",
+    "user:snap 双级缓存命中/未命中（layer=l1|l2, result=hit|miss）",
+    ("layer", "result"),
+)
+# user:snap 读请求合并（singleflight）：role=leader 为真正执行加载的请求，shared 为复用其结果者。
+# leader/shared 比值反映合并收益（趋近 1:1 表示热点击穿被有效收敛）。
+user_snap_singleflight_total = Counter(
+    "user_snap_singleflight_total",
+    "user:snap singleflight 请求合并（role=leader|shared）",
+    ("role",),
+)
+
 
 def setup_metrics(app: FastAPI) -> None:
     """按 settings 装配 /metrics + 自动 HTTP 埋点；关闭或缺依赖均 fail-open（幂等）。"""

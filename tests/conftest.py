@@ -20,7 +20,7 @@ schema，测末 drop cascade。每测试“单长活会话 override”保住了�
 """
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -38,6 +38,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
+from app.core import local_cache as _local_cache
+from app.core import singleflight as _singleflight
 from app.core.config import settings
 from app.db.auth_base import auth_metadata
 from app.db.base import Base, now_iso
@@ -47,6 +49,20 @@ from app.main import app
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
 Client = Annotated[AsyncClient, pytest.fixture]
+
+
+@pytest.fixture(autouse=True)
+def _reset_local_caches() -> Iterator[None]:
+    """每测复位 L1 本地缓存与 singleflight flight 表。
+
+    两者均为进程内全局单例，且测试大量复用相同 uid（7/3/42…）；不复位必跨用例串味
+    （旧的本地命中掩盖新写、或 flight 表残留）。
+    """
+    _local_cache.reset()
+    _singleflight.reset()
+    yield
+    _local_cache.reset()
+    _singleflight.reset()
 
 
 # ───────────────────────────────────────────────────────────────────────

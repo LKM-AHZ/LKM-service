@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     app_name: str = "LKM-API"
     app_version: str = "0.0.1"
     api_prefix: str = "/api/v1"
-    
+
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "lkm"
@@ -77,6 +77,23 @@ class Settings(BaseSettings):
     redis_url: str = (
         ""  # 空串 = 未启用 Redis；非空走 redis://[user:pass@]host:port[/db]
     )
+
+    # ---- 双级缓存 L1（本地进程内，roadmap §5.6）----
+    # user:snap 热读的进程内首级缓存：短 TTL、有界，仅加速不具权威（L2/DB 仍是权威）。
+    # 失效经 Redis pub/sub 广播到各实例（见 core/user_cache_events.py）；Redis 未启用时
+    # L1 一并关闭（无法跨实例失效，不冒陈旧风险）。
+    user_snap_l1_enabled: bool = True
+    # L1 短 TTL（秒）：同时是 pub/sub 丢广播时的陈旧窗口上界。
+    user_snap_l1_ttl_s: float = 10.0
+    # L1 最大条目数（LRU 逐出），防 user 数增长导致进程内存无界。
+    user_snap_l1_maxsize: int = 10000
+    # 单用户读请求合并（singleflight）：同进程并发 miss 只放一个真去调 AUTH/DB。
+    user_snap_singleflight_enabled: bool = True
+
+    # ---- 读热路径序列化（msgspec，roadmap §6.5.2）----
+    # timeline/feed 读热列表在 Pydantic 校验后改用 msgspec 出端口（降 CPU）。关闭即回退
+    # 既有 Pydantic model_dump + stdlib json 路径（逐字节一致），作回滚开关。
+    read_msgspec_enabled: bool = True
 
     # ---- 消息总线（Apache Pulsar，M4 全量迁移）----
     # 空串 = 未启用消息总线（发布 fail-open 返回 False、outbox 不入队、relay 空转）。

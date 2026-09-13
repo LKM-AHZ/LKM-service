@@ -41,7 +41,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import app.core.singleflight as singleflight
 import app.core.user_cache as user_cache
+from app.core.config import settings
+from app.core.metrics import user_snap_singleflight_total
 from app.modules.auth import user_http
 from app.modules.auth.models import Profile, User
 from app.modules.auth.schemas import ProfileInfo, ProfileRole
@@ -106,10 +109,12 @@ def _snap_to_dict(snap: UserSnapshot) -> dict[str, Any]:
 
 
 async def get_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot | None:
-    """按 id 取单用户快照；不存在返回 None。走 cache-through（A6）+ B1.2 HTTP seam。
+    """按 id 取单用户快照；不存在返回 None。走 cache-through（A6）+ B1.2 HTTP seam + 请求合并。
 
     - 命中 ``core.user_cache``：以冻结字段重建 ``UserSnapshot`` 直接返回（展示语义与直读 DB
       等价）；Redis 故障/失效 → miss。
+    - miss 走 singleflight（§5.4）：同进程并发拉同一 user_id 只放一个真去调 AUTH/DB，其余复用
+      其结果，防热点 key 击穿；loader 内**二次检查缓存**（可能已被先到者回填）。
     - miss 会**先捕获失效代次（``expected_epoch``）再取回填源**。回填源 = 就地直读 DB（A6，
       默认）或跨 HTTP 打 AUTH 读端点（B1.2 seam，见 ``auth.user_http``）；"取到的既有
       snapshot（或权威不存在）都先验真，再以来源版本 CAS 回填（缓存防线只对捕获 epoch 之后
@@ -117,7 +122,24 @@ async def get_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot |
     - fail-open：seam 开启时若 AUTH 不可达/超时/畸形（client 抛 ``UserHttpUnavailable``），
       回退本进程 DB 直读一并返回（读永不 crash、不以 stale 当 truth）。
     """
+    cached = await user_cache.read_snap(user_id)
+    if cached is not None:
+        return _from_cache_dict(cached)
+    if settings.user_snap_singleflight_enabled:
+        key = user_cache.get_user_cache_key(user_id)
+        return await singleflight.run(
+            key,
+            lambda: _load_user_snapshot(db, user_id=user_id),
+            on_role=lambda role: user_snap_singleflight_total.labels(role).inc(),
+        )
+    return await _load_user_snapshot(db, user_id=user_id)
 
+
+async def _load_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot | None:
+    """singleflight loader：二次检查缓存 → 捕获 epoch → 取回填源 → CAS 回填并返回。
+
+    二次检查确保被合并的等待方不重复回退上游；其余语义与直路逐字节一致。
+    """
     cached = await user_cache.read_snap(user_id)
     if cached is not None:
         return _from_cache_dict(cached)
@@ -130,7 +152,9 @@ async def get_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot |
 
     snap = UserSnapshot(**fields)
     if version is not None:
-        await user_cache.write_if_newer(user_id, _snap_to_dict(snap), version, expected_epoch)
+        await user_cache.write_if_newer(
+            user_id, _snap_to_dict(snap), version, expected_epoch
+        )
     return snap
 
 

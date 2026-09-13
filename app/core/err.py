@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from app.core.common import ApiResp, PageData
 
@@ -126,21 +127,25 @@ def resp_json(
 
 def respond[**P, R](
     func: Callable[P, Coroutine[Any, Any, R]],
-) -> Callable[P, Coroutine[Any, Any, JSONResponse]]:
+) -> Callable[P, Coroutine[Any, Any, Response]]:
     """装饰器：将返回值通过 ERRTABLE 包装。
 
     仅承担 FastAPI 端点（当前全部为 async def），返回类型保持 Coroutine 交给 FastAPI await。
+    端点若已返回 ``Response``（如读热路径 msgspec 预编码响应，见 ``core.wire``）则原样透传。
     """
 
     @functools.wraps(func)
-    async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> JSONResponse:
+    async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Response:
         result = await func(*args, **kwargs)
         return _wrap_result(result)
 
     return async_wrapper
 
 
-def _wrap_result(result: Any) -> JSONResponse:
+def _wrap_result(result: Any) -> Response:
+    # 预编码响应透传（读热端点用 msgspec 直出，勿再包一层 JSONResponse）
+    if isinstance(result, Response):
+        return result
     if (
         isinstance(result, tuple)
         and len(cast(Any, result)) >= 2

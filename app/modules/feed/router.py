@@ -10,9 +10,12 @@ APIRouter 各自声明前缀，URL 契约（前端/集成测试续用）保持�
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from app.core.common import ApiResp, ListData
+from app.core.config import settings
 from app.core.err import respond
+from app.core.wire import msgspec_ok
 from app.db.session import get_read_session, get_session
 from app.modules.auth.deps import (
     CurrentUser,
@@ -28,6 +31,7 @@ from app.modules.feed.schemas import (
     FollowUser,
 )
 from app.modules.feed.service import get_timeline
+from app.modules.feed.wire import to_wire
 
 user_follow_router = APIRouter(prefix="/users", tags=["follow"])
 board_follow_router = APIRouter(prefix="/content/boards", tags=["follow"])
@@ -134,8 +138,15 @@ async def get_timeline_endpoint(
     mode: str = Query("follow", pattern="^(follow|hot)$"),
     cur: CurrentUser | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_read_session),
-) -> FeedResponse:
+) -> FeedResponse | Response:
+    """时间线读热端点（§6.5.2）。
+
+    ``response_model`` 仅用于 OpenAPI 文档：开启 ``read_msgspec_enabled`` 时返回已用 msgspec
+    预编码的 ``Response``（FastAPI 对 Response 实例直接透传、不再跑 response_model 序列化），
+    关闭时返回 Pydantic ``FeedResponse`` 走既有路径。两条路径 JSON 等价由契约测试守。
+    """
     user_id = cur.id if cur is not None else None
-    return await get_timeline(
-        db, user_id=user_id, mode=mode, cursor=cursor, limit=limit
-    )
+    resp = await get_timeline(db, user_id=user_id, mode=mode, cursor=cursor, limit=limit)
+    if settings.read_msgspec_enabled:
+        return msgspec_ok(to_wire(resp))
+    return resp

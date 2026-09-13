@@ -10,7 +10,8 @@
 - 信息流域（feed）：关注用户/板块 + 时间线（分页 + `X-Total`）。
 - 其他业务域：博客（Git 托管/星标/评论/Git HTTP）、文件库（上传/审核/下载）、积分/成就/排行榜（事件规则引擎）、考试认证、项目广场、StarHope AI 学习助手。
 - 消息与一致性（M1/M4）：Pulsar 全站消息总线、事务发件箱（outbox）+ relay、按 `event_id` 幂等消费、死信（`system/dlq`）+ 重投、订阅 lag 上报；points 三订阅扇出隔离。
-- 缓存与报表：`user:snap` cache-through（版本 CAS + 失效 epoch 防复活）、AUTH 变更事件失效；`user_dim` 离线宽表 ETL 供后台/运营报表（与在线读隔离）。
+- 缓存与报表：`user:snap` 双级缓存（L1 进程内 + L2 Redis，cache-through + 版本 CAS + 失效 epoch 防复活 + singleflight 请求合并，L1 失效经 pub/sub 广播）、AUTH 变更事件失效；`user_dim` 离线宽表 ETL 供后台/运营报表（与在线读隔离）。
+- 读热序列化（M5 §6.5.2）：timeline 读热列表在 Pydantic v2 校验后经 msgspec 出端口（`LKM_READ_MSGPEC_ENABLED`，关闭回退旧路径）；基准 `loadtest/bench_read_serialize.py`。
 - 可观测：`/metrics`（prometheus-fastapi-instrumentator）+ Sentry（DSN 为空则跳过）。
 - 数据库：开发环境自动建表；生产使用 Alembic 迁移（业务库 `alembic/`，auth 库 `alembic_auth/`）。
 

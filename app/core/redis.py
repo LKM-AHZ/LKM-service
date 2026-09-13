@@ -19,6 +19,11 @@ def _is_enabled() -> bool:
     return bool(settings.redis_url)
 
 
+def is_enabled() -> bool:
+    """Redis 是否已配置（公开只读判断；供 L1 缓存等「Redis 关闭则整体关闭」的 gate 复用）。"""
+    return _is_enabled()
+
+
 async def get_redis() -> Redis | None:
     """返回可用的 Redis 客户端；未启用或连接/探测失败返回 None。
 
