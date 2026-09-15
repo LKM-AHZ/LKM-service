@@ -35,6 +35,7 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_USER_SESSION_REVOKE,
         messaging.RKEY_CLEANUP,
         messaging.RKEY_RECONCILE,
+        messaging.RKEY_ANALYTICS,
     }
     assert set(messaging.ROUTING_KEY_TOPICS) == expected
 

@@ -55,6 +55,7 @@ RKEY_USER_BANNED = "event.user.banned"
 RKEY_USER_SESSION_REVOKE = "event.user.session_revoke"
 RKEY_CLEANUP = "cron.cleanup"
 RKEY_RECONCILE = "cron.reconcile"
+RKEY_ANALYTICS = "cron.analytics_export"
 
 # ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
 
@@ -81,6 +82,7 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_POINTS: TOPIC_POINTS,
     RKEY_CLEANUP: TOPIC_CRON,
     RKEY_RECONCILE: TOPIC_CRON,
+    RKEY_ANALYTICS: TOPIC_CRON,
 }
 
 
@@ -108,7 +110,9 @@ SUB_USER_INVALIDATE = Subscription(
     TOPIC_USER_EVENTS,
     (RKEY_USER_UPDATED, RKEY_USER_BANNED, RKEY_USER_SESSION_REVOKE),
 )
-SUB_JOBS = Subscription("jobs", TOPIC_CRON, (RKEY_CLEANUP, RKEY_RECONCILE))
+SUB_JOBS = Subscription(
+    "jobs", TOPIC_CRON, (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS)
+)
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
 
 SUBSCRIPTIONS: dict[str, Subscription] = {

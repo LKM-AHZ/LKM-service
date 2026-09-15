@@ -17,11 +17,20 @@ worker.py 不再手写 handler 表。
   失效语义（B0.2 离线写，永不作在线热路径阻塞点）。
 - **周期增量对账（crash-safety 网）**：``reconcile_user_dim`` 经 cron 定时发布到
   ``system/cron`` topic，由 jobs 订阅消费（低频，见 register_cron_job），批扫 + 批量 upsert。
+  当 ``LKM_PREFECT_ENABLED=true`` 时，本 handler 改为经 Prefect deployment 触发 flow
+  （DAG/重试/回填，``app/flows/user_dim.py``）；触发失败 **fail-open 回落直调**，保证对账不漏跑。
 """
 
 import logging
+from typing import Any
 
-from app.core.messaging import RKEY_RECONCILE, SUB_JOBS, SUB_SEND, SUB_USER_INVALIDATE
+from app.core.messaging import (
+    RKEY_ANALYTICS,
+    RKEY_RECONCILE,
+    SUB_JOBS,
+    SUB_SEND,
+    SUB_USER_INVALIDATE,
+)
 from app.core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger("lkm.auth.tasks")
@@ -65,22 +74,88 @@ async def invalidate_user_snap(user_id: int) -> None:
         logger.exception("user_dim 事件刷新失败(在线失效已完成) user_id=%s", user_id)
 
 
+async def _trigger_prefect_flow(deployment: str, parameters: dict[str, Any]) -> bool:
+    """经 Prefect deployment 触发 flow：成功 True，失败 False（调用方回落直调）。
+
+    ``run_deployment(timeout=0)`` 创建 flow run 即返回，不阻塞 jobs worker
+    （``JOB_TIMEOUT_S=120``）。API 地址/token 经 Settings 收口，运行期导出为 Prefect
+    认的 ``PREFECT_API_*`` 环境变量（Infisical 只注入 ``LKM_`` 前缀，故此处做映射）。
+    重活全部在 prefect-worker 内完成，本进程只做触发；traceparent 由本进程注入续链。
+    """
+    import os
+
+    from app.core import tracing
+    from app.core.config import settings
+    from app.core.secrets import reveal
+
+    os.environ.setdefault("PREFECT_API_URL", settings.prefect_api_url)
+    token = reveal(settings.prefect_api_token)
+    if token:
+        os.environ.setdefault("PREFECT_API_KEY", token)
+
+    from prefect.deployments import run_deployment
+
+    carrier: dict[str, str] = {}
+    tracing.inject_context(carrier)
+    params = dict(parameters)
+    params.setdefault("traceparent", carrier.get("traceparent", ""))
+    try:
+        await run_deployment(deployment, parameters=params, timeout=0)
+        return True
+    except Exception:
+        logger.exception("Prefect flow 触发失败 deployment=%s, 回落直调", deployment)
+        return False
+
+
 async def reconcile_user_dim() -> None:
     """周期增量对账消费口（jobs worker 消费 cron.reconcile）：批扫 + 批量 upsert。
 
     依赖函数级 import，避免 worker 冷启动拉整棵 auth/db 树——到点才真正建会话。fn 名与
     register_cron_job 成对声明（见下），scheduler 发布 ``fn=reconcile_user_dim`` 时
     worker 按其名命中本 handler。
+
+    Prefect 开启且触发成功 → 由 flow 执行；否则（默认关 / 触发失败）回落直调，保持
+    既有 crash-safety 语义不因编排层故障而丢跑。
     """
+    from app.core.config import settings
+
+    if settings.prefect_enabled and await _trigger_prefect_flow(
+        settings.prefect_deployment, {"mode": "reconcile"}
+    ):
+        return
+
     from app.modules.auth.user_dim_sync import reconcile_user_dim_periodic
 
     await reconcile_user_dim_periodic()
+
+
+async def export_analytics_clickhouse() -> None:
+    """周期分析导出消费口（jobs worker 消费 cron.analytics_export，M5 7.2.6）。
+
+    把业务库 ``event_failures`` + auth 库 ``audit_logs`` 增量导出到 ClickHouse。
+    Prefect 开启且配了 analytics deployment 且触发成功 → 由 flow 执行（DAG/重试/回填）；
+    否则回落直调纯体层 ``app.flows.analytics_body.run_analytics_export``——该模块**不 import
+    prefect**，故默认关/触发失败路径零 Prefect 依赖。CH 未启用时两头都是 no-op，不报错。
+    """
+    from app.core.config import settings
+
+    if (
+        settings.prefect_enabled
+        and settings.prefect_analytics_deployment
+        and await _trigger_prefect_flow(settings.prefect_analytics_deployment, {})
+    ):
+        return
+
+    from app.flows.analytics_body import run_analytics_export
+
+    await run_analytics_export()
 
 
 register_task(SUB_SEND.name, "send_code", send_code)
 register_task(SUB_SEND.name, "send_magic_link", send_magic_link)
 register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_snap)
 register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
+register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
 # 低频 crash-safety 网：周期增量对账（非新鲜度主路；主路是上面的 user.* 事件）。每日 03:10
 # 由 scheduler 发布 cron.reconcile→jobs 订阅。routing/cron 复用既有 cron.reconcile 键/订阅。
 register_cron_job(
@@ -88,4 +163,11 @@ register_cron_job(
     cron="10 3 * * *",  # 每日 03:10
     routing_key=RKEY_RECONCILE,
     fn="reconcile_user_dim",
+)
+# 分析导出：每日 03:30（对账之后），经 cron.analytics_export→jobs 订阅触发。
+register_cron_job(
+    job_id="analytics_export",
+    cron="30 3 * * *",  # 每日 03:30
+    routing_key=RKEY_ANALYTICS,
+    fn="export_analytics_clickhouse",
 )

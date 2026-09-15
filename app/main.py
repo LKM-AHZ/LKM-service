@@ -14,8 +14,8 @@ from strawberry.fastapi import BaseContext, GraphQLRouter
 
 from app.api.graphql import build_schema
 from app.api.router import api_router
+from app.core import clickhouse, messaging, user_cache_events
 from app.core import logging as logger
-from app.core import messaging, user_cache_events
 from app.core import redis as redis_client
 from app.core.apm import init_sentry
 from app.core.config import settings
@@ -94,6 +94,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await stop_lag_reporter()
     await messaging.close()
+    # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）
+    await clickhouse.close()
     await redis_client.close_redis()
     # 收尾链路追踪（限时 flush），先于引擎释放
     shutdown_tracing()

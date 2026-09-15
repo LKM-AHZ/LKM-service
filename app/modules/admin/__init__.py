@@ -18,6 +18,7 @@ def __getattr__(name: str) -> Any:
     global _exported_routers, _exported_graphql
     if name == "ROUTERS":
         if _exported_routers is None:
+            from app.modules.admin.analytics_router import router as router_analytics
             from app.modules.admin.auth_router import router
             from app.modules.admin.content_router import router as router_content
             from app.modules.admin.dlq_router import router as router_dlq
@@ -34,6 +35,7 @@ def __getattr__(name: str) -> Any:
                 router_reports,
                 router_dlq,
                 router_moderation,
+                router_analytics,
             ]
         return _exported_routers
     if name == "GRAPHQL":

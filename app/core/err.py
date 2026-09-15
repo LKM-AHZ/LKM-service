@@ -56,6 +56,7 @@ class CommonErr(ErrCode):
     FORBIDDEN = NS_COMMON.err(2)
     INTERNAL_ERROR = NS_COMMON.err(3)
     MFA_REQUIRED = NS_COMMON.err(4)  # 危险操作需重新完成 2FA（step-up）
+    UNAVAILABLE = NS_COMMON.err(5)  # 依赖的后端未启用/不可达（如分析库 ClickHouse）
 
 
 ERRTABLE: dict[ErrCode, tuple[int, str]] = {}
@@ -75,6 +76,7 @@ register(
         CommonErr.FORBIDDEN: (403, "Forbidden"),
         CommonErr.INTERNAL_ERROR: (500, "Internal server error"),
         CommonErr.MFA_REQUIRED: (401, "MFA required"),
+        CommonErr.UNAVAILABLE: (503, "Service unavailable"),
     }
 )
 

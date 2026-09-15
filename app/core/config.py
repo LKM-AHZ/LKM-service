@@ -124,6 +124,36 @@ class Settings(BaseSettings):
     # 延迟上界≈该 TTL。基值取「远大于单轮 poll 耗时 + 单 tick 周期」，防无故障抢主抖动。
     outbox_leader_ttl_s: float = 60.0
 
+    # ---- Prefect 编排（M5 7.2.5，复杂数据管道 DAG/重试/回填）----
+    # 默认关：cron 消费者直调既有函数（现状路径），不依赖 Prefect server，测试/部署零改动。
+    # 开启后 handler 经 run_deployment 触发 flow（timeout=0 立即返回，不占 JOB_TIMEOUT）；触发
+    # 失败 fail-open 回落直调，保证 crash-safety 对账不漏跑。
+    prefect_enabled: bool = False
+    # Prefect API 基址（如 http://prefect-server:4200/api）；prefect_enabled 时必填
+    prefect_api_url: str = ""
+    # 目标名 "<flow 名>/<deployment 名>"，如 user-dim-reconcile/reconcile
+    prefect_deployment: str = ""
+    # API 鉴权 token；自托管无鉴权可空
+    prefect_api_token: SecretStr = SecretStr("")
+    # analytics 导出 flow 的目标名，形如 "<flow 名>/<deployment 名>"，如
+    # analytics-clickhouse-export/analytics-export；留空则不触发 analytics flow（回落直调导出）。
+    prefect_analytics_deployment: str = ""
+
+    # ---- ClickHouse 分析管道（M5 7.2.6，日志/失败事件/审计分析）----
+    # 默认关：不建连接、导出 no-op、admin 查询端点返回 503（不返回空数据造成假绿）。
+    # 开启需 `--profile clickhouse` 起 clickhouse + vector，并把本组配置下发到
+    # backend / jobs worker / prefect-worker。
+    clickhouse_enabled: bool = False
+    # HTTP 接口基址（如 http://clickhouse:8123；https 走 8443 且 secure）
+    clickhouse_url: str = ""
+    clickhouse_database: str = "lkm"
+    clickhouse_user: str = "default"
+    clickhouse_password: SecretStr = SecretStr("")
+    # 增量导出的单批窗口（行）：水位之后每次取这么多行，循环至不足一批（命令数恒定）
+    clickhouse_export_window: int = 1000
+    # admin 查询接口单页上限（用户传入 limit 会被裁剪到此值，防一次拖全表）
+    clickhouse_query_limit_max: int = 200
+
     # MinIO/S3 对象事件回调共享令牌：空串 = 未启用（回调端点一律 401）。
     # 生产必须设置固定随机值，供桶通知 webhook 的 Authorization: Bearer 头校验。
     files_notify_token: SecretStr = SecretStr("")
@@ -244,6 +274,16 @@ class Settings(BaseSettings):
         # AUTH seam 配齐 URL 即须成对给 token（否则端点一律 401，身份读全线降级）
         if self.auth_http_url and _bad(reveal(self.auth_http_token)):
             insecure.append("auth_http_token(missing while auth_http_url set)")
+        # Prefect 编排启用即须给 API 基址与目标 deployment（否则触发必失败）
+        if self.prefect_enabled and (
+            not self.prefect_api_url or not self.prefect_deployment
+        ):
+            insecure.append(
+                "prefect_api_url/prefect_deployment(required while prefect_enabled=true)"
+            )
+        # ClickHouse 分析后端启用即须给 HTTP 基址（否则客户端建连必失败）
+        if self.clickhouse_enabled and not self.clickhouse_url:
+            insecure.append("clickhouse_url(required while clickhouse_enabled=true)")
 
         if insecure:
             raise ValueError(
