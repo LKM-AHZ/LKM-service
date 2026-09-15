@@ -99,10 +99,22 @@ def main() -> None:
     parser.add_argument("--window", type=int, default=_DEFAULT_WINDOW)
     parser.add_argument("--traceparent", default="", help="可选：续接父 trace")
     args = parser.parse_args()
-    result = asyncio.run(
-        analytics_export_flow(window=args.window, traceparent=args.traceparent)
-    )
+    result = asyncio.run(_run_cli(args.window, args.traceparent))
     logger.info("analytics 导出 flow 完成: %s", result)
+
+
+async def _run_cli(window: int, traceparent: str) -> dict[str, Any]:
+    """CLI 包装：跑完 flow 关闭 CH 客户端。
+
+    flow 在常驻 prefect-worker 进程内复用单例连接（不关），但 CLI 是一次性进程——
+    不显式关闭会遗留 aiohttp connector（退出时报 Unclosed connector）。
+    """
+    from app.core import clickhouse
+
+    try:
+        return await analytics_export_flow(window=window, traceparent=traceparent)
+    finally:
+        await clickhouse.close()
 
 
 if __name__ == "__main__":

@@ -59,6 +59,7 @@ def should_configure_vector_capture_volumes() -> None:
     assert "/var/run/docker.sock" in vols
     assert "/var/lib/docker/containers" in vols
     assert "vector.toml" in vols
+    assert vector["command"] == ["--config", "/etc/vector/vector.toml"]
 
 
 def should_route_clickhouse_env_to_three_services() -> None:
@@ -96,9 +97,14 @@ def should_apply_ttl_and_partitioning() -> None:
     # 缺 TTL/分区 → 分析库无限膨胀、按时间查询全表扫
     sql = _init_sql()
     assert sql.count("PARTITION BY toYYYYMM") == 3
-    assert "TTL ts + INTERVAL 30 DAY" in sql
-    assert "TTL folded_at + INTERVAL 180 DAY" in sql
-    assert "TTL created_at + INTERVAL 365 DAY" in sql
+    # TTL 表达式须返回 DateTime/Date：直接用 DateTime64 列会被 CH 拒（BAD_TTL_EXPRESSION）
+    # 并使整个 init.sql 中止（真机踩过——全部表未建）。必须经 toDateTime() 降精度。
+    assert "TTL toDateTime(ts) + INTERVAL 30 DAY" in sql
+    assert "TTL toDateTime(folded_at) + INTERVAL 180 DAY" in sql
+    assert "TTL toDateTime(created_at) + INTERVAL 365 DAY" in sql
+    assert "TTL ts + INTERVAL" not in sql
+    assert "TTL folded_at + INTERVAL" not in sql
+    assert "TTL created_at + INTERVAL" not in sql
     assert sql.count("DateTime64(3)") >= 6
 
 

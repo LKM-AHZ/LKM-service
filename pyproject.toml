@@ -32,7 +32,8 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
     "opentelemetry-instrumentation-httpx>=0.49b0",
     "prefect>=3.8.5,<4",
-    "clickhouse-connect>=0.8",
+    # [async] extra 必需：不加则 get_async_client 在运行期 ImportError（缺 aiohttp）
+    "clickhouse-connect[async]>=0.8",
 ]
 
 [tool.pytest.ini_options]
