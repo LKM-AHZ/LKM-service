@@ -1,7 +1,8 @@
 """M5 7.2.4 APISIX 网关配置静态验收：路由/优先级/插件/TLS 渲染。
 
-解析 `deploy/apisix/{config.yaml,apisix.yaml}` 并跑一次 render.sh（伪造证书），断言
-nginx 全量替换后的关键契约。运行时连通性（DNS discovery、WS、预签名）由 smoke.sh + 人工清单守。
+解析 `deploy/apisix/{config.yaml,apisix.yaml}` 与根 `docker-compose.yml`，并跑一次 render.sh
+（伪造证书），断言 APISIX 作为唯一网关的关键契约 + nginx 已彻底移除。运行时连通性（DNS
+discovery、WS、预签名）由 smoke.sh + 人工清单守。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]  # LKM-Website
 _APISIX_DIR = _ROOT / "deploy" / "apisix"
+_COMPOSE = _ROOT / "docker-compose.yml"
 
 _DOMAINS = ["lkm-ahz.ltd", "lkm-ahz.icu"]
 _ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
@@ -74,7 +76,7 @@ def test_graphql_websocket_enabled() -> None:
 
 
 def test_realtime_ws_endpoint_upgrade_enabled() -> None:
-    """/api/v1/ws/events 走 api-prefix，必须开 upgrade（旧 nginx 未开→后端收普通 GET 404）。"""
+    """/api/v1/ws/events 走 api-prefix，必须开 upgrade（网关未开→后端收普通 GET 404）。"""
     route = _routes()["api-prefix"]
     assert route["enable_websocket"] is True
     assert route["upstream"]["service_name"].startswith("backend:")
@@ -116,6 +118,34 @@ def test_cache_headers_on_assets() -> None:
         assert "max-age=31536000" in cache
 
 
+def test_cors_explicit_whitelist_no_empty_fallback() -> None:
+    """M6.1：网关 CORS 须显式白名单，禁回退 `cors: {}`（默认等价 `*`，对全网开放）。"""
+    routes = _routes()
+    cors_routes = [
+        rid for rid, r in routes.items() if "cors" in (r.get("plugins") or {})
+    ]
+    assert cors_routes, "至少承载 API/认证面的路由须配 cors"
+    for rid in cors_routes:
+        cors = routes[rid]["plugins"]["cors"]
+        assert cors, f"{rid}.cors 不可为空兜底"
+        origins = cors["allow_origins"]
+        assert "*" not in origins, f"{rid}.cors 不得含通配来源"
+        # 两个社区域名（含 www）均在白名单内，与应用层 LKM_CORS_ORIGINS 同值
+        assert "https://lkm-ahz.ltd" in origins
+        assert "https://www.lkm-ahz.ltd" in origins
+        assert cors["allow_credential"] is True
+        # APISIX cors schema 硬规则：allow_credential=true 时四个字段**任一**为 `*` 即校验失败
+        # → **整条路由不被加载**（限流/WS upgrade/CORS 静默失效，流量退化为经 astro 转发）。
+        # 按规则本身断言，而非照抄实现取值（否则与实现同错 → 假绿，见 §8 #19/#26）。
+        for field in (
+            "allow_origins",
+            "allow_methods",
+            "allow_headers",
+            "expose_headers",
+        ):
+            assert "*" not in str(cors.get(field, "")), f"{rid}.cors.{field} 不得为 *"
+
+
 def test_global_gzip_and_login_rate_limit() -> None:
     data = _load("apisix.yaml")
     assert any("gzip" in rule["plugins"] for rule in data["global_rules"])
@@ -124,8 +154,8 @@ def test_global_gzip_and_login_rate_limit() -> None:
     assert limit["rejected_code"] == 429
 
 
-def test_global_forwarded_headers_parity_nginx() -> None:
-    """旧 nginx proxy-common-headers.conf 设 X-Real-IP/XFF/Proto；APISIX 默认不设，需 global rule 补齐。"""
+def test_global_forwarded_headers_parity() -> None:
+    """转发头契约：X-Real-IP/XFF/Proto 必须由 global rule 设（APISIX 默认不设）。"""
     data = _load("apisix.yaml")
     set_headers: dict[str, str] = {}
     for rule in data["global_rules"]:
@@ -185,3 +215,58 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
         )
     # 路由模板完整保留
     assert len(rendered["routes"]) == len(_load("apisix.yaml")["routes"])
+
+
+# ── nginx 移除（防回潮）────────────────────────────────────────────────────
+
+
+def _services() -> dict[str, dict]:
+    return yaml.safe_load(_COMPOSE.read_text())["services"]
+
+
+def test_nginx_gateway_fully_removed() -> None:
+    """nginx 网关服务与 `nginx-gateway` 回退 profile 均已删除，配置目录亦不存在。
+
+    回退路径由 git 承担（`git revert` 得到的是「当时一致」的整套配置）；保留一份与 APISIX
+    路由分叉的 nginx 配置＝会腐烂的第二真相源，故以断言防其回潮。
+    """
+    assert "nginx" not in _services()
+    assert "nginx-gateway" not in _COMPOSE.read_text()
+    assert not (_ROOT / "deploy" / "nginx").exists()
+
+
+def test_only_apisix_publishes_gateway_ports() -> None:
+    """80/443 只由 APISIX 发布——全栈不存在第二个网关。"""
+    owners = {
+        name
+        for name, svc in _services().items()
+        for port in (svc.get("ports") or [])
+        if str(port).split(":")[0] in {"80", "443"}
+    }
+    assert owners == {"apisix"}
+
+
+def test_nginx_kept_only_as_static_file_servers() -> None:
+    """仅存的 nginx 镜像是静态文件服务器角色（ACME responder / 官网源站），且不发布 80/443。"""
+    nginx_services = {
+        name
+        for name, svc in _services().items()
+        if "nginx" in str(svc.get("image", ""))
+    }
+    assert nginx_services <= {"acme-webroot", "static"}
+    for name in nginx_services:
+        assert not set(_services()[name].get("ports") or [])
+
+
+def test_apisix_render_is_pure_shell_sidecar() -> None:
+    """apisix-render 只借 shell 跑 render.sh，不应使用任何 Web 服务器镜像。"""
+    image = _services()["apisix-render"]["image"]
+    assert "nginx" not in image
+    assert image.startswith("alpine:")
+
+
+def test_certbot_entrypoint_relocated() -> None:
+    """certbot 入口脚本随 nginx 目录移除迁到 deploy/certbot/，compose 挂载路径同步。"""
+    assert (_ROOT / "deploy" / "certbot" / "entrypoint.sh").is_file()
+    mounts = _services()["certbot"]["volumes"]
+    assert any("./deploy/certbot/entrypoint.sh" in str(m) for m in mounts)

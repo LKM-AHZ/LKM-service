@@ -2,7 +2,7 @@
 
 装配：本 router 与业务域名前缀分开、显式带 ``/auth/internal``；**只**承载内部读、不承载任何
 浏览器可触的高危面。monolith（经 registry ROUTERS）与独立 AUTH 进程（main_auth 显式挂）都挂
-载它 → 两个进程都能 serve 同一读契约；B1.2 只 build 缝 + client + flag + 端点，nginx ``/auth/**``
+载它 → 两个进程都能 serve 同一读契约；B1.2 只 build 缝 + client + flag + 端点，网关 ``/auth/**``
 路由（B1.3）在下个 leg。
 
 鉴权模型（防新公共 blast surface）——**内部共享 token**（与 files/notify 同类最小摩擦力）：

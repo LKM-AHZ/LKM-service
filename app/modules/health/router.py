@@ -1,7 +1,7 @@
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -9,6 +9,7 @@ from app.core import redis as redis_client
 from app.core.common import ApiResp
 from app.core.config import settings
 from app.core.err import respond
+from app.core.pulsar_lag import probe_health as probe_pulsar_health
 from app.db.session import get_async_engine
 
 router = APIRouter(tags=["health"])
@@ -23,6 +24,24 @@ class HealthData(BaseModel):
     status: str
     db: DependencyStatus
     redis: DependencyStatus
+    auth: DependencyStatus
+
+
+class LiveData(BaseModel):
+    """liveness 响应：仅证明进程存活/应答，不断言任何外部依赖。"""
+
+    status: str
+    service: str
+
+
+class ReadyData(BaseModel):
+    """readiness 响应：复合硬依赖（DB/Redis/Pulsar/AUTH）状态。"""
+
+    status: str
+    service: str
+    db: DependencyStatus
+    redis: DependencyStatus
+    pulsar: DependencyStatus
     auth: DependencyStatus
 
 
@@ -51,7 +70,9 @@ async def _probe_auth() -> DependencyStatus:
     except httpx.HTTPError as exc:
         return DependencyStatus(status="error", detail=f"auth 不可达: {exc}")
     if resp.status_code != 200:
-        return DependencyStatus(status="error", detail=f"auth /liveness http {resp.status_code}")
+        return DependencyStatus(
+            status="error", detail=f"auth /liveness http {resp.status_code}"
+        )
     payload = _coerce_liveness(resp)
     ok = isinstance(payload, dict) and payload.get("status") == "ok"
     if not ok:
@@ -107,6 +128,57 @@ async def _probe_redis() -> DependencyStatus:
     if not ok:
         return DependencyStatus(status="error", detail="ping failed")
     return DependencyStatus(status="up")
+
+
+async def _probe_pulsar() -> DependencyStatus:
+    """探消息总线：复用 lag 上报的 Admin REST 通道（短超时 + up 结果短缓存）。
+
+    未启用消息总线/未配 ``pulsar_admin_url`` → ``disabled``（**不计入** readiness 硬依赖，
+    单机或尚未接总线的部署就绪语义明确）；否则 ``up``/``error``。
+    """
+    status, detail = await probe_pulsar_health()
+    return DependencyStatus(status=status, detail=detail)
+
+
+@router.get("/liveness", response_model=LiveData)
+async def liveness() -> LiveData:
+    """存活探针：**零外部依赖**，进程能应答即 ok。
+
+    供 compose/编排判断"进程是否该被重启"——DB/Redis/Pulsar/AUTH 抖动会让 readiness
+    未就绪，但不该导致容器被判死重启（见 /readiness）。
+    """
+    return LiveData(status="ok", service="api")
+
+
+@router.get("/readiness", response_model=ReadyData)
+async def readiness(response: Response) -> ReadyData:
+    """就绪探针：DB + Redis + Pulsar + AUTH 复合（AND 语义），未就绪返回 **503**。
+
+    - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``。
+    - ``disabled``（未配置，如单机无总线/未接 AUTH 进程）不降就绪——是部署取向而非故障。
+    - 状态码语义：就绪 200 / 未就绪 503（供 compose depends_on、K8s readinessProbe、
+      负载均衡摘流直接消费；M3.4 已把语义定在 AUTH 进程侧，此处对齐到单体）。
+    """
+    db = await _probe_db()
+    redis = await _probe_redis()
+    pulsar = await _probe_pulsar()
+    auth = await _probe_auth()
+    ready = (
+        db.status == "up"
+        and redis.status == "up"
+        and pulsar.status in ("up", "disabled")
+        and auth.status in ("up", "disabled")
+    )
+    if not ready:
+        response.status_code = 503
+    return ReadyData(
+        status="ok" if ready else "degraded",
+        service="api",
+        db=db,
+        redis=redis,
+        pulsar=pulsar,
+        auth=auth,
+    )
 
 
 @router.get("/health", response_model=ApiResp[HealthData])

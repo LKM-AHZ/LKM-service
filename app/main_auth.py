@@ -5,13 +5,13 @@
 **可独立运行的 auth-only ASGI 应用** + 它**专属的 liveness/readiness 健康缝** + compose
 同镜像异 command 的 ``auth`` 服务。纯增量，不改单体 ``app.main`` 任何行为。
 B1.2 在同进程再挂 internal 读缝 router（``auth.router_read``，/auth/internal，B1.2 seam），
-令 AUTH 进程本身也能 serve 该读端点供消费进程经 HTTP 跨缝（nginx 路由 B1.3 接）。
+令 AUTH 进程本身也能 serve 该读端点供消费进程经 HTTP 跨缝（APISIX 路由 B1.3 接）。
 
 装配口径：此进程只 mount ``app.modules.auth`` 的 7 个 router（登录/档案/2FA/oauth/
 passkey/recovery/settings）**plus** 本进程自己的 auth-health router；不引业务域
 （content/feed/points/projects 等）、不起 GraphQL/WebSocket、不做制品迁移 —— auth 是
 owner-leaf，其 router 只依赖 core + db.session + auth 内部，故可干净独立装配。
-进程内 HTTP 面对外暴露（nginx location / B1.3 复合就绪合并）属后续 leg，此处仅就绪
+进程内 HTTP 面对外暴露（APISIX 路由 / B1.3 复合就绪合并）属后续 leg，此处仅就绪
 一个可被 compose/后续编排单独探活的自足进程。
 
 同名但独立：DB 引擎/Redis client 由本进程内 realm 各自 lazy 自持（同库同数据源，
@@ -34,6 +34,7 @@ import app.health_auth as health_auth
 from app.core import redis as redis_client
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
+from app.core.middleware import install_security_middleware
 from app.core.tracing import setup_tracing, shutdown_tracing
 from app.db.auth_session import dispose_auth_engine
 from app.db.init_db import init_auth_db
@@ -95,6 +96,10 @@ def create_auth_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # 公网安全面（M6.1）：与单体共用同一装配（Host 白名单 / CORS 白名单 / 安全头，
+    # HSTS 仅生产）——auth 承载 /api/v1/auth/* 对外面，语义须与 backend 一致。
+    install_security_middleware(application)
+
     # 与单体一致的 error 语义映射（BizError / 校验错误 / 兜底 500），保证 auth 端点错误口径一致
     application.add_exception_handler(BizError, _on_err)
     application.add_exception_handler(RequestValidationError, _on_err)
@@ -120,7 +125,7 @@ def main() -> None:
     """compose `python -m app.main_auth` 入口：起本进程自己的 uvicorn（内网端口）。
 
     只跑本 ASGI app，单 worker；host 0.0.0.0 + 固定内网端口 8001，
-    由 compose auth 服务 def 面内部承载（无主机端口映射），B1.2 再交由 nginx 反代。
+    由 compose auth 服务 def 面内部承载（无主机端口映射），B1.2 再交由 APISIX 反代。
     """
     import uvicorn
 

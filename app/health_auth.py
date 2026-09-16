@@ -2,7 +2,7 @@
 
 与单体 ``app.modules.health.router`` 刻意分离、互不引用：
 单体 /health 是经 ApiResp 包裹的模块健康；本进程是「auth-only ASGI 进程」自己治病的
-轻量探活，供容器编排自洽（compose healthcheck / 后续 B1.2 nginx 上游均可消费）：
+轻量探活，供容器编排自洽（compose healthcheck / 后续 B1.2 APISIX 上游均可消费）：
 
 - ``liveness``：自身存活。**零外部依赖**，仅证明进程起来能应答。
 - ``readiness``：依赖就绪。聚合 DB(SELECT 1) + Redis(ping)，供 service 依赖序判定。

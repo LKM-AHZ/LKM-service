@@ -21,6 +21,7 @@ from app.core.apm import init_sentry
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
+from app.core.middleware import install_security_middleware
 from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
 from app.core.tracing import (
     instrument_sqlalchemy,
@@ -139,6 +140,11 @@ def create_app() -> FastAPI:
             return response
         finally:
             logger.reset_request_id(token)
+
+    # 公网安全面（M6.1）：TrustedHost + CORS 白名单 + 安全响应头。**最后加 → 最外层**，
+    # 使访问日志与其下全部业务路由、以及 TrustedHost/CORS 的拒答响应都带上安全头。
+    # 生产缺 LKM_ALLOWED_HOSTS/LKM_CORS_ORIGINS 时在此 fail-fast（不静默降级）。
+    install_security_middleware(application)
 
     application.include_router(api_router, prefix=settings.api_prefix)
     application.add_exception_handler(BizError, _on_err)

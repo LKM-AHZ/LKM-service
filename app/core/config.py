@@ -11,6 +11,14 @@ from app.core.secrets import reveal
 # 避免"忘了设 LKM_ENV=production"时占位密钥悄悄放行。本地开发默认 env="dev" 不受影响。
 _PERMISSIVE_ENVS: set[str] = {"dev", "local", "test"}
 
+# 开发兜底的 CORS 来源白名单（本地前端：社区站 astro/管理台 vite）。
+# 生产必须显式配置 LKM_CORS_ORIGINS —— 由 ``assert_web_security_configured()`` 在
+# HTTP 服务进程装配期强制（见该方法 docstring 说明为何不放进逐进程校验器）。
+_DEV_CORS_ORIGINS: tuple[str, ...] = (
+    "http://localhost:4321",
+    "http://localhost:5173",
+)
+
 
 class Settings(BaseSettings):
     # 支持项目根目录的 .env 加载（本地开发）；生产无 .env 时走环境变量/默认值
@@ -27,6 +35,17 @@ class Settings(BaseSettings):
     app_name: str = "LKM-API"
     app_version: str = "0.0.1"
     api_prefix: str = "/api/v1"
+
+    # ---- 公网安全面（M6.1）----
+    # HTTP 服务进程（backend / auth）的 Host 头白名单，逗号分隔；"*" = 不校验。
+    # 留空在 dev 等价 "*"；生产由 ``assert_web_security_configured()`` 在应用装配期强制显式给值。
+    # 注意须把**内网服务名/回环**一并列入（backend,auth,127.0.0.1,localhost），否则容器
+    # healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 而长期 unhealthy。
+    allowed_hosts: str = ""
+    # CORS 显式来源白名单，逗号分隔（如 https://lkm-ahz.ltd,https://www.lkm-ahz.ltd）。
+    # 未配且非生产 → 取 _DEV_CORS_ORIGINS；生产由上述断言强制显式给值。
+    # 断言/装配层保证「"*" 与 allow_credentials 不并存」（见 core/middleware.py）。
+    cors_origins: str = ""
 
     db_host: str = "localhost"
     db_port: int = 5432
@@ -115,6 +134,12 @@ class Settings(BaseSettings):
     pulsar_dlq_max_redeliver: int = 1
     # lag 上报周期（秒）；API 进程统计各订阅 msgBacklog 到 Prometheus gauge
     pulsar_lag_interval_s: float = 30.0
+    # readiness 探 broker 健康的 Admin REST 超时（秒）：短超时 fail-fast，防不可达的
+    # Pulsar 把就绪探针挂死在连接等待上
+    pulsar_probe_timeout_s: float = 2.0
+    # 探活「up」结果的缓存秒数：就绪探针可能被高频打，避免每次真打 Admin REST；
+    # 只缓存成功（error 不缓存 → 恢复立即可见，也不会把 stale 健康当就绪）
+    pulsar_probe_cache_s: float = 5.0
     # Pulsar 客户端操作超时（秒）
     pulsar_operation_timeout_s: float = 30.0
 
@@ -300,6 +325,45 @@ class Settings(BaseSettings):
         生产（如 LKM_ENV=production）为 True，要求 https 传输 cookie。
         """
         return (self.env or "").strip().lower() not in _PERMISSIVE_ENVS
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        """TrustedHost 白名单列表；留空视为 ``["*"]``（不校验，dev 与生产装配期断言兜底）。"""
+        return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()] or ["*"]
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """CORS 来源白名单列表；留空 → dev 本地前端兜底（生产由装配期断言拦截）。"""
+        parsed = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return parsed or list(_DEV_CORS_ORIGINS)
+
+    def assert_web_security_configured(self) -> None:
+        """HTTP 服务进程装配期校验：生产必须显式给 Host 白名单与 CORS 来源。
+
+        刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 校验器：该器按进程执行，
+        而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀（见路线图 §8 #16 同款
+        取舍）。本方法只由 ``app.main.create_app`` / ``app.main_auth.create_auth_app``
+        调用——即真正对外承载请求的进程，缺失即启动失败，不靠"配了才生效"的静默降级。
+
+        dev/local/test 直接放行，保持本地零配置可跑。
+        """
+        if not self.is_production:
+            return
+        missing = [
+            name
+            for name, value in (
+                ("LKM_ALLOWED_HOSTS", self.allowed_hosts),
+                ("LKM_CORS_ORIGINS", self.cors_origins),
+            )
+            if not value.strip()
+        ]
+        if missing:
+            raise ValueError(
+                "公网安全面未配置（生产必填）："
+                + ", ".join(missing)
+                + "；示例 LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,127.0.0.1 "
+                "LKM_CORS_ORIGINS=https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+            )
 
     @property
     def message_bus_enabled(self) -> bool:
