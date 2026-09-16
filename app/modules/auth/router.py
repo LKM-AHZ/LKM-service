@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import jobs
+from app.core.client_ip import client_ip
 from app.core.common import ApiResp
 from app.core.config import settings
 from app.core.err import BizError, CommonErr, respond
@@ -311,9 +312,11 @@ async def refresh_access_token_route(
 ) -> dict[str, Any]:
     # 按 IP 限流而非全局，避免单用户频繁刷新拖垮/阻塞全站其他用户；
     # 刷新签发新 token 属安全敏感路径，Redis 故障时 fail-close（拒绝）。
-    client_ip = request.client.host if request.client else ""
+    # IP 经 core.client_ip 取（网关后读 X-Real-IP），不可用 request.client.host
+    # ——那是 apisix 容器的地址，会让本限流退化成全站共享单桶。
+    ip = client_ip(request)
     await check_code_rate_limit(
-        f"token:refresh:ip:{client_ip}",
+        f"token:refresh:ip:{ip}",
         max_count=REFRESH_MAX_PER_WINDOW,
         window=REFRESH_WINDOW_SECONDS,
     )

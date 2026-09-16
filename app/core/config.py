@@ -42,9 +42,11 @@ class Settings(BaseSettings):
     # 注意须把**内网服务名/回环**一并列入（backend,auth,127.0.0.1,localhost），否则容器
     # healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 而长期 unhealthy。
     allowed_hosts: str = ""
-    # CORS 显式来源白名单，逗号分隔（如 https://lkm-ahz.ltd,https://www.lkm-ahz.ltd）。
-    # 未配且非生产 → 取 _DEV_CORS_ORIGINS；生产由上述断言强制显式给值。
-    # 断言/装配层保证「"*" 与 allow_credentials 不并存」（见 core/middleware.py）。
+    # CORS 显式来源白名单，逗号分隔（如 http://localhost:4321,http://localhost:5173）。
+    # **仅本地开发有效**：生产不挂应用层 CORSMiddleware，CORS 唯一权威是 APISIX
+    # （deploy/apisix/apisix.yaml 的 cors 插件）——生产流量必经网关，两边各挂一份只会
+    # 变成需要人工同步的第二真相源。未配则取 _DEV_CORS_ORIGINS 兜底。
+    # 装配层保证「"*" 与 allow_credentials 不并存」（见 core/middleware.py）。
     cors_origins: str = ""
 
     db_host: str = "localhost"
@@ -70,7 +72,14 @@ class Settings(BaseSettings):
     # 后台 cookie 会话：access cookie 存活分钟（refresh 天数复用 refresh_token_expire_days）
     admin_access_cookie_minutes: int = 15
 
-    # 登录限流安全参数（见 backend_auth_security 记忆）：IP/全局每次数量与窗口秒
+    # 登录限流安全参数（见 backend_auth_security 记忆）：IP/全局每次数量与窗口秒。
+    #
+    # **与网关限流的分工，不是重复**（`deploy/apisix/apisix.yaml` 的 auth-login 路由另有
+    # 60/60s 的 limit-count，两者语义不同、数值刻意不同，不必同步）：
+    #   网关：按 remote_addr 的粗粒度削峰，policy=local（各实例独立计数），把洪水挡在应用前。
+    #   此处：**账号级精确锁定** —— 用户名级 + 真实 IP 级（经 `core.client_ip` 读 X-Real-IP）
+    #         的 Redis 滑动窗口，跨实例共享；只有这一层才会真正锁账号。
+    # 调参请按各自语义调：这里的 IP/全局阈值是"防爆破"，网关那边是"防洪水"。
     login_ip_max_per_min: int = 20
     login_global_max_per_min: int = 200
     login_window_seconds: int = 60
@@ -338,31 +347,24 @@ class Settings(BaseSettings):
         return parsed or list(_DEV_CORS_ORIGINS)
 
     def assert_web_security_configured(self) -> None:
-        """HTTP 服务进程装配期校验：生产必须显式给 Host 白名单与 CORS 来源。
+        """HTTP 服务进程装配期校验：生产必须显式给 Host 白名单。
 
         刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 校验器：该器按进程执行，
         而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀（见路线图 §8 #16 同款
         取舍）。本方法只由 ``app.main.create_app`` / ``app.main_auth.create_auth_app``
         调用——即真正对外承载请求的进程，缺失即启动失败，不靠"配了才生效"的静默降级。
 
+        ``LKM_CORS_ORIGINS`` **不在**必填项内：生产不挂应用层 CORS，该值在生产不生效，
+        唯一权威是 APISIX 的 ``cors`` 插件（见 core/middleware.py 的取舍说明）。
+
         dev/local/test 直接放行，保持本地零配置可跑。
         """
         if not self.is_production:
             return
-        missing = [
-            name
-            for name, value in (
-                ("LKM_ALLOWED_HOSTS", self.allowed_hosts),
-                ("LKM_CORS_ORIGINS", self.cors_origins),
-            )
-            if not value.strip()
-        ]
-        if missing:
+        if not self.allowed_hosts.strip():
             raise ValueError(
-                "公网安全面未配置（生产必填）："
-                + ", ".join(missing)
-                + "；示例 LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,127.0.0.1 "
-                "LKM_CORS_ORIGINS=https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+                "公网安全面未配置（生产必填）：LKM_ALLOWED_HOSTS；"
+                "示例 LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,127.0.0.1"
             )
 
     @property

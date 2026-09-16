@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import client_ip
 from app.core.config import settings
 from app.core.err import BizError, CommonErr, resp_json
 from app.core.secrets import reveal
@@ -192,13 +193,16 @@ async def admin_login(
 ) -> JSONResponse:
     """管理员密码登录（auth 库真值，httpOnly cookie 会话）。
 
-    频控两把锁（方案 §8.4）：用户名级 5/5min + 真实 IP 级 20/5min；IP 源 request.client.host。
+    频控两把锁（方案 §8.4）：用户名级 5/5min + 真实 IP 级 20/5min；IP 源
+    ``core.client_ip``（网关后读 ``X-Real-IP``）。用 ``request.client.host`` 会拿到
+    apisix 容器地址，使这把锁退化成全站共享单桶。
     """
     await check_code_rate_limit(
         f"admin:login:user:{body.username}", max_count=5, window=300
     )
-    ip = request.client.host if request.client else "unknown"
-    await check_code_rate_limit(f"admin:login:ip:{ip}", max_count=20, window=300)
+    await check_code_rate_limit(
+        f"admin:login:ip:{client_ip(request)}", max_count=20, window=300
+    )
 
     result = await db.execute(select(User).where(User.username == body.username))
     user = result.scalars().first()

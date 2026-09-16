@@ -1,14 +1,16 @@
-"""M5 7.2.4 APISIX 网关配置静态验收：路由/优先级/插件/TLS 渲染。
+"""M5 7.2.4 APISIX 网关配置静态验收：路由/优先级/插件/TLS 渲染 + 单一来源展开。
 
-解析 `deploy/apisix/{config.yaml,apisix.yaml}` 与根 `docker-compose.yml`，并跑一次 render.sh
-（伪造证书），断言 APISIX 作为唯一网关的关键契约 + nginx 已彻底移除。运行时连通性（DNS
-discovery、WS、预签名）由 smoke.sh + 人工清单守。
+解析 `deploy/apisix/{config.yaml,apisix.yaml}`（**模板**）与根 `docker-compose.yml`，并跑一次
+render.sh（伪造证书）得到**渲染产物**，两者分别断言：模板只放占位（禁硬编码域名/上限），
+产物里占位必须已展开为实值。运行时连通性（DNS discovery、WS、预签名）由 smoke.sh + 人工清单守。
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -17,8 +19,20 @@ _ROOT = Path(__file__).resolve().parents[3]  # LKM-Website
 _APISIX_DIR = _ROOT / "deploy" / "apisix"
 _COMPOSE = _ROOT / "docker-compose.yml"
 
-_DOMAINS = ["lkm-ahz.ltd", "lkm-ahz.icu"]
+_COMMUNITY = "lkm-ahz.ltd"
+_OFFICIAL = "lkm-ahz.icu"
+_DOMAINS = [_COMMUNITY, _OFFICIAL]
 _ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
+# 模板里允许出现的占位（展开由 render.sh 负责）
+_PLACEHOLDERS = {
+    "__SSL_SECTION__",
+    "__COMMUNITY_DOMAIN__",
+    "__COMMUNITY_HOSTS__",
+    "__OFFICIAL_HOSTS__",
+    "__ALL_HOSTS__",
+    "__COMMUNITY_ORIGINS__",
+    "__MAX_BODY_SIZE__",
+}
 
 
 def _load(name: str) -> dict:
@@ -27,6 +41,45 @@ def _load(name: str) -> dict:
 
 def _routes() -> dict[str, dict]:
     return {r["id"]: r for r in _load("apisix.yaml")["routes"]}
+
+
+@lru_cache(maxsize=1)
+def _rendered() -> dict:
+    """跑一次 render.sh（伪造证书，进程内缓存）并解析渲染产物。
+
+    模板里的 hosts/CORS 来源/请求体上限都是占位，故断言实值的用例必须看产物。
+    """
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-render-"))
+    cert_root = tmp / "live"
+    for domain in _DOMAINS:
+        d = cert_root / domain
+        d.mkdir(parents=True)
+        (d / "fullchain.pem").write_text(
+            "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+        )
+        (d / "privkey.pem").write_text(
+            "-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n"
+        )
+    out = tmp / "out" / "apisix.yaml"
+    out.parent.mkdir(parents=True)
+    subprocess.run(
+        ["sh", str(_APISIX_DIR / "render.sh")],
+        env={
+            **os.environ,
+            "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
+            "APISIX_OUT": str(out),
+            "APISIX_CERT_ROOT": str(cert_root),
+            "APISIX_RENDER_ONCE": "1",
+        },
+        check=True,
+    )
+    return yaml.safe_load(out.read_text())
+
+
+def _rendered_routes() -> dict[str, dict]:
+    return {r["id"]: r for r in _rendered()["routes"]}
 
 
 def test_config_yaml_standalone() -> None:
@@ -46,9 +99,45 @@ def test_config_yaml_standalone() -> None:
 
 
 def test_dual_domain_hosts_covered() -> None:
-    routes = _routes()
+    """渲染产物里两个域名（含 www）都被路由覆盖。"""
+    routes = _rendered_routes()
     hosted = {h for r in routes.values() for h in (r.get("hosts") or [])}
     assert set(_ALL_HOSTS) <= hosted
+
+
+def test_template_has_no_hardcoded_domains_or_limits() -> None:
+    """模板只放占位：域名与请求体上限均不得硬编码（单一来源由 render.sh 展开）。
+
+    此前 hosts 硬编码 12 处、CORS 来源 8 处、max_body_size 8 处，改域名必漏。
+    """
+    raw = (_APISIX_DIR / "apisix.yaml").read_text()
+    # 去掉占位后不应再出现任何真实域名或裸数字上限
+    for host in _ALL_HOSTS:
+        assert host not in raw, f"模板仍硬编码域名 {host}"
+    assert "max_body_size: 104857600" not in raw
+    assert "max_body_size: __MAX_BODY_SIZE__" in raw
+    # 模板里出现的占位必须是已登记的那批（防拼错导致 render 后残留）
+    assert set(re.findall(r"__[A-Z_]+__", raw)) <= _PLACEHOLDERS
+
+
+def test_render_expands_all_placeholders() -> None:
+    """渲染后不得残留任何未展开占位（render.sh 自身也会拒发含残留的配置）。"""
+    rendered = _rendered()
+    leftover = set(re.findall(r"__[A-Z_]+__", yaml.safe_dump(rendered)))
+    assert leftover <= {"__SSL_SECTION__"}  # 仅模板注释里的说明文字会被带出
+
+
+def test_render_expands_domains_and_body_limit() -> None:
+    routes = _rendered_routes()
+    assert routes["api-prefix"]["hosts"] == [
+        _COMMUNITY,
+        f"www.{_COMMUNITY}",
+    ]
+    assert routes["official-site"]["hosts"] == [_OFFICIAL, f"www.{_OFFICIAL}"]
+    assert routes["acme-challenge"]["hosts"] == _ALL_HOSTS
+    cors = routes["api-prefix"]["plugins"]["cors"]
+    assert cors["allow_origins"] == f"https://{_COMMUNITY},https://www.{_COMMUNITY}"
+    assert routes["api-prefix"]["plugins"]["client-control"]["max_body_size"] == 104857600
 
 
 def test_exact_admin_me_beats_prefix() -> None:
@@ -83,18 +172,18 @@ def test_realtime_ws_endpoint_upgrade_enabled() -> None:
 
 
 def test_minio_presign_host_rewrite() -> None:
-    route = _routes()["minio"]
+    route = _rendered_routes()["minio"]
     assert route["uri"] == "/lkm/*"
     # pass_host=rewrite 的 Host 必须落 upstream.upstream_host；用 proxy-rewrite.host 会被
     # pass_host 逻辑以 nil 覆盖 → 空 Host → MinIO 400（真机验收暴露）
     assert "plugins" not in route
     assert route["upstream"]["pass_host"] == "rewrite"
-    assert route["upstream"]["upstream_host"] == "lkm-ahz.ltd"
+    assert route["upstream"]["upstream_host"] == _COMMUNITY
     assert route["upstream"]["service_name"].startswith("minio:")
 
 
 def test_upload_routes_have_body_limit() -> None:
-    routes = _routes()
+    routes = _rendered_routes()
     for rid in (
         "auth-login",
         "admin-auth-me",
@@ -120,7 +209,7 @@ def test_cache_headers_on_assets() -> None:
 
 def test_cors_explicit_whitelist_no_empty_fallback() -> None:
     """M6.1：网关 CORS 须显式白名单，禁回退 `cors: {}`（默认等价 `*`，对全网开放）。"""
-    routes = _routes()
+    routes = _rendered_routes()
     cors_routes = [
         rid for rid, r in routes.items() if "cors" in (r.get("plugins") or {})
     ]
@@ -130,9 +219,9 @@ def test_cors_explicit_whitelist_no_empty_fallback() -> None:
         assert cors, f"{rid}.cors 不可为空兜底"
         origins = cors["allow_origins"]
         assert "*" not in origins, f"{rid}.cors 不得含通配来源"
-        # 两个社区域名（含 www）均在白名单内，与应用层 LKM_CORS_ORIGINS 同值
-        assert "https://lkm-ahz.ltd" in origins
-        assert "https://www.lkm-ahz.ltd" in origins
+        # 两个社区域名（含 www）均在白名单内（实值由 render.sh 从域名变量展开）
+        assert f"https://{_COMMUNITY}" in origins
+        assert f"https://www.{_COMMUNITY}" in origins
         assert cors["allow_credential"] is True
         # APISIX cors schema 硬规则：allow_credential=true 时四个字段**任一**为 `*` 即校验失败
         # → **整条路由不被加载**（限流/WS upgrade/CORS 静默失效，流量退化为经 astro 转发）。
@@ -144,6 +233,20 @@ def test_cors_explicit_whitelist_no_empty_fallback() -> None:
             "expose_headers",
         ):
             assert "*" not in str(cors.get(field, "")), f"{rid}.cors.{field} 不得为 *"
+
+
+def test_every_api_route_carries_cors() -> None:
+    """每条代理到 backend/auth 的路由都必须带 cors 插件。
+
+    生产不挂应用层 CORS（见 LKM-service/app/core/middleware.py 的取舍），网关是唯一权威；
+    新增对外 API 路由若漏配 cors，浏览器跨域会**完全没有**响应头且无兜底 —— 本断言即守此回归。
+    """
+    for rid, route in _routes().items():
+        upstream = str((route.get("upstream") or {}).get("service_name", ""))
+        if not upstream.startswith(("backend:", "auth:")):
+            continue
+        cors = (route.get("plugins") or {}).get("cors")
+        assert cors, f"{rid} 代理到 {upstream} 却未配 cors 插件（生产无应用层兜底）"
 
 
 def test_global_gzip_and_login_rate_limit() -> None:

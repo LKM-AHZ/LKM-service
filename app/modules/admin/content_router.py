@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import client_ip
 from app.core.common import ApiResp, PageData, PaginateDep, PaginateParams
 from app.core.err import respond
 from app.db.session import get_session
@@ -31,7 +32,7 @@ from app.modules.content.service import (
 from app.modules.content.service import list_items as list_content_items_svc
 from app.modules.rbac.permissions import Permission
 
-from .deps import get_real_client_ip, require_admin, require_admin_2fa
+from .deps import require_admin, require_admin_2fa
 from .permissions import require_permission
 
 router = APIRouter(prefix="/admin/content", tags=["admin-content"])
@@ -70,7 +71,7 @@ async def _audit_admin_delete(
         target_user_id,
         action,
         detail=f"{detail} by admin={admin_id}",
-        ip_address=get_real_client_ip(request),
+        ip_address=client_ip(request),
     )
 
 

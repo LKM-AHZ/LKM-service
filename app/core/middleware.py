@@ -1,20 +1,28 @@
-"""公网安全面中间件（M6.1）：TrustedHost + CORS 白名单 + 安全响应头。
+"""公网安全面中间件（M6.1）：TrustedHost + CORS(仅非生产) + 安全响应头。
 
 单体（``app.main``）与 auth 独立进程（``app.main_auth``）共用 :func:`install_security_middleware`
-一处装配，避免两套漂移——两进程都在 APISIX 之后直接承载 ``/api/*`` 与认证面，安全头/CORS
-语义必须一致（网关侧的同名配置见 ``deploy/apisix/apisix.yaml``，两者互为纵深兜底）。
+一处装配，避免两套漂移——两进程都在 APISIX 之后直接承载 ``/api/*`` 与认证面，安全头语义
+必须一致。
 
 三件各自职责：
 
 - ``TrustedHostMiddleware``:Host 头白名单（``settings.allowed_hosts_list``，``*`` = 不校验）。
   仅作纵深——对外 Host 已由 APISIX 的 ``hosts:`` 路由约束，此层挡住绕过网关直连容器端口的场景。
-- ``CORSMiddleware``:显式来源白名单。**含 ``*`` 时自动关闭 ``allow_credentials``**，
-  杜绝「``*`` + 凭证」这一高危组合（浏览器会直接拒绝，且等于对全网开放带 cookie 的跨域读）。
+- ``CORSMiddleware``:**仅非生产挂载**。生产环境 CORS 的唯一权威是 APISIX
+  （``deploy/apisix/apisix.yaml`` 的 ``cors`` 插件）——backend/auth/astro 在 compose 里都没有
+  对外端口，生产流量必经网关，故应用层再挂一份纯属**第二个真相源**：两边取值必须人工同步，
+  而 APISIX 的 schema 比 Starlette 严（``allow_credential=true`` 时四个字段都禁 ``*``），
+  照抄即错（2026-09-16 就因此把 8 条路由整条拒载，见路线图 §8 #26）。本地开发前端直连
+  ``:8000`` 仍需跨域，故非生产保留。
 - ``SecurityHeadersMiddleware``:自研轻量 ASGI 中间件，补 nosniff / X-Frame-Options /
   Referrer-Policy / Permissions-Policy；**HSTS 仅生产**——纯 HTTP 环境误开会把域名锁死到 https。
 
 装配顺序（``add_middleware`` 后加者在外层）：安全头最后加 → 最外层，连 TrustedHost/CORS 的
 拒答响应也带上安全头。
+
+**生产 CORS 少了应用层兜底**：新增对外路由若漏配 APISIX 的 ``cors`` 插件，将**完全没有**跨域
+响应头。由 ``tests/deploy/test_apisix_config.py`` 的「每条代理到 backend/auth 的路由都必须带
+cors」断言守住（回归即红）。
 """
 
 from __future__ import annotations
@@ -75,22 +83,22 @@ def install_security_middleware(application: FastAPI) -> None:
     """装配安全面中间件（含生产必填校验；仅 HTTP 服务进程调用）。"""
     settings.assert_web_security_configured()
 
-    origins = settings.cors_origins_list
-    # 禁「* + 凭证」并存：命中通配即关闭 credentials（跨域读仍可用，但不再携带 cookie）。
-    allow_credentials = "*" not in origins
-
     application.add_middleware(
         TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list
     )
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=allow_credentials,
-        allow_methods=_ALLOW_METHODS,
-        allow_headers=["*"],
-        expose_headers=_EXPOSE_HEADERS,
-        max_age=_MAX_AGE_S,
-    )
+    # CORS 只在非生产挂载：生产唯一权威是 APISIX（见模块 docstring 的取舍说明）
+    if not settings.is_production:
+        origins = settings.cors_origins_list
+        # 禁「* + 凭证」并存：命中通配即关闭 credentials（跨域读仍可用，但不再携带 cookie）。
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials="*" not in origins,
+            allow_methods=_ALLOW_METHODS,
+            allow_headers=["*"],
+            expose_headers=_EXPOSE_HEADERS,
+            max_age=_MAX_AGE_S,
+        )
     # 最后加 → 最外层：TrustedHost/CORS 的拒答也带安全头
     application.add_middleware(SecurityHeadersMiddleware, hsts=settings.is_production)
 

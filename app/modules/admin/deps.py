@@ -52,7 +52,6 @@ __all__ = [
     "decode_admin_access",
     "get_current_admin",
     "get_current_admin_2fa",
-    "get_real_client_ip",
     "require_admin",
     "require_admin_2fa",
 ]
@@ -150,6 +149,3 @@ async def get_current_admin_2fa(
 require_admin_2fa = Depends(get_current_admin_2fa)
 
 
-def get_real_client_ip(request: Request) -> str:
-    """取客户端 IP，供后台登录 IP 级频控使用。"""
-    return request.client.host if request.client else "unknown"

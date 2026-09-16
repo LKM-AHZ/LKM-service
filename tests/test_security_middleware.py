@@ -193,6 +193,24 @@ async def test_cors_origins_dev_fallback(sec_env) -> None:
     assert "http://localhost:4321" in settings.cors_origins_list
 
 
+async def test_cors_not_mounted_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """生产不挂应用层 CORS：唯一权威是 APISIX，避免第二个真相源（见 core/middleware 取舍）。"""
+    monkeypatch.setattr(settings, "env", "production")
+    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd,127.0.0.1")
+    app = _make_app()
+    installed = {cls for cls, _args, _kw in app.user_middleware}
+    assert middleware.CORSMiddleware not in installed
+    assert middleware.TrustedHostMiddleware in installed
+    assert middleware.SecurityHeadersMiddleware in installed
+
+    # 即便显式配了来源，生产也不应回任何 CORS 头
+    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    app2 = _make_app()
+    async with _client(app2, base_url="http://lkm-ahz.ltd") as c:
+        resp = await c.get("/ping", headers={"Origin": "https://lkm-ahz.ltd"})
+    assert "access-control-allow-origin" not in resp.headers
+
+
 # ── 生产必填门控 ───────────────────────────────────────────────────────────
 
 
@@ -223,18 +241,24 @@ def test_dev_passes_without_web_security_config(sec_env) -> None:
 
 
 def test_monolith_and_auth_apps_install_security_middleware() -> None:
-    """单体与 auth 进程都已装上三件中间件（防只在一边装配导致语义漂移）。"""
+    """单体与 auth 进程都已装上安全面中间件（防只在一边装配导致语义漂移）。
+
+    测试跑在 dev（`sec_env` 不适用于本用例，故显式断言 dev 下的集合）：
+    TrustedHost + SecurityHeaders 恒定，CORS 仅非生产。
+    """
     import app.main
     import app.main_auth
 
-    expected = {
+    required = {
         middleware.TrustedHostMiddleware,
-        middleware.CORSMiddleware,
         middleware.SecurityHeadersMiddleware,
     }
     for application in (app.main.app, app.main_auth.app):
         installed = {cls for cls, _args, _kw in application.user_middleware}
-        assert expected <= installed
+        assert required <= installed
+        assert (middleware.CORSMiddleware in installed) is (
+            not settings.is_production
+        )
 
 
 async def test_monolith_exposes_probe_endpoints(sec_env) -> None:
