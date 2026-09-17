@@ -1,38 +1,100 @@
-"""事件发布侧：worker 进程把登记结果发布到 Redis pub/sub，供 API 进程转发给 WebSocket。
+"""事件发布侧：worker 进程把事件发布到 Redis pub/sub，供 API 进程转发给 WebSocket。
 
-通道命名约定集中在业务侧语义 —— ``ws:upload:<uploader_id>``（按用户订阅粒度）。
-worker（如 ``app.modules.files.tasks``）只 import 本模块的 ``publish_upload_bound`` 发布；
-不持有任何 WebSocket 连接（连接只存在于 API 进程的 ``manager``）。
+通道命名约定 ``ws:{user_id}:{channel}``（M6.7 泛化；泛化前为 ``ws:upload:{uploader_id}``）。
+**user_id 前缀由服务端从 token 派生**，客户端不能自选，故越权订阅面天然收敛于通道白名单
+（见 ``CHANNELS``，订阅侧同表校验）。
+
+现有通道：
+- ``upload``：直传登记完成（原 ``ws:upload:<id>`` 语义与会话端不变）；
+- ``notify``：站内信/业务通知（M6.8 使用）。
+
+推送 body 统一带两个幂等/排序字段：
+- ``event_id``：事件幂等键。调用方可显式传入（如复用 outbox 事件的 event_id），未传则自动
+  生成 UUID——即「新事件」语义。同一 ``event_id`` 重推时 body 逐字段一致，前端据此去重。
+- ``version``：调用方给的单调版本号（缺省 0 = 未指定）。前端可据 ``(event_id, version)``
+  丢弃旧帧。
+
+发布一律 fail-open（``app.core.redis`` 语义）：Redis 不可用或 publish 异常静默 no-op，
+广播只是体验增强，缺失时前端回退到「稍后刷新」即可，不该阻塞登记/通知主流程。
 """
 
 import json
+import uuid
 from typing import Any
 
 from app.core.redis import get_redis
 
-# 通道前缀：ws:upload:<uploader_id>
-_UPLOAD_CHANNEL_PREFIX = "ws:upload:"
+CHANNEL_UPLOAD = "upload"
+CHANNEL_NOTIFY = "notify"
+
+# 服务端通道白名单：发布侧与订阅侧共用（越权订阅/投递的唯一收敛点）
+CHANNELS: frozenset[str] = frozenset({CHANNEL_UPLOAD, CHANNEL_NOTIFY})
+
+_CHANNEL_PREFIX = "ws"
+
+
+def ws_channel(user_id: int, channel: str) -> str:
+    """返回某用户某通道的 Redis 通道名（``ws:{user_id}:{channel}``）。"""
+    return f"{_CHANNEL_PREFIX}:{user_id}:{channel}"
 
 
 def upload_channel(uploader_id: int) -> str:
-    """返回某用户上传事件所属的 Redis 通道名。"""
-    return f"{_UPLOAD_CHANNEL_PREFIX}{uploader_id}"
+    """上传通道名（兼容旧调用点）。"""
+    return ws_channel(uploader_id, CHANNEL_UPLOAD)
 
 
-async def publish_upload_bound(uploader_id: int, payload: dict[str, Any]) -> None:
-    """把登记完成的 payload 发布到该 uploader 的通道。
+def parse_channel(channel: str) -> tuple[int, str] | None:
+    """解析 ``ws:{user_id}:{channel}``；格式不符或通道不在白名单返回 None。"""
+    parts = channel.split(":", 2)
+    if len(parts) != 3 or parts[0] != _CHANNEL_PREFIX:
+        return None
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        return None
+    if parts[2] not in CHANNELS:
+        return None
+    return user_id, parts[2]
 
-    Redis 不可用或发布异常一律静默 no-op（fail-open，与 ``app.core.redis`` 语义一致）：
-    广播只是体验增强，缺失时前端回退到「稍后刷新列表」即可，不该阻塞/影响登记流程
-    与任务成功语义。
-    """
+
+async def publish(
+    user_id: int,
+    channel: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None = None,
+    version: int | None = None,
+) -> None:
+    """向 ``ws:{user_id}:{channel}`` 发布一条消息（fail-open，异常/未配置静默）。"""
+    if channel not in CHANNELS:
+        # 白名单外：调用方 bug，静默丢弃优于越权投递
+        return
     redis = await get_redis()
     if redis is None:
         return
+    body = dict(payload)
+    body["event_id"] = event_id or str(uuid.uuid4())
+    body["version"] = version if version is not None else 0
     try:
         await redis.publish(
-            upload_channel(uploader_id), json.dumps(payload, ensure_ascii=False)
+            ws_channel(user_id, channel), json.dumps(body, ensure_ascii=False)
         )
     except Exception:
-        # 广播失败不影响登记主流程；下次成功触发前前端靠超时兜底
+        # 广播失败不影响主流程；前端靠超时/刷新兜底
         return
+
+
+async def publish_upload_bound(uploader_id: int, payload: dict[str, Any]) -> None:
+    """把登记完成的 payload 发布到该 uploader 的 upload 通道。"""
+    await publish(uploader_id, CHANNEL_UPLOAD, payload)
+
+
+async def publish_notification(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None = None,
+    version: int | None = None,
+) -> None:
+    """把通知 payload 发布到该用户的 notify 通道（M6.8 生产侧入口）。"""
+    await publish(user_id, CHANNEL_NOTIFY, payload, event_id=event_id, version=version)

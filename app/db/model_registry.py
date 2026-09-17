@@ -35,6 +35,7 @@ def ensure_all_models() -> None:
     import app.modules.exam.models
     import app.modules.feed.models
     import app.modules.files.models
+    import app.modules.interaction.models
     import app.modules.points.models
     import app.modules.projects.models
     import app.modules.starhope.models  # noqa: F401

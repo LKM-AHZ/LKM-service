@@ -96,7 +96,7 @@ class TestConnectionManagerFanout:
         payload = json.dumps(
             {"event": "upload_registered", "upload_id": "abc123", "file": {}}
         )
-        await m.dispatch(7, payload)
+        await m.dispatch(7, ws_broker.CHANNEL_UPLOAD, payload)
 
         assert target.sent and "abc123" in target.sent[0]
         assert other.sent == []  # 其它用户不收到
@@ -108,11 +108,11 @@ class TestConnectionManagerFanout:
         await m.register(9, bad)
         await m.register(9, good)
 
-        await m.dispatch(9, "payload")
+        await m.dispatch(9, ws_broker.CHANNEL_UPLOAD, "payload")
 
         assert good.sent == ["payload"]  # 好连接仍收到
         async with m._lock:
-            live = list(m._connections.get(9, ()))
+            live = list(m._connections.get(9, {}).get(ws_broker.CHANNEL_UPLOAD, ()))
         assert bad not in live  # 坏连接被清理
         assert good in live
         await m.close()
@@ -120,7 +120,9 @@ class TestConnectionManagerFanout:
 
 class TestBroker:
     def test_channel_naming(self) -> None:
-        assert ws_broker.upload_channel(42) == "ws:upload:42"
+        # M6.7 泛化后：ws:{user_id}:{channel}（原 ws:upload:{user_id}）
+        assert ws_broker.upload_channel(42) == "ws:42:upload"
+        assert ws_broker.ws_channel(42, "notify") == "ws:42:notify"
 
     async def test_publish_fail_open_without_redis(
         self, monkeypatch: pytest.MonkeyPatch

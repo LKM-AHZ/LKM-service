@@ -23,6 +23,7 @@ MODULES: list[str] = [
     "feed",
     "files",
     "health",
+    "interaction",
     "points",
     "projects",
     "starhope",
@@ -43,6 +44,7 @@ _ERROR_MODULES: list[str] = [
     "exam",
     "feed",  # FollowErr（关注关系；M2.3 原 follow 域并入）
     "files",
+    "interaction",
     "points",
     "projects",
     "starhope",

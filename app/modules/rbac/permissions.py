@@ -19,6 +19,9 @@ class Permission(StrEnum):
     content_create = "content.create"
     content_comment_create = "content.comment_create"
     content_like = "content.like"
+    # interaction 域（M6.6）
+    interaction_favorite = "interaction.favorite"
+    interaction_history = "interaction.history"
     # boards 域
     boards_create_application = "boards.create_application"
     boards_review_application = "boards.review_application"
@@ -87,6 +90,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.columns_application_create),
         Grant(Permission.files_upload),
         Grant(Permission.files_download),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
         Grant(Permission.projects_application_create),
     ),
     "normal:columnist": (
@@ -100,6 +105,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.columns_publish),
         Grant(Permission.files_upload),
         Grant(Permission.files_download),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
         Grant(Permission.projects_application_create),
     ),
     "normal:author": (
@@ -115,6 +122,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.files_download),
         Grant(Permission.projects_application_create),
         Grant(Permission.projects_create),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
     ),
     "admin:org_member": (
         Grant(Permission.comment_create),
@@ -127,6 +136,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.files_upload),
         Grant(Permission.files_download),
         Grant(Permission.projects_application_create),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
         Grant(Permission.admin_dashboard),
         Grant(Permission.admin_reports_view),
     ),
@@ -138,6 +149,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_like),
         Grant(Permission.files_upload),
         Grant(Permission.files_download),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.columns_publish),

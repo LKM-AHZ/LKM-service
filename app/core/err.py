@@ -48,6 +48,8 @@ NS_PROJECTS = Namespace(14, "projects")
 NS_FOLLOW = Namespace(15, "follow")
 NS_MODERATION = Namespace(16, "moderation")
 NS_CONTENT = Namespace(17, "content")
+NS_INTERACTION = Namespace(18, "interaction")
+NS_NOTIFICATION = Namespace(19, "notification")
 
 
 class CommonErr(ErrCode):
@@ -169,6 +171,7 @@ def _wrap_result(result: Any) -> Response:
 # AuthErr 原为 app/modules/auth/errors.py 私有；现并入共享 app.core.err，
 # 使 app.core.throttle / app.db.session 等 monolith 共享层无需反向 import auth 包。
 # 定义与 register 映射原样迁移，行为零变化。auth/errors.py 改为仅私有重导出。
+
 
 class AuthErr(ErrCode):
     ALREADY_REGISTERED = NS_AUTH.err(1)
