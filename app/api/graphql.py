@@ -138,8 +138,8 @@ def build_schema() -> strawberry.Schema:
     extensions: list[Any] = [
         lambda: QueryDepthLimiter(max_depth=settings.graphql_max_depth),
     ]
-    # ``graphql_max_tokens <= 0`` = 不注册规模限制（供本地 GraphiQL 拉 introspection 等大文档；
-    # 生产不建议关闭——这是唯一挡超大文档的一层）。
+    # ``graphql_max_tokens <= 0`` = 不注册规模限制（逃生口：需要完全免限时用）。默认 1000 的
+    # 余量经真机实测充足——完整 introspection 文档仅 163 token，GraphiQL 开箱可用。
     if settings.graphql_max_tokens > 0:
         extensions.append(
             lambda: MaxTokensLimiter(max_token_count=settings.graphql_max_tokens)

@@ -134,8 +134,9 @@ class Settings(BaseSettings):
     # 2×/14× 余量）后写死；前端加查询撞阈值时按需放宽，不随请求动态调整。
     graphql_max_depth: int = 10
     # strawberry 无成本分析器：以「词法 token 数」作文档规模/复杂度上限的代理指标。
-    # **0 = 关闭该项**（不注册该限制器）：GraphiQL/客户端拉 schema 的 introspection 文档本身
-    # 就远超千级 token，本地要用 GraphiQL 时把它调大或置 0（生产不建议放行超大文档）。
+    # **0 = 关闭该项**（不注册该限制器）。阈值余量经真机实测：前端最大查询远低于 1000，
+    # 连完整的 introspection 文档也只有 163 token（真机 2026-09-17 用 lexer 口径反解），
+    # 故默认放行 GraphiQL；置 0 只在需要完全免限时用（生产不建议）。
     graphql_max_tokens: int = 1000
     # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver，令查询以受控错误收束（不能中断
     # 单个已在 await 中的 resolver，见 app/api/graphql.py 的局限说明）
