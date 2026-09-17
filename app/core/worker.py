@@ -81,7 +81,9 @@ async def _dispatch_with_dedup(
             await record_processed(db, eid, scope=scope)
         except Exception:
             # 记账失败(罕见)：已跑过一次副作用，宁可让 DLQ requeue 重试走幂等查账兜底。
-            logger.exception("event_processed 记账失败 scope=%s event_id=%s", scope, eid)
+            logger.exception(
+                "event_processed 记账失败 scope=%s event_id=%s", scope, eid
+            )
             raise
     finally:
         await db.close()
@@ -101,9 +103,7 @@ async def _consume(subscription_name: str) -> None:
         args = payload.get("args", [])
         handler = handlers.get(fn) if isinstance(fn, str) else None
         if handler is None:
-            logger.warning(
-                "未知任务 %s, 丢弃 subscription=%s", fn, subscription_name
-            )
+            logger.warning("未知任务 %s, 丢弃 subscription=%s", fn, subscription_name)
             return  # ack 丢弃
         await _dispatch_with_dedup(payload, handler, args, scope=subscription_name)
 

@@ -24,6 +24,7 @@ MODULES: list[str] = [
     "files",
     "health",
     "interaction",
+    "notification",
     "points",
     "projects",
     "starhope",

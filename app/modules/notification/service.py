@@ -115,7 +115,9 @@ async def list_notifications(
     if unread_only:
         conditions.append(Notification.read_at.is_(None))
     total = (
-        await db.scalar(select(func.count()).select_from(Notification).where(*conditions))
+        await db.scalar(
+            select(func.count()).select_from(Notification).where(*conditions)
+        )
         or 0
     )
     rows = (
@@ -144,9 +146,7 @@ async def unread_count(db: AsyncSession, user_id: int) -> int:
         await db.scalar(
             select(func.count())
             .select_from(Notification)
-            .where(
-                Notification.user_id == user_id, Notification.read_at.is_(None)
-            )
+            .where(Notification.user_id == user_id, Notification.read_at.is_(None))
         )
         or 0
     )

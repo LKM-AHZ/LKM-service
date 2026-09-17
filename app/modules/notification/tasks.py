@@ -57,9 +57,7 @@ def _split_ref(ref_id: str) -> tuple[str, int] | None:
     return prefix, int(raw)
 
 
-async def _resolve_targets(
-    db: AsyncSession, event: str, ref_id: str
-) -> list[_Target]:
+async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_Target]:
     """把行为事件解析为通知目标列表（无法解析/无作者 → 空列表，静默跳过）。"""
     parsed = _split_ref(ref_id)
     if parsed is None:
@@ -83,7 +81,9 @@ async def _resolve_targets(
         ]
 
     if event == "comment" and prefix == "comment":
-        comment = await db.scalar(select(ContentComment).where(ContentComment.id == ref))
+        comment = await db.scalar(
+            select(ContentComment).where(ContentComment.id == ref)
+        )
         if comment is None:
             return []
         item = await db.scalar(
@@ -125,8 +125,18 @@ async def _resolve_targets(
 
 
 async def _actor_name(db: AsyncSession, actor_id: int) -> str:
-    """触发者展示名（snapshot 读缝 fail-open，取不到就给空串）。"""
-    snap = await get_user_snapshot(db, user_id=actor_id)
+    """触发者展示名（展示增强项：任何失败都降级为空串，不能让通知丢失）。
+
+    snapshot 读缝自身对「AUTH 不可达」是 fail-open 的，但若 seam 关闭且业务库无
+    ``users`` 表（拆库后的真实部署）会抛 ``UndefinedTable``——此处兜住并回滚，使
+    当前事务恢复可用（调用点在所有写入之前，回滚无副作用）。
+    """
+    try:
+        snap = await get_user_snapshot(db, user_id=actor_id)
+    except Exception:
+        logger.warning("actor name lookup failed uid=%s; 降级为空名", actor_id)
+        await db.rollback()
+        return ""
     return snap.display_name if snap is not None else ""
 
 

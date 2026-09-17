@@ -49,9 +49,7 @@ class Notification(Base):
     actor_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 目标实体 id（当前为 content_items.id）；系统通知为 None
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    payload: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     read_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )

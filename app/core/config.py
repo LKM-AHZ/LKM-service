@@ -185,6 +185,11 @@ class Settings(BaseSettings):
     # （行数上界是「用户数 × 内容数」，但历史内容多的站点仍需按时间收敛）。
     interaction_view_log_retention_days: int = 90
 
+    # ---- notification 域（M6.8）----
+    # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为
+    # 一条（payload.count 累加），防「一次动作扇出大量通知」的通知风暴。0 = 关闭聚合。
+    notification_aggregate_window_s: float = 3600.0
+
     # ---- Prefect 编排（M5 7.2.5，复杂数据管道 DAG/重试/回填）----
     # 默认关：cron 消费者直调既有函数（现状路径），不依赖 Prefect server，测试/部署零改动。
     # 开启后 handler 经 run_deployment 触发 flow（timeout=0 立即返回，不占 JOB_TIMEOUT）；触发

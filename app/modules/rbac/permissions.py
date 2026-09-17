@@ -22,6 +22,9 @@ class Permission(StrEnum):
     # interaction 域（M6.6）
     interaction_favorite = "interaction.favorite"
     interaction_history = "interaction.history"
+    # notification 域（M6.8）
+    notification_read = "notification.read"
+    notification_manage = "notification.manage"
     # boards 域
     boards_create_application = "boards.create_application"
     boards_review_application = "boards.review_application"
@@ -92,6 +95,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.files_download),
         Grant(Permission.interaction_favorite),
         Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
         Grant(Permission.projects_application_create),
     ),
     "normal:columnist": (
@@ -107,6 +112,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.files_download),
         Grant(Permission.interaction_favorite),
         Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
         Grant(Permission.projects_application_create),
     ),
     "normal:author": (
@@ -124,6 +131,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.projects_create),
         Grant(Permission.interaction_favorite),
         Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
     ),
     "admin:org_member": (
         Grant(Permission.comment_create),
@@ -138,6 +147,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.projects_application_create),
         Grant(Permission.interaction_favorite),
         Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
         Grant(Permission.admin_dashboard),
         Grant(Permission.admin_reports_view),
     ),
@@ -151,6 +162,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.files_download),
         Grant(Permission.interaction_favorite),
         Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.columns_publish),
