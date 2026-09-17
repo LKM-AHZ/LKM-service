@@ -18,15 +18,20 @@ M3.A「读权收束」第一腿（A1，纯增量）+ 管理面腿（A4）+ 单�
   本函数不带任何鉴权——授权由路由层（require_admin + require_permission）负责。
 - 单用户读走 cache-through（A6）：``get_user_snapshot`` 命中 ``core.user_cache`` 直接返回
   ``UserSnapshot``；miss 时回填带来源版本（User.updated_at）+ 反陈旧 CAS，展示语义与直读
-  DB 完全一致（diff=0）。``get_user_snapshot_batch`` 保持 DB 直读单查询语义（不逐行 N+1，
-  也不对批量集成版本 CAS——热目标 auth/self、feed 'me' 已由单读缓存覆盖，见 task-A6-report）。
-  缓存失效由 A7 走 ``core.user_cache.invalidate_user_snap``，不在本缝接线。
+  DB 完全一致（diff=0）。
+- 批量读（M6.5 起与单读同源）：``get_user_snapshot_batch`` 在 seam 打开时走「**一次**批量缓存读
+  （L1 逐个 + L2 单次 MGET）→ 未命中项按 ``BATCH_IDS_MAX`` 分块、每块批内 singleflight →
+  **一次** by-ids HTTP → 按 wire 出的真实 sv 逐条 CAS 回填」；seam 关闭时仍是**一条 SQL 查多行**。
+  两条路径都**不逐 id N+1**。缓存失效由 A7 走 ``core.user_cache.invalidate_user_snap``，
+  不在本缝接线。
 - B1.2 HTTP seam（默认 OFF）：当配置 ``auth_http_url`` + ``auth_http_token``（见 core.config）
   时，本缝的 **miss 回填源**从「就地直读本进程业务 DB」切换成「跨 HTTP 打 AUTH 读端点」
-  （``auth.user_http``）——在线读路径可由不同进程序提供。AUTH 不可达/超时/畸形 → client 抛
-  ``UserHttpUnavailable`` → **fail-open 回落本进程 DB**（读永不 crash、不以 stale 当 truth）；
-  来源版本取 HTTP 信封带出的 AUTH 端真实 sv，缓存 CAS 语义不变（不捏造版本，不泄露面加宽）。
-  打开时每次 miss 都整段走 client（含往返）；关闭时是既有 A6 原路径、行为逐字节不变（回归锚）。
+  （``auth.user_http``；单读走 ``/users/{id}/snapshot``、批量走 ``/users/by-ids``）——在线读路径
+  可由不同进程序提供。来源版本取 HTTP 信封带出的 AUTH 端真实 sv，缓存 CAS 语义不变（不捏造
+  版本，不泄露面加宽）。单读 AUTH 不可达/超时/畸形 → **fail-open 回落本进程 DB**（读永不 crash、
+  不以 stale 当 truth）；**批量读**（跨 realm 展示读）无本地 users 可回落 → 整块**跳过该批**
+  （缺行跳过 ≠ 故障，见 ``_retrieve_fields_batch``）。seam 关闭时是既有 A6 原路径、行为逐字节
+  不变（回归锚）。
 """
 
 from __future__ import annotations
@@ -101,6 +106,11 @@ _SNAP_FIELDS = (
     "banned",
     "nickname",
 )
+
+
+# 批量读单次上限（M6.5）：业务侧分块大小与 AUTH 内部 by-ids 端点的入参上限**同一常量**
+# （router_read 引用此处，防两侧漂移）——既限单次 HTTP 体量，也限服务端一次 in_(...) 的规模。
+BATCH_IDS_MAX = 200
 
 
 def _snap_to_dict(snap: UserSnapshot) -> dict[str, Any]:
@@ -213,37 +223,101 @@ async def get_user_snapshot_batch(
     return {uid: UserSnapshot(**f) for uid, f in fields_map.items()}
 
 
+async def _fetch_fields_batch_from_db(
+    user_ids: list[int], db: AsyncSession
+) -> dict[int, tuple[dict[str, Any], int | None]]:
+    """就地**单查询**批量直读：``{id: (冻结字段 dict, 来源版本)}``；缺行不在结果里。
+
+    与 :func:`_fetch_fields_from_db` 同源（同一 ``_to_snap`` + 版本推导），差别只在一查多行。
+    供两处共用：seam 关闭时的批量读、AUTH 内部 by-ids 读端点（M6.5）。
+    """
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(User)
+            .where(User.id.in_(user_ids))
+            .options(selectinload(User.profile))
+        )
+    ).scalars()
+    out: dict[int, tuple[dict[str, Any], int | None]] = {}
+    for u in rows:
+        version = (
+            user_cache.version_of_updated_at(u.updated_at) if u.updated_at else None
+        )
+        out[u.id] = (_snap_to_dict(_to_snap(u)), version)
+    return out
+
+
+def _batch_singleflight_key(chunk: list[int]) -> str:
+    """批内合并键（与单读键不同域）：排序分块后同一集合必得同键（首/末 id + 长度）。"""
+    return f"{user_cache.get_user_cache_key(chunk[0])}:batch:{chunk[-1]}:{len(chunk)}"
+
+
+async def _load_batch_uncached(user_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """单块 loader（M6.5）：二次检查缓存 → **一次**批量 HTTP → 带来源版本逐条 CAS 回填。
+
+    与单读 loader 同纪律：先捕获各 id 的失效代次（``expected_epoch``）再取回填源，写回由
+    ``write_if_newer`` 做「sv 不陈旧 + 期间未失效」双校验；被拒写不影响返回值（缓存不改读语义）。
+    """
+    out = await user_cache.read_snaps(user_ids)
+    pending = [uid for uid in user_ids if uid not in out]
+    if not pending:
+        return out
+    epochs = {uid: await user_cache.current_epoch(uid) for uid in pending}
+    try:
+        fetched = await user_http.fetch_users_http_batch(pending)
+    except user_http.UserHttpUnavailable:
+        logger.warning("auth_http batch read failed n=%s; skip rows", len(pending))
+        return out
+    for uid, (fields, source_version) in fetched.items():
+        if fields is None:  # 权威不存在：不缓存缺行，也不入结果（缺行 ≠ 故障）
+            continue
+        out[uid] = fields
+        if source_version is not None:
+            await user_cache.write_if_newer(uid, fields, source_version, epochs[uid])
+    return out
+
+
 async def _retrieve_fields_batch(
     user_ids: list[int], db: AsyncSession
 ) -> dict[int, dict[str, Any]]:
     """批量取回填源**冻结字段 dict**（跨 realm 语义，同单读）。
 
-    - seam 打开（``user_http.enabled()``）：对每个 id 走 seam（``fetch_user_http_payload``，
-      读到的是 auth realm 真值）；权威缺(this=404/data=null)或 seam 瞬时不可用 → **跳过该 id**
-      （不入结果，配合业务展示读取方自己的 ``.get(id,"")`` 语义降级为空白展示）；**绝不让该 id
-      回落业务 db 查 User**（M3.B S5 拆库后业务 realm 无 users，读了会 UndefinedTable）。
-      （不逐 id 抛错：跨 realm 下"批量展示读"无本地回退可抛，纪律=缺行跳过 ≠ 故障。）
+    - seam 打开（``user_http.enabled()``）：①**一次批量缓存读**（L1 逐个 + L2 单次 MGET）→
+      ②未命中项按 ≤`BATCH_IDS_MAX` 分块，每块经**批内 singleflight**（并发同块只放一个去拉）
+      → **一次 HTTP** 批量端点 → ③命中结果带来源版本逐条 CAS 回填缓存。权威缺(``data=null``)
+      或 HTTP 不可用 → **跳过该 id**（不入结果，配合业务展示读取方自己的 ``.get(id,"")``
+      语义降级为空白展示）；**绝不让该 id 回落业务 db 查 User**（M3.B S5 拆库后业务 realm
+      无 users，读了会 UndefinedTable）。（不抛错：跨 realm 下"批量展示读"无本地回退可抛，
+      纪律=缺行跳过 ≠ 故障。）
     - seam 关闭（默认）：就地 **SQL 单查询批量**读本进程 db（既有 A6 原路径、非 N+1）。
     """
     if not user_http.enabled():
-        rows = (
-            await db.execute(
-                select(User)
-                .where(User.id.in_(user_ids))
-                .options(selectinload(User.profile))
-            )
-        ).scalars()
-        return {u.id: _snap_to_dict(_to_snap(u)) for u in rows}
+        rows = await _fetch_fields_batch_from_db(user_ids, db)
+        return {uid: fields for uid, (fields, _sv) in rows.items()}
 
-    out: dict[int, dict[str, Any]] = {}
-    for uid in user_ids:
+    ids = sorted(set(user_ids))
+    out: dict[int, dict[str, Any]] = await user_cache.read_snaps(ids)
+    missing = [uid for uid in ids if uid not in out]
+    for start in range(0, len(missing), BATCH_IDS_MAX):
+        chunk = missing[start : start + BATCH_IDS_MAX]
         try:
-            fields, _version = await user_http.fetch_user_http_payload(uid)
-        except user_http.UserHttpUnavailable:
-            logger.warning("auth_http batch read failed uid=%s; skip row", uid)
+            if settings.user_snap_singleflight_enabled:
+                part = await singleflight.run(
+                    _batch_singleflight_key(chunk),
+                    lambda c=chunk: _load_batch_uncached(c),
+                    on_role=lambda role: user_snap_singleflight_total.labels(
+                        role
+                    ).inc(),
+                )
+            else:
+                part = await _load_batch_uncached(chunk)
+        except Exception:
+            # 展示型批量读不得因单块异常整体失败：记日志、跳过该块（缺行跳过语义）。
+            logger.exception("auth_http batch load failed n=%s; skip rows", len(chunk))
             continue
-        if fields is not None:
-            out[uid] = fields
+        out.update(part)
     return out
 
 

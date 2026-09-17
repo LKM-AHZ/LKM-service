@@ -443,6 +443,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     :func:`auth_seam_fused`（carrier=fused 融合 schema 内的 auth 表）复用，避免两处漂移。
     - authorize_via_seam：按 carrier 的 User(+Profile) 裁 is_locked/…/account_level/role → verdict。
     - fetch_user_http_payload：按 carrier 的 User(+Profile) 产出冻结 dict+sv（等价 AUTH 读端点）。
+    - fetch_users_http_batch：单条替身的批量形态（等价 AUTH by-ids 端点，M6.5）。
     - grant_via_seam：升权写替身 → carrier 上 service_authz 原语。
     """
     from app.core.config import settings as _cfg
@@ -526,8 +527,18 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             unlock_role=kw.get("unlock_role"),
         )
 
+    async def _fetch_batch(
+        user_ids: list[int],
+    ) -> dict[int, tuple[Any, int | None]]:
+        """批量替身（M6.5 by-ids）：逐 id 复用单条替身，缺行回 ``(None, None)``（同端点契约）。"""
+        out: dict[int, tuple[Any, int | None]] = {}
+        for uid in user_ids:
+            out[int(uid)] = await _fetch(int(uid))
+        return out
+
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)
     monkeypatch.setattr(uh, "fetch_user_http_payload", _fetch)
+    monkeypatch.setattr(uh, "fetch_users_http_batch", _fetch_batch)
     monkeypatch.setattr(uh, "grant_via_seam", _grant)
 
 

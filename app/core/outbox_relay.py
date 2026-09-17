@@ -13,13 +13,15 @@ session_factory seam 注入即可直接驱动；租约判定只出现在 `run_ou
 
 import asyncio
 import logging
+import os
+import socket
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis import WatchError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import messaging
@@ -34,12 +36,40 @@ from app.db.outbox import (
     OUTBOX_PUBLISHED,
     OutboxMessage,
 )
+from app.db.outbox_archive import OutboxArchived
 from app.db.session import new_session
 
 logger = logging.getLogger("lkm.outbox")
 
 # 会话工厂类型：relay_poll 允许单测注入独立内存库会话，默认走生产 async_session(new_session)
 SessionFactory = Callable[..., Awaitable[AsyncSession]]
+
+# 本进程标识，写入 `locked_by`（M6.3）：定位「某行被哪个进程认领」，也在排障时区分副本。
+_INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:64]
+
+
+def _claimable(now: datetime) -> tuple[Any, ...]:
+    """可领取窗口的 WHERE 条件：到期待投 **且** 未被别的进程有效认领（M6.3）。
+
+    锁列（`locked_at/locked_by`）此前只建不用；现在领取即写、投递后清，并叠加陈旧阈值：
+    `locked_at` 比 TTL 更早的行视为「持有者已崩溃」，可被重新领取——否则持锁进程崩溃会让
+    该行永久卡死。未到期（`locked_at` 新鲜）的行留给持有者，别的副本不抢。
+    """
+    stale_before = now - timedelta(seconds=settings.outbox_lock_ttl_s)
+    return (
+        OutboxMessage.status == OUTBOX_PENDING,
+        OutboxMessage.next_retry_at <= now,
+        or_(
+            OutboxMessage.locked_at.is_(None),
+            OutboxMessage.locked_at < stale_before,
+        ),
+    )
+
+
+def _clear_lock(msg: OutboxMessage) -> None:
+    """投递尝试结束（成功或失败）即清认领标记，令该行按自身退避窗口重新可领。"""
+    msg.locked_at = None
+    msg.locked_by = None
 
 
 async def relay_poll(
@@ -48,16 +78,21 @@ async def relay_poll(
     """扫一批到期的 pending 事件投递；返回本轮成功(published)事件数。
 
     语义：
-    - 领取窗口 = `status=pending AND next_retry_at<=now`，按 attempt 升序（少重试者在先）。
+    - 领取窗口 = `status=pending AND next_retry_at<=now` **且未被有效认领**
+      （`locked_at IS NULL OR locked_at < now-lock_ttl`，见 :func:`_claimable`），
+      按 attempt 升序（少重试者在先），`FOR UPDATE SKIP LOCKED` 避免与并发 poller 阻塞互等。
+    - 领取即写 `locked_at/locked_by` 并 commit（释放行级锁、留下跨事务的认领标记），
+      投递尝试结束（成功或失败）即 :func:`_clear_lock`——标记只用于「同刻不被两个副本各取走」，
+      不改变退避语义；持标记进程崩溃 → 超 `outbox_lock_ttl_s` 后该行可被重新领取。
     - 投递（`messaging.publish(routing_key, parsed)`）成功 → `published_at=now, status=published`。
-    - 失败/异常 → `attempt_count += 1`；达 `MAX_TRIES` 置 `failed`（不再投），否则指数退避
-      `next_retry_at = now + 2**attempt s`（cap 1h）保持 pending 待下轮。
+    - **永久失败分类**（M6.3）：投递前经 `messaging.permanent_failure_reason` 判定
+      （未知 routing_key / payload 不可编码）→ **不消耗重试额度**，一次即折叠进 `event_failures`；
+      其余失败视为瞬时（总线不可达等）→ `attempt_count += 1`，达 `MAX_TRIES` 折叠归档，
+      否则指数退避 `next_retry_at = now + 2**attempt s`（cap 1h）保持 pending 待下轮。
     - 每事件独立 flush/commit，单条失败不影响其余。
-    - 多副本注（M1 gate review 收钝）：领取 `FOR UPDATE` 行级锁收窄
-      「同批 pending 被双 poller 各取走」窗；同刻唯一 poll 仍由 leader 租约(M1.2)保证。
-      因每事件独立 commit 周期放行锁，本锁非全串行兜底，最外正确性靠消费端 event_id 幂等
-      + handler 硬次级幂等(points ref 唯一 / notify GETDEL)；故不再叠加 claim-marker
-      （预留 locked_at/locked_by 列）。
+    - 多副本注（M1 gate review 收钝）：同刻唯一 poll 仍由 leader 租约(M1.2)保证；本层的
+      SKIP LOCKED + 认领标记是 leader 内多线程/接管窗口的兜底。最外正确性仍靠消费端
+      event_id 幂等 + handler 硬次级幂等(points ref 唯一 / notify GETDEL)。
     - 可观测（M0.5.2）：每轮末尾统计表内仍 `status=pending`（含退避等待下一轮）件数
       set 到 `outbox_pending_count` gauge 供积压看板。投递失败计数不在此重复——提交经
       `messaging.publish`，其抛出/不可用路径已由 messaging 层自身计 `notify_failed_total`。
@@ -71,24 +106,50 @@ async def relay_poll(
             (
                 await db.execute(
                     select(OutboxMessage)
-                    .where(
-                        OutboxMessage.status == OUTBOX_PENDING,
-                        OutboxMessage.next_retry_at <= now,
-                    )
+                    .where(*_claimable(now))
                     .order_by(OutboxMessage.attempt_count.asc(), OutboxMessage.id.asc())
                     .limit(batch)
-                    .with_for_update()
+                    .with_for_update(skip_locked=True)
                 )
             )
             .scalars()
             .all()
         )
+        if rows:
+            # 认领落库（先 commit 释放行锁）：后续其它 poller 会跳过这些行直到清标记/超时。
+            claimed_at = datetime.now(UTC)
+            for msg in rows:
+                msg.locked_at = claimed_at
+                msg.locked_by = _INSTANCE_ID
+            await db.commit()
+
         for msg in rows:
+            # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
+            # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留，多余键对 handler 无害。
+            payload = {**msg.payload_json, "event_id": msg.event_id}
+            reason = messaging.permanent_failure_reason(msg.routing_key, payload)
+            if reason is not None:
+                # 确定性错误：重试不会变好，一次即折叠（不累加 attempt_count，不空耗退避）。
+                logger.error(
+                    "outbox 永久失败折叠 id=%s rk=%s reason=%s",
+                    msg.id,
+                    msg.routing_key,
+                    reason,
+                )
+                db.add(
+                    EventFailure(
+                        event_id=msg.event_id,
+                        routing_key=msg.routing_key,
+                        payload_json=msg.payload_json,
+                        attempt_count=msg.attempt_count,
+                        reason=reason,
+                    )
+                )
+                await db.delete(msg)
+                await db.commit()
+                continue
+
             try:
-                payload = msg.payload_json
-                # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
-                # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留，多余键对 handler 无害。
-                payload = {**payload, "event_id": msg.event_id}
                 ok = await messaging.publish(msg.routing_key, payload)
             except Exception:
                 logger.exception(
@@ -96,6 +157,7 @@ async def relay_poll(
                 )
                 ok = False
 
+            _clear_lock(msg)
             if ok:
                 msg.status = OUTBOX_PUBLISHED
                 msg.published_at = datetime.now(UTC)
@@ -138,6 +200,72 @@ async def relay_poll(
             outbox_pending_count.set(pending_left or 0)
         except Exception:
             logger.exception("outbox pending gauge 统计失败，保留上次值")
+        await db.close()
+
+
+async def archive_published(
+    *,
+    retention_s: float | None = None,
+    batch: int | None = None,
+    session_factory: SessionFactory | None = None,
+) -> int:
+    """把**已投递且超过保留期**的行迁到 `outbox_archived` 冷表后从 outbox 删除（M6.3）。
+
+    纪律：**先归档后删**（同一事务内先 insert 冷副本再 delete 原行）——删除是不可逆操作，
+    蓝图为它定的前提是「先留冷副本」，故本函数是唯一允许删已发布行的入口。
+
+    - 只动 `status=published AND published_at < now-retention` 的行；pending/failed 一律不碰
+      （它们仍在生命周期中：pending 待投、failed 理论上不会留在 outbox——达上限即折叠）。
+    - `SKIP LOCKED` + 批上限：与服务化 relay 并发时不会互锁，单轮工作量有界。
+    - 返回本轮归档（=删除）条数；无候选返回 0。
+    """
+    retention = (
+        settings.outbox_archive_retention_s if retention_s is None else retention_s
+    )
+    limit = settings.outbox_archive_batch if batch is None else batch
+    factory = session_factory or new_session
+    db = await factory()
+    try:
+        cutoff = datetime.now(UTC) - timedelta(seconds=retention)
+        rows = list(
+            (
+                await db.execute(
+                    select(OutboxMessage)
+                    .where(
+                        OutboxMessage.status == OUTBOX_PUBLISHED,
+                        OutboxMessage.published_at.is_not(None),
+                        OutboxMessage.published_at < cutoff,
+                    )
+                    .order_by(OutboxMessage.id.asc())
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return 0
+        archived_at = datetime.now(UTC)
+        for msg in rows:
+            db.add(
+                OutboxArchived(
+                    event_id=msg.event_id,
+                    routing_key=msg.routing_key,
+                    payload_json=msg.payload_json,
+                    attempt_count=msg.attempt_count,
+                    created_at=msg.created_at,
+                    published_at=msg.published_at,
+                    archived_at=archived_at,
+                )
+            )
+            await db.delete(msg)
+        await db.commit()
+        logger.info(
+            "outbox 归档 %s 条已发布行（保留期 %ss）", len(rows), retention
+        )
+        return len(rows)
+    finally:
         await db.close()
 
 
@@ -225,16 +353,33 @@ async def run_outbox_loop() -> None:
         settings.outbox_leader_ttl_s,
     )
     token: str | None = None
+    # 归档节流（M6.3）：启动即允许首轮（清历史积压），此后按 interval 周期执行；只由
+    # 当前 poll 者做（单 owner 或 leader），与 poll 同循环、不另起任务。
+    next_archive_at = datetime.now(UTC)
+
+    async def _poll_tick() -> None:
+        nonlocal next_archive_at
+        try:
+            await relay_poll()
+        except Exception:
+            logger.exception("outbox relay_poll 异常，下轮重试")
+        now = datetime.now(UTC)
+        if now >= next_archive_at:
+            try:
+                await archive_published()
+            except Exception:
+                logger.exception("outbox 归档已发布行异常，下个间隔再试")
+            next_archive_at = now + timedelta(
+                seconds=settings.outbox_archive_interval_s
+            )
+
     while True:
         try:
             redis = await redis_client.get_redis()
             if redis is None:
                 # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll，等同 M1.1。
                 token = None
-                try:
-                    await relay_poll()
-                except Exception:
-                    logger.exception("outbox relay_poll 异常，下轮重试")
+                await _poll_tick()
                 await asyncio.sleep(interval)
                 continue
 
@@ -244,10 +389,7 @@ async def run_outbox_loop() -> None:
                     logger.info("租约续约失败/已让出，回到外层重抢")
                     token = None
                 else:
-                    try:
-                        await relay_poll()
-                    except Exception:
-                        logger.exception("outbox relay_poll 异常，下轮重试")
+                    await _poll_tick()
                     await asyncio.sleep(interval)
                     continue
 

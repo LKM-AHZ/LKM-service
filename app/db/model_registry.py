@@ -23,6 +23,7 @@ def ensure_all_models() -> None:
     import app.db.event_failure  # outbox 发布耗竭归档(event_failures)
     import app.db.event_processed  # 消费者幂等去重表(event_processed)
     import app.db.outbox  # 共享基础设施表(outbox_events)，非业务模块性质
+    import app.db.outbox_archive  # outbox 已发布冷表(outbox_archived)；M6.3
     import app.db.user_dim  # 离线报表宽表(user_dim)，auth源只读反范式副本；B0.1 纯建表
     import app.modules.admin.models
     import app.modules.articles.models

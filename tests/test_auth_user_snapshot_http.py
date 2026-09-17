@@ -23,11 +23,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.redis as redis_mod
 import app.core.user_cache as uc
+import app.modules.auth.snapshot as snap_mod
 import app.modules.auth.user_http as user_http
 from app.core.config import settings
 from app.modules.auth.models import Profile, User
 from app.modules.auth.security import hashpwd
-from app.modules.auth.snapshot import UserSnapshot, get_user_snapshot
+from app.modules.auth.snapshot import (
+    UserSnapshot,
+    get_user_snapshot,
+    get_user_snapshot_batch,
+)
 from tests.conftest import DB, Client
 
 
@@ -278,3 +283,184 @@ class TestInternalEndpointAuth:
         assert "email" not in body["data"]
         assert "phone" not in body["data"]
         assert "hashed_password" not in body["data"]
+
+
+# ---- (c) M6.5 by-ids 批量跨 AUTH 读：一次 HTTP、分块、缓存前置、缺行/故障语义 ----
+
+
+def _batch_handler(
+    calls: list[httpx.Request], snapshot_by_id: dict[int, dict[str, Any]]
+) -> Any:
+    """by-ids 假端点：按请求里的 ids 回 items（未知 id 回 data=null）。"""
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        ids = [
+            int(p)
+            for p in request.url.params.get("ids", "").split(",")
+            if p.strip()
+        ]
+        items = [
+            {
+                "user_id": uid,
+                "data": snapshot_by_id.get(uid),
+                "sv": (900 + uid) if uid in snapshot_by_id else None,
+            }
+            for uid in ids
+        ]
+        return httpx.Response(200, json={"items": items})
+
+    return _handler
+
+
+class TestBatchByIds:
+    async def test_many_ids_single_http_call(
+        self, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N 个 id 且缓存全 miss → **恰好 1 次** HTTP（消逐 id 循环），并按 wire sv 回填缓存。"""
+        _enable_fake_redis(monkeypatch)
+        _enable_seam(monkeypatch)
+        ids = [await _mk_user(db, f"b{i}", nickname=f"N{i}") for i in range(5)]
+        calls: list[httpx.Request] = []
+        by_id = {
+            uid: {**WIRE_SNAP, "user_id": uid, "nickname": f"W{uid}"} for uid in ids
+        }
+        _inject_transport(monkeypatch, _batch_handler(calls, by_id))
+
+        snaps = await get_user_snapshot_batch(db, user_ids=ids)
+
+        assert set(snaps) == set(ids)
+        assert snaps[ids[0]].nickname == f"W{ids[0]}"  # 值来自 wire 而非 DB
+        assert len(calls) == 1
+        assert calls[0].url.path.endswith("/api/v1/auth/internal/users/by-ids")
+        assert calls[0].headers["Authorization"] == "Bearer internal-secret-xyz"
+        sv, data = await uc.read_snap_with_version(ids[0])
+        assert sv == 900 + ids[0]
+        assert data is not None and data["nickname"] == f"W{ids[0]}"
+
+    async def test_all_cached_makes_zero_http_calls(
+        self, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """缓存全命中 → 零 HTTP（批量缓存读前置）。"""
+        _enable_fake_redis(monkeypatch)
+        _enable_seam(monkeypatch)
+        ids = [await _mk_user(db, f"c{i}", nickname=f"C{i}") for i in range(3)]
+        for uid in ids:
+            assert await uc.write_if_newer(
+                uid, {**WIRE_SNAP, "user_id": uid}, 700 + uid, 0
+            )
+        calls: list[httpx.Request] = []
+        _inject_transport(monkeypatch, _batch_handler(calls, {}))
+
+        snaps = await get_user_snapshot_batch(db, user_ids=ids)
+
+        assert set(snaps) == set(ids)
+        assert calls == []
+
+    async def test_batch_chunked_by_max_ids(
+        self, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N 个 id 时 HTTP 调用数 = ⌈N/上限⌉（超限自动分批，不超发单次请求）。"""
+        _enable_fake_redis(monkeypatch)
+        _enable_seam(monkeypatch)
+        monkeypatch.setattr(snap_mod, "BATCH_IDS_MAX", 2)
+        ids = [await _mk_user(db, f"d{i}", nickname=f"D{i}") for i in range(5)]
+        calls: list[httpx.Request] = []
+        by_id = {uid: {**WIRE_SNAP, "user_id": uid} for uid in ids}
+        _inject_transport(monkeypatch, _batch_handler(calls, by_id))
+
+        snaps = await get_user_snapshot_batch(db, user_ids=ids)
+
+        assert set(snaps) == set(ids)
+        assert len(calls) == 3  # ⌈5/2⌉
+        for call in calls:
+            sent = [p for p in call.url.params.get("ids", "").split(",") if p]
+            assert len(sent) <= 2
+
+    async def test_batch_http_failure_skips_rows_without_raising(
+        self, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HTTP 不可用 → 整批跳过（空结果）、不抛、不回落业务 DB（跨 realm 无本地回退）。"""
+        _enable_fake_redis(monkeypatch)
+        _enable_seam(monkeypatch)
+        ids = [await _mk_user(db, "e0", nickname="E0")]
+
+        async def _boom(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("auth unreachable")
+
+        _inject_transport(monkeypatch, _boom)
+        snaps = await get_user_snapshot_batch(db, user_ids=ids)
+        assert snaps == {}  # 缺行跳过 ≠ 故障抛出
+        assert await uc.read_snap(ids[0]) is None  # 没有把失败当值缓存
+
+
+class TestBatchEndpoint:
+    @pytest.fixture(autouse=True)
+    async def _bind_internal_auth_session(self, db: DB):
+        from app.db.auth_session import get_auth_session
+        from app.main import app as _app
+
+        async def _override() -> AsyncIterator[AsyncSession]:
+            yield db
+
+        _app.dependency_overrides[get_auth_session] = _override
+        try:
+            yield
+        finally:
+            _app.dependency_overrides.pop(get_auth_session, None)
+
+    async def _get(self, client: Client, ids: str, token: str = "real-token"):
+        return await client.get(
+            "/api/v1/auth/internal/users/by-ids",
+            params={"ids": ids},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    async def test_returns_items_for_all_ids_including_missing(
+        self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "auth_http_token", "real-token")
+        uid = await _mk_user(db, "batchep", nickname="BE")
+        resp = await self._get(client, f"{uid},999999")
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert [i["user_id"] for i in items] == [uid, 999999]
+        assert set(items[0]["data"]) == set(UserSnapshot.__dataclass_fields__)
+        assert items[0]["data"]["user_id"] == uid
+        assert items[1]["data"] is None and items[1]["sv"] is None  # 缺行语义同单条
+        assert "email" not in items[0]["data"]
+
+    async def test_requires_internal_token(
+        self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "auth_http_token", "real-token")
+        assert (await self._get(client, "1", token="wrong")).status_code == 401
+        monkeypatch.setattr(settings, "auth_http_token", "")
+        assert (await self._get(client, "1")).status_code == 401
+
+    async def test_bad_ids_rejected(
+        self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "auth_http_token", "real-token")
+        assert (await self._get(client, "abc")).status_code == 400
+        assert (await self._get(client, "")).status_code == 400
+        assert (await self._get(client, "0")).status_code == 400
+
+    async def test_over_limit_rejected_not_truncated(
+        self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """超限直接 400（截断=静默错答案）。"""
+        monkeypatch.setattr(settings, "auth_http_token", "real-token")
+        monkeypatch.setattr(snap_mod, "BATCH_IDS_MAX", 2)
+        resp = await self._get(client, "1,2,3")
+        assert resp.status_code == 400
+        assert "too many ids" in resp.json()["detail"]
+
+    async def test_duplicate_ids_deduped(
+        self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "auth_http_token", "real-token")
+        uid = await _mk_user(db, "dupids", nickname="DUP")
+        resp = await self._get(client, f"{uid},{uid},{uid}")
+        assert resp.status_code == 200
+        assert [i["user_id"] for i in resp.json()["items"]] == [uid]

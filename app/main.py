@@ -10,9 +10,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
-from strawberry.fastapi import BaseContext, GraphQLRouter
+from strawberry.fastapi import BaseContext
 
-from app.api.graphql import build_schema
+from app.api.graphql import GuardedGraphQLRouter, build_schema
 from app.api.router import api_router
 from app.core import clickhouse, messaging, user_cache_events
 from app.core import logging as logger
@@ -160,7 +160,7 @@ def create_app() -> FastAPI:
         return GraphQLContext(db=db, user_id=cur.id if cur is not None else None)
 
     merged_schema = build_schema()  # §7：registry 聚合全部模块 GraphQL Query
-    graphql_router = GraphQLRouter(
+    graphql_router = GuardedGraphQLRouter(
         merged_schema,
         path="/graphql",
         context_getter=_graphql_context,

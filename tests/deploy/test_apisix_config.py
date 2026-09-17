@@ -23,7 +23,8 @@ _COMMUNITY = "lkm-ahz.ltd"
 _OFFICIAL = "lkm-ahz.icu"
 _DOMAINS = [_COMMUNITY, _OFFICIAL]
 _ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
-# 模板里允许出现的占位（展开由 render.sh 负责）
+# 模板里允许出现的占位（展开由 render.sh 负责）。
+# 同时覆盖 apisix.yaml（路由模板）与 config.yaml（APISIX 自身配置模板）两个文件。
 _PLACEHOLDERS = {
     "__SSL_SECTION__",
     "__COMMUNITY_DOMAIN__",
@@ -32,6 +33,10 @@ _PLACEHOLDERS = {
     "__ALL_HOSTS__",
     "__COMMUNITY_ORIGINS__",
     "__MAX_BODY_SIZE__",
+    # upstream 服务名后缀：compose 空（Docker 内嵌 DNS 解析短名）/ k8s `.lkm.svc.cluster.local`
+    "__UPSTREAM_SUFFIX__",
+    # 上游 DNS：compose 127.0.0.11 / k8s CoreDNS ClusterIP
+    "__DNS_RESOLVER__",
 }
 
 
@@ -43,39 +48,65 @@ def _routes() -> dict[str, dict]:
     return {r["id"]: r for r in _load("apisix.yaml")["routes"]}
 
 
-@lru_cache(maxsize=1)
-def _rendered() -> dict:
-    """跑一次 render.sh（伪造证书，进程内缓存）并解析渲染产物。
+def _run_render(cert_root: Path, out_dir: Path, extra_env: dict | None = None) -> None:
+    """在给定证书目录下跑一次 render.sh，产物落 out_dir/{apisix,config}.yaml。
 
-    模板里的 hosts/CORS 来源/请求体上限都是占位，故断言实值的用例必须看产物。
+    render.sh 现在渲染**两个**产物：路由（apisix.yaml）与 APISIX 自身配置（config.yaml），
+    后者只有上游 DNS 一处随运行时变化。
     """
-    import tempfile
+    env = {
+        **os.environ,
+        "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
+        "APISIX_OUT": str(out_dir / "apisix.yaml"),
+        "APISIX_SRC_CONFIG": str(_APISIX_DIR / "config.yaml"),
+        "APISIX_OUT_CONFIG": str(out_dir / "config.yaml"),
+        "APISIX_CERT_ROOT": str(cert_root),
+        "APISIX_RENDER_ONCE": "1",
+    }
+    if extra_env:
+        env.update(extra_env)
+    subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
-    tmp = Path(tempfile.mkdtemp(prefix="apisix-render-"))
-    cert_root = tmp / "live"
+
+def _fake_certs(cert_root: Path) -> None:
     for domain in _DOMAINS:
         d = cert_root / domain
-        d.mkdir(parents=True)
+        d.mkdir(parents=True, exist_ok=True)
         (d / "fullchain.pem").write_text(
             "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
         )
         (d / "privkey.pem").write_text(
             "-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n"
         )
-    out = tmp / "out" / "apisix.yaml"
-    out.parent.mkdir(parents=True)
-    subprocess.run(
-        ["sh", str(_APISIX_DIR / "render.sh")],
-        env={
-            **os.environ,
-            "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
-            "APISIX_OUT": str(out),
-            "APISIX_CERT_ROOT": str(cert_root),
-            "APISIX_RENDER_ONCE": "1",
-        },
-        check=True,
+
+
+@lru_cache(maxsize=1)
+def _render_default() -> tuple[dict, dict]:
+    """用**默认环境**（即 compose 口径：无 UPSTREAM_SUFFIX、DNS=127.0.0.11）渲染一次。
+
+    模板里的 hosts/CORS 来源/请求体上限/upstream 服务名都是占位，故断言实值的用例
+    必须看产物。
+    """
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-render-"))
+    cert_root = tmp / "live"
+    _fake_certs(cert_root)
+    out_dir = tmp / "out"
+    out_dir.mkdir(parents=True)
+    _run_render(cert_root, out_dir)
+    return (
+        yaml.safe_load((out_dir / "apisix.yaml").read_text()),
+        yaml.safe_load((out_dir / "config.yaml").read_text()),
     )
-    return yaml.safe_load(out.read_text())
+
+
+def _rendered() -> dict:
+    return _render_default()[0]
+
+
+def _rendered_config() -> dict:
+    return _render_default()[1]
 
 
 def _rendered_routes() -> dict[str, dict]:
@@ -90,12 +121,78 @@ def test_config_yaml_standalone() -> None:
     assert cfg["apisix"]["node_listen"] == 9080
     ssl_listen = cfg["apisix"]["ssl"]["listen"]
     assert any(item["port"] == 9443 for item in ssl_listen)
-    # APISIX schema 要求数组；曾因写成裸字符串导致启动即校验失败、而旧断言同错故"假绿"
-    assert cfg["apisix"]["dns_resolver"] == ["127.0.0.11"]
-    # discovery 模块须显式初始化，否则 discovery_type: dns 运行时 503
-    assert cfg["discovery"]["dns"]["servers"] == ["127.0.0.11"]
     # 容器内 ssl 听 9443（非 root 不能听 443），对外重定向端口须显式 443，否则 Location 带 :9443
     assert cfg["plugin_attr"]["redirect"]["https_port"] == 443
+
+
+def test_config_yaml_dns_is_placeholder_only() -> None:
+    """config.yaml 现为**模板**：上游 DNS 两处只放占位，实值由 render.sh 展开。
+
+    此前 config.yaml 是直接挂载的静态文件，DNS 硬编码 127.0.0.11（Docker 内嵌 DNS）；
+    k8s 下必须换成 CoreDNS 的 ClusterIP，故改为占位 + 环境变量展开，避免出现第二份
+    config.yaml 副本（第二真相源）。此断言即守「模板不得回退成硬编码」。
+    """
+    cfg = _load("config.yaml")
+    # APISIX schema 要求数组；曾因写成裸字符串导致启动即校验失败、而旧断言同错故"假绿"
+    assert cfg["apisix"]["dns_resolver"] == ["__DNS_RESOLVER__"]
+    # discovery 模块须显式初始化，否则 discovery_type: dns 运行时 503
+    assert cfg["discovery"]["dns"]["servers"] == ["__DNS_RESOLVER__"]
+
+
+def test_dns_resolver_expands_per_runtime() -> None:
+    """同一个模板要能在两种运行时展开出各自的 DNS（compose / k8s）。"""
+    import tempfile
+
+    # ① 默认（compose）：Docker 内嵌 DNS，行为与改造前完全一致
+    assert _rendered_config()["apisix"]["dns_resolver"] == ["127.0.0.11"]
+    assert _rendered_config()["discovery"]["dns"]["servers"] == ["127.0.0.11"]
+
+    # ② k8s：显式给 CoreDNS ClusterIP
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-render-dns-"))
+    cert_root = tmp / "live"
+    _fake_certs(cert_root)
+    out_dir = tmp / "out"
+    out_dir.mkdir(parents=True)
+    _run_render(cert_root, out_dir, {"APISIX_DNS_RESOLVER": "10.96.0.10"})
+    cfg = yaml.safe_load((out_dir / "config.yaml").read_text())
+    assert cfg["apisix"]["dns_resolver"] == ["10.96.0.10"]
+    assert cfg["discovery"]["dns"]["servers"] == ["10.96.0.10"]
+
+
+def test_upstream_suffix_expands_per_runtime() -> None:
+    """upstream 服务名后缀：compose 空（短名）/ k8s 补全 FQDN。
+
+    CoreDNS 不做 search domain 补全（lua-resty-dns 是裸查询），k8s 下若仍写短名
+    `backend:8000` 会解析不到 → 网关全量 503。此处双向断言。
+    """
+    import tempfile
+
+    # ① 默认（compose）：短名保持不变
+    assert _rendered_routes()["api-prefix"]["upstream"]["service_name"] == "backend:8000"
+
+    # ② k8s：补全 FQDN
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-render-suffix-"))
+    cert_root = tmp / "live"
+    _fake_certs(cert_root)
+    out_dir = tmp / "out"
+    out_dir.mkdir(parents=True)
+    _run_render(
+        cert_root, out_dir, {"APISIX_UPSTREAM_SUFFIX": ".lkm.svc.cluster.local"}
+    )
+    routes = {
+        r["id"]: r for r in yaml.safe_load((out_dir / "apisix.yaml").read_text())["routes"]
+    }
+    assert (
+        routes["api-prefix"]["upstream"]["service_name"]
+        == "backend.lkm.svc.cluster.local:8000"
+    )
+    assert (
+        routes["minio"]["upstream"]["service_name"]
+        == "minio.lkm.svc.cluster.local:9000"
+    )
+    # 渲染产物里不得残留任何占位
+    raw = (out_dir / "apisix.yaml").read_text()
+    assert "__UPSTREAM_SUFFIX__" not in raw
 
 
 def test_dual_domain_hosts_covered() -> None:
@@ -116,8 +213,11 @@ def test_template_has_no_hardcoded_domains_or_limits() -> None:
         assert host not in raw, f"模板仍硬编码域名 {host}"
     assert "max_body_size: 104857600" not in raw
     assert "max_body_size: __MAX_BODY_SIZE__" in raw
-    # 模板里出现的占位必须是已登记的那批（防拼错导致 render 后残留）
-    assert set(re.findall(r"__[A-Z_]+__", raw)) <= _PLACEHOLDERS
+    # 模板里出现的占位必须是已登记的那批（防拼错导致 render 后残留）。
+    # config.yaml 也是模板（DNS 占位），同样纳入登记表校验。
+    for name in ("apisix.yaml", "config.yaml"):
+        text = (_APISIX_DIR / name).read_text()
+        assert set(re.findall(r"__[A-Z_]+__", text)) <= _PLACEHOLDERS, name
 
 
 def test_render_expands_all_placeholders() -> None:
@@ -141,7 +241,9 @@ def test_render_expands_domains_and_body_limit() -> None:
 
 
 def test_exact_admin_me_beats_prefix() -> None:
-    routes = _routes()
+    # 用渲染产物：upstream 服务名在模板里带 __UPSTREAM_SUFFIX__ 占位，
+    # 在模板上断言 startswith("backend:") 会恒假（或反之恒真）——必须在产物上看实值。
+    routes = _rendered_routes()
     me = routes["admin-auth-me"]
     prefix = routes["admin-auth-prefix"]
     assert me["uri"] == "/api/v1/admin/auth/me"
@@ -152,13 +254,13 @@ def test_exact_admin_me_beats_prefix() -> None:
 
 
 def test_auth_prefix_split() -> None:
-    routes = _routes()
+    routes = _rendered_routes()
     assert routes["auth-prefix"]["uri"] == "/api/v1/auth/*"
     assert routes["auth-prefix"]["upstream"]["service_name"].startswith("auth:")
 
 
 def test_graphql_websocket_enabled() -> None:
-    routes = _routes()
+    routes = _rendered_routes()
     assert routes["graphql-exact"]["enable_websocket"] is True
     assert routes["graphql-prefix"]["enable_websocket"] is True
     assert routes["graphql-exact"]["upstream"]["service_name"].startswith("backend:")
@@ -166,7 +268,7 @@ def test_graphql_websocket_enabled() -> None:
 
 def test_realtime_ws_endpoint_upgrade_enabled() -> None:
     """/api/v1/ws/events 走 api-prefix，必须开 upgrade（网关未开→后端收普通 GET 404）。"""
-    route = _routes()["api-prefix"]
+    route = _rendered_routes()["api-prefix"]
     assert route["enable_websocket"] is True
     assert route["upstream"]["service_name"].startswith("backend:")
 
@@ -240,8 +342,11 @@ def test_every_api_route_carries_cors() -> None:
 
     生产不挂应用层 CORS（见 LKM-service/app/core/middleware.py 的取舍），网关是唯一权威；
     新增对外 API 路由若漏配 cors，浏览器跨域会**完全没有**响应头且无兜底 —— 本断言即守此回归。
+
+    必须在**渲染产物**上跑：模板里的 upstream 带 __UPSTREAM_SUFFIX__ 占位，
+    在模板上判 startswith(("backend:","auth:")) 会一条都不匹配 → 断言空转、假绿。
     """
-    for rid, route in _routes().items():
+    for rid, route in _rendered_routes().items():
         upstream = str((route.get("upstream") or {}).get("service_name", ""))
         if not upstream.startswith(("backend:", "auth:")):
             continue
@@ -270,7 +375,7 @@ def test_global_forwarded_headers_parity() -> None:
 
 
 def test_http_to_https_redirect_and_acme_precedence() -> None:
-    routes = _routes()
+    routes = _rendered_routes()
     redirect = routes["http-redirect"]
     assert redirect["plugins"]["redirect"]["http_to_https"] is True
     assert redirect["vars"] == [["scheme", "==", "http"]]
@@ -373,3 +478,25 @@ def test_certbot_entrypoint_relocated() -> None:
     assert (_ROOT / "deploy" / "certbot" / "entrypoint.sh").is_file()
     mounts = _services()["certbot"]["volumes"]
     assert any("./deploy/certbot/entrypoint.sh" in str(m) for m in mounts)
+
+
+def test_apisix_mounts_rendered_config_not_repo_template() -> None:
+    """APISIX 必须挂 apisix-render 的**渲染产物**，不能直接挂仓库里的 config.yaml 模板。
+
+    config.yaml 自本次改造起是模板（`__DNS_RESOLVER__` 占位），直接挂原文件会让 APISIX
+    读到字面量占位符当 DNS 地址 → 启动即校验失败。两个产物（config.yaml/apisix.yaml）
+    都必须来自 apisix_conf 卷。
+    """
+    mounts = _services()["apisix"]["volumes"]
+    as_str = [str(m) for m in mounts]
+    assert not any("./deploy/apisix/config.yaml" in m for m in as_str), (
+        "apisix 直接挂了模板文件；应改为挂 apisix_conf 卷里的渲染产物"
+    )
+    for target in ("config.yaml", "apisix.yaml"):
+        assert any(
+            target in m and "apisix_conf" in m for m in as_str
+        ), f"apisix 未从 apisix_conf 卷挂载渲染后的 {target}"
+    # render sidecar 的健康检查必须同时覆盖两个产物，否则 apisix 可能在没有 config.yaml
+    # 的情况下被 depends_on 放行
+    hc = str(_services()["apisix-render"]["healthcheck"]["test"])
+    assert "/out/config.yaml" in hc and "/out/apisix.yaml" in hc

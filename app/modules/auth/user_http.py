@@ -105,6 +105,56 @@ async def fetch_user_http_payload(
     return _to_fields_or_unavailable(data_obj), _coerce_sv(payload.get("sv"))
 
 
+async def fetch_users_http_batch(
+    user_ids: list[int],
+) -> dict[int, tuple[dict[str, Any] | None, int | None]]:
+    """经 AUTH 读端点**一次**拉一批快照（M6.5），返回 ``{user_id: (fields_dict|None, sv|None)}``。
+
+    调用方保证单次 ``len(user_ids) <= snapshot.BATCH_IDS_MAX``（超限端点回 400 → 本函数抛
+    ``UserHttpUnavailable``）；返回的 dict 覆盖入参里的全部 id（权威不存在 → ``(None, None)``）。
+
+    - 与单条 :func:`fetch_user_http_payload` 同纪律：任何 4xx/5xx/网络/超时/畸形 JSON/缺字段
+      → 抛 ``UserHttpUnavailable``，由调用方按「整块跳过」处理（跨 realm 批量展示读无本地
+      回退可抛，见 ``auth.snapshot._retrieve_fields_batch``）。
+    - 不再逐 id 往返：`len(ids) = N` 时 HTTP 调用数为 ``⌈N / BATCH_IDS_MAX⌉``（由调用方分块）。
+    """
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/users/by-ids"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    params = {"ids": ",".join(str(int(i)) for i in user_ids)}
+    try:
+        async with _build_client() as client:
+            resp = await client.get(url, headers=headers, params=params)
+    except httpx.HTTPError as exc:
+        raise UserHttpUnavailable(f"auth_http batch request failed: {exc}") from None
+
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http batch unexpected status {resp.status_code}"
+        )
+
+    payload = _coerce_json(resp)
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise UserHttpUnavailable("auth_http batch payload missing items")
+    out: dict[int, tuple[dict[str, Any] | None, int | None]] = {}
+    for item in items:
+        if not isinstance(item, dict) or "user_id" not in item:
+            raise UserHttpUnavailable("auth_http batch malformed item")
+        try:
+            uid = int(item["user_id"])
+        except (TypeError, ValueError):
+            raise UserHttpUnavailable("auth_http batch malformed user_id") from None
+        data = item.get("data")
+        if data is None:
+            out[uid] = (None, None)  # 权威不存在（与单条信封同义）
+            continue
+        out[uid] = (_to_fields_or_unavailable(data), _coerce_sv(item.get("sv")))
+    return out
+
+
 def _coerce_json(resp: httpx.Response) -> dict[str, Any]:
     """Response → dict；非 JSON/非对象一律判畸形 → fail-open。"""
     try:

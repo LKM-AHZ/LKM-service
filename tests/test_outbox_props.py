@@ -195,3 +195,85 @@ def test_relay_never_duplicates_or_loses(
 ) -> None:
     with PropPG("p_outbox_relay") as pg:
         pg.run(_relay_scenario(pg, specs))
+
+
+# ─────────────── 4) 认领标记（M6.3）：新鲜锁不被抢、陈旧锁必被接管、不重复投 ───────────────
+
+
+async def _claim_lock_scenario(pg: PropPG, spec: list[tuple[str, bool]]) -> None:
+    """随机把行标成「被别进程新鲜认领」或「陈旧认领（持有者已崩溃）」，跑一轮 poll。
+
+    不变量：①新鲜锁行**不得**被投、认领者不被改写；②陈旧锁行**必须**被接管并投出恰好一次；
+    ③两者都不产生重复投递。
+    """
+    now = datetime.now(UTC)
+    stale = now - timedelta(seconds=settings.outbox_lock_ttl_s + 60)
+
+    db = pg.session()
+    try:
+        await db.execute(delete(OutboxMessage))
+        for eid, fresh in spec:
+            db.add(
+                OutboxMessage(
+                    event_id=eid,
+                    routing_key=_RK,
+                    payload_json=_PAYLOAD,
+                    locked_at=now if fresh else stale,
+                    locked_by="other:1",
+                )
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+    seen: list[str] = []
+
+    async def _pub(_rk: str, payload: dict) -> bool:
+        seen.append(payload["event_id"])
+        return True
+
+    original = messaging.publish
+    messaging.publish = _pub  # type: ignore[assignment]
+    try:
+        await outbox_relay.relay_poll(session_factory=pg.session_factory)
+    finally:
+        messaging.publish = original  # type: ignore[assignment]
+
+    expected = {eid for eid, fresh in spec if not fresh}
+    assert sorted(seen) == sorted(expected), "只应投出陈旧锁行，各恰好一次"
+
+    db = pg.session()
+    try:
+        rows = {
+            r.event_id: r
+            for r in (await db.execute(select(OutboxMessage))).scalars().all()
+        }
+    finally:
+        await db.close()
+
+    for eid, fresh in spec:
+        assert eid in rows, "任何行都不该在无失败时消失"
+        row = rows[eid]
+        if fresh:
+            assert row.status == "pending", "新鲜锁行不得被抢投"
+            assert row.locked_by == "other:1"
+        else:
+            assert row.status == OUTBOX_PUBLISHED
+            assert row.locked_at is None and row.locked_by is None
+
+
+@hsettings(max_examples=20, deadline=None)
+@given(
+    st.lists(
+        st.tuples(
+            st.text(alphabet="abcxyz0123456789-", min_size=1, max_size=16),
+            st.booleans(),
+        ),
+        min_size=1,
+        max_size=5,
+        unique_by=lambda t: t[0],
+    )
+)
+def test_relay_respects_claim_locks(spec: list[tuple[str, bool]]) -> None:
+    with PropPG("p_outbox_claims") as pg:
+        pg.run(_claim_lock_scenario(pg, spec))

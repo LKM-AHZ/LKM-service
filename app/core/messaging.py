@@ -184,6 +184,28 @@ def make_event_schema(topic: str) -> Any:
     return _EventJsonSchema()
 
 
+def permanent_failure_reason(
+    routing_key: str, payload: Mapping[str, Any]
+) -> str | None:
+    """判定一次发布是否属**永久失败**（重试无意义）；返回原因字符串，None = 可重试。
+
+    只覆盖 relay 侧在投递前就可确定的确定性错误（M6.3 失败分类）：
+    - 未知 ``routing_key``：不在 ``ROUTING_KEY_TOPICS`` 里，连目标 topic 都定不出来；
+    - payload 无法按线上格式编码（含非 JSON 可序列化对象）。
+
+    其余情况（连接失败 / 超时 / 总线不可达 / broker 拒收）一律**不**判永久——relay 不得把
+    瞬时故障折叠成失败归档，否则一次总线抖动就丢事件。schema registry 侧校验不在此判定：
+    ``make_event_schema().encode`` 与 ``_encode_event`` 是同一套 JSON 编码，差异只在元数据。
+    """
+    if routing_key not in ROUTING_KEY_TOPICS:
+        return f"unknown routing_key={routing_key}"
+    try:
+        _encode_event(dict(payload))
+    except (TypeError, ValueError) as exc:
+        return f"payload not json-encodable: {exc}"
+    return None
+
+
 # ---- 发布 ----
 @dataclass(frozen=True)
 class MessageMeta:
@@ -231,7 +253,10 @@ def _client_locked() -> Any:
 
         _client = pulsar.Client(
             settings.pulsar_url,
-            operation_timeout_seconds=settings.pulsar_operation_timeout_s,
+            # Pulsar Python 客户端的 operation_timeout_seconds 只接受 int（传 float 直接
+            # ValueError），而 Settings 里是 float（便于配亚秒级的周期项）。故此处取整，
+            # 并下限钳到 1：该参数为 0 等于「无/瞬时超时」，比配置失误更危险。
+            operation_timeout_seconds=max(1, int(settings.pulsar_operation_timeout_s)),
         )
     return _client
 
@@ -401,10 +426,17 @@ def _receive_loop(
         logger.exception("pulsar consumer 创建失败 subscription=%s", sub.name)
         return
     logger.info("pulsar 订阅启动 subscription=%s topic=%s", sub.name, sub.topic)
+    import pulsar  # 局部导入：与文件其余处一致，无总线时不硬依赖客户端
+
     try:
         while not stop.is_set():
             try:
                 msg = consumer.receive(timeout_millis=1000)
+            except pulsar.Timeout:
+                # 长轮询到期（1s 内无消息）是**正常路径**，不是异常：曾按 Exception 分支
+                # 打整栈 + 睡 1s，导致每个 worker 每秒一条 traceback 刷日志并灌进
+                # ClickHouse app_logs（2026-09-17 修复类型 bug 后暴露）
+                continue
             except Exception:
                 if stop.is_set():
                     break

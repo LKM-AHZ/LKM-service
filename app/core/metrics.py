@@ -12,7 +12,7 @@
 import logging
 
 from fastapi import FastAPI
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 from app.core.config import settings
 
@@ -62,6 +62,22 @@ user_snap_singleflight_total = Counter(
     "user_snap_singleflight_total",
     "user:snap singleflight 请求合并（role=leader|shared）",
     ("role",),
+)
+
+
+# GraphQL 查询耗时（M6.4）：从 operation 开始到执行收束（含解析/校验/执行），供只读端点
+# 的性能看板；被防护拒绝的查询同样计入（耗时短，正是防护生效的形态）。
+graphql_query_duration_seconds = Histogram(
+    "graphql_query_duration_seconds",
+    "GraphQL 单次操作耗时（秒，含解析/校验/执行；M6.4）",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+# GraphQL 被防护拒绝的次数：label reason=depth（深度超限）/complexity（文档规模超限）/
+# timeout（时间预算耗尽）。只由防护产生的错误计入——业务 resolver 自身的执行错误不计。
+graphql_query_rejected_total = Counter(
+    "graphql_query_rejected_total",
+    "GraphQL 查询被防护拒绝次数（reason=depth|complexity|timeout；M6.4）",
+    ("reason",),
 )
 
 

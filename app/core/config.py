@@ -129,6 +129,18 @@ class Settings(BaseSettings):
     # 既有 Pydantic model_dump + stdlib json 路径（逐字节一致），作回滚开关。
     read_msgspec_enabled: bool = True
 
+    # ---- GraphQL 防护（M6.4）----
+    # 默认值由前端现有查询集实测校准（2026-09-17：最大深度 5、最大文档 ≈70 token，取
+    # 2×/14× 余量）后写死；前端加查询撞阈值时按需放宽，不随请求动态调整。
+    graphql_max_depth: int = 10
+    # strawberry 无成本分析器：以「词法 token 数」作文档规模/复杂度上限的代理指标。
+    # **0 = 关闭该项**（不注册该限制器）：GraphiQL/客户端拉 schema 的 introspection 文档本身
+    # 就远超千级 token，本地要用 GraphiQL 时把它调大或置 0（生产不建议放行超大文档）。
+    graphql_max_tokens: int = 1000
+    # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver，令查询以受控错误收束（不能中断
+    # 单个已在 await 中的 resolver，见 app/api/graphql.py 的局限说明）
+    graphql_timeout_s: float = 5.0
+
     # ---- 消息总线（Apache Pulsar，M4 全量迁移）----
     # 空串 = 未启用消息总线（发布 fail-open 返回 False、outbox 不入队、relay 空转）。
     # 非空走 pulsar://host:6650（或 pulsar+ssl://）。
@@ -157,6 +169,15 @@ class Settings(BaseSettings):
     # Redis leader 租约 TTL：多副本部署下同一时刻仅持租约副本 poll；worker 失联后接管
     # 延迟上界≈该 TTL。基值取「远大于单轮 poll 耗时 + 单 tick 周期」，防无故障抢主抖动。
     outbox_leader_ttl_s: float = 60.0
+    # 行级认领标记（locked_at/locked_by）的陈旧阈值：超过该时长仍被标记的行视为「持有者
+    # 已崩溃」，可被重新领取（防某行被崩溃进程永久占住）。基值须远大于单批投递耗时。
+    outbox_lock_ttl_s: float = 300.0
+    # 已 published 行的归档保留期与单轮归档批大小（M6.3）：relay 把超过保留期的已投行
+    # 先复制到 outbox_archived 冷表再删除，避免 outbox_events 随时间无限增长。
+    outbox_archive_retention_s: float = 604800.0  # 7 天
+    outbox_archive_batch: int = 500
+    # 归档动作的触发间隔（秒）：relay 主循环按此节流执行归档，不另起循环。
+    outbox_archive_interval_s: float = 3600.0
 
     # ---- Prefect 编排（M5 7.2.5，复杂数据管道 DAG/重试/回填）----
     # 默认关：cron 消费者直调既有函数（现状路径），不依赖 Prefect server，测试/部署零改动。

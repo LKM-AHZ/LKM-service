@@ -26,7 +26,7 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -65,3 +65,60 @@ async def internal_user_snapshot(
     """
     fields, version = await snap_mod._fetch_fields_from_db(user_id, db)
     return {"data": fields, "sv": version}
+
+
+def _parse_ids(ids: str) -> list[int]:
+    """解析 ``ids=1,2,3``：去重 + 保序（首次出现序）；非法/空/超限即 400（fail-closed）。
+
+    上限用 ``snapshot.BATCH_IDS_MAX``（与业务侧分块同一常量）——超限直接拒，不静默截断：
+    截断会让调用方以为全部取到，属静默错答案。去重避免同 id 重复占额度与重复行。
+    """
+    raw = [p.strip() for p in ids.split(",")]
+    parsed: list[int] = []
+    seen: set[int] = set()
+    for p in raw:
+        if not p:
+            continue
+        try:
+            uid = int(p)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"bad user id: {p!r}") from None
+        if uid <= 0:
+            raise HTTPException(status_code=400, detail=f"bad user id: {p!r}")
+        if uid not in seen:
+            seen.add(uid)
+            parsed.append(uid)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="ids is empty")
+    if len(parsed) > snap_mod.BATCH_IDS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many ids: {len(parsed)} > {snap_mod.BATCH_IDS_MAX}",
+        )
+    return parsed
+
+
+@router.get("/users/by-ids")
+async def internal_users_by_ids(
+    ids: str = Query(description="逗号分隔的用户 id，≤BATCH_IDS_MAX 个（自动去重）"),
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, Any]:
+    """经内部缝**一次**拉一批用户快照（M6.5，消跨 AUTH 逐 id HTTP 循环）。
+
+    返回 ``{"items": [{"user_id": <int>, "data": <fields|null>, "sv": <int|null>}, ...]}``
+    ——每个**入参 id** 都有一条（权威不存在 → ``data=null``），顺序与去重后的入参一致。只读
+    冻结字段、零 PII，与单条端点同源（``_fetch_fields_batch_from_db``：一条 SQL 查多行）。
+    """
+    parsed = _parse_ids(ids)
+    rows = await snap_mod._fetch_fields_batch_from_db(parsed, db)
+    return {
+        "items": [
+            {
+                "user_id": uid,
+                "data": rows[uid][0] if uid in rows else None,
+                "sv": rows[uid][1] if uid in rows else None,
+            }
+            for uid in parsed
+        ]
+    }

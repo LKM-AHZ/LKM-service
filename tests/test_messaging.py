@@ -1,6 +1,10 @@
 """M4 消息总线抽象测试：映射表、transport 发布、fail-open、JSON schema（无需真实 broker）。"""
 
 import json
+import logging
+import sys
+import threading
+import types
 from collections.abc import Iterator
 
 import pytest
@@ -106,3 +110,74 @@ def test_subscription_index_unique_and_points_fanout() -> None:
         messaging.SUB_POINTS_TASKS.topic,
     }
     assert len(points_topics) == 1
+
+
+def _client_kwargs_with_timeout(monkeypatch: pytest.MonkeyPatch, timeout: float) -> dict:
+    """用假 pulsar 模块截获 Client 构造参数（不连真 broker）。"""
+    captured: dict = {}
+
+    class _FakeClient:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "pulsar", types.SimpleNamespace(Client=_FakeClient))
+    monkeypatch.setattr(messaging, "_client", None)
+    monkeypatch.setattr(messaging.settings, "pulsar_operation_timeout_s", timeout)
+    messaging._client_locked()
+    return captured
+
+
+def test_client_operation_timeout_is_int(monkeypatch: pytest.MonkeyPatch) -> None:
+    """回归：`operation_timeout_seconds` 必须是 int。
+
+    Settings 里该字段是 float（默认 30.0），曾原样传给 Pulsar Python 客户端 →
+    `ValueError: Argument operation_timeout_seconds is expected to be of type 'int' and
+    not 'float'` → 所有 worker/producer 都建不出 client。compose 与 k8s 同一镜像均中招，
+    只是当时 outbox 为空、影响潜伏（2026-09-17 在 k8s 真机验收中定位）。
+    """
+    kwargs = _client_kwargs_with_timeout(monkeypatch, 30.0)
+    value = kwargs["operation_timeout_seconds"]
+    assert isinstance(value, int) and not isinstance(value, bool)
+    assert value == 30
+
+
+def test_client_operation_timeout_clamped_to_at_least_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """亚秒配置取整后会变 0，而该参数为 0 等于「无/瞬时超时」——故下限钳到 1。"""
+    kwargs = _client_kwargs_with_timeout(monkeypatch, 0.4)
+    assert kwargs["operation_timeout_seconds"] == 1
+
+
+def test_receive_timeout_is_not_logged_as_exception(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """回归：长轮询到期（`pulsar.Timeout`）是正常路径，不得打 ERROR 整栈。
+
+    修好 `operation_timeout_seconds` 类型 bug 后 worker 才真正走到消费循环，随即暴露：
+    `receive(timeout_millis=1000)` 的到期异常落进 `except Exception` 分支，每个 worker
+    每秒一条 traceback（实测 30 秒 15 条）→ 刷爆日志并灌进 ClickHouse `app_logs`。
+    """
+    import pulsar
+
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    class _FakeConsumer:
+        def receive(self, timeout_millis: int = 0) -> object:
+            calls["n"] += 1
+            if calls["n"] > 3:
+                stop.set()  # 让循环自然退出
+            raise pulsar.Timeout()
+
+        def close(self) -> None: ...
+
+    monkeypatch.setattr(messaging, "_create_consumer_sync", lambda _sub: _FakeConsumer())
+
+    with caplog.at_level(logging.ERROR, logger="lkm.messaging"):
+        messaging._receive_loop(
+            messaging.SUB_POINTS_STATS, lambda *_: None, None, stop  # type: ignore[arg-type]
+        )
+
+    assert calls["n"] == 4
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []

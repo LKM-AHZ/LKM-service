@@ -165,6 +165,62 @@ async def read_snap(user_id: int) -> dict[str, Any] | None:
         return None
 
 
+async def read_snaps(user_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """批量读快照（L1 逐个 → L2 一次 MGET，命中回填 L1）；未命中的 id 不在结果里。
+
+    语义与逐 id 调 :func:`read_snap` 等价（同一套 L1/L2 与命中指标），差别只在把 N 次 L2
+    往返收成 1 次——M6.5 批量读（by-ids）的收益正是在此。Redis 不可用/异常 fail-open → 空
+    （调用方走上游拉取），绝不抛错。
+    """
+    if not user_ids:
+        return {}
+    redis = await _get_redis()
+    if redis is None:
+        return {}
+    l1 = _l1_on()
+    out: dict[int, dict[str, Any]] = {}
+    pending: list[int] = []
+    for uid in user_ids:
+        if l1:
+            entry = local_cache.l1_get(_snap_key(uid))
+            if isinstance(entry, dict) and isinstance(entry.get("data"), dict):
+                user_snap_cache_total.labels("l1", "hit").inc()
+                out[uid] = entry["data"]
+                continue
+            if entry is not None and not isinstance(entry, dict):
+                local_cache.l1_delete(_snap_key(uid))  # 脏形态即删，不放大问题
+            user_snap_cache_total.labels("l1", "miss").inc()
+        pending.append(uid)
+    if not pending:
+        return out
+    try:
+        raws = await redis.mget([_snap_key(uid) for uid in pending])
+    except Exception:
+        logger.debug("user_cache mget fail-open n=%s", len(pending))
+        return out
+    for uid, raw in zip(pending, raws, strict=True):
+        if raw is None:
+            user_snap_cache_total.labels("l2", "miss").inc()
+            continue
+        user_snap_cache_total.labels("l2", "hit").inc()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        out[uid] = data
+        if l1:
+            sv = payload.get("sv")
+            local_cache.l1_set(
+                _snap_key(uid),
+                {"sv": _to_int(sv) if sv is not None else None, "data": data},
+                settings.user_snap_l1_ttl_s,
+            )
+    return out
+
+
 async def read_snap_with_version(
     user_id: int,
 ) -> tuple[int | None, dict[str, Any] | None]:
