@@ -45,6 +45,7 @@ _ERROR_MODULES: list[str] = [
     "feed",  # FollowErr（关注关系；M2.3 原 follow 域并入）
     "files",
     "interaction",
+    "notification",
     "points",
     "projects",
     "starhope",

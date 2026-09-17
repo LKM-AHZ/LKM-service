@@ -30,6 +30,7 @@ NOTIFY_SUBSCRIPTION = messaging.SUB_NOTIFY.name
 POINTS_REWARD_SUBSCRIPTION = messaging.SUB_POINTS_REWARD.name
 POINTS_STATS_SUBSCRIPTION = messaging.SUB_POINTS_STATS.name
 POINTS_TASKS_SUBSCRIPTION = messaging.SUB_POINTS_TASKS.name
+NOTIFICATION_SUBSCRIPTION = messaging.SUB_NOTIFICATION.name
 USER_INVALIDATE_SUBSCRIPTION = messaging.SUB_USER_INVALIDATE.name
 JOBS_SUBSCRIPTION = messaging.SUB_JOBS.name
 
@@ -130,6 +131,10 @@ async def run_points_stats_worker() -> None:
 
 async def run_points_tasks_worker() -> None:
     await _consume(POINTS_TASKS_SUBSCRIPTION)
+
+
+async def run_notification_worker() -> None:
+    await _consume(NOTIFICATION_SUBSCRIPTION)
 
 
 async def run_points_worker() -> None:

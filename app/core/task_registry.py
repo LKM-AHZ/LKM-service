@@ -59,6 +59,7 @@ def import_task_modules() -> None:
     import app.modules.blog.tasks
     import app.modules.files.tasks
     import app.modules.interaction.tasks
+    import app.modules.notification.tasks
     import app.modules.points.tasks  # noqa: F401
 
 

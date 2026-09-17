@@ -105,6 +105,8 @@ SUB_NOTIFY = Subscription("notify", TOPIC_NOTIFY, (RKEY_NOTIFY,))
 SUB_POINTS_REWARD = Subscription("points-reward", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_POINTS_STATS = Subscription("points-stats", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_POINTS_TASKS = Subscription("points-tasks", TOPIC_POINTS, (RKEY_POINTS,))
+# M6.8：站内信生成。与 points 三订阅同 topic 不同订阅名 → 各收全量、独立幂等 scope。
+SUB_NOTIFICATION = Subscription("notification", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_USER_INVALIDATE = Subscription(
     "user-invalidate",
     TOPIC_USER_EVENTS,
@@ -123,6 +125,7 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
         SUB_POINTS_REWARD,
         SUB_POINTS_STATS,
         SUB_POINTS_TASKS,
+        SUB_NOTIFICATION,
         SUB_USER_INVALIDATE,
         SUB_JOBS,
         SUB_DLQ,
