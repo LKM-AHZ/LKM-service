@@ -137,6 +137,7 @@ ignore_imports = [
     "app.core.jobs -> app.modules.auth.deps",       # 发送降级同步分支
     "app.core.task_registry -> app.modules.auth.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.blog.tasks",  # 任务注册枢纽
+    "app.core.task_registry -> app.modules.content.tasks",  # 任务注册枢纽（M6.10 计数落库/对账）
     "app.core.task_registry -> app.modules.files.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.interaction.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.notification.tasks",  # 任务注册枢纽
@@ -171,8 +172,8 @@ ignore_imports = [
 [[tool.importlinter.contracts]]
 name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
-source_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.starhope"]
-forbidden_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.starhope"]
+source_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
+forbidden_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
 allow_indirect_imports = "true"
 ignore_imports = [
     "app.modules.content.boards.router -> app.modules.admin.deps",
@@ -204,12 +205,14 @@ ignore_imports = [
     "app.modules.feed.models -> app.modules.content.models",
     "app.modules.interaction.service -> app.modules.content.models",  # 收藏计数/摘要读内容表
     "app.modules.notification.tasks -> app.modules.content.models",  # 事件解析目标内容/评论作者
+    "app.modules.search.service -> app.modules.content.models",  # 检索只读内容表
+    "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
 ]
 
 [[tool.importlinter.contracts]]
 name = "边界: 业务域不得 import auth(只经 auth.snapshot 读缝)"
 type = "forbidden"
-source_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.starhope"]
+source_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
 forbidden_modules = ["app.modules.auth"]
 allow_indirect_imports = "true"
 ignore_imports = [
@@ -267,5 +270,6 @@ ignore_imports = [
     "app.modules.interaction.router -> app.modules.auth.deps",
     "app.modules.notification.router -> app.modules.auth.deps",
     "app.modules.notification.tasks -> app.modules.auth.snapshot",  # 触发者展示名
+    "app.modules.search.service -> app.modules.auth.snapshot",  # 命中项作者展示名
 ]
 

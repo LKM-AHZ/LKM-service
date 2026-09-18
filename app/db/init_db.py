@@ -91,6 +91,8 @@ async def _create_all() -> None:
     表是 no-op，无需 Redis 迁移锁。注意必须 import 所有模型模块，metadata 才会被填满；
     模型归位后由 ``model_registry.ensure_all_models`` 统一预注册各模块 models.py。
     """
+    import sqlalchemy as sa
+
     from app.db.base import Base
     from app.db.model_registry import ensure_all_models
     from app.db.session import get_async_engine
@@ -100,6 +102,11 @@ async def _create_all() -> None:
     if engine is None:
         return
     async with engine.begin() as conn:
+        # M6.9 搜索 P1：trgm 索引的 opclass 依赖 pg_trgm 扩展（索引 DDL 显式写
+        # ``public.gin_trgm_ops``），故 create_all 前先幂等建扩展；否则建索引即失败。
+        await conn.execute(
+            sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
+        )
         await conn.run_sync(Base.metadata.create_all)
 
 

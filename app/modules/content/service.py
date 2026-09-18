@@ -46,6 +46,7 @@ from app.modules.content.columns.schemas import (
     ColumnPostCreate,
     ColumnPostInfo,
 )
+from app.modules.content.counters import bump_content_counter, read_count
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import (
     Board,
@@ -369,7 +370,7 @@ def _now() -> _dt.datetime:
 
 
 async def like_item(db: AsyncSession, item_id: int, user_id: int) -> int:
-    item = await get_or_raise(
+    await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
     existing = (
@@ -385,17 +386,17 @@ async def like_item(db: AsyncSession, item_id: int, user_id: int) -> int:
         .first()
     )
     if existing is not None:
-        return item.like_count
+        return await read_count(db, item_id, "like_count")
 
     db.add(ContentLike(content_id=item_id, user_id=user_id))
-    item.like_count += 1
     await db.flush()
     await enqueue_points_event(db, user_id, "like", f"item:{item_id}")
-    return item.like_count
+    # M6.10：计数走 Redis 增量链路（明细行已落库，是真相源）；Redis 不可用则直改 DB
+    return await bump_content_counter(db, item_id, "like_count", 1)
 
 
 async def unlike_item(db: AsyncSession, item_id: int, user_id: int) -> int:
-    item = await get_or_raise(
+    await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
     existing = (
@@ -411,11 +412,10 @@ async def unlike_item(db: AsyncSession, item_id: int, user_id: int) -> int:
         .first()
     )
     if existing is None:
-        return item.like_count
+        return await read_count(db, item_id, "like_count")
     await db.delete(existing)
-    item.like_count = max(0, item.like_count - 1)
     await db.flush()
-    return item.like_count
+    return await bump_content_counter(db, item_id, "like_count", -1)
 
 
 async def list_comments(
@@ -476,7 +476,7 @@ async def create_comment(
     user_id: int,
     info: ContentCommentCreate,
 ) -> ContentCommentInfo:
-    item = await get_or_raise(
+    await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
     if info.parent_id is not None:
@@ -505,8 +505,9 @@ async def create_comment(
         parent_id=info.parent_id,
     )
     db.add(comment)
-    item.comment_count += 1
     await db.flush()
+    # M6.10：评论计数同走计数链路（评论明细行已落库，是真相源）
+    await bump_content_counter(db, item_id, "comment_count", 1)
     await enqueue_points_event(db, user_id, "comment", f"comment:{comment.id}")
 
     names = await _author_map(db, [comment.user_id])

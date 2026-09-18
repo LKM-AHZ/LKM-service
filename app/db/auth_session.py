@@ -19,14 +19,12 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from app.core.config import settings
 from app.core.err import (
     AuthErr,  # M3 peer: 并入共享 shared err
     BizError,
 )
-from app.db.session import _is_unique_violation
-
-from app.core.config import settings
-from app.db.session import create_realm_async_engine
+from app.db.session import _is_unique_violation, create_realm_async_engine
 
 _auth_async_engine: AsyncEngine | None = None
 _auth_AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None

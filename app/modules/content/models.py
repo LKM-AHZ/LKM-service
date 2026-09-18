@@ -4,7 +4,16 @@ import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Computed,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UTCDateTime, now_iso  # 注意是 db.base 不是 db.models
@@ -148,6 +157,16 @@ class ContentStatus(StrEnum):
     REJECTED = "rejected"
 
 
+# M6.9 搜索 P1：可检索文本 → tsvector 生成列的表达式（写入时由 PG 自动维护）。
+# ``simple`` 分词不识别中文（连续中文整段视为一个 lexeme），中文子串检索由
+# ``pg_trgm`` GIN 索引承担（见下方 ix_content_*_trgm），两者互补。
+SEARCH_VECTOR_SQL = (
+    "to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(excerpt,'') || "
+    "' ' || coalesce(content,'') || ' ' || coalesce(summary,'') || ' ' || "
+    "coalesce(keywords,'') || ' ' || coalesce(tags,''))"
+)
+
+
 class ContentItem(Base):
     """统一内容表：五套旧内容表（forum_posts/articles/column_posts/blog 发布产物）收敛。
 
@@ -173,6 +192,24 @@ class ContentItem(Base):
         ),
         Index("ix_content_published", "published_at"),
         Index("ix_content_slug", "slug"),
+        # M6.9 搜索 P1：tsvector 生成列 GIN（英文/数字词）+ pg_trgm GIN（中文子串
+        # ILIKE '%x%'）。trgm opclass 属 pg_trgm 扩展，**显式限定 public**——否则
+        # 索引 DDL 依赖连接的 search_path（测试库 schema-per-test 不含 public 时会
+        # 解析不到 opclass 而建表失败）。扩展由迁移 / init_db / tests/conftest 保证
+        # 装在 public。
+        Index("ix_content_search_vector", "search_vector", postgresql_using="gin"),
+        Index(
+            "ix_content_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "public.gin_trgm_ops"},
+        ),
+        Index(
+            "ix_content_content_trgm",
+            "content",
+            postgresql_using="gin",
+            postgresql_ops={"content": "public.gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -201,6 +238,12 @@ class ContentItem(Base):
     keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str | None] = mapped_column(String(8), nullable=True)
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    # M6.9 搜索 P1：物化 tsvector（生成列，插入/更新时 PG 自动维护，应用不写）
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR,
+        Computed(SEARCH_VECTOR_SQL, persisted=True),
+        nullable=True,
+    )
     # 状态：discussion 恒 published；其余支持 draft/pending/published/rejected
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="published")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -211,6 +254,11 @@ class ContentItem(Base):
     comment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     bookmark_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     forward_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # M6.10 计数对账：本行计数最后一次**因对账被修正**的时刻（NULL = 从未偏差）。
+    # 不是「上次扫描时刻」——故连续两次对账第二次不再触碰任何行，收敛可证伪。
+    counts_reconciled_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
@@ -358,7 +406,9 @@ class Board(Base):
     slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    owner_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # S5: auth user_id
+    owner_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )  # S5: auth user_id
     # 子板块挂父板块（板块广场嵌套展示：父=大分类，子=细分板块）
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("boards.id"), nullable=True, index=True
@@ -398,7 +448,9 @@ class BoardApplication(Base):
     __tablename__: str = "board_applications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    applicant_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    applicant_id: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
     reason: Mapped[str] = mapped_column(String(500), nullable=False)

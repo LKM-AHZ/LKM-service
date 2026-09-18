@@ -19,6 +19,8 @@ schema，测末 drop cascade。每测试“单长活会话 override”保住了�
   ``db`` 会话。
 """
 
+import asyncio
+import contextlib
 import os
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
@@ -71,6 +73,29 @@ _hypothesis_settings.register_profile(
     ],
 )
 _hypothesis_settings.load_profile("lkm")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_pg_trgm_extension() -> None:
+    """测试库确保装有 ``pg_trgm``（M6.9 搜索 P1 的 trgm 索引 opclass 依赖它）。
+
+    索引 DDL 显式写作 ``public.gin_trgm_ops``，故扩展须在 public——而 schema-per-test
+    的 search_path 不含 public，扩展只能显式指定 schema 创建。幂等（IF NOT EXISTS）；
+    库不可达时静默跳过，交由既有 DB fixture 给出更明确的连接错误。
+    """
+
+    async def _run() -> None:
+        engine = create_async_engine(settings.database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
+                )
+        finally:
+            await engine.dispose()
+
+    with contextlib.suppress(Exception):
+        asyncio.run(_run())
 
 
 @pytest.fixture(autouse=True)

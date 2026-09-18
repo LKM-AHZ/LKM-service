@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import counters
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError
 from app.modules.content.models import ContentItem
@@ -45,7 +46,20 @@ async def _bookmark_count(db: AsyncSession, content_id: int) -> int:
 
 
 async def _bump_bookmark(db: AsyncSession, content_id: int, delta: int) -> int:
-    """原子增减 ``bookmark_count`` 并返回新值（下限 0）。"""
+    """增减 ``bookmark_count`` 并返回即时读数（下限 0）。
+
+    M6.10：优先走 Redis 增量链路（收藏明细行是真相源，计数由 flush 收敛）；Redis
+    未启用/不可达时回退到原有原子 UPDATE，语义不变。
+    """
+    if await counters.bump_counter("bookmark_count", content_id, delta):
+        base = await db.scalar(
+            select(ContentItem.bookmark_count).where(ContentItem.id == content_id)
+        )
+        if base is None:
+            raise BizError(InteractionErr.CONTENT_NOT_FOUND)
+        pending = await counters.pending_delta("bookmark_count", content_id)
+        return int(base) + pending
+
     result = await db.execute(
         sa_update(ContentItem)
         .where(ContentItem.id == content_id)

@@ -27,6 +27,7 @@ MODULES: list[str] = [
     "notification",
     "points",
     "projects",
+    "search",
     "starhope",
     # rbac 无 REST/GraphQL 导出，但承载跨模块权限框架，无需在此列表聚合路由；
     # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
@@ -49,6 +50,7 @@ _ERROR_MODULES: list[str] = [
     "notification",
     "points",
     "projects",
+    "search",
     "starhope",
 ]
 
