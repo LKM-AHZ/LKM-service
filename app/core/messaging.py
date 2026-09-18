@@ -45,6 +45,9 @@ logger = logging.getLogger("lkm.messaging")
 # 单任务执行上限（秒）：与迁移前 worker.JOB_TIMEOUT_S 对齐，超时视为消费失败 → 负确认。
 JOB_TIMEOUT_S = 120
 
+# 消费者建连/重建的退避间隔（秒）：空 topic 并发首订的 schema 注册竞态失败后重试用
+_CONSUMER_RETRY_S = 2.0
+
 # ---- routing_key 常量（业务唯一入口；原 core/jobs.py、core/worker.py 的 RKEY_* 迁此）----
 RKEY_SEND_CODE = "event.send_code"
 RKEY_SEND_MAGIC = "event.send_magic_link"
@@ -133,6 +136,15 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
 }
 
 # 事件 envelope JSON Schema（Pulsar schema registry 校验用）。
+#
+# **不要加 ``"required": [...]`**：Pulsar 的 JSON schema 解析器按旧 JSON-Schema 语义把
+# ``required`` 当 **boolean**，遇到数组会报
+# ``Invalid schema definition data for JSON schema ... Cannot deserialize value of type
+# java.lang.Boolean from Array value``，使 schema **注册被拒**（producer/consumer 双双
+# ``IncompatibleSchema``）。暴露条件很隐蔽：topic 由第一个订阅创建时**跳过** schema 检查，
+# 故单订阅 topic 看起来正常，直到第二个订阅/新 producer 出现才炸；pulsar 数据被清空
+# （compose「无状态化」每次重启）后更是全量复发——2026-09-17 真机定位。
+# ``fn`` 的存在性由应用层保证：``worker._consume`` 对无 ``fn``/未知 ``fn`` 的消息告警后丢弃。
 EVENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -140,7 +152,6 @@ EVENT_SCHEMA: dict[str, Any] = {
         "args": {"type": "array"},
         "event_id": {"type": "string"},
     },
-    "required": ["fn"],
 }
 
 # 每个 topic 一份 schema（envelope 形态一致；集中定义便于审计 schema 演化）。
@@ -422,35 +433,50 @@ def _receive_loop(
     loop: asyncio.AbstractEventLoop,
     stop: threading.Event,
 ) -> None:
-    """订阅专用 daemon 线程主循环：receive(timeout) → 处理，收到 stop 后退出并关消费者。"""
-    try:
-        consumer = _create_consumer_sync(sub)
-    except Exception:
-        logger.exception("pulsar consumer 创建失败 subscription=%s", sub.name)
-        return
-    logger.info("pulsar 订阅启动 subscription=%s topic=%s", sub.name, sub.topic)
+    """订阅专用 daemon 线程主循环：建消费者 → receive(timeout) → 处理，收到 stop 后退出。
+
+    建消费者失败**不退出**，退避重试：空 topic 上多个订阅并发首订时，broker 的 schema
+    注册存在竞态——实测 4 个 points 订阅同时启动只有先到者成功，其余报
+    ``IncompatibleSchema: Topic does not have schema to check``；先到者注册完成后，重试者
+    即可订阅成功。原先「失败即 return」会让该订阅在进程生命周期内**永久失效**，只能靠重启
+    容器恢复（无状态化清空 pulsar 数据后每次重启都会踩到）。
+    """
     import pulsar  # 局部导入：与文件其余处一致，无总线时不硬依赖客户端
 
-    try:
-        while not stop.is_set():
-            try:
-                msg = consumer.receive(timeout_millis=1000)
-            except pulsar.Timeout:
-                # 长轮询到期（1s 内无消息）是**正常路径**，不是异常：曾按 Exception 分支
-                # 打整栈 + 睡 1s，导致每个 worker 每秒一条 traceback 刷日志并灌进
-                # ClickHouse app_logs（2026-09-17 修复类型 bug 后暴露）
-                continue
-            except Exception:
-                if stop.is_set():
-                    break
-                logger.exception("pulsar receive 异常 subscription=%s", sub.name)
-                time.sleep(1.0)
-                continue
-            _handle_message(consumer, msg, handler, loop, sub.name)
-    finally:
-        with suppress(Exception):
-            consumer.close()
-        logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
+    while not stop.is_set():
+        try:
+            consumer = _create_consumer_sync(sub)
+        except Exception:
+            logger.exception(
+                "pulsar consumer 创建失败 subscription=%s; 退避后重试", sub.name
+            )
+            if stop.wait(_CONSUMER_RETRY_S):
+                return
+            continue
+        logger.info("pulsar 订阅启动 subscription=%s topic=%s", sub.name, sub.topic)
+        try:
+            while not stop.is_set():
+                try:
+                    msg = consumer.receive(timeout_millis=1000)
+                except pulsar.Timeout:
+                    # 长轮询到期（1s 内无消息）是**正常路径**，不是异常：曾按 Exception 分支
+                    # 打整栈 + 睡 1s，导致每个 worker 每秒一条 traceback 刷日志并灌进
+                    # ClickHouse app_logs（2026-09-17 修复类型 bug 后暴露）
+                    continue
+                except Exception:
+                    if stop.is_set():
+                        break
+                    logger.exception("pulsar receive 异常 subscription=%s", sub.name)
+                    time.sleep(1.0)
+                    continue
+                _handle_message(consumer, msg, handler, loop, sub.name)
+        finally:
+            with suppress(Exception):
+                consumer.close()
+            logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
+        if not stop.is_set():
+            # 消费循环非 stop 退出（链路异常）→ 退避后重建消费者
+            time.sleep(_CONSUMER_RETRY_S)
 
 
 async def run_subscription(

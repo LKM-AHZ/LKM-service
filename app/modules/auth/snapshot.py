@@ -481,9 +481,15 @@ async def user_count_by_day(
     """
     end = start + datetime.timedelta(days=days)
     day_expr = func.date(func.timezone("UTC", User.created_at))
+    # 窗口边界须用 **UTC aware datetime** 而非 ``date``：asyncpg 绑定 date 时 PG 会按
+    # 会话时区（东八区部署实测 +08）把它转 timestamptz，使 [start, end) 整体偏移 8 小时
+    # ——右界被提前到 UTC 前一日 16:00，落在该 8 小时内新建的用户被漏计（本地凌晨跑测试
+    # 必现 user_delta=0）。用 aware datetime 比较既精确，又保留 created_at 列索引可用。
+    start_dt = datetime.datetime.combine(start, datetime.time.min, tzinfo=datetime.UTC)
+    end_dt = datetime.datetime.combine(end, datetime.time.min, tzinfo=datetime.UTC)
     stmt = (
         select(day_expr.label("d"), func.count())
-        .where(User.created_at >= start, User.created_at < end)
+        .where(User.created_at >= start_dt, User.created_at < end_dt)
         .group_by("d")
     )
     rows = (await db.execute(stmt)).all()

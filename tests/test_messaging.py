@@ -26,6 +26,50 @@ def _failed_count() -> float:
     return value if value is not None else 0.0
 
 
+def test_event_schema_omits_legacy_required_field() -> None:
+    """防回潮：``EVENT_SCHEMA`` 不得带 ``required``（数组）。
+
+    Pulsar 的 JSON schema 解析器按旧 draft 语义把 ``required`` 当 **boolean**，数组会令
+    schema 注册被拒（``Invalid schema definition data for JSON schema``）——清空 pulsar 数据后
+    所有「多订阅 topic」的消费者将全部起不来（2026-09-17 真机定位）。
+    """
+    assert "required" not in messaging.EVENT_SCHEMA
+    for topic, schema in messaging.TOPIC_SCHEMAS.items():
+        assert "required" not in schema, topic
+
+
+def test_receive_loop_retries_when_consumer_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """建消费者失败须退避重试而非放弃（原实现一次失败即在该进程内永久失去订阅）。"""
+    import pulsar
+
+    monkeypatch.setattr(messaging, "_CONSUMER_RETRY_S", 0.01)
+    stop = threading.Event()
+    attempts = {"n": 0}
+
+    class _FakeConsumer:
+        def receive(self, timeout_millis: int = 0) -> object:
+            stop.set()  # 订阅成功后立即让循环自然退出
+            raise pulsar.Timeout()
+
+        def close(self) -> None: ...
+
+    def _create(_sub: object) -> _FakeConsumer:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("IncompatibleSchema")
+        return _FakeConsumer()
+
+    monkeypatch.setattr(messaging, "_create_consumer_sync", _create)
+
+    messaging._receive_loop(
+        messaging.SUB_POINTS_STATS, lambda *_: None, None, stop  # type: ignore[arg-type]
+    )
+
+    assert attempts["n"] == 3, "前两次失败应重试，第三次成功"
+
+
 async def test_publish_routes_to_mapped_topic() -> None:
     transport = InMemoryTransport()
     messaging.set_transport(transport)

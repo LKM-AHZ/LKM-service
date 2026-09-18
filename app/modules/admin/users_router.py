@@ -180,7 +180,10 @@ async def admin_trend(
             # 统一按 UTC 分桶：PG 的 func.date(timestamptz) 会先按会话时区(本地+08)取日，
             # 与“以 UTC 今天为基准”偏移一天；故先 AT TIME ZONE 'UTC' 变 naive-UTC 再取日。
             day_expr = func.date(func.timezone("UTC", col))
-            stmt = select(day_expr.label("d"), func.count()).where(col >= start)
+            # 右界同理须用 UTC aware datetime：date 参数会被 PG 按会话时区解释而整体
+            # 偏移（见 auth.snapshot.user_count_by_day 同款说明）。
+            start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
+            stmt = select(day_expr.label("d"), func.count()).where(col >= start_dt)
             if extra_where is not None:
                 stmt = stmt.where(extra_where)
             rows = (await db.execute(stmt.group_by("d"))).all()

@@ -26,6 +26,12 @@ _TASK_HANDLERS: dict[str, dict[str, Callable[..., Any]]] = {}
 # CRON_JOBS: list[dict]，含 id/trigger(cron 名)/routing_key/fn
 _CRON_JOBS: list[dict[str, Any]] = []
 
+# 全量导入是否已执行（显式标志，**不能用「注册表非空」代替**）：
+# 任一模块的 ``tasks.py`` 被单独导入就会填 ``_TASK_HANDLERS``（如仅导入
+# ``notification.tasks`` 只注册 handler、无 cron），若据此判定「已注册」就会跳过全量导入，
+# 使 cron 声明与其余模块 handler 永久缺失（scheduler 拿到 0 个 job，2026-09-18 定位）。
+_tasks_imported = False
+
 
 def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> None:
     """登记一条 cron 任务：到点由 scheduler 发布 ``fn`` 到 ``routing_key``。
@@ -54,7 +60,11 @@ def import_task_modules() -> None:
 
     供 worker / scheduler / 单测在装配前调用，确保注册表被填满。任务逻辑内重型依赖
     均为函数级 import，此处仅触发注册，不拉业务整树。模块清单随新增业务域扩充。
+
+    置 ``_tasks_imported``：已导入的模块被 ``sys.modules`` 缓存，重复调用不会再执行注册
+    代码，故「是否跑过」只能由本标志承载（见 ``_tasks_imported`` 说明）。
     """
+    global _tasks_imported
     import app.modules.auth.tasks
     import app.modules.blog.tasks
     import app.modules.files.tasks
@@ -62,10 +72,12 @@ def import_task_modules() -> None:
     import app.modules.notification.tasks
     import app.modules.points.tasks  # noqa: F401
 
+    _tasks_imported = True
+
 
 def ensure_tasks_registered() -> None:
     """确保已注册（guard 幂等，重复调用不重复触发）。"""
-    if _TASK_HANDLERS or _CRON_JOBS:
+    if _tasks_imported:
         return
     import_task_modules()
 
