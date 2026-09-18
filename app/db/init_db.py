@@ -13,6 +13,7 @@ Redis 不可用（未配置/宕机，fail-open）则不设锁直接跑（dev 单
 import asyncio
 import logging
 from contextlib import suppress
+from typing import Any
 
 logger = logging.getLogger("lkm.init_db")
 
@@ -84,12 +85,88 @@ async def _release_migration_lock(
         await client.delete(key)
 
 
+def _sync_additive_schema(conn: Any) -> list[str]:
+    """为**已存在的表**补上 metadata 里新增的列与索引（只增不改，幂等）。
+
+    为什么需要：``create_all`` 只建缺失的**表**，对已存在的表是 no-op——于是「加列型」
+    变更在 ``LKM_USE_ALEMBIC=false``（compose 默认）的**既有部署**上升级后不会生效，
+    新代码一查新列就 ``UndefinedColumn``。本函数把这类加性变更加进 create_all 通道。
+
+    边界（刻意保守）：只做 ``ADD COLUMN IF NOT EXISTS`` 与 ``CREATE INDEX``（缺则建），
+    **绝不**改类型、删列、改约束——破坏性 schema 变更仍必须走 alembic 人工评审。
+    因此它与 alembic 是「加性兜底」而非替代。
+    """
+    import sqlalchemy as sa
+    from sqlalchemy.schema import CreateColumn, CreateIndex
+
+    from app.db.base import Base
+
+    changed: list[str] = []
+    inspector = sa.inspect(conn)
+    existing_tables = set(inspector.get_table_names())
+
+    # 用 tables.values() 而非 sorted_tables：本函数只做加列/加索引，不需要拓扑序，
+    # 而 sorted_tables 会因 qa_answers/qa_questions 的相互外键触发 SAWarning
+    # （测试环境 filterwarnings=["error"] 下即红）。
+    for table in Base.metadata.tables.values():
+        if table.name not in existing_tables:
+            continue
+        have_cols = {c["name"] for c in inspector.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have_cols:
+                continue
+            if not col.nullable and col.server_default is None:
+                # NOT NULL 且无 SQL 侧默认：已存行的表上 ADD COLUMN 必然失败，硬来会让
+                # 应用起不来（比缺列更糟）。跳过并告警——这类列须人工迁移（alembic 或
+                # 手工 ALTER + 回填），本函数只兜「可空/带默认」的加性变更。
+                logger.warning(
+                    "跳过补列 %s.%s（NOT NULL 且无 server_default，需人工迁移）",
+                    table.name,
+                    col.name,
+                )
+                continue
+            ddl = CreateColumn(col).compile(dialect=conn.dialect)
+            # 用 savepoint 包住：单条失败只回滚该条，不污染整个迁移事务
+            # （PG 里事务内任一语句报错后，后续语句一律 InFailedSQLTransaction）。
+            sp = conn.begin_nested()
+            try:
+                conn.execute(
+                    sa.text(
+                        f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS {ddl}'
+                    )
+                )
+                sp.commit()
+            except sa.exc.DBAPIError as exc:
+                sp.rollback()
+                # 例如生成列引用了同批次里尚未补上的依赖列；跳过并告警，不让启动挂掉
+                logger.warning("补列 %s.%s 失败：%s", table.name, col.name, exc)
+                continue
+            changed.append(f"{table.name}.{col.name}")
+
+        have_idx = {i["name"] for i in inspector.get_indexes(table.name)}
+        for index in table.indexes:
+            if index.name in have_idx:
+                continue
+            ddl = str(CreateIndex(index).compile(dialect=conn.dialect))
+            sp = conn.begin_nested()
+            try:
+                conn.execute(sa.text(ddl))
+                sp.commit()
+            except sa.exc.DBAPIError:
+                # 多 worker 并发启动可能同时建同名索引（DuplicateTable）→ 视为已建成
+                sp.rollback()
+                continue
+            changed.append(f"index {index.name}")
+    return changed
+
+
 async def _create_all() -> None:
-    """create_all 降级通道：按 Base.metadata 建缺失的表（幂等，只建不 ALTER）。
+    """create_all 降级通道：按 Base.metadata 建缺失的表，并补已存在表缺失的列/索引。
 
     仅在 ``settings.use_alembic=False`` 时启用。多 worker 安全：create_all 对已存在的
-    表是 no-op，无需 Redis 迁移锁。注意必须 import 所有模型模块，metadata 才会被填满；
-    模型归位后由 ``model_registry.ensure_all_models`` 统一预注册各模块 models.py。
+    表是 no-op、补列/索引均幂等，无需 Redis 迁移锁。注意必须 import 所有模型模块，
+    metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
+    各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`。
     """
     import sqlalchemy as sa
 
@@ -108,6 +185,7 @@ async def _create_all() -> None:
             sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
         )
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sync_additive_schema)
 
 
 async def _seed_base_data() -> None:

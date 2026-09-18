@@ -274,3 +274,88 @@ def test_auth_alembic_chain_baseline_head() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
     assert script.get_current_head() == "a0b1c2d3e4f5"
+
+
+async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:
+    """create_all 通道的加性同步：已存在的表缺列/缺索引时被补上，且幂等。
+
+    覆盖真实升级缺口——既有部署（表由 create_all 建）新增列后若不补，新代码查询该列
+    即 UndefinedColumn；而 create_all 对已存在的表是 no-op。
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.base import Base
+    from app.db.init_db import _sync_additive_schema
+    from app.db.model_registry import ensure_all_models
+
+    ensure_all_models()
+    schema = "s_additive"
+    engine = create_async_engine(settings.database_url, poolclass=StaticPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET search_path TO "{schema}"'))
+            # 造「升级前」形态：全量建表后删掉本批新增的两列（真实场景就是加列）
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                text(
+                    "ALTER TABLE content_items "
+                    "DROP COLUMN search_vector, DROP COLUMN counts_reconciled_at"
+                )
+            )
+            changed = await conn.run_sync(_sync_additive_schema)
+            assert any(c.endswith("content_items.search_vector") for c in changed)
+            assert any(
+                c.endswith("content_items.counts_reconciled_at") for c in changed
+            )
+
+            cols = (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = :s AND table_name = 'content_items'"
+                    ),
+                    {"s": schema},
+                )
+            ).scalars()
+            names = set(cols)
+            assert {"search_vector", "counts_reconciled_at"} <= names
+
+            # 幂等：二次同步不再有任何改动
+            assert await conn.run_sync(_sync_additive_schema) == []
+            await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        await engine.dispose()
+
+
+async def test_additive_schema_sync_skips_not_null_without_default() -> None:
+    """NOT NULL 且无 server_default 的缺列**跳过**（避免 ADD COLUMN 失败把启动搞挂）。"""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.base import Base
+    from app.db.init_db import _sync_additive_schema
+    from app.db.model_registry import ensure_all_models
+
+    ensure_all_models()
+    schema = "s_additive2"
+    engine = create_async_engine(settings.database_url, poolclass=StaticPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET search_path TO "{schema}"'))
+            await conn.run_sync(Base.metadata.create_all)
+            # title 是 NOT NULL 且模型无 server_default → 补列必然失败，故应被跳过
+            await conn.execute(
+                text("ALTER TABLE content_items DROP COLUMN title CASCADE")
+            )
+            changed = await conn.run_sync(_sync_additive_schema)
+            assert not any(c.endswith(".title") for c in changed)
+            await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        await engine.dispose()

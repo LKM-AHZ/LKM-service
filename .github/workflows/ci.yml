@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTEST_RUNNING: "1"
+
+jobs:
+  lint:
+    name: lint（ruff + import-linter 边界门禁）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check app tests scripts
+      - run: uv run lint-imports
+
+  migrations:
+    name: migrations（逐 revision 双向离线 SQL）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run python scripts/check_migrations.py
+
+  test:
+    name: test（pytest + 真 PG）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lkm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      LKM_DB_PASSWORD: postgres
+      LKM_AUTH_DB_PASSWORD: postgres
+      # 刻意不设 LKM_REDIS_URL：Redis 相关单测走 fakeredis / fail-open 路径
+      # （设了真实 Redis 会让「Redis 不可用应直改 DB」这类断言失真）。
+      # 真实 Redis 由 integration job 的 Testcontainers 提供。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # auth 独立库（fixture 需要）：业务库由 service 建出，auth 库需显式建
+      - name: 建 auth 库
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE lkm_auth"
+      - name: pytest（默认排除 integration）
+        run: uv run pytest -q
+
+  integration:
+    name: integration（Testcontainers 起 PG/Redis/Pulsar）
+    runs-on: ubuntu-latest
+    env:
+      LKM_IT_USE_TESTCONTAINERS: "1"
+      LKM_DB_PASSWORD: postgres
+      LKM_AUTH_DB_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # Testcontainers 刻意**不进 pyproject/lock**：它只在集成 job 需要，装进主依赖会让
+      # 所有镜像与本地环境都背上它（且改 lock 会击穿镜像依赖层缓存）。用 --with 临时装。
+      - name: pytest -m integration（Testcontainers）
+        run: uv run --with 'testcontainers[postgres,redis]>=4.8' pytest -m integration -q
+
+  image:
+    name: image（docker build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: lkm-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
