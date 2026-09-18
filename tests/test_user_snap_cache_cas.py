@@ -14,6 +14,7 @@
   ⑤ Redis 故障 → fail-open 返回 DB 值不 crash
 """
 
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -82,7 +83,7 @@ async def _mk_user(
     updated_at: datetime | None = None,
     role: str | None = "member",
     account_level: str = "local",
-) -> tuple[int, datetime]:
+) -> tuple[uuid.UUID, datetime]:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -103,7 +104,7 @@ async def _mk_user(
 # ---- Test 1: 读缓存命中/未命中回填语义；键/TTL/命名空间 sane ----
 
 
-async def _hit(uid: int) -> dict[str, Any]:
+async def _hit(uid: uuid.UUID) -> dict[str, Any]:
     """必须命中缓存并返回快照 dict；未命中即断言失败（测试前置不变量）。"""
     data = await uc.read_snap(uid)
     assert data is not None
@@ -111,41 +112,42 @@ async def _hit(uid: int) -> dict[str, Any]:
 class TestReadPopulateAndKeyShape:
     async def test_miss_return_none_then_fill_then_hit(self, monkeypatch: Any) -> None:
         _enable_fake_redis(monkeypatch)
-        assert await uc.read_snap(7) is None  # miss
+        uid = uuid.uuid4()
+        assert await uc.read_snap(uid) is None  # miss
         assert (
-            (await uc.read_snap_with_version(7)) == (None, None)
+            (await uc.read_snap_with_version(uid)) == (None, None)
         )  # miss with-version 也为空
-        epoch0 = await uc.current_epoch(7)
+        epoch0 = await uc.current_epoch(uid)
         assert epoch0 == 0  # 从未失效 → epoch 0
-        assert await uc.write_if_newer(7, {"user_id": 7, "username": "bob", "display_name": "Bob",
-                                            "avatar": None, "role": None,
-                                            "account_level": "local", "banned": False},
+        snap = {"user_id": uid, "username": "bob", "display_name": "Bob",
+                "avatar": None, "role": None,
+                "account_level": "local", "banned": False}
+        assert await uc.write_if_newer(uid, snap,
                                        source_version=100, expected_epoch=epoch0) is True
-        assert await uc.read_snap(7) == {"user_id": 7, "username": "bob", "display_name": "Bob",
-                                         "avatar": None, "role": None,
-                                         "account_level": "local", "banned": False}
-        sv, _d = await uc.read_snap_with_version(7)
+        assert await uc.read_snap(uid) == snap
+        sv, _d = await uc.read_snap_with_version(uid)
         assert sv == 100
 
     async def test_key_shape_env_namespace_ttl(self, monkeypatch: Any) -> None:
         """键沿用 make_key env 命名空间；TTL 有 EX 兜底。"""
         fake = _enable_fake_redis(monkeypatch)
-        assert uc.get_user_cache_key(9) == make_key("user:snap", 9)
-        assert str(uc.get_user_cache_key(9)).endswith(":user:snap:9")
+        uid = uuid.uuid4()
+        assert uc.get_user_cache_key(uid) == make_key("user:snap", uid)
+        assert str(uc.get_user_cache_key(uid)).endswith(f":user:snap:{uid}")
         await uc._get_redis()
         # 经 write_if_newer 得到的快照键带 TTL
-        e = await uc.current_epoch(9)
-        await uc.write_if_newer(9, {"x": 1}, 1, e)
+        e = await uc.current_epoch(uid)
+        await uc.write_if_newer(uid, {"x": 1}, 1, e)
         import app.core.user_cache as _uc
 
-        raw = await fake.get(_uc._snap_key(9))
+        raw = await fake.get(_uc._snap_key(uid))
         assert raw is not None
-        assert await fake.ttl(_uc._snap_key(9)) != -1  # 有失效时间（非无限）
+        assert await fake.ttl(_uc._snap_key(uid)) != -1  # 有失效时间（非无限）
 
     async def test_empty_db_user_not_cached_and_none(self, db: DB, monkeypatch: Any) -> None:
         """不存在用户 miss → 命中返回 None 语义；不写缓存（seam DB 直读）。"""
         _enable_fake_redis(monkeypatch)
-        snap = await get_user_snapshot(db, user_id=99999)
+        snap = await get_user_snapshot(db, user_id=uuid.uuid4())
         assert snap is None
 
 
@@ -183,7 +185,7 @@ class TestSeamCacheThroughDiffZero:
 class TestCasVersionGuard:
     async def test_stale_older_version_rejected_newer_wins(self, monkeypatch: Any) -> None:
         _enable_fake_redis(monkeypatch)
-        uid = 3
+        uid = uuid.uuid4()
         e = await uc.current_epoch(uid)
         # 新版本先写
         assert await uc.write_if_newer(uid, {"v": "new"}, source_version=200, expected_epoch=e) is True
@@ -197,7 +199,7 @@ class TestCasVersionGuard:
     async def test_equal_version_idempotent_rewrite_allowed(self, monkeypatch: Any) -> None:
         """等 sv 视为幂等续写（不看作覆盖更新值）——多实例同值回填不互相拒写死锁。"""
         _enable_fake_redis(monkeypatch)
-        uid = 5
+        uid = uuid.uuid4()
         e = await uc.current_epoch(uid)
         assert await uc.write_if_newer(uid, {"v": 1}, 50, e) is True
         assert await uc.write_if_newer(uid, {"v": 1}, 50, e) is True  # 等值允许
@@ -208,7 +210,7 @@ class TestCasVersionGuard:
 class TestAntiStaleAfterInvalidate:
     async def test_invalidate_blocks_stale_pop_then_fresh_read(self, monkeypatch: Any) -> None:
         _enable_fake_redis(monkeypatch)
-        uid = 42
+        uid = uuid.uuid4()
         e0 = await uc.current_epoch(uid)  # 0
         # 正常回填（epoch under 它 DB 读语义 OK）
         assert await uc.write_if_newer(uid, {"v": "old"}, source_version=100, expected_epoch=e0)

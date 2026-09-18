@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import secrets
+import uuid
 
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from sqlalchemy import select
@@ -183,7 +184,9 @@ def _authentication_credential(credential: dict) -> dict:
     }
 
 
-async def begin_passkey_registration(db: AsyncSession, user_id: int) -> dict:
+async def begin_passkey_registration(
+    db: AsyncSession, user_id: uuid.UUID
+) -> dict:
     user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
 
     challenge_id, challenge = await _store_challenge(db)
@@ -204,7 +207,7 @@ async def begin_passkey_registration(db: AsyncSession, user_id: int) -> dict:
         for c in existing
     ]
 
-    user_id_bytes = user.id.to_bytes(8, "big")
+    user_id_bytes = user.id.bytes
     options = generate_registration_options(
         rp_id=settings.rp_id,
         rp_name=settings.rp_name,
@@ -233,7 +236,7 @@ async def begin_passkey_registration(db: AsyncSession, user_id: int) -> dict:
 
 
 async def complete_passkey_registration(
-    db: AsyncSession, user_id: int, credential: dict
+    db: AsyncSession, user_id: uuid.UUID, credential: dict
 ) -> dict:
     raw_id = credential.get("rawId") or ""
     challenge_id = credential.get("challenge_id")
@@ -360,7 +363,7 @@ async def complete_passkey_login(db: AsyncSession, credential: dict) -> dict:
     return await finalize_auth_response(db, user)
 
 
-async def list_credentials(db: AsyncSession, user_id: int) -> list[dict]:
+async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     creds = (
         (
             await db.execute(
@@ -381,7 +384,9 @@ async def list_credentials(db: AsyncSession, user_id: int) -> list[dict]:
     ]
 
 
-async def delete_credential(db: AsyncSession, user_id: int, credential_id: int) -> dict:
+async def delete_credential(
+    db: AsyncSession, user_id: uuid.UUID, credential_id: uuid.UUID
+) -> dict:
     cred = await get_or_raise(
         db,
         PasskeyCredential,

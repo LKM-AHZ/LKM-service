@@ -8,6 +8,7 @@
 - 回归基线：pytest -m "not integration" 全绿。本文件不引入新 fixture，复用 conftest。
 """
 
+import uuid
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -21,6 +22,9 @@ from app.modules.auth.snapshot import (
     get_user_snapshot_batch,
 )
 from tests.conftest import DB
+
+# 固定 uuid7 形态常量（跨断言复用；第 3 段以 7 开头、第 4 段以 8 开头）
+_UID = uuid.UUID("00000000-0000-7000-8000-000000000001")
 
 
 @pytest.fixture
@@ -41,7 +45,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 
 def test_snapshot_fields_frozen() -> None:
     snap = UserSnapshot(
-        user_id=1,
+        user_id=_UID,
         username="bob",
         display_name="Bob",
         avatar=None,
@@ -50,7 +54,7 @@ def test_snapshot_fields_frozen() -> None:
         banned=False,
         nickname=None,
     )
-    assert snap.user_id == 1
+    assert snap.user_id == _UID
     # frozen dataclass 赋值抛 FrozenInstanceError（冻结只读不可变不变量）
     with pytest.raises(FrozenInstanceError):
         snap.display_name = "mutate"  # ty: ignore[invalid-assignment]
@@ -68,7 +72,7 @@ async def _mk_user(
     account_level: str = "normal",
     locked: bool = False,
     with_profile: bool = True,
-) -> int:
+) -> uuid.UUID:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -88,7 +92,7 @@ async def _mk_user(
 
 
 async def test_get_user_snapshot_missing_returns_none(db: DB) -> None:
-    snap = await get_user_snapshot(db, user_id=99999)
+    snap = await get_user_snapshot(db, user_id=uuid.uuid4())
     assert snap is None
 
 
@@ -134,7 +138,7 @@ async def test_banned_derived_from_is_locked(db: DB) -> None:
 async def test_batch_returns_partial_and_keeps_projection(db: DB) -> None:
     a = await _mk_user(db, "u_a", nickname="Alpha")
     b = await _mk_user(db, "u_b", nickname=None, account_level="admin")
-    res = await get_user_snapshot_batch(db, user_ids=[a, b, 88888])
+    res = await get_user_snapshot_batch(db, user_ids=[a, b, uuid.uuid4()])
     assert set(res) == {a, b}
     assert res[a].display_name == "Alpha"
     assert res[b].display_name == "u_b"

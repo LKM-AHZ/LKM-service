@@ -1,6 +1,7 @@
 """项目广场服务：孵化申请、审核（通过→建项目+落成员+纳入成员升级）、公开展示。"""
 
 import json
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -49,8 +50,8 @@ def _project_to_schema(p: Project, *, applicant_name: str) -> ProjectOut:
 
 
 async def _applicant_names(
-    db: AsyncSession, applicant_ids: list[int]
-) -> dict[int, str]:
+    db: AsyncSession, applicant_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     """批量取申请人展示名（seam 口径 = nickname or username）；缺失 id 不在结果里。"""
     if not applicant_ids:
         return {}
@@ -61,7 +62,7 @@ async def _applicant_names(
 
 
 async def submit_application(
-    db: AsyncSession, applicant_id: int, info: ProjectApplicationCreate
+    db: AsyncSession, applicant_id: uuid.UUID, info: ProjectApplicationCreate
 ) -> ProjectApplicationOut:
     # 同一申请人同名的 pending 申请唯一性（防重复刷单）
     dup = await db.scalar(
@@ -79,7 +80,8 @@ async def submit_application(
         summary=info.summary,
         description=info.description,
         member_claims=json.dumps(
-            [m.model_dump() for m in info.member_claims], ensure_ascii=False
+            [m.model_dump(mode="json") for m in info.member_claims],
+            ensure_ascii=False,
         ),
         status="pending",
     )
@@ -88,7 +90,9 @@ async def submit_application(
     return _app_to_schema(app_)
 
 
-async def _assert_member_users_exist(db: AsyncSession, user_ids: set[int]) -> None:
+async def _assert_member_users_exist(
+    db: AsyncSession, user_ids: set[uuid.UUID]
+) -> None:
     """给定的 member user_ids 必须是存在的用户。
 
     只在“通过审核”时（review_application 的 approve 路径）校验：提交阶段不拦截，
@@ -106,8 +110,8 @@ async def _assert_member_users_exist(db: AsyncSession, user_ids: set[int]) -> No
 
 async def review_application(
     db: AsyncSession,
-    application_id: int,
-    reviewer_id: int,
+    application_id: uuid.UUID,
+    reviewer_id: uuid.UUID,
     body: ReviewProjectApplicationRequest,
 ) -> ProjectApplicationOut:
     app_ = await get_or_raise(
@@ -125,7 +129,7 @@ async def review_application(
         claims = json.loads(app_.member_claims or "[]")
         await _assert_member_users_exist(
             db,
-            {c["user_id"] for c in claims if isinstance(c.get("user_id"), int)},
+            {uuid.UUID(c["user_id"]) for c in claims if c.get("user_id")},
         )
     else:
         claims = []
@@ -154,7 +158,7 @@ async def review_application(
             db.add(
                 ProjectMember(
                     project_id=project.id,
-                    user_id=uid if isinstance(uid, int) else None,
+                    user_id=uuid.UUID(uid) if isinstance(uid, str) else None,
                     display_name=str(c.get("display_name", "")),
                     role_in_project=str(c.get("role_in_project", "")),
                     sort_order=i,
@@ -165,7 +169,7 @@ async def review_application(
     return _app_to_schema(app_)
 
 
-async def _apply_incubation(db: AsyncSession, applicant_id: int) -> None:
+async def _apply_incubation(db: AsyncSession, applicant_id: uuid.UUID) -> None:
     """纳入成员升级：account_level→admin / member role→incubated_member（auth 域权威写面）。
 
     M3.B S5 C：拆库后本项目 DB 会话（业务 realm）已无 users/profiles——auth 是身份词表唯一
@@ -204,7 +208,7 @@ async def list_projects(db: AsyncSession) -> list[ProjectOut]:
     ]
 
 
-async def get_project(db: AsyncSession, project_id: int) -> Project:
+async def get_project(db: AsyncSession, project_id: uuid.UUID) -> Project:
     return await get_or_raise(
         db,
         Project,
@@ -214,7 +218,7 @@ async def get_project(db: AsyncSession, project_id: int) -> Project:
     )
 
 
-async def get_project_ex(db: AsyncSession, project_id: int) -> ProjectOut:
+async def get_project_ex(db: AsyncSession, project_id: uuid.UUID) -> ProjectOut:
     p = await get_project(db, project_id)
     names = await _applicant_names(db, [p.applicant_id])
     return _project_to_schema(p, applicant_name=names.get(p.applicant_id, ""))

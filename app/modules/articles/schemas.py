@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -13,7 +14,7 @@ class ArticleListItem(BaseModel):
     title: str
     description: str | None = None
     cover: str | None = None
-    category_id: int
+    category_id: uuid.UUID
     category_title: str = ""
     published: datetime.datetime | None = None
     views: int = 0
@@ -49,7 +50,7 @@ class CategoryCreate(BaseModel):
 class CategoryOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     slug: str
     title: str
     sort: int
@@ -61,7 +62,7 @@ class ArticleCreate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     cover: str | None = Field(default=None, max_length=2000)
     content: str = Field(..., min_length=1)
-    category_id: int = Field(..., ge=1)
+    category_id: uuid.UUID = Field(...)
     keywords: list[str] = Field(default_factory=list)
     department: str | None = Field(default=None, max_length=100)
     publisher: str | None = Field(default=None, max_length=100)
@@ -74,7 +75,7 @@ class ArticleUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     cover: str | None = Field(default=None, max_length=2000)
     content: str | None = Field(default=None, min_length=1)
-    category_id: int | None = Field(default=None, ge=1)
+    category_id: uuid.UUID | None = Field(default=None)
     keyword_str: str | None = Field(default=None, max_length=2000)  # 逗号分隔
     status: str | None = Field(
         default=None, pattern="^(draft|pending|published|rejected)$"
@@ -99,16 +100,16 @@ class ArticleLikeStatus(BaseModel):
 
 class ArticleCommentCreate(BaseModel):
     content: str
-    parent_id: int | None = None
+    parent_id: uuid.UUID | None = None
 
 
 class ArticleCommentOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    article_id: int
-    user_id: int
+    id: uuid.UUID
+    article_id: uuid.UUID
+    user_id: uuid.UUID
     content: str
-    parent_id: int | None = None
+    parent_id: uuid.UUID | None = None
     created_at: datetime.datetime
     profile: ProfileInfo | None = None

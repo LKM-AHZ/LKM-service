@@ -3,6 +3,7 @@
 import datetime as _dt
 import os
 import time as _time
+import uuid
 from typing import Any
 
 from fastapi import Depends, Header
@@ -34,7 +35,7 @@ _LEVEL_ORDER = {"local": 0, "normal": 1, "admin": 2}
 class CurrentUser(BaseModel):
     """从已验证的 JWT 访问令牌中提取的用户信息。"""
 
-    id: int
+    id: uuid.UUID
     account_level: str
     role: str
     email: str | None = None
@@ -60,14 +61,19 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     except (PyJWTError, ValueError) as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
 
-    user_id = payload.get("user_id")
-    if not user_id:
+    raw_user_id = payload.get("user_id")
+    if not raw_user_id:
         raise BizError(AuthErr.TOKEN_INVALID, "Token missing user_id")
+    # JWT 载荷只能带字符串（json 无 uuid 类型），读侧统一还原为 UUID
+    try:
+        user_id = uuid.UUID(str(raw_user_id))
+    except ValueError as exc:
+        raise BizError(AuthErr.TOKEN_INVALID, "Token user_id malformed") from exc
 
     # —— M3.B S3 seam：鉴权缝开启时把“锁定/token_version/改密撤销/权威角色档”判给 auth ——
     if seam_enabled():
         return await _resolve_via_seam(
-            int(user_id),
+            user_id,
             int(payload.get("token_version", 0)),
             payload.get("iat"),
             require_admin=False,
@@ -107,7 +113,7 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     profile = user.profile
     role: str = profile.role if profile else "member"
     return CurrentUser(
-        id=int(user.id),
+        id=user.id,
         account_level=str(user.account_level),
         role=role,
         email=user.email,
@@ -143,7 +149,7 @@ def _fail_current_user(cause: object | None) -> BizError:
 
 
 async def _resolve_via_seam(
-    user_id: int,
+    user_id: uuid.UUID,
     expect_token_version: int,
     iat_ts: object,
     *,

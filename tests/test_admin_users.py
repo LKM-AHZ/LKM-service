@@ -9,6 +9,8 @@ S5-A2 Step2 版本：users/profiles 真值迁 auth 库后，本文件一律经 *
 
 from __future__ import annotations
 
+import uuid
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,19 +149,19 @@ async def _seed_stats(
 ) -> User:
     """root(admin) + u0..u{n-1} 在 auth realm；content/file(biz realm) 引用 auth 裸 id。"""
     root = await _mk_admin(auth_db, "root")
-    ids: list[int] = []
+    ids: list[uuid.UUID] = []
     for i in range(n_users):
         au = await auth_user_uid(
             auth_db, username=f"u{i}", account_level="local", with_token=False
         )
-        ids.append(int(au.id))
+        ids.append(au.id)
     board = Board(slug="stats", title="统计", description="", is_public=True)
     db.add(board)
     await db.flush()
     db.add(
         ContentItem(
             content_type=ContentType.DISCUSSION,
-            author_id=int(ids[0]),
+            author_id=ids[0],
             board_id=board.id,
             title="t",
             excerpt="",
@@ -169,7 +171,7 @@ async def _seed_stats(
     )
     db.add(
         LibraryFile(
-            uploader_id=int(ids[1]),
+            uploader_id=ids[1],
             original_name="f.pdf",
             stored_name="f.pdf",
             mime_type="application/pdf",

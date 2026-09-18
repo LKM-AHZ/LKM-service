@@ -1,25 +1,31 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
-    Integer,
     String,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意 db.base 而非 db.models
+from app.db.base import (  # 注意 db.base 而非 db.models
+    Base,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 if TYPE_CHECKING:
     from app.modules.content.models import Board
 
 
-class UserFollow(Base):
+class UserFollow(UUIDPrimaryKeyMixin, Base):
     """用户关注关系（软删墓碑）：follower 关注 following。
 
     唯一约束针对``(follower_id, following_id)``——软删行保留以便幂等重关注；
@@ -34,9 +40,8 @@ class UserFollow(Base):
         Index("ix_user_follows_follower_created", "follower_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    follower_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
-    following_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    follower_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    following_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
@@ -45,7 +50,7 @@ class UserFollow(Base):
     )
 
 
-class BoardFollow(Base):
+class BoardFollow(UUIDPrimaryKeyMixin, Base):
     """用户关注版块关系（软删墓碑）：follower 关注 board_id。"""
 
     __tablename__: str = "board_follows"
@@ -54,9 +59,10 @@ class BoardFollow(Base):
         Index("ix_board_follows_board", "board_id"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    follower_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
-    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), nullable=False)
+    follower_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("boards.id"), nullable=False
+    )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
@@ -67,7 +73,7 @@ class BoardFollow(Base):
     board: Mapped[Board] = relationship(back_populates="followers")
 
 
-class FeedItemMaterialized(Base):
+class FeedItemMaterialized(UUIDPrimaryKeyMixin, Base):
     """时间线物化读模型（M6.11）：一条 = 某用户的 feed 里的一条内容。
 
     写扩散（fanout）由 cron 按源水位扫描新内容后为本条目的**关注者**写入；读路径
@@ -87,12 +93,11 @@ class FeedItemMaterialized(Base):
         Index("ix_feed_items_source", "item_type", "source_id"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)  # feed 所有者
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # feed 所有者
     item_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    source_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    author_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    board_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    author_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    board_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     sort_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     # 展示字段快照：读路径零回查（内容编辑后 feed 里短暂显示旧标题，随新条目自然滚出）
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
@@ -117,7 +122,8 @@ class FeedFanoutState(Base):
     last_created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False
     )
-    last_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 水位末条的**内容主键**（源内 id，非时间）；首次无水位为 NULL
+    last_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )

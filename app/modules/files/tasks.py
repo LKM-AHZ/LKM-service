@@ -11,6 +11,7 @@
 
 import json
 import logging
+import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
 
@@ -54,13 +55,13 @@ async def notify_upload(upload_id: str) -> None:
     db = await new_session()
     try:
         reg = await _register_from_upload(
-            db, meta, int(meta["uploader_id"]), _get_storage()
+            db, meta, uuid.UUID(meta["uploader_id"]), _get_storage()
         )
         await db.commit()
         # 登记成功后广播给 uploader 的 WebSocket(仅成功路径；失败走下方恢复标记+重试)。
         # 广播自身 fail-open(见 broker),异常被吞,不影响任务成功语义。
         await publish_upload_bound(
-            int(meta["uploader_id"]),
+            uuid.UUID(meta["uploader_id"]),
             {
                 "event": "upload_registered",
                 "upload_id": upload_id,

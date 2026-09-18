@@ -10,6 +10,7 @@ M6.7 泛化：连接表从「按 user_id」扩为「按 user_id → channel」�
 """
 
 import asyncio
+import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import suppress
@@ -29,7 +30,7 @@ class ConnectionManager:
     """``user_id -> channel -> 连接集合`` 的活动连接表 + Redis 订阅驱动的扇出。"""
 
     def __init__(self) -> None:
-        self._connections: dict[int, dict[str, set[Dispatcheable]]] = defaultdict(
+        self._connections: dict[uuid.UUID, dict[str, set[Dispatcheable]]] = defaultdict(
             lambda: defaultdict(set)
         )
         self._lock = asyncio.Lock()
@@ -38,7 +39,7 @@ class ConnectionManager:
 
     async def register(
         self,
-        user_id: int,
+        user_id: uuid.UUID,
         ws: Dispatcheable,
         channels: Iterable[str] = (CHANNEL_UPLOAD,),
     ) -> None:
@@ -46,7 +47,7 @@ class ConnectionManager:
             for channel in channels:
                 self._connections[user_id][channel].add(ws)
 
-    async def unregister(self, user_id: int, ws: Dispatcheable) -> None:
+    async def unregister(self, user_id: uuid.UUID, ws: Dispatcheable) -> None:
         """摘除连接的全部通道订阅（连接对象不记通道，故遍历）——幂等。"""
         async with self._lock:
             chans = self._connections.get(user_id)
@@ -59,7 +60,7 @@ class ConnectionManager:
             if not chans:
                 self._connections.pop(user_id, None)
 
-    async def dispatch(self, user_id: int, channel: str, message: str) -> None:
+    async def dispatch(self, user_id: uuid.UUID, channel: str, message: str) -> None:
         """向某用户某通道的所有连接推送同一文本消息。失效连接尽力移除，不阻塞整体。"""
         async with self._lock:
             targets: list[Dispatcheable] = list(

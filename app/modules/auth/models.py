@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import (
@@ -12,22 +13,22 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.auth_base import AuthBase
-from app.db.base import UTCDateTime, now_iso
+from app.db.base import UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
-class RefreshToken(AuthBase):
+class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "refresh_tokens"
     __table_args__: tuple[Any, ...] = (
         Index("ix_refresh_tokens_user_revoked", "user_id", "revoked_at"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     # 会话用途："web"（前台 Bearer）/"admin"（后台 cookie）。用于隔离，避免跨会话互用。
@@ -46,7 +47,7 @@ class RefreshToken(AuthBase):
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
 
 
-class EmailVerification(AuthBase):
+class EmailVerification(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "email_verifications"
     __table_args__: tuple[Any, ...] = (
         Index(
@@ -54,7 +55,6 @@ class EmailVerification(AuthBase):
         ),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(200), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     purpose: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -67,7 +67,7 @@ class EmailVerification(AuthBase):
     )
 
 
-class PhoneVerification(AuthBase):
+class PhoneVerification(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "phone_verifications"
     __table_args__: tuple[Any, ...] = (
         Index(
@@ -75,7 +75,6 @@ class PhoneVerification(AuthBase):
         ),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     purpose: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -88,13 +87,12 @@ class PhoneVerification(AuthBase):
     )
 
 
-class MagicLink(AuthBase):
+class MagicLink(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "magic_links"
     __table_args__: tuple[Any, ...] = (
         Index("ix_magic_links_hash_purpose", "token_hash", "purpose"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(200), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     purpose: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -105,15 +103,14 @@ class MagicLink(AuthBase):
     )
 
 
-class UserOAuth(AuthBase):
+class UserOAuth(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "user_oauths"
     __table_args__: tuple[Any, ...] = (
         UniqueConstraint("provider", "provider_user_id", name="uq_oauth_provider_user"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -128,8 +125,8 @@ class UserOAuth(AuthBase):
 class TOTP(AuthBase):
     __tablename__: str = "totp"
 
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     secret: Mapped[str] = mapped_column(String(128), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -145,15 +142,14 @@ class TOTP(AuthBase):
     user: Mapped[User] = relationship(back_populates="totp")
 
 
-class RecoveryCode(AuthBase):
+class RecoveryCode(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "recovery_codes"
     __table_args__: tuple[Any, ...] = (
         Index("ix_recovery_codes_user_hash", "user_id", "code_hash"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -165,15 +161,14 @@ class RecoveryCode(AuthBase):
     user: Mapped[User] = relationship(back_populates="recovery_codes")
 
 
-class TempTokenUsage(AuthBase):
+class TempTokenUsage(UUIDPrimaryKeyMixin, AuthBase):
     """跟踪用于 2FA 验证的一次性临时令牌。"""
 
     __tablename__: str = "temp_token_usages"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     purpose: Mapped[str] = mapped_column(String(20), nullable=False, default="2fa")
     txn_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -183,15 +178,14 @@ class TempTokenUsage(AuthBase):
     )
 
 
-class SetupTransaction(AuthBase):
+class SetupTransaction(UUIDPrimaryKeyMixin, AuthBase):
     """绑定到设置临时令牌的一次性 TOTP 设置事务。"""
 
     __tablename__: str = "setup_transactions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
@@ -200,12 +194,11 @@ class SetupTransaction(AuthBase):
     )
 
 
-class PendingRegistration(AuthBase):
+class PendingRegistration(UUIDPrimaryKeyMixin, AuthBase):
     """存储待处理的普通注册数据，直到联系方式被验证。"""
 
     __tablename__: str = "pending_registrations"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     txn_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     username: Mapped[str] = mapped_column(String(100), nullable=False)
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
@@ -218,15 +211,14 @@ class PendingRegistration(AuthBase):
     )
 
 
-class RecoveryTransaction(AuthBase):
+class RecoveryTransaction(UUIDPrimaryKeyMixin, AuthBase):
     """专用的管理员密码恢复事务，支持双重验证。"""
 
     __tablename__: str = "recovery_transactions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     txn_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     contact: Mapped[str] = mapped_column(String(200), nullable=False)
     contact_verified: Mapped[bool] = mapped_column(
@@ -256,12 +248,11 @@ class RecoveryTransaction(AuthBase):
     )
 
 
-class PasskeyCredential(AuthBase):
+class PasskeyCredential(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "passkey_credentials"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     credential_id: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
     public_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -274,12 +265,11 @@ class PasskeyCredential(AuthBase):
     user: Mapped[User] = relationship(back_populates="passkey_credentials")
 
 
-class AuditLog(AuthBase):
+class AuditLog(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "audit_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(200), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -289,12 +279,11 @@ class AuditLog(AuthBase):
     )
 
 
-class PasskeyChallenge(AuthBase):
+class PasskeyChallenge(UUIDPrimaryKeyMixin, AuthBase):
     """WebAuthn 挑战码，跨 worker 共享，过期自动失效。"""
 
     __tablename__: str = "passkey_challenges"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     challenge_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     challenge: Mapped[str] = mapped_column(Text, nullable=False)
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -304,18 +293,17 @@ class PasskeyChallenge(AuthBase):
     )
 
 
-class OAuthState(AuthBase):
+class OAuthState(UUIDPrimaryKeyMixin, AuthBase):
     """临时的 OAuth 状态令牌，用于 CSRF 保护。"""
 
     __tablename__: str = "oauth_states"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     state: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     purpose: Mapped[str] = mapped_column(
         String(20), nullable=False
     )  # "login" or "bind"
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )  # 仅 bind 场景：发起绑定的用户
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
@@ -333,8 +321,8 @@ class OnboardingProgress(AuthBase):
 
     __tablename__: str = "onboarding_progress"
 
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     step: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -347,10 +335,9 @@ class OnboardingProgress(AuthBase):
     )
 
 
-class User(AuthBase):
+class User(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     email: Mapped[str | None] = mapped_column(String(200), unique=True, nullable=True)
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
@@ -388,7 +375,9 @@ class User(AuthBase):
 class Profile(AuthBase):
     __tablename__: str = "profiles"
 
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id"), primary_key=True
+    )
     nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)
     avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")

@@ -131,16 +131,20 @@ def result_rows(result: Any) -> list[tuple[Any, ...]]:
     return list(rows or [])
 
 
-async def fetch_watermark(client: ClickHouseClient, table: str) -> int:
-    """取 CH 表当前最大业务 id 作增量水位；空表返回 0。
+async def fetch_watermark(client: ClickHouseClient, table: str) -> str | None:
+    """取 CH 表当前最大业务 id 作增量水位；空表返回 ``None``（调用方据此首次全量导出）。
+
+    业务 id 为 uuid7，CH 列类型 String：其字符串字典序与时间序一致，故 ``max(id)``
+    仍是最新已导出行。水位以字符串形式返回，PG 侧 ``Uuid`` 列与之直接比较
+    （SQLAlchemy 原生 uuid 绑定，asyncpg 接受十六进制字符串；见 export 单测）。
 
     ``table`` 只接受代码内常量（导出口径表名），不接受外部输入——SQL 以 f-string 拼接表名，
     绝不拼接任何用户可控标识符。
     """
     rows = result_rows(await client.query(f"SELECT max(id) FROM {table}"))
     if not rows or rows[0][0] is None:
-        return 0
-    return int(rows[0][0])
+        return None
+    return str(rows[0][0])
 
 
 def to_ch_datetime(value: datetime.datetime) -> datetime.datetime:

@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -51,7 +52,7 @@ async def create_content_item(
 @router.post("/items/{item_id}/like", response_model=ApiResp[dict[str, Any]])
 @respond
 async def like_content_item(
-    item_id: int,
+    item_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -61,7 +62,7 @@ async def like_content_item(
 @router.delete("/items/{item_id}/like", response_model=ApiResp[dict[str, Any]])
 @respond
 async def unlike_content_item(
-    item_id: int,
+    item_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -71,7 +72,7 @@ async def unlike_content_item(
 @router.delete("/items/{item_id}", response_model=ApiResp[dict[str, Any]])
 @respond
 async def delete_content_item(
-    item_id: int,
+    item_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -85,7 +86,7 @@ async def delete_content_item(
 @router.post("/items/{item_id}/comments", response_model=ApiResp[ContentCommentInfo])
 @respond
 async def create_content_comment(
-    item_id: int,
+    item_id: uuid.UUID,
     info: ContentCommentCreate,
     cur: CurrentUser = RequirePermission(Permission.content_comment_create),
     db: AsyncSession = Depends(get_session),

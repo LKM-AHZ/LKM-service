@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -7,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class MemberClaim(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     role_in_project: str = Field(..., min_length=1, max_length=100)
-    user_id: int | None = None
+    user_id: uuid.UUID | None = None
 
 
 class ProjectApplicationCreate(BaseModel):
@@ -20,8 +21,8 @@ class ProjectApplicationCreate(BaseModel):
 class ProjectApplicationOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    applicant_id: int
+    id: uuid.UUID
+    applicant_id: uuid.UUID
     title: str
     summary: str
     description: str
@@ -29,7 +30,7 @@ class ProjectApplicationOut(BaseModel):
     member_claims: list[dict] = Field(
         default_factory=list
     )  # 请求原样回显（存 JSON 文本）
-    reviewer_id: int | None = None
+    reviewer_id: uuid.UUID | None = None
     review_note: str | None = None
     created_at: datetime.datetime
     reviewed_at: datetime.datetime | None = None
@@ -43,9 +44,9 @@ class ReviewProjectApplicationRequest(BaseModel):
 class ProjectMemberOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    project_id: int
-    user_id: int | None
+    id: uuid.UUID
+    project_id: uuid.UUID
+    user_id: uuid.UUID | None
     display_name: str
     role_in_project: str
     sort_order: int
@@ -54,11 +55,11 @@ class ProjectMemberOut(BaseModel):
 class ProjectOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     title: str
     summary: str
     description: str
-    applicant_id: int
+    applicant_id: uuid.UUID
     is_incubated: bool
     # 项目广场展示字段
     type: str = "showcase"

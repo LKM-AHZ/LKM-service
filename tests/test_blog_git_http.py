@@ -5,6 +5,7 @@
 """
 
 import base64
+import uuid
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -178,7 +179,7 @@ class TestResolveSeriesId:
     """repo_name → blog_series.id；孤儿仓库返回 None。"""
 
     async def should_return_id_when_series_exists(self, db):
-        # PG 强外键：裸插 owner_id=1 需先在 schema 有真实 owner 用户，否则 FK 失败
+        # owner_id 为 auth realm 的 uuid；先建真实 owner 用户再挂 series 属主
         owner = User(username="serieowner", hashed_password="x")
         db.add(owner)
         await db.flush()
@@ -214,7 +215,7 @@ class TestRequireOwnerForPush:
         await db.flush()
         return owner, other
 
-    async def _series(self, db, owner_id: int, repo_name: str) -> int:
+    async def _series(self, db, owner_id: uuid.UUID, repo_name: str) -> uuid.UUID:
         series = BlogSeries(
             owner_id=owner_id, title="t", repo_name=repo_name, description=None
         )
@@ -222,9 +223,10 @@ class TestRequireOwnerForPush:
         await db.flush()
         return series.id
 
-    async def should_reject_anonymous(self, db):
+    async def should_reject_anonymous(self, db, _users):
         repo = "blog-anon"
-        await self._series(db, 1, repo)
+        owner, _ = _users
+        await self._series(db, owner.id, repo)
         with pytest.raises(HTTPException) as ei:
             await _require_owner_for_push(db, repo, _push_auth_request({}))
         assert ei.value.status_code == 401
@@ -287,8 +289,8 @@ class TestMaybeBackfillAfterPush:
 
         monkeypatch.setattr("app.modules.blog.git_http._session_factory", _factory)
 
-    async def _make_series(self, db, repo_name: str) -> int:
-        # PG 强外键：先建真实 owner 取自增 id 再挂 series 属主，避免 owner_id=1 孤儿 FK。
+    async def _make_series(self, db, repo_name: str) -> uuid.UUID:
+        # 先建真实 owner 取 uuid 再挂 series 属主（owner_id 现为 auth realm uuid）。
         owner = User(username=f"o{repo_name}", hashed_password="x")
         db.add(owner)
         await db.flush()

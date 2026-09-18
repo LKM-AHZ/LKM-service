@@ -1,5 +1,6 @@
 import datetime
 import re
+import uuid
 from enum import StrEnum
 from typing import Annotated, Any, ClassVar
 
@@ -79,7 +80,7 @@ class UserLoginPassword(BaseModel):
 class AuthTokenData(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
-    user_id: int
+    user_id: uuid.UUID
     account_level: str
     requires_2fa: bool = False
     setup_required: bool = False
@@ -232,7 +233,7 @@ class PasskeyRegisterCompleteResponse(BaseModel):
 
 
 class PasskeyCredentialItem(BaseModel):
-    id: int
+    id: uuid.UUID
     credential_id: str
     device_name: str
     created_at: datetime.datetime  # UTC 时间
@@ -246,7 +247,7 @@ class PasskeyCredentialItem(BaseModel):
 
 class BindCodeRequestResponse(BaseModel):
     message: str
-    record_id: int
+    record_id: uuid.UUID
 
 
 class BindCodeVerifyResponse(BaseModel):
@@ -260,7 +261,7 @@ class TOTPConfirmResponse(BaseModel):
 class TOTPVerifyResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
-    user_id: int
+    user_id: uuid.UUID
     account_level: str
     trust_device: bool = False
     mfa_verified: bool | None = None

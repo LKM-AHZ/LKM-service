@@ -68,7 +68,9 @@ def _file_to_schema(f: LibraryFile, uploader_name: str) -> FileInfo:
     )
 
 
-async def _uploader_map(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
+async def _uploader_map(
+    db: AsyncSession, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     if not user_ids:
         return {}
     snaps = await get_user_snapshot_batch(db, user_ids=list(set(user_ids)))
@@ -112,7 +114,9 @@ async def list_files(
     )
 
 
-async def get_file(db: AsyncSession, file_id: int, bump_view: bool = False) -> FileInfo:
+async def get_file(
+    db: AsyncSession, file_id: uuid.UUID, bump_view: bool = False
+) -> FileInfo:
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
@@ -309,7 +313,7 @@ async def _sync_ref_count(db: AsyncSession, sha3_hash: str) -> None:
 
 async def create_file(
     db: AsyncSession,
-    uploader_id: int,
+    uploader_id: uuid.UUID,
     info: FileCreate,
     stream: _Readable,
     max_bytes: int | None = None,
@@ -380,7 +384,7 @@ async def create_file(
     return _file_to_schema(f, names.get(f.uploader_id, ""))
 
 
-async def bump_download(db: AsyncSession, file_id: int) -> int:
+async def bump_download(db: AsyncSession, file_id: uuid.UUID) -> int:
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
@@ -391,7 +395,7 @@ async def bump_download(db: AsyncSession, file_id: int) -> int:
 
 async def review_file(
     db: AsyncSession,
-    file_id: int,
+    file_id: uuid.UUID,
     target_status: FileStatus,
     review_comment: str | None = None,
     is_admin: bool = False,
@@ -457,8 +461,8 @@ async def review_file(
 
 async def delete_file(
     db: AsyncSession,
-    file_id: int,
-    actor_id: int,
+    file_id: uuid.UUID,
+    actor_id: uuid.UUID,
     is_admin: bool = False,
 ) -> FileInfo:
     """软删除文件：管理员或文件所有者可操作，物理文件引用归零时清理磁盘。"""
@@ -510,7 +514,7 @@ def _require_approved(f: LibraryFile, *, action: str) -> None:
 
 
 async def download_url(
-    db: AsyncSession, file_id: int, cur: CurrentUser
+    db: AsyncSession, file_id: uuid.UUID, cur: CurrentUser
 ) -> DownloadUrlInfo:
     """签发下载 URL：本地后端回指 /content 端点，S3 后端返回预签名 URL（60s）。计次 download_count。"""
     f = await get_or_raise(
@@ -559,7 +563,9 @@ def _serve(
 
 
 async def serve_content(
-    db: AsyncSession, file_id: int, disposition: Literal["inline", "attachment"]
+    db: AsyncSession,
+    file_id: uuid.UUID,
+    disposition: Literal["inline", "attachment"],
 ) -> StreamingResponse:
     """预览(/preview)/下载(/content)共用入口：仅 APPROVED 可访问；预览计次 view_count。"""
     f = await get_or_raise(
@@ -608,7 +614,7 @@ async def upload_init(
         meta = json.dumps(
             {
                 "key": key,
-                "uploader_id": cur.id,
+                "uploader_id": str(cur.id),
                 "original_name": info.original_name,
                 "mime_type": info.mime_type,
                 "category_id": info.category_id,
@@ -646,7 +652,7 @@ async def _hash_from_storage(
 async def _register_from_upload(
     db: AsyncSession,
     meta: dict[str, Any],
-    uploader_id: int,
+    uploader_id: uuid.UUID,
     storage: StorageBackend,
 ) -> FileInfo:
     """把已直传的随机对象登记为 PENDING 的 LibraryFile（Phase 2-C 可复用核心）。
@@ -729,7 +735,9 @@ async def confirm_upload(
     except json.JSONDecodeError:
         raise BizError(FileErr.UPLOAD_EXPIRED) from None
     storage = _get_storage()
-    return await _register_from_upload(db, meta, int(meta["uploader_id"]), storage)
+    return await _register_from_upload(
+        db, meta, uuid.UUID(meta["uploader_id"]), storage
+    )
 
 
 async def _safe_delete(storage: StorageBackend, key: str) -> None:

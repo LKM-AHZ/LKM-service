@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -72,7 +73,7 @@ async def _invalidate_article_cache(db: AsyncSession, slug: str) -> None:
 
 
 async def _sync_article_tags(
-    db: AsyncSession, article_id: int, names: list[str]
+    db: AsyncSession, article_id: uuid.UUID, names: list[str]
 ) -> None:
     """按 name upsert Tag 并关联 ArticleTag（幂等，批量 O(log N)，保序去重）。
 
@@ -317,7 +318,7 @@ async def get_about() -> dict[str, str]:
 
 
 async def _bump_article_count(
-    db: AsyncSession, article_id: int, column: str, delta: int
+    db: AsyncSession, article_id: uuid.UUID, column: str, delta: int
 ) -> None:
     """原子回填计数列（SET col = col ± N），防并发丢更新。"""
     await db.execute(
@@ -328,7 +329,7 @@ async def _bump_article_count(
 
 
 async def toggle_article_like(
-    db: AsyncSession, slug: str, user_id: int
+    db: AsyncSession, slug: str, user_id: uuid.UUID
 ) -> dict[str, Any]:
     article = await get_or_raise(
         db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
@@ -370,9 +371,9 @@ async def toggle_article_like(
 async def create_article_comment(
     db: AsyncSession,
     slug: str,
-    user_id: int,
+    user_id: uuid.UUID,
     content: str,
-    parent_id: int | None = None,
+    parent_id: uuid.UUID | None = None,
 ) -> ArticleComment:
     article = await get_or_raise(
         db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
@@ -396,8 +397,8 @@ async def create_article_comment(
 
 
 async def _get_author_profiles(
-    db: AsyncSession, user_ids: set[int]
-) -> dict[int, ProfileInfo | None]:
+    db: AsyncSession, user_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, ProfileInfo | None]:
     """批量取评论作者 ProfileInfo（M3.A残项：经 auth 批量读缝一次查齐，不再直读 Profile）。"""
     if not user_ids:
         return {}
@@ -432,10 +433,10 @@ async def list_article_comments(db: AsyncSession, slug: str) -> list[ArticleComm
 
 async def delete_article_comment(
     db: AsyncSession,
-    comment_id: int,
-    user_id: int,
+    comment_id: uuid.UUID,
+    user_id: uuid.UUID,
     as_admin: bool = False,
-) -> int:
+) -> uuid.UUID:
     comment = await get_or_raise(
         db,
         ArticleComment,
@@ -473,7 +474,7 @@ async def create_category_ex(db: AsyncSession, info: CategoryCreate) -> Category
 
 
 async def update_category_ex(
-    db: AsyncSession, category_id: int, patch: CategoryCreate
+    db: AsyncSession, category_id: uuid.UUID, patch: CategoryCreate
 ) -> CategoryOut:
     """更新分类；slug 冲突（排除自身）抛出 409。"""
     cat = await get_or_raise(
@@ -498,7 +499,7 @@ async def update_category_ex(
     return CategoryOut.model_validate(cat)
 
 
-async def delete_category_ex(db: AsyncSession, category_id: int) -> None:
+async def delete_category_ex(db: AsyncSession, category_id: uuid.UUID) -> None:
     """删除分类；分类下仍有文章时禁止删除。"""
     cat = await get_or_raise(
         db,
@@ -516,20 +517,20 @@ async def delete_category_ex(db: AsyncSession, category_id: int) -> None:
     await _invalidate_categories_cache()
 
 
-async def _resolve_category_id(db: AsyncSession, slug: str) -> int:
+async def _resolve_category_id(db: AsyncSession, slug: str) -> uuid.UUID:
     """按 slug 解析分类 id（旧 blog/seed 流程传 slug，这里保向兼容）；不存在则 404。"""
     category_id = await db.scalar(
         select(ArticleCategoryORM.id).where(ArticleCategoryORM.slug == slug)
     )
     if category_id is None:
         raise BizError(ArticleErr.CATEGORY_NOT_FOUND)
-    return int(category_id)
+    return category_id
 
 
 # ————— 文章写接口 / 删除 / 审核 —————
 
 
-async def _require_category(db: AsyncSession, category_id: int) -> None:
+async def _require_category(db: AsyncSession, category_id: uuid.UUID) -> None:
     """校验分类存在，否则抛出 404。"""
     exists = await db.scalar(
         select(ArticleCategoryORM.id).where(ArticleCategoryORM.id == category_id)
@@ -543,7 +544,7 @@ async def _get_article(db: AsyncSession, slug: str) -> Article:
     return await get_or_raise(db, Article, ArticleErr.NOT_FOUND, Article.slug == slug)
 
 
-async def _load_category_title(db: AsyncSession, category_id: int) -> str:
+async def _load_category_title(db: AsyncSession, category_id: uuid.UUID) -> str:
     """一次查询分类 title，供详情填充 category_title。"""
     title = await db.scalar(
         select(ArticleCategoryORM.title).where(ArticleCategoryORM.id == category_id)
@@ -603,7 +604,7 @@ async def update_article_ex(
     article = await _get_article(db, slug)
     data = patch.model_dump(exclude_unset=True)
     if data.get("category_id") is not None:
-        await _require_category(db, int(data["category_id"]))
+        await _require_category(db, data["category_id"])
     if "status" in data:
         article.status = str(data["status"])
         if data["status"] == "published" and article.published is None:

@@ -287,7 +287,8 @@ async def recover_admin_verify_totp(
         raise BizError(AuthErr.TOKEN_INVALID, "Invalid 2FA temp token") from exc
 
     user_id: Any = payload.get("user_id", payload.get("sub"))
-    if user_id != txn.user_id:
+    # JWT 落 JSON，uuid 以字符串回读；与 UUID 列比较须归一字符串形式
+    if str(user_id) != str(txn.user_id):
         raise BizError(
             AuthErr.TOKEN_INVALID, "Token user does not match recovery transaction user"
         )
@@ -360,7 +361,7 @@ async def _consume_recovery_txn(db: AsyncSession, txn_id: str) -> User:
         db,
         User,
         AuthErr.USER_NOT_FOUND,
-        User.id == int(txn.user_id),
+        User.id == txn.user_id,
     )
 
     return user

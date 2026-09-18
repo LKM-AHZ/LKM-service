@@ -55,7 +55,7 @@ async def admin_list_reports(
 
     items = [
         AdminReportListItem(
-            id=int(r.id),
+            id=r.id,
             type=str(r.type),
             target_id=str(r.target_id),
             target_title=str(r.target_title),

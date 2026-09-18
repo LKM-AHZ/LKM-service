@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -82,7 +83,7 @@ def _rows_for(
         is_locked = bool(u.is_locked)
         rows.append(
             {
-                "user_id": int(u.id),
+                "user_id": u.id,
                 "username": u.username,
                 "email": u.email,
                 "nickname": p.nickname if p else None,
@@ -101,7 +102,7 @@ def _rows_for(
 
 
 async def _load_source_rows(
-    source_db: AsyncSession, user_ids: list[int]
+    source_db: AsyncSession, user_ids: list[uuid.UUID]
 ) -> list[tuple[User, Profile | None]]:
     """从 **auth 库**批量读给定 user 的源（User 全列 + LEFT JOIN Profile），单条命令，no N+1。
 
@@ -158,7 +159,7 @@ async def _upsert_dim_rows(
 
 
 async def sync_dim_for_ids(
-    source_db: AsyncSession, target_db: AsyncSession, user_ids: list[int]
+    source_db: AsyncSession, target_db: AsyncSession, user_ids: list[uuid.UUID]
 ) -> int:
     """批式 upsert：把 ``user_ids`` 对应的源最新快照摊进 user_dim（跨库双会话）。
 
@@ -176,7 +177,7 @@ async def sync_dim_for_ids(
 
 
 async def refresh_user_dim(
-    source_db: AsyncSession, target_db: AsyncSession, *, user_id: int
+    source_db: AsyncSession, target_db: AsyncSession, *, user_id: uuid.UUID
 ) -> int:
     """事件驱动的单用户 dim 刷新（新鲜度主路，AUTH user 事件在主路调用）。
 
@@ -212,11 +213,11 @@ async def reconcile_user_dim_incremental(
     if not src:
         return 0
     dim_rows = (await target_db.execute(select(UserDim.user_id, UserDim.sync_ts))).all()
-    dim_sync: dict[int, datetime.datetime] = {
-        int(uid): ts for uid, ts in dim_rows
+    dim_sync: dict[uuid.UUID, datetime.datetime] = {
+        uid: ts for uid, ts in dim_rows
     }
     stale = [
-        int(uid)
+        uid
         for uid, updated_at in src
         if uid not in dim_sync or (updated_at is not None and updated_at > dim_sync[uid])
     ]
@@ -250,7 +251,7 @@ async def _open_session_pair() -> SessionPair:
 _session_factory: Callable[[], Awaitable[SessionPair]] = _open_session_pair
 
 
-async def refresh_user_dim_event(user_id: int) -> int:
+async def refresh_user_dim_event(user_id: uuid.UUID) -> int:
     """事件驱动（新鲜度主路）：按单 user 自开双会话刷新 dim 行。
 
     A7 ``user.updated/banned/session_revoke`` 的 jobs worker 消费在**失效在线缓存的同时**

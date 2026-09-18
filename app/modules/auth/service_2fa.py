@@ -1,6 +1,7 @@
 """双因素认证（TOTP）服务。"""
 
 import hashlib
+import uuid
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
@@ -32,7 +33,7 @@ _TOTP_MAX_FAILED = 3
 _RECOVERY_MAX_FAILED = 3  # 恢复码暴力尝试上限（对齐 TOTP 的失败锁定）
 
 
-async def get_enabled_totp(db: AsyncSession, user_id: int) -> TOTP | None:
+async def get_enabled_totp(db: AsyncSession, user_id: uuid.UUID) -> TOTP | None:
     """取用户**已启用**的 TOTP 记录，供各处判断"是否开启 2FA"复用。"""
     return (
         (
@@ -45,7 +46,7 @@ async def get_enabled_totp(db: AsyncSession, user_id: int) -> TOTP | None:
     )
 
 
-async def get_totp(db: AsyncSession, user_id: int) -> TOTP | None:
+async def get_totp(db: AsyncSession, user_id: uuid.UUID) -> TOTP | None:
     """取用户 TOTP 记录（不分启用/禁用），setup/verify/disable 复用，避免重复裸查询。"""
     return (
         (await db.execute(select(TOTP).where(TOTP.user_id == user_id)))
@@ -112,7 +113,7 @@ def _recovery_candidate_hashes(plain: str) -> list[str]:
     return hashes
 
 
-async def _check_recovery_locked(db: AsyncSession, user_id: int) -> None:
+async def _check_recovery_locked(db: AsyncSession, user_id: uuid.UUID) -> None:
     """恢复码暴力尝试超限（任一未用码 failed_attempts 达上限）即拒绝验证。"""
     maxf = await db.scalar(
         select(func.max(RecoveryCode.failed_attempts)).where(
@@ -126,7 +127,7 @@ async def _check_recovery_locked(db: AsyncSession, user_id: int) -> None:
         )
 
 
-async def _record_recovery_failure(db: AsyncSession, user_id: int) -> None:
+async def _record_recovery_failure(db: AsyncSession, user_id: uuid.UUID) -> None:
     """恢复码验证失败：经保存点原子递增失败计数，即使外层事务回滚也保留。"""
     await isolated_update(
         db,
@@ -136,7 +137,7 @@ async def _record_recovery_failure(db: AsyncSession, user_id: int) -> None:
     )
 
 
-async def _reset_recovery_failures(db: AsyncSession, user_id: int) -> None:
+async def _reset_recovery_failures(db: AsyncSession, user_id: uuid.UUID) -> None:
     """恢复码成功消费后清零失败计数。"""
     await db.execute(
         sa_update(RecoveryCode)
@@ -146,7 +147,7 @@ async def _reset_recovery_failures(db: AsyncSession, user_id: int) -> None:
 
 
 async def consume_recovery_code(
-    db: AsyncSession, user_id: int, recovery_code: str
+    db: AsyncSession, user_id: uuid.UUID, recovery_code: str
 ) -> None:
     """原子消费恢复码（一次性）并带失败锁定；失败抛 RECOVERY_CODE_INVALID。
 
@@ -178,7 +179,7 @@ def _decode_temp_token(raw_token: str) -> dict[str, Any]:
 
 
 async def _check_and_consume_temp_token(
-    db: AsyncSession, raw_token: str, user_id: int, txn_id: str | None = None
+    db: AsyncSession, raw_token: str, user_id: uuid.UUID, txn_id: str | None = None
 ) -> dict[str, Any]:
     """在成功的第二因素验证后原子地消费临时令牌。"""
     payload = _decode_temp_token(raw_token)
@@ -237,7 +238,7 @@ async def _create_auth_tokens(
     }
 
 
-async def setup_2fa_begin(db: AsyncSession, user_id: int) -> dict[str, Any]:
+async def setup_2fa_begin(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     user = await get_or_raise(
         db,
         User,
@@ -272,7 +273,7 @@ async def setup_2fa_begin(db: AsyncSession, user_id: int) -> dict[str, Any]:
 
 
 async def setup_2fa_complete(
-    db: AsyncSession, user_id: int, code: str
+    db: AsyncSession, user_id: uuid.UUID, code: str
 ) -> dict[str, Any]:
     totp_record = await get_totp(db, user_id)
     if not totp_record or totp_record.enabled:
@@ -297,7 +298,7 @@ async def setup_2fa_complete(
 
 
 async def confirm_recovery_codes_saved(
-    db: AsyncSession, user_id: int
+    db: AsyncSession, user_id: uuid.UUID
 ) -> dict[str, Any]:
     """标记用户已保存其恢复码。"""
     totp_record = await get_totp(db, user_id)
@@ -388,7 +389,7 @@ async def verify_2fa(
 
 async def disable_2fa(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     code: str | None = None,
     recovery_code: str | None = None,
 ) -> dict[str, Any]:
@@ -426,7 +427,7 @@ async def disable_2fa(
 
 async def verify_second_factor(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     code: str | None = None,
     recovery_code: str | None = None,
 ) -> None:
@@ -451,7 +452,7 @@ async def verify_second_factor(
     await _verify_totp_guarded(db, totp_record, code)
 
 
-async def verify_user_totp(db: AsyncSession, user_id: int, code: str) -> None:
+async def verify_user_totp(db: AsyncSession, user_id: uuid.UUID, code: str) -> None:
     """校验已登录用户的 TOTP 码（不改状态、不消费，仅二次确认）。失败抛 TOTP_CODE_INVALID。
 
     兼容旧调用（如既有 step-up/unbind 直接传 TOTP 码）。需恢复码兜底时请用 verify_second_factor。

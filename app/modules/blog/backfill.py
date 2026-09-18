@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -37,7 +38,7 @@ def _sha3(content: str) -> str:
 async def backfill_series_from_git(
     db: AsyncSession,
     repo_name: str,
-    series_id: int,
+    series_id: uuid.UUID,
     old_sha: str | None,
     push_at: datetime | None = None,
 ) -> BackfillResult:

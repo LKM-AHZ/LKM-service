@@ -14,6 +14,7 @@
   确认 seam in 公共 blast 面不成立。HTTP 用 ``httpx.MockTransport`` 注入，别连真实网络。
 fixture 复用 repo fakeredis 范式（reset _core + settings.redis_url + Redis.from_url→fake）。
 """
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -42,8 +43,17 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
     return auth_db
 
 
+# wire 上的 user_id 是字符串（JSON 无 uuid 类型）；固定 uuid7 形态常量便于跨断言复用
+_WIRE_UID = "00000000-0000-7000-8000-000000000001"
+
+
+def _sv(uid: uuid.UUID) -> int:
+    """由 uuid 派生的确定性「来源版本」，替代旧 int id 上的 ``900 + uid``。"""
+    return 900 + uid.int % 1000
+
+
 WIRE_SNAP = {
-    "user_id": 1,
+    "user_id": _WIRE_UID,
     "username": "wirebob",
     "display_name": "Wire Bob",
     "avatar": "avatars/w.png",
@@ -87,7 +97,7 @@ def _enable_seam(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "auth_http_timeout_s", 1.0)
 
 
-async def _mk_user(db: AsyncSession, username: str, *, nickname: str) -> int:
+async def _mk_user(db: AsyncSession, username: str, *, nickname: str) -> uuid.UUID:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -209,9 +219,10 @@ class TestFlagOnUsesTransport:
             return httpx.Response(404, json={})
 
         _inject_transport(monkeypatch, _notfound)
-        snap = await get_user_snapshot(db, user_id=99999)
+        missing = uuid.uuid4()
+        snap = await get_user_snapshot(db, user_id=missing)
         assert snap is None
-        assert await uc.read_snap(99999) is None  # 没有缓存缺行
+        assert await uc.read_snap(missing) is None  # 没有缓存缺行
 
 
 # ---- internal 读端点（公网 blast 面检查）：令牌鉴权 ----
@@ -232,13 +243,13 @@ class TestInternalEndpointAuth:
             _app.dependency_overrides.pop(get_auth_session, None)
 
     @pytest.fixture
-    async def snap_user(self, db: DB) -> int:
+    async def snap_user(self, db: DB) -> uuid.UUID:
         return await _mk_user(db, "epuser", nickname="EP")
 
     async def test_unconfigured_token_401(
         self,
         client: Client,
-        snap_user: int,
+        snap_user: uuid.UUID,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(settings, "auth_http_token", "")
@@ -251,7 +262,7 @@ class TestInternalEndpointAuth:
     async def test_wrong_or_missing_token_401(
         self,
         client: Client,
-        snap_user: int,
+        snap_user: uuid.UUID,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(settings, "auth_http_token", "real-token")
@@ -266,7 +277,7 @@ class TestInternalEndpointAuth:
     async def test_valid_token_returns_frozen_fields_no_pii(
         self,
         client: Client,
-        snap_user: int,
+        snap_user: uuid.UUID,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(settings, "auth_http_token", "real-token")
@@ -278,7 +289,7 @@ class TestInternalEndpointAuth:
         body = resp.json()
         assert body["sv"] is None or isinstance(body["sv"], int)
         assert set(body["data"]) == set(UserSnapshot.__dataclass_fields__)
-        assert body["data"]["user_id"] == snap_user
+        assert body["data"]["user_id"] == str(snap_user)
         # 零 PII 泄漏：无 email/phone/凭证
         assert "email" not in body["data"]
         assert "phone" not in body["data"]
@@ -289,22 +300,22 @@ class TestInternalEndpointAuth:
 
 
 def _batch_handler(
-    calls: list[httpx.Request], snapshot_by_id: dict[int, dict[str, Any]]
+    calls: list[httpx.Request], snapshot_by_id: dict[uuid.UUID, dict[str, Any]]
 ) -> Any:
     """by-ids 假端点：按请求里的 ids 回 items（未知 id 回 data=null）。"""
 
     async def _handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         ids = [
-            int(p)
+            uuid.UUID(p)
             for p in request.url.params.get("ids", "").split(",")
             if p.strip()
         ]
         items = [
             {
-                "user_id": uid,
+                "user_id": str(uid),
                 "data": snapshot_by_id.get(uid),
-                "sv": (900 + uid) if uid in snapshot_by_id else None,
+                "sv": _sv(uid) if uid in snapshot_by_id else None,
             }
             for uid in ids
         ]
@@ -323,7 +334,8 @@ class TestBatchByIds:
         ids = [await _mk_user(db, f"b{i}", nickname=f"N{i}") for i in range(5)]
         calls: list[httpx.Request] = []
         by_id = {
-            uid: {**WIRE_SNAP, "user_id": uid, "nickname": f"W{uid}"} for uid in ids
+            uid: {**WIRE_SNAP, "user_id": str(uid), "nickname": f"W{uid}"}
+            for uid in ids
         }
         _inject_transport(monkeypatch, _batch_handler(calls, by_id))
 
@@ -335,7 +347,7 @@ class TestBatchByIds:
         assert calls[0].url.path.endswith("/api/v1/auth/internal/users/by-ids")
         assert calls[0].headers["Authorization"] == "Bearer internal-secret-xyz"
         sv, data = await uc.read_snap_with_version(ids[0])
-        assert sv == 900 + ids[0]
+        assert sv == _sv(ids[0])
         assert data is not None and data["nickname"] == f"W{ids[0]}"
 
     async def test_all_cached_makes_zero_http_calls(
@@ -347,7 +359,7 @@ class TestBatchByIds:
         ids = [await _mk_user(db, f"c{i}", nickname=f"C{i}") for i in range(3)]
         for uid in ids:
             assert await uc.write_if_newer(
-                uid, {**WIRE_SNAP, "user_id": uid}, 700 + uid, 0
+                uid, {**WIRE_SNAP, "user_id": str(uid)}, _sv(uid), 0
             )
         calls: list[httpx.Request] = []
         _inject_transport(monkeypatch, _batch_handler(calls, {}))
@@ -366,7 +378,7 @@ class TestBatchByIds:
         monkeypatch.setattr(snap_mod, "BATCH_IDS_MAX", 2)
         ids = [await _mk_user(db, f"d{i}", nickname=f"D{i}") for i in range(5)]
         calls: list[httpx.Request] = []
-        by_id = {uid: {**WIRE_SNAP, "user_id": uid} for uid in ids}
+        by_id = {uid: {**WIRE_SNAP, "user_id": str(uid)} for uid in ids}
         _inject_transport(monkeypatch, _batch_handler(calls, by_id))
 
         snaps = await get_user_snapshot_batch(db, user_ids=ids)
@@ -421,12 +433,13 @@ class TestBatchEndpoint:
     ) -> None:
         monkeypatch.setattr(settings, "auth_http_token", "real-token")
         uid = await _mk_user(db, "batchep", nickname="BE")
-        resp = await self._get(client, f"{uid},999999")
+        missing = uuid.uuid4()
+        resp = await self._get(client, f"{uid},{missing}")
         assert resp.status_code == 200
         items = resp.json()["items"]
-        assert [i["user_id"] for i in items] == [uid, 999999]
+        assert [i["user_id"] for i in items] == [str(uid), str(missing)]
         assert set(items[0]["data"]) == set(UserSnapshot.__dataclass_fields__)
-        assert items[0]["data"]["user_id"] == uid
+        assert items[0]["data"]["user_id"] == str(uid)
         assert items[1]["data"] is None and items[1]["sv"] is None  # 缺行语义同单条
         assert "email" not in items[0]["data"]
 
@@ -434,9 +447,9 @@ class TestBatchEndpoint:
         self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "auth_http_token", "real-token")
-        assert (await self._get(client, "1", token="wrong")).status_code == 401
+        assert (await self._get(client, _WIRE_UID, token="wrong")).status_code == 401
         monkeypatch.setattr(settings, "auth_http_token", "")
-        assert (await self._get(client, "1")).status_code == 401
+        assert (await self._get(client, _WIRE_UID)).status_code == 401
 
     async def test_bad_ids_rejected(
         self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch
@@ -452,7 +465,14 @@ class TestBatchEndpoint:
         """超限直接 400（截断=静默错答案）。"""
         monkeypatch.setattr(settings, "auth_http_token", "real-token")
         monkeypatch.setattr(snap_mod, "BATCH_IDS_MAX", 2)
-        resp = await self._get(client, "1,2,3")
+        three = ",".join(
+            (
+                "00000000-0000-7000-8000-000000000001",
+                "00000000-0000-7000-8000-000000000002",
+                "00000000-0000-7000-8000-000000000003",
+            )
+        )
+        resp = await self._get(client, three)
         assert resp.status_code == 400
         assert "too many ids" in resp.json()["detail"]
 
@@ -463,4 +483,4 @@ class TestBatchEndpoint:
         uid = await _mk_user(db, "dupids", nickname="DUP")
         resp = await self._get(client, f"{uid},{uid},{uid}")
         assert resp.status_code == 200
-        assert [i["user_id"] for i in resp.json()["items"]] == [uid]
+        assert [i["user_id"] for i in resp.json()["items"]] == [str(uid)]

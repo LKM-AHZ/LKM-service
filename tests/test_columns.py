@@ -9,6 +9,7 @@
 真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
+import uuid
 from typing import Any
 
 import pytest
@@ -43,6 +44,9 @@ from tests.conftest import AuthUser, auth_user_uid
 # db 与 client fixture 均由 tests/conftest.py 提供（business realm schema + httpx.AsyncClient）
 # auth_db 亦为 conftest：各测试在自己的 auth schema 以 auth_user_uid 造真实 auth 用户。
 
+# 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
+
 
 async def _au(
     auth_db: AsyncSession,
@@ -70,7 +74,7 @@ async def _grant(db: AsyncSession, role_name: str, *perms: str) -> None:
     await db.flush()
 
 
-async def _application(db: AsyncSession, user_id: int = 1) -> ColumnApplicationInfo:
+async def _application(db: AsyncSession, user_id: uuid.UUID) -> ColumnApplicationInfo:
     return await create_application(
         db,
         user_id,
@@ -82,7 +86,7 @@ async def _application(db: AsyncSession, user_id: int = 1) -> ColumnApplicationI
     )
 
 
-async def _approved_column(db: AsyncSession, user_id: int = 1) -> dict[str, Any]:
+async def _approved_column(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
     application = await _application(db, user_id=user_id)
     result: dict[str, Any] = await review_application(
         db,
@@ -97,7 +101,7 @@ async def _approved_column(db: AsyncSession, user_id: int = 1) -> dict[str, Any]
 
 
 async def _post(
-    db: AsyncSession, column_id: int = 1, author_id: int = 1
+    db: AsyncSession, column_id: uuid.UUID, author_id: uuid.UUID
 ) -> ColumnPostInfo:
     return await create_post(
         db,
@@ -117,7 +121,7 @@ class TestColumnApplications:
 
         application = await _application(db, user_id=user.id)
 
-        assert application.id == 1
+        assert isinstance(application.id, uuid.UUID)
         assert application.user_id == user.id
         assert application.status == ColumnApplicationStatus.PENDING
 
@@ -140,7 +144,7 @@ class TestColumnApplications:
 
     async def should_reject_nonexistent_application(self, db: AsyncSession):
         with pytest.raises(BizError) as exc:
-            await get_application(db, 999)
+            await get_application(db, _MISSING_ID)
 
         assert exc.value.errcode == ColumnErr.APPLICATION_NOT_FOUND
 
@@ -160,7 +164,7 @@ class TestColumnReview:
         )
 
         assert result["application"]["status"] == ColumnApplicationStatus.APPROVED
-        assert result["column"]["id"] == 1
+        assert isinstance(result["column"]["id"], uuid.UUID)
         assert result["column"]["owner_id"] == user.id
         assert result["column"]["application_id"] == application.id
 
@@ -219,7 +223,7 @@ class TestColumns:
 
     async def should_reject_nonexistent_column(self, db: AsyncSession):
         with pytest.raises(BizError) as exc:
-            await get_column(db, 999)
+            await get_column(db, _MISSING_ID)
 
         assert exc.value.errcode == ColumnErr.NOT_FOUND
 
@@ -231,7 +235,7 @@ class TestColumnPosts:
 
         post = await _post(db, column_id=column["id"], author_id=user.id)
 
-        assert post.id == 1
+        assert isinstance(post.id, uuid.UUID)
         assert post.column_id == column["id"]
         assert post.author_id == user.id
         assert post.status == "published"
@@ -267,7 +271,7 @@ class TestColumnPosts:
         post = await _post(db, column_id=column["id"], author_id=user.id)
 
         with pytest.raises(BizError) as exc:
-            await get_post(db, post.id, column_id=999)
+            await get_post(db, post.id, column_id=_MISSING_ID)
 
         assert exc.value.errcode == ColumnErr.POST_NOT_FOUND
 
@@ -277,7 +281,7 @@ class TestColumnPosts:
         user = await _au(auth_db)
 
         with pytest.raises(BizError) as exc:
-            await _post(db, column_id=999, author_id=user.id)
+            await _post(db, column_id=_MISSING_ID, author_id=user.id)
 
         assert exc.value.errcode == ColumnErr.NOT_FOUND
 
@@ -334,7 +338,7 @@ class TestColumnRoutes:
 
         assert resp.status_code == 200
         assert resp.json()["code"] == 0
-        assert resp.json()["data"]["user_id"] == user.id
+        assert resp.json()["data"]["user_id"] == str(user.id)
 
     async def should_reject_applications_list_for_non_admin(
         self,
@@ -361,9 +365,9 @@ class TestColumnRoutes:
         # review 走后台 cookie 会话（require_admin_2fa）：普通用户无 admin cookie → FORBIDDEN，
         # 而非旧前台 RequireLevel(admin) 的 ACCOUNT_LEVEL_INSUFFICIENT。与 boards/projects 审核一致。
         user = await self._setup_user(db, auth_db)
-        await _application(db, user_id=user.id)
+        application = await _application(db, user_id=user.id)
         resp = await client.post(
-            "/api/v1/content/columns/applications/1/review",
+            f"/api/v1/content/columns/applications/{application.id}/review",
             json={"status": "approved"},
         )
         assert resp.status_code == 403

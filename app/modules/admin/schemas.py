@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,7 +25,7 @@ class AdminUserOut(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     username: str
     account_level: str
     created_at: datetime.datetime
@@ -33,7 +34,7 @@ class AdminUserOut(BaseModel):
 class AdminUserListItem(BaseModel):
     """后台用户列表项。默认不含邮箱/手机等 PII；include_pii=True 时才带。"""
 
-    id: int
+    id: uuid.UUID
     username: str
     account_level: str
     is_locked: bool
@@ -55,7 +56,7 @@ class AdminStats(BaseModel):
 class AdminReportListItem(BaseModel):
     """后台举报列表项。type: post/comment/file；status: pending/resolved/dismissed。"""
 
-    id: int
+    id: uuid.UUID
     type: str
     target_id: str
     target_title: str
@@ -87,7 +88,7 @@ class DimUserRow(BaseModel):
     sync_ts 供读方判该行离最后一次 ETL/事件刷新多近（可容忍滞后）。
     """
 
-    user_id: int
+    user_id: uuid.UUID
     username: str
     account_level: str
     is_banned: bool

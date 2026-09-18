@@ -34,10 +34,10 @@ CH_COLUMNS: tuple[str, ...] = (
 
 
 def _to_row(row: AuditLog) -> tuple[Any, ...]:
-    """ORM 行 → CH 列元组（可空文本列落空串，时间转 naive UTC）。"""
+    """ORM 行 → CH 列元组（uuid 落字符串形式，可空文本列落空串，时间转 naive UTC）。"""
     return (
-        row.id,
-        row.user_id,
+        str(row.id),
+        None if row.user_id is None else str(row.user_id),
         row.action,
         row.detail or "",
         row.ip_address or "",
@@ -54,28 +54,23 @@ async def export_audit_logs(
 ) -> int:
     """把水位之后未导出的 audit_logs 分批灌入 CH，返回本次导出总行数。
 
-    ``max_batches`` 防高写入下无界循环；超出即返回，剩余由下次周期继续。
+    ``max_batches`` 防高写入下无界循环；超出即返回，剩余由下次周期继续。主键为 uuid7，
+    水位取字符串形式（CH String 列，字典序即时间序）；CH 空表返回 ``None`` 时首次全量。
     """
     watermark = await fetch_watermark(client, CH_TABLE)
     total = 0
     for _ in range(max_batches):
-        rows = (
-            (
-                await db.execute(
-                    select(AuditLog)
-                    .where(AuditLog.id > watermark)
-                    .order_by(AuditLog.id)
-                    .limit(window)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        stmt = select(AuditLog).order_by(AuditLog.id).limit(window)
+        if watermark is not None:
+            # 首次导出（CH 空表）无水位 → 不加条件即全量，语义同原 watermark=0。
+            # watermark 是 uuid7 字符串，与 Uuid 列比较时按原生 uuid 绑定。
+            stmt = stmt.where(AuditLog.id > watermark)
+        rows = (await db.execute(stmt)).scalars().all()
         if not rows:
             break
         await client.insert(CH_TABLE, [_to_row(r) for r in rows], list(CH_COLUMNS))
         total += len(rows)
-        watermark = rows[-1].id
+        watermark = str(rows[-1].id)
         if len(rows) < window:
             break
     return total

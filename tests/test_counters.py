@@ -9,6 +9,7 @@
 - cron/任务注册存在（防回退：任务被摘掉即红）
 """
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -81,7 +82,7 @@ async def _make_item(db: AsyncSession, slug: str = "cnt-b") -> ContentItem:
     return item
 
 
-async def _db_count(db: AsyncSession, item_id: int, field: str) -> int:
+async def _db_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     col = getattr(ContentItem, field)
     value = await db.scalar(select(col).where(ContentItem.id == item_id))
     assert value is not None
@@ -94,7 +95,7 @@ async def test_like_buffers_in_redis_then_flush(
     await _enable_fake_redis(monkeypatch)
     item = await _make_item(db)
 
-    new_count = await like_item(db, item.id, 42)
+    new_count = await like_item(db, item.id, uuid.uuid4())
     assert new_count == 1  # 即时读数 = DB 0 + 未落库 1
     assert await _db_count(db, item.id, "like_count") == 0  # DB 计数列未被写
     assert await counters.pending_delta("like_count", item.id) == 1
@@ -112,16 +113,17 @@ async def test_unlike_floors_at_zero_and_flushes(
     await _enable_fake_redis(monkeypatch)
     item = await _make_item(db, "cnt-b2")
 
-    await like_item(db, item.id, 7)
+    user_id = uuid.uuid4()
+    await like_item(db, item.id, user_id)
     await flush_counters(db)
     assert await _db_count(db, item.id, "like_count") == 1
 
-    assert await unlike_item(db, item.id, 7) == 0
+    assert await unlike_item(db, item.id, user_id) == 0
     await flush_counters(db)
     assert await _db_count(db, item.id, "like_count") == 0
 
     # 未点赞者取消 → 幂等，且不会把计数压负
-    assert await unlike_item(db, item.id, 999) == 0
+    assert await unlike_item(db, item.id, uuid.uuid4()) == 0
     await flush_counters(db)
     assert await _db_count(db, item.id, "like_count") == 0
 
@@ -130,9 +132,10 @@ async def test_fail_open_direct_db_when_redis_absent(db: AsyncSession) -> None:
     """Redis 未启用：回退原子 UPDATE，计数立刻可见（语义与引入链路前一致）。"""
     item = await _make_item(db, "cnt-b3")
 
-    assert await like_item(db, item.id, 5) == 1
+    user_id = uuid.uuid4()
+    assert await like_item(db, item.id, user_id) == 1
     assert await _db_count(db, item.id, "like_count") == 1
-    assert await unlike_item(db, item.id, 5) == 0
+    assert await unlike_item(db, item.id, user_id) == 0
     assert await _db_count(db, item.id, "like_count") == 0
 
 
@@ -151,14 +154,14 @@ async def test_reconcile_fixes_drift_and_is_falsifiable(db: AsyncSession) -> Non
     item = await _make_item(db, "cnt-b5")
     db.add_all(
         [
-            ContentLike(content_id=item.id, user_id=1),
-            ContentLike(content_id=item.id, user_id=2),
+            ContentLike(content_id=item.id, user_id=uuid.uuid4()),
+            ContentLike(content_id=item.id, user_id=uuid.uuid4()),
             ContentComment(
-                content_id=item.id, user_id=3, content="c1", floor_number=1
+                content_id=item.id, user_id=uuid.uuid4(), content="c1", floor_number=1
             ),
         ]
     )
-    db.add(InteractionFavorite(content_id=item.id, user_id=9))
+    db.add(InteractionFavorite(content_id=item.id, user_id=uuid.uuid4()))
     # 人为制造偏差（模拟链路漏落库/漏计）
     item.like_count = 99
     item.comment_count = 0
@@ -207,7 +210,8 @@ async def test_bookmark_and_comment_go_through_link(
         account_level="normal",
     )
 
-    state = await add_favorite(db, user_id=3, content_id=item.id)
+    fav_user = uuid.uuid4()
+    state = await add_favorite(db, user_id=fav_user, content_id=item.id)
     assert state.bookmark_count == 1
     await create_comment(
         db,
@@ -222,7 +226,7 @@ async def test_bookmark_and_comment_go_through_link(
     assert await _db_count(db, item.id, "bookmark_count") == 1
     assert await _db_count(db, item.id, "comment_count") == 1
 
-    state = await remove_favorite(db, user_id=3, content_id=item.id)
+    state = await remove_favorite(db, user_id=fav_user, content_id=item.id)
     assert state.bookmark_count == 0
     await flush_counters(db)
     assert await _db_count(db, item.id, "bookmark_count") == 0

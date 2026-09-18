@@ -8,6 +8,7 @@ GET    /auth/passkey/credentials        get_current_user        列出 Passkey �
 DELETE /auth/passkey/{cred_id}          get_current_user        删除 Passkey 凭据
 """
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -91,7 +92,7 @@ async def list_credentials(
 @router.delete("/{cred_id}", response_model=ApiResp[MessageResponse])
 @respond
 async def delete_credential(
-    cred_id: int,
+    cred_id: uuid.UUID,
     cur: CurrentUser = require_2fa,
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:

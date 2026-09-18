@@ -22,15 +22,14 @@ from sqlalchemy import Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
-class OutboxArchived(Base):
+class OutboxArchived(UUIDPrimaryKeyMixin, Base):
     """已投递 outbox 事件的冷副本；`event_id` 为跨表审计锚点（与 outbox_events 同值）。"""
 
     __tablename__: str = "outbox_archived"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     routing_key: Mapped[str] = mapped_column(String(64), nullable=False)
     payload_json: Mapped[dict[str, Any]] = mapped_column(

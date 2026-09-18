@@ -108,7 +108,7 @@ async def list_exams(
     return items, total
 
 
-async def get_exam_ex(db: AsyncSession, exam_id: int) -> ExamOut:
+async def get_exam_ex(db: AsyncSession, exam_id: uuid.UUID) -> ExamOut:
     exam = await get_or_raise(
         db,
         Exam,
@@ -119,10 +119,12 @@ async def get_exam_ex(db: AsyncSession, exam_id: int) -> ExamOut:
     return _exam_to_schema(exam)
 
 
-def _score_attempt(exam: Exam, answers: dict[int, str]) -> tuple[int, dict[int, bool]]:
+def _score_attempt(
+    exam: Exam, answers: dict[uuid.UUID, str]
+) -> tuple[int, dict[uuid.UUID, bool]]:
     """客观题自动判分，返回 (总分, 每题对错映射)。"""
     total = 0
-    per_q: dict[int, bool] = {}
+    per_q: dict[uuid.UUID, bool] = {}
     for q in exam.questions:
         user_ans = answers.get(q.id)
         if user_ans is None:
@@ -136,7 +138,7 @@ def _score_attempt(exam: Exam, answers: dict[int, str]) -> tuple[int, dict[int, 
 
 
 async def start_attempt(
-    db: AsyncSession, exam_id: int, user_id: int
+    db: AsyncSession, exam_id: uuid.UUID, user_id: uuid.UUID
 ) -> AttemptStartResp:
     """开考：校验可考性，锁定试题快照，生成作答会话。"""
     exam = await get_or_raise(
@@ -210,7 +212,10 @@ def _check_attempt_deadline(attempt: ExamAttempt, exam: Exam) -> None:
 
 
 async def submit_attempt(
-    db: AsyncSession, attempt_id: int, user_id: int, payload: SubmitAnswersRequest
+    db: AsyncSession,
+    attempt_id: uuid.UUID,
+    user_id: uuid.UUID,
+    payload: SubmitAnswersRequest,
 ) -> SubmitResult:
     """交卷：判分、落库、发证书、触发等级升级。"""
     attempt = await get_or_raise(
@@ -255,7 +260,7 @@ async def submit_attempt(
     attempt.time_spent_s = int((now_iso() - attempt.started_at).total_seconds())
     await db.flush()
 
-    certificate_id: int | None = None
+    certificate_id: uuid.UUID | None = None
     if passed:
         cert = ExamCertificate(
             exam_id=exam.id,
@@ -283,7 +288,7 @@ async def submit_attempt(
     )
 
 
-async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: int) -> None:
+async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: uuid.UUID) -> None:
     """通过认证考试后升级 account_level/profile.role（auth 域权威升权写面）。
 
     M3.B S4：把「单向派升 + token_version 失效」收敛到 auth 的 :func:`grant_exam_unlock`
@@ -304,7 +309,9 @@ async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: int) -> None:
     )
 
 
-async def list_certificates(db: AsyncSession, user_id: int) -> list[CertificateOut]:
+async def list_certificates(
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[CertificateOut]:
     rows = (
         await db.execute(
             select(ExamCertificate, Exam.title)
@@ -324,7 +331,7 @@ async def list_certificates(db: AsyncSession, user_id: int) -> list[CertificateO
 
 
 async def leaderboard(
-    db: AsyncSession, exam_id: int, offset: int = 0, limit: int = 50
+    db: AsyncSession, exam_id: uuid.UUID, offset: int = 0, limit: int = 50
 ) -> tuple[list[LeaderboardEntry], int]:
     """按认证通过成绩排序的榜单（正式竞赛用），分页。
 
@@ -351,7 +358,7 @@ async def leaderboard(
         .all()
     )
     # 每名用户只保留最高成绩（取最早达标的那张证书），随后按成绩降序。
-    best: dict[int, ExamCertificate] = {}
+    best: dict[uuid.UUID, ExamCertificate] = {}
     for cert in rows:
         if cert.user_id not in best:
             best[cert.user_id] = cert

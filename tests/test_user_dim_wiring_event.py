@@ -13,6 +13,7 @@ seam 指向独立内存库(全量 schema)，避免触碰真实默认 DB；两任
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -81,7 +82,7 @@ async def _mk_user(
     *,
     nickname: str | None = None,
     role: str = "member",
-) -> int:
+) -> uuid.UUID:
     u = User(
         username=username,
         email=f"{username}@x.com",
@@ -92,10 +93,10 @@ async def _mk_user(
     if nickname is not None:
         session.add(Profile(user_id=u.id, nickname=nickname, role=role))
         await session.flush()
-    return int(u.id)
+    return u.id
 
 
-async def _dim(session: AsyncSession, uid: int) -> UserDim | None:
+async def _dim(session: AsyncSession, uid: uuid.UUID) -> UserDim | None:
     return (
         await session.execute(select(UserDim).where(UserDim.user_id == uid))
     ).scalar_one_or_none()

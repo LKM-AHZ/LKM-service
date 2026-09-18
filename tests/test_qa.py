@@ -1,10 +1,12 @@
 """QA 模块测试：escrow 锁定/防超发/退回/状态机/权限。
 
 拆库(M3.B S5 dual 真 PG)：users/profiles 迁 auth realm。user_id 是引用 auth realm 用户的裸
-int(FK 已断)；建用户须落 auth_db(经 auth_user_uid 返稳定 id)。业务 service 的展示读(QA 作者名)
+uuid 主键(FK 已断)；建用户须落 auth_db(经 auth_user_uid 返稳定 id)。业务 service 的展示读(QA 作者名)
 经 get_user_snapshot_batch→auth HTTP seam，故本域测试逐个显式打开 ``auth_seam_realm`` 把缝指到
 本测 auth_db 真值，免得 seam-关闭时回落"就地 select(User)"读到已拆走的业务 users(UndefinedTable)。
 """
+
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -33,8 +35,8 @@ async def _user(
     *,
     role: str = "member",
     token: bool = False,
-) -> int | str:
-    """在 auth realm 建一线用户返回其稳定裸 int id（角色/等级入缝供 HTTP 鉴权裁决）。"""
+) -> uuid.UUID | str:
+    """在 auth realm 建一线用户返回其稳定 uuid 主键（角色/等级入缝供 HTTP 鉴权裁决）。"""
     u = await auth_user_uid(
         auth_db,
         username=username,
@@ -44,14 +46,14 @@ async def _user(
         role=role,
         with_token=token,
     )
-    return u.token if token and u.token else int(u.id)
+    return u.token if token and u.token else u.id
 
 
 async def _asker_with_bounty(
     db: AsyncSession, auth_db: AsyncSession, people=2, per=30
-) -> tuple[int, int]:
+) -> tuple[uuid.UUID, uuid.UUID]:
     """建一个发问者（先给积分）+ 发一个问题。返回 (question_id, asker_id)。"""
-    asker = int(await _user(auth_db, "asker"))
+    asker = await _user(auth_db, "asker")
     await reward(db, asker, 1000, "seed", "seed", str(asker))
     q = await create_question(
         db,
@@ -71,7 +73,7 @@ class TestAsk:
     async def test_asker_spends_escrow(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
-        asker = int(await _user(auth_db, "asker"))
+        asker = await _user(auth_db, "asker")
         await reward(db, asker, 1000, "seed", "s", "1")
         q = await create_question(
             db,
@@ -92,7 +94,7 @@ class TestAsk:
     ):
         from app.modules.points.errors import PointsErr
 
-        asker = int(await _user(auth_db, "poor"))
+        asker = await _user(auth_db, "poor")
         with pytest.raises(BizError) as exc:
             await create_question(
                 db,
@@ -113,7 +115,7 @@ class TestAnswer:
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
         qid, _asker = await _asker_with_bounty(db, auth_db)
-        ans = int(await _user(auth_db, "answerer"))
+        ans = await _user(auth_db, "answerer")
         a = await create_answer(db, qid, ans, AnswerCreate(content="我来答"))
         assert a.question_id == qid
         detail = await get_question(db, qid)
@@ -125,7 +127,7 @@ class TestAccept:
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
         qid, asker = await _asker_with_bounty(db, auth_db, people=2, per=30)
-        answerer = int(await _user(auth_db, "answerer"))
+        answerer = await _user(auth_db, "answerer")
         a = await create_answer(db, qid, answerer, AnswerCreate(content="答"))
         await accept_answer(db, qid, a.id, asker)
         assert await get_balance(db, answerer) == 30
@@ -141,13 +143,13 @@ class TestAccept:
     ):
         qid, asker = await _asker_with_bounty(db, auth_db, people=2, per=30)
         a1 = await create_answer(
-            db, qid, int(await _user(auth_db, "r1")), AnswerCreate(content="1")
+            db, qid, await _user(auth_db, "r1"), AnswerCreate(content="1")
         )
         a2 = await create_answer(
-            db, qid, int(await _user(auth_db, "r2")), AnswerCreate(content="2")
+            db, qid, await _user(auth_db, "r2"), AnswerCreate(content="2")
         )
         a3 = await create_answer(
-            db, qid, int(await _user(auth_db, "r3")), AnswerCreate(content="3")
+            db, qid, await _user(auth_db, "r3"), AnswerCreate(content="3")
         )
         await accept_answer(db, qid, a1.id, asker)
         await accept_answer(db, qid, a2.id, asker)
@@ -159,9 +161,9 @@ class TestAccept:
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
         qid, _asker = await _asker_with_bounty(db, auth_db)
-        other = int(await _user(auth_db, "other"))
+        other = await _user(auth_db, "other")
         a = await create_answer(
-            db, qid, int(await _user(auth_db, "rr")), AnswerCreate(content="x")
+            db, qid, await _user(auth_db, "rr"), AnswerCreate(content="x")
         )
         with pytest.raises(BizError) as e:
             await accept_answer(db, qid, a.id, other)
@@ -174,7 +176,7 @@ class TestClose:
     ):
         qid, asker = await _asker_with_bounty(db, auth_db, people=2, per=30)
         a = await create_answer(
-            db, qid, int(await _user(auth_db, "r")), AnswerCreate(content="x")
+            db, qid, await _user(auth_db, "r"), AnswerCreate(content="x")
         )
         await accept_answer(db, qid, a.id, asker)  # 派发 30
         # 未派发完 30 应退回 → asker 余额 = 1000-60+30 = 970
@@ -244,7 +246,7 @@ class TestQuestionForumSync:
     ) -> None:
         from app.modules.content.models import ContentItem
 
-        asker = int(await _user(auth_db, "syncasker"))
+        asker = await _user(auth_db, "syncasker")
         q = await create_question(
             db,
             asker,

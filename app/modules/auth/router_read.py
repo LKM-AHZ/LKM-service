@@ -24,6 +24,7 @@ AUTH 进程都挂本 router，两进程的 ``get_auth_session`` 都指向各自�
 from __future__ import annotations
 
 import secrets
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -53,7 +54,7 @@ def _require_internal_token(
 
 @router.get("/users/{user_id}/snapshot")
 async def internal_user_snapshot(
-    user_id: int,
+    user_id: uuid.UUID,
     _auth: None = Depends(_require_internal_token),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
@@ -67,24 +68,22 @@ async def internal_user_snapshot(
     return {"data": fields, "sv": version}
 
 
-def _parse_ids(ids: str) -> list[int]:
-    """解析 ``ids=1,2,3``：去重 + 保序（首次出现序）；非法/空/超限即 400（fail-closed）。
+def _parse_ids(ids: str) -> list[uuid.UUID]:
+    """解析 ``ids=<uuid>,<uuid>``：去重 + 保序（首次出现序）；非法/空/超限即 400（fail-closed）。
 
     上限用 ``snapshot.BATCH_IDS_MAX``（与业务侧分块同一常量）——超限直接拒，不静默截断：
     截断会让调用方以为全部取到，属静默错答案。去重避免同 id 重复占额度与重复行。
     """
     raw = [p.strip() for p in ids.split(",")]
-    parsed: list[int] = []
-    seen: set[int] = set()
+    parsed: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
     for p in raw:
         if not p:
             continue
         try:
-            uid = int(p)
+            uid = uuid.UUID(p)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"bad user id: {p!r}") from None
-        if uid <= 0:
-            raise HTTPException(status_code=400, detail=f"bad user id: {p!r}")
         if uid not in seen:
             seen.add(uid)
             parsed.append(uid)

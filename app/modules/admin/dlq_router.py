@@ -1,5 +1,6 @@
 """Admin 端点：死信消息列表 / 重投 / 丢弃。"""
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -49,7 +50,7 @@ async def list_dlq(
 
 @router.post("/{dlq_id}/requeue")
 async def requeue_dlq(
-    dlq_id: int,
+    dlq_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> dict:
@@ -61,7 +62,7 @@ async def requeue_dlq(
 
 @router.post("/{dlq_id}/discard")
 async def discard_dlq(
-    dlq_id: int,
+    dlq_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> dict:

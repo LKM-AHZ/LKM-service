@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意 db.base 而非 db.models
+from app.db.base import (  # 注意 db.base 而非 db.models
+    Base,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 
-class Exam(Base):
+class Exam(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "exams"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="exam"
     )  # exam | competition
@@ -44,12 +49,11 @@ class Exam(Base):
     )
 
 
-class ExamQuestion(Base):
+class ExamQuestion(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "exam_questions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    exam_id: Mapped[int] = mapped_column(
-        ForeignKey("exams.id"), nullable=False, index=True
+    exam_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("exams.id"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(String(20), nullable=False)  # single | judge
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -69,14 +73,13 @@ class ExamQuestion(Base):
     exam: Mapped[Exam] = relationship(back_populates="questions")
 
 
-class ExamAttempt(Base):
+class ExamAttempt(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "exam_attempts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    exam_id: Mapped[int] = mapped_column(
-        ForeignKey("exams.id"), nullable=False, index=True
+    exam_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("exams.id"), nullable=False, index=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="in_progress"
     )
@@ -93,14 +96,13 @@ class ExamAttempt(Base):
     time_spent_s: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class ExamCertificate(Base):
+class ExamCertificate(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "exam_certificates"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    exam_id: Mapped[int] = mapped_column(
-        ForeignKey("exams.id"), nullable=False, index=True
+    exam_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("exams.id"), nullable=False, index=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cert_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)

@@ -1,4 +1,5 @@
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Protocol
@@ -19,7 +20,7 @@ from app.modules.storage.errors import StorageErr
 from app.modules.storage.factory import get_storage
 
 
-async def get_profile(db: AsyncSession, user_id: int) -> ProfileInfo:
+async def get_profile(db: AsyncSession, user_id: uuid.UUID) -> ProfileInfo:
     profile = await get_or_raise(
         db, Profile, AuthErr.USER_NOT_FOUND, Profile.user_id == user_id
     )
@@ -34,7 +35,7 @@ async def get_profile_by_username(db: AsyncSession, username: str) -> ProfileInf
     return await get_profile(db, user.id)
 
 
-async def update_profile(db: AsyncSession, user_id: int, info: ProfileUpdate) -> None:
+async def update_profile(db: AsyncSession, user_id: uuid.UUID, info: ProfileUpdate) -> None:
     profile = await get_or_raise(
         db, Profile, AuthErr.USER_NOT_FOUND, Profile.user_id == user_id
     )
@@ -78,7 +79,7 @@ def _get_storage() -> StorageBackend:
     return get_storage()
 
 
-def _avatar_key(user_id: int) -> str:
+def _avatar_key(user_id: uuid.UUID) -> str:
     """版本化 key：``avatars/{uid}/v{ms}.webp``，每次上传 ms 不同 → 新 key。
 
     旧 key 不覆盖（immutable 长缓存下旧 URL 自然失效），由数据库改指向新 key。
@@ -87,7 +88,7 @@ def _avatar_key(user_id: int) -> str:
     return f"avatars/{user_id}/v{ms}.{_AVATAR_EXT}"
 
 
-async def update_avatar(db: AsyncSession, user_id: int, stream: _Readable) -> str:
+async def update_avatar(db: AsyncSession, user_id: uuid.UUID, stream: _Readable) -> str:
     """保存头像：写入版本化 key 并更新 ``Profile.avatar``，尽力删除旧 key。
 
     超过 2MB 由 storage 层抛 ``StorageErr.TOO_LARGE``（临时文件不落残留），此处映射为
@@ -122,7 +123,7 @@ async def update_avatar(db: AsyncSession, user_id: int, stream: _Readable) -> st
     return new_key
 
 
-async def serve_avatar(db: AsyncSession, user_id: int) -> StreamingResponse:
+async def serve_avatar(db: AsyncSession, user_id: uuid.UUID) -> StreamingResponse:
     """流式回读某用户头像字节；无头像/用户不存在 → 404（AuthErr.AVATAR_NOT_FOUND）。
 
     404 在构造响应前急切抛出（端点 await 本函数，此刻尚未发头）；不能放进流式生成器——

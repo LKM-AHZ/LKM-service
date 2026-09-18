@@ -31,17 +31,17 @@ class GraphFileTreeNode:
 
 @strawberry.type
 class GraphSeriesCommentAuthor:
-    id: int
+    id: strawberry.ID
     name: str | None
 
 
 @strawberry.type
 class GraphSeriesComment:
-    id: int
-    userId: int
-    seriesId: int
+    id: strawberry.ID
+    userId: strawberry.ID
+    seriesId: strawberry.ID
     content: str
-    parentId: int | None
+    parentId: strawberry.ID | None
     createdAt: str
     author: GraphSeriesCommentAuthor | None = None
     replies: list["GraphSeriesComment"] = strawberry.field(default_factory=list)
@@ -49,8 +49,8 @@ class GraphSeriesComment:
 
 @strawberry.type
 class GraphBlogSeries:
-    id: int
-    ownerId: int
+    id: strawberry.ID
+    ownerId: strawberry.ID
     title: str
     description: str | None
     coverUrl: str | None
@@ -147,7 +147,7 @@ class BlogQuery:
 
     @strawberry.field
     async def blogSeriesDetail(
-        self, info: Info, seriesId: int
+        self, info: Info, seriesId: strawberry.ID
     ) -> GraphBlogSeriesDetail | None:
         db = _get_db(info)
         try:
@@ -175,7 +175,7 @@ class BlogQuery:
 
     @strawberry.field
     async def blogSeriesComments(
-        self, info: Info, seriesId: int
+        self, info: Info, seriesId: strawberry.ID
     ) -> list[GraphSeriesComment]:
         db = _get_db(info)
         try:
@@ -189,7 +189,7 @@ class BlogQuery:
 
     @strawberry.field
     async def blogFileContent(
-        self, info: Info, seriesId: int, filepath: str
+        self, info: Info, seriesId: strawberry.ID, filepath: str
     ) -> GraphFileContent | None:
         db = _get_db(info)
         try:

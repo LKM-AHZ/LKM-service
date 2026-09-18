@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意 db.base 而非 db.models
+from app.db.base import (  # 注意 db.base 而非 db.models
+    Base,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 
-class Project(Base):
+class Project(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "projects"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     summary: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
-    applicant_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    applicant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     is_incubated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # ———————— 项目广场展示字段（后端扩充，供 GET /projects 展示） ————————
     type: Mapped[str] = mapped_column(
@@ -48,11 +53,10 @@ class Project(Base):
     )
 
 
-class ProjectApplication(Base):
+class ProjectApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "project_applications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    applicant_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    applicant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     summary: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -61,7 +65,7 @@ class ProjectApplication(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )  # pending|approved|rejected
-    reviewer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -71,12 +75,15 @@ class ProjectApplication(Base):
     )
 
 
-class ProjectMember(Base):
+class ProjectMember(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "project_members"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
-    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # S5: auth user_id
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("projects.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True
+    )  # S5: auth user_id
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role_in_project: Mapped[str] = mapped_column(String(100), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

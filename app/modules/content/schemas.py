@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -11,16 +12,16 @@ class ContentItemInfo(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     content_type: str
-    board_id: int
-    author_id: int | None = None
+    board_id: uuid.UUID
+    author_id: uuid.UUID | None = None
     author_name: str = ""
     publisher: str | None = None
     department: str | None = None
-    column_id: int | None = None
+    column_id: uuid.UUID | None = None
     column_title: str = ""
-    qa_question_id: int | None = None
+    qa_question_id: uuid.UUID | None = None
     slug: str | None = None
     title: str
     excerpt: str
@@ -55,7 +56,7 @@ class ContentItemInfo(BaseModel):
 
 class ContentItemCreate(BaseModel):
     content_type: str = Field(default="discussion")
-    board_id: int = Field(..., ge=1)
+    board_id: uuid.UUID = Field(...)
     title: str = Field(..., min_length=1, max_length=200)
     content: str = Field(..., min_length=1, max_length=200_000)
     summary: str | None = Field(default=None, max_length=300)
@@ -67,9 +68,9 @@ class ContentItemCreate(BaseModel):
     department: str | None = Field(default=None, max_length=100)
     keywords: list[str] = Field(default_factory=list)
     # 专栏连载（content_type == column_post）
-    column_id: int | None = Field(default=None, ge=1)
+    column_id: uuid.UUID | None = Field(default=None)
     # QA 提问（content_type == qa）
-    qa_question_id: int | None = Field(default=None, ge=1)
+    qa_question_id: uuid.UUID | None = Field(default=None)
     status: str = Field(default="published", pattern="^(draft|pending|published)$")
     is_pinned: bool = False
     is_featured: bool = False
@@ -77,18 +78,18 @@ class ContentItemCreate(BaseModel):
 
 class ContentCommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
-    parent_id: int | None = Field(default=None, ge=1)
+    parent_id: uuid.UUID | None = Field(default=None)
 
 
 class ContentCommentInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    content_id: int
-    author_id: int = Field(validation_alias="user_id")
+    id: uuid.UUID
+    content_id: uuid.UUID
+    author_id: uuid.UUID = Field(validation_alias="user_id")
     author_name: str = ""
     content: str
     floor_number: int
-    parent_id: int | None = None
+    parent_id: uuid.UUID | None = None
     like_count: int
     created_at: datetime.datetime

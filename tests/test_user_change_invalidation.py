@@ -17,6 +17,7 @@
    确定性、无需消息总线 worker（失效 handler 在进程内直接驱动，等价 worker 分派）。
 """
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -141,7 +142,7 @@ async def _enabled() -> Any:
 
 async def _mk_user(
     db: AsyncSession, username: str, *, nickname: str = "旧名", account_level: str = "normal"
-) -> int:
+) -> uuid.UUID:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -152,7 +153,7 @@ async def _mk_user(
     await db.flush()
     db.add(Profile(user_id=user.id, nickname=nickname, role="member"))
     await db.flush()
-    return int(user.id)
+    return user.id
 
 
 async def _rows(db: AsyncSession) -> list[Any]:
@@ -163,8 +164,8 @@ async def _rows(db: AsyncSession) -> list[Any]:
     return list(res.scalars().all())
 
 
-def _payload_user_id(payload_json: dict[str, Any]) -> int:
-    return int(payload_json["args"][0])
+def _payload_user_id(payload_json: dict[str, Any]) -> uuid.UUID:
+    return uuid.UUID(str(payload_json["args"][0]))
 
 
 # ---- Layer 1：真实写点按源发对应 outbox 事件 ----
@@ -264,7 +265,7 @@ class TestConsumerHandlerInvalidates:
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _enable_fake_redis(monkeypatch)
-        uid = 201
+        uid = uuid.uuid4()
         e = await uc.current_epoch(uid)
         assert await uc.write_if_newer(
             uid, {"display_name": "old"}, source_version=10, expected_epoch=e
@@ -313,7 +314,9 @@ class TestProfileEditFreshnessThroughSeam:
 
 # ---- M3.A残项: 成功登录解锁(is_locked True→False)须失效 user:snap，patch banned 陈旧 ----
 class TestLoginUnlockInvalidatesSnap:
-    async def _mk_locked_user(self, db: AsyncSession, username: str, password: str) -> int:
+    async def _mk_locked_user(
+        self, db: AsyncSession, username: str, password: str
+    ) -> uuid.UUID:
         user = User(
             username=username,
             email=f"{username}@example.com",
@@ -322,7 +325,7 @@ class TestLoginUnlockInvalidatesSnap:
         )
         db.add(user)
         await db.flush()
-        uid = int(user.id)  # commit 前置 ID，避免 commit 后 expire 触发 greenlet 懒读
+        uid = user.id  # commit 前置 ID，避免 commit 后 expire 触发 greenlet 懒读
         user.is_locked = True  # 模拟先前被自动锁定(banned)，locked_until=None(解锁后可成功登)
         await db.commit()
         return uid

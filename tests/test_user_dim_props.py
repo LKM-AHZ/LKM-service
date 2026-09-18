@@ -11,6 +11,7 @@ updated_at」等**与 N 无关**的不变量。
 
 from __future__ import annotations
 
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -46,7 +47,7 @@ async def _dim_scenario(pg: PropPG, users: list[tuple[str, bool]]) -> None:
         await db.execute(delete(User))
         await db.commit()
 
-        ids: list[int] = []
+        ids: list[uuid.UUID] = []
         for i, (account_level, has_profile) in enumerate(users):
             u = User(
                 username=f"u{i}",
@@ -58,7 +59,7 @@ async def _dim_scenario(pg: PropPG, users: list[tuple[str, bool]]) -> None:
             await db.flush()
             if has_profile:
                 db.add(Profile(user_id=u.id, nickname=f"N{i}", role="member"))
-            ids.append(int(u.id))
+            ids.append(u.id)
         await db.commit()
 
         # 1) 全量批 sync：命令数恒 2（1 源读 + 1 upsert），与 N 无关
@@ -70,7 +71,7 @@ async def _dim_scenario(pg: PropPG, users: list[tuple[str, bool]]) -> None:
         )
 
         dims = (await db.execute(select(UserDim))).scalars().all()
-        assert {int(d.user_id) for d in dims} == set(ids)
+        assert {d.user_id for d in dims} == set(ids)
         for d in dims:
             assert d.sync_ts >= d.updated_at  # 物化不早于源
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from enum import StrEnum
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class FileStatus(StrEnum):
@@ -40,11 +41,10 @@ FILES_TABLE_PLAN = {
 }
 
 
-class LibraryFile(Base):
+class LibraryFile(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "library_files"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    uploader_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    uploader_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     # 内容寻址哈希（SHA3-256，16 进制 64 字符）

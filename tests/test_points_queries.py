@@ -5,6 +5,7 @@
 """
 
 import datetime
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -44,24 +45,24 @@ async def _create_user(
     auth_db: AsyncSession,
     username: str,
     nickname: str = "",
-) -> int:
-    """在 auth realm 建用户返其裸 int id，并在业务 points 表建 balance=0 行。"""
-    uid = int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@example.com",
-                nickname=nickname or None,
-            )
-        ).id
-    )
+) -> uuid.UUID:
+    """在 auth realm 建用户返其 uuid 主键，并在业务 points 表建 balance=0 行。"""
+    uid = (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@example.com",
+            nickname=nickname or None,
+        )
+    ).id
     db.add(UserBalance(user_id=uid, balance=0))
     await db.flush()
     return uid
 
 
-async def _mk_ledger(db: AsyncSession, user_id: int, deltas: list[int]) -> None:
+async def _mk_ledger(
+    db: AsyncSession, user_id: uuid.UUID, deltas: list[int]
+) -> None:
     for i, d in enumerate(deltas):
         db.add(
             PointsLedger(

@@ -1,4 +1,5 @@
 import time
+import uuid
 
 import jwt
 import pytest
@@ -28,15 +29,18 @@ from app.modules.auth.security import (
 
 class TestAccessToken:
     def should_create_and_decode(self):
-        token = create_access_token(user_id=1, account_level="normal", role="member")
+        uid = uuid.uuid4()
+        token = create_access_token(user_id=uid, account_level="normal", role="member")
         payload = decode_access_token(token)
-        assert payload["user_id"] == 1
+        assert payload["user_id"] == str(uid)
         assert payload["account_level"] == "normal"
         assert payload["role"] == "member"
         assert payload["type"] == "access"
 
     def should_reject_wrong_secret(self):
-        token = create_access_token(user_id=2, account_level="normal", role="member")
+        token = create_access_token(
+            user_id=uuid.uuid4(), account_level="normal", role="member"
+        )
         wrong_key = "wrong-secret-key-hopefully-not-used"
         with pytest.raises(jwt.exceptions.InvalidSignatureError):
             jwt.decode(token, wrong_key, algorithms=[settings.jwt_algorithm])
@@ -45,7 +49,7 @@ class TestAccessToken:
         # Build an already-expired JWT manually
         now = int(time.time())
         payload = {
-            "user_id": 3,
+            "user_id": str(uuid.uuid4()),
             "account_level": "normal",
             "role": "member",
             "type": "access",
@@ -60,7 +64,7 @@ class TestAccessToken:
 
     def should_reject_non_access_type(self):
         # 传入 temp token：其 audience 与 access 不同，单次验 aud 即被拒（不再是"先看 type"）
-        token = create_temp_token(user_id=4)
+        token = create_temp_token(user_id=uuid.uuid4())
         with pytest.raises((jwt.exceptions.InvalidAudienceError, ValueError)):
             decode_access_token(token)
 
@@ -72,14 +76,17 @@ class TestAccessToken:
 
 class TestTempToken:
     def should_create_and_decode(self):
-        token = create_temp_token(user_id=5)
+        uid = uuid.uuid4()
+        token = create_temp_token(user_id=uid)
         payload = decode_temp_token(token)
-        assert payload["user_id"] == 5
+        assert payload["user_id"] == str(uid)
         assert payload["type"] == "temp"
 
     def should_reject_non_temp_type(self):
         # 传入 access token：audience 与 temp 不同，单次验 aud 即被拒
-        token = create_access_token(user_id=6, account_level="normal", role="member")
+        token = create_access_token(
+            user_id=uuid.uuid4(), account_level="normal", role="member"
+        )
         with pytest.raises((jwt.exceptions.InvalidAudienceError, ValueError)):
             decode_temp_token(token)
 

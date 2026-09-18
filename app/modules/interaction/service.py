@@ -13,6 +13,7 @@ import-linter 契约中精确豁免；不建跨模块 ORM relationship，保持�
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -35,7 +36,7 @@ from app.modules.interaction.schemas import (
 )
 
 
-async def _bookmark_count(db: AsyncSession, content_id: int) -> int:
+async def _bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> int:
     """内容不存在 → 404；存在则返回当前收藏计数。"""
     count = await db.scalar(
         select(ContentItem.bookmark_count).where(ContentItem.id == content_id)
@@ -45,7 +46,7 @@ async def _bookmark_count(db: AsyncSession, content_id: int) -> int:
     return int(count)
 
 
-async def _bump_bookmark(db: AsyncSession, content_id: int, delta: int) -> int:
+async def _bump_bookmark(db: AsyncSession, content_id: uuid.UUID, delta: int) -> int:
     """增减 ``bookmark_count`` 并返回即时读数（下限 0）。
 
     M6.10：优先走 Redis 增量链路（收藏明细行是真相源，计数由 flush 收敛）；Redis
@@ -72,7 +73,7 @@ async def _bump_bookmark(db: AsyncSession, content_id: int, delta: int) -> int:
     return int(row[0])
 
 
-async def _is_favorited(db: AsyncSession, user_id: int, content_id: int) -> bool:
+async def _is_favorited(db: AsyncSession, user_id: uuid.UUID, content_id: uuid.UUID) -> bool:
     found = await db.scalar(
         select(InteractionFavorite.content_id).where(
             InteractionFavorite.user_id == user_id,
@@ -83,7 +84,7 @@ async def _is_favorited(db: AsyncSession, user_id: int, content_id: int) -> bool
 
 
 async def add_favorite(
-    db: AsyncSession, user_id: int, content_id: int
+    db: AsyncSession, user_id: uuid.UUID, content_id: uuid.UUID
 ) -> FavoriteState:
     """收藏：重复调用不报错也不重复计数（复合主键兜并发）。"""
     count = await _bookmark_count(db, content_id)
@@ -113,7 +114,7 @@ async def add_favorite(
 
 
 async def remove_favorite(
-    db: AsyncSession, user_id: int, content_id: int
+    db: AsyncSession, user_id: uuid.UUID, content_id: uuid.UUID
 ) -> FavoriteState:
     """取消收藏：未收藏时幂等返回当前计数，不递减。"""
     count = await _bookmark_count(db, content_id)
@@ -134,7 +135,7 @@ async def remove_favorite(
 
 
 async def list_favorites(
-    db: AsyncSession, user_id: int, page: int = 1, limit: int = 20
+    db: AsyncSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
 ) -> PageData[FavoriteItem]:
     total = (
         await db.scalar(
@@ -180,7 +181,7 @@ async def list_favorites(
     )
 
 
-async def record_view(db: AsyncSession, user_id: int, content_id: int) -> ViewState:
+async def record_view(db: AsyncSession, user_id: uuid.UUID, content_id: uuid.UUID) -> ViewState:
     """浏览上报：同内容重复调用幂等（只刷新 viewed_at）。"""
     exists = await db.scalar(select(ContentItem.id).where(ContentItem.id == content_id))
     if exists is None:
@@ -199,7 +200,7 @@ async def record_view(db: AsyncSession, user_id: int, content_id: int) -> ViewSt
 
 
 async def list_history(
-    db: AsyncSession, user_id: int, page: int = 1, limit: int = 20
+    db: AsyncSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
 ) -> PageData[HistoryItem]:
     total = (
         await db.scalar(

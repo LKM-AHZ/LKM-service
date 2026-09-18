@@ -7,6 +7,8 @@
 - check_owner(ArticleComment.user_id) 用 au.id 断言属主。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,9 +52,9 @@ async def _grant(db: DB, role_name: str, permission: str) -> None:
         await db.flush()
 
 
-async def _category(db: DB) -> int:
+async def _category(db: DB) -> uuid.UUID:
     cat = await create_category_ex(db, CategoryCreate(slug="news", title="news"))
-    return int(cat.id)
+    return cat.id
 
 
 async def test_member_cannot_publish_article(
@@ -64,7 +66,7 @@ async def test_member_cannot_publish_article(
     r = await client.post(
         "/api/v1/articles",
         headers=_h(u),
-        json={"slug": "x", "title": "t", "content": "c", "category_id": cid},
+        json={"slug": "x", "title": "t", "content": "c", "category_id": str(cid)},
     )
     assert r.status_code == 403
 
@@ -96,28 +98,28 @@ async def test_super_admin_can_publish_article(
             "slug": "official-1",
             "title": "t",
             "content": "c",
-            "category_id": cid,
+            "category_id": str(cid),
         },
     )
     assert r.status_code == 200
     assert (r.json().get("data") or {}).get("slug") == "official-1"
 
 
-async def _article(db: DB, category_id: int | None = None) -> int:
+async def _article(db: DB, category_id: uuid.UUID | None = None) -> uuid.UUID:
     """直插一条 Article，供评论挂在 article_id 下。返回文章 id。"""
     cid = category_id if category_id is not None else await _category(db)
     art = Article(slug="rbac-cmt", title="t", category_id=cid, content="c")
     db.add(art)
     await db.flush()
-    return int(art.id)
+    return art.id
 
 
-async def _comment(db: DB, article_id: int, author_id: int) -> int:
+async def _comment(db: DB, article_id: uuid.UUID, author_id: uuid.UUID) -> uuid.UUID:
     """直插一条评论（评论作者 = author_id），返回评论 id。"""
     cmt = ArticleComment(article_id=article_id, user_id=author_id, content="c")
     db.add(cmt)
     await db.flush()
-    return int(cmt.id)
+    return cmt.id
 
 
 async def test_comment_author_can_delete_own(

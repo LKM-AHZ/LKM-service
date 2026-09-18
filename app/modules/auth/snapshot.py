@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,7 +68,7 @@ class UserSnapshot:
     是否真被设置"（如 blog/articles 组 ProfileInfo 须保 blank-when-unset）的读 raw nickname。
     """
 
-    user_id: int
+    user_id: uuid.UUID
     username: str
     display_name: str
     avatar: str | None
@@ -114,11 +115,32 @@ BATCH_IDS_MAX = 200
 
 
 def _snap_to_dict(snap: UserSnapshot) -> dict[str, Any]:
-    """UserSnapshot → JSON 可存 dict（键即冻结字段名，读取端 `UserSnapshot(**d)` 原样重建）。"""
-    return {f: getattr(snap, f) for f in _SNAP_FIELDS}
+    """UserSnapshot → JSON/wire 可存 dict（键即冻结字段名）。
+
+    ``user_id`` 落为 **str**：本 dict 会经 ``user_cache.write_if_newer`` 的 ``json.dumps`` 与
+    HTTP 信封（JSON 无 uuid 类型）出入，UUID 不可直接序列化。读取端一律经
+    :func:`_snap_from_fields` 还原为 ``uuid.UUID``（类型注解与读取语义不变）。
+    """
+    data = {f: getattr(snap, f) for f in _SNAP_FIELDS}
+    data["user_id"] = str(snap.user_id)
+    return data
 
 
-async def get_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot | None:
+def _snap_from_fields(fields: dict[str, Any]) -> UserSnapshot:
+    """冻结字段 dict（DB/缓存/HTTP 三源同构）→ UserSnapshot，``user_id`` 还原为 ``uuid.UUID``。
+
+    缺字段 / user_id 不可解析 → 抛 KeyError/TypeError/ValueError，由调用方按各自语义处理
+    （缓存判不可重建、HTTP 判不可用 fail-open；DB 源不会失败）。
+    """
+    data = {f: fields[f] for f in _SNAP_FIELDS}
+    uid = data["user_id"]
+    data["user_id"] = uid if isinstance(uid, uuid.UUID) else uuid.UUID(str(uid))
+    return UserSnapshot(**data)
+
+
+async def get_user_snapshot(
+    db: AsyncSession, *, user_id: uuid.UUID
+) -> UserSnapshot | None:
     """按 id 取单用户快照；不存在返回 None。走 cache-through（A6）+ B1.2 HTTP seam + 请求合并。
 
     - 命中 ``core.user_cache``：以冻结字段重建 ``UserSnapshot`` 直接返回（展示语义与直读 DB
@@ -145,7 +167,9 @@ async def get_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot |
     return await _load_user_snapshot(db, user_id=user_id)
 
 
-async def _load_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot | None:
+async def _load_user_snapshot(
+    db: AsyncSession, *, user_id: uuid.UUID
+) -> UserSnapshot | None:
     """singleflight loader：二次检查缓存 → 捕获 epoch → 取回填源 → CAS 回填并返回。
 
     二次检查确保被合并的等待方不重复回退上游；其余语义与直路逐字节一致。
@@ -160,7 +184,7 @@ async def _load_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot
     if fields is None:  # 权威不存在：不缓存缺行，直接 None（含 seam 关闭/离线沿直读路径同一语义）
         return None
 
-    snap = UserSnapshot(**fields)
+    snap = _snap_from_fields(fields)
     if version is not None:
         await user_cache.write_if_newer(
             user_id, _snap_to_dict(snap), version, expected_epoch
@@ -169,25 +193,38 @@ async def _load_user_snapshot(db: AsyncSession, *, user_id: int) -> UserSnapshot
 
 
 async def _retrieve_fields(
-    user_id: int, db: AsyncSession
+    user_id: uuid.UUID, db: AsyncSession
 ) -> tuple[dict[str, Any] | None, int | None]:
     """取回填源的**冻结字段 dict + 来源版本**，失败已按 fail-open 语义收口。
 
-    - seam 打开（``user_http.enabled()``）且 AUTH 响应：返回其冻结字段 + AUTH 端真实 sv。
+    - seam 打开（``user_http.enabled()``）且 AUTH 响应：返回其冻结字段 + AUTH 端真实 sv
+      （先校验可重建，user_id 不可解析的畸形体按不可用处理，不把畸形当 truth）。
     - seam 打开但 AUTH 不可用/畸形（抛 ``UserHttpUnavailable``）：记降级日志，**回落 DB**
       （就地 ``select(User)...`` + ``_to_snap`` + ``version_of_updated_at``），不把失败当 None。
     - seam 关闭（默认）：就地 DB 直读（既有 A6 原路径）。
     """
     if user_http.enabled():
         try:
-            return await user_http.fetch_user_http_payload(user_id)
+            fields, version = await user_http.fetch_user_http_payload(user_id)
         except user_http.UserHttpUnavailable:
             logger.warning("auth_http read failed uid=%s; fail-open to local DB", user_id)
+        else:
+            if fields is None:  # 权威不存在：不回落 DB、不缓存缺行
+                return None, version
+            try:
+                _snap_from_fields(fields)
+            except (KeyError, TypeError, ValueError):
+                logger.warning(
+                    "auth_http malformed snapshot uid=%s; fail-open to local DB",
+                    user_id,
+                )
+            else:
+                return fields, version
     return await _fetch_fields_from_db(user_id, db)
 
 
 async def _fetch_fields_from_db(
-    user_id: int, db: AsyncSession
+    user_id: uuid.UUID, db: AsyncSession
 ) -> tuple[dict[str, Any] | None, int | None]:
     """就地直读业务 DB：User(+profile) → 冻结字段 dict + 来源版本（A6 原路径的抽出的查询体）。
 
@@ -206,26 +243,32 @@ async def _fetch_fields_from_db(
 
 
 def _from_cache_dict(data: dict[str, Any]) -> UserSnapshot | None:
-    """缓存 dict → UserSnapshot。字段残缺/多余一律判不可重建 → None（回落 DB，杜绝脏缓存透出）。"""
+    """缓存 dict → UserSnapshot。字段残缺/多余/id 不可解析一律判不可重建 → None（回落 DB，杜绝脏缓存透出）。"""
     try:
-        return UserSnapshot(**{k: data[k] for k in _SNAP_FIELDS})
-    except (KeyError, TypeError):
+        return _snap_from_fields(data)
+    except (KeyError, TypeError, ValueError):
         return None
 
 
 async def get_user_snapshot_batch(
-    db: AsyncSession, *, user_ids: list[int]
-) -> dict[int, UserSnapshot]:
+    db: AsyncSession, *, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, UserSnapshot]:
     """按 id 列表批量取快照；不存在的 id 不在结果里。空列表返回空 dict。"""
     if not user_ids:
         return {}
     fields_map = await _retrieve_fields_batch(list(set(user_ids)), db)
-    return {uid: UserSnapshot(**f) for uid, f in fields_map.items()}
+    out: dict[uuid.UUID, UserSnapshot] = {}
+    for uid, f in fields_map.items():
+        try:
+            out[uid] = _snap_from_fields(f)
+        except (KeyError, TypeError, ValueError):
+            continue  # 坏行跳过（与缺行同语义），不因单行畸形整批失败
+    return out
 
 
 async def _fetch_fields_batch_from_db(
-    user_ids: list[int], db: AsyncSession
-) -> dict[int, tuple[dict[str, Any], int | None]]:
+    user_ids: list[uuid.UUID], db: AsyncSession
+) -> dict[uuid.UUID, tuple[dict[str, Any], int | None]]:
     """就地**单查询**批量直读：``{id: (冻结字段 dict, 来源版本)}``；缺行不在结果里。
 
     与 :func:`_fetch_fields_from_db` 同源（同一 ``_to_snap`` + 版本推导），差别只在一查多行。
@@ -240,7 +283,7 @@ async def _fetch_fields_batch_from_db(
             .options(selectinload(User.profile))
         )
     ).scalars()
-    out: dict[int, tuple[dict[str, Any], int | None]] = {}
+    out: dict[uuid.UUID, tuple[dict[str, Any], int | None]] = {}
     for u in rows:
         version = (
             user_cache.version_of_updated_at(u.updated_at) if u.updated_at else None
@@ -249,12 +292,19 @@ async def _fetch_fields_batch_from_db(
     return out
 
 
-def _batch_singleflight_key(chunk: list[int]) -> str:
-    """批内合并键（与单读键不同域）：排序分块后同一集合必得同键（首/末 id + 长度）。"""
+def _batch_singleflight_key(chunk: list[uuid.UUID]) -> str:
+    """批内合并键（与单读键不同域）：排序分块后同一集合必得同键（首/末 id + 长度）。
+
+    ``chunk`` 由调用方（:func:`_retrieve_fields_batch`）在 ``sorted(set(user_ids))`` 上切片，
+    恒为升序；``uuid.UUID`` 可全序比较（按 128-bit int，规范 str 亦同序），故 ``chunk[0]``/
+    ``chunk[-1]`` 就是该块的最小/最大 id，同集合必得稳定键，无需改按字符串排序。
+    """
     return f"{user_cache.get_user_cache_key(chunk[0])}:batch:{chunk[-1]}:{len(chunk)}"
 
 
-async def _load_batch_uncached(user_ids: list[int]) -> dict[int, dict[str, Any]]:
+async def _load_batch_uncached(
+    user_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict[str, Any]]:
     """单块 loader（M6.5）：二次检查缓存 → **一次**批量 HTTP → 带来源版本逐条 CAS 回填。
 
     与单读 loader 同纪律：先捕获各 id 的失效代次（``expected_epoch``）再取回填源，写回由
@@ -280,8 +330,8 @@ async def _load_batch_uncached(user_ids: list[int]) -> dict[int, dict[str, Any]]
 
 
 async def _retrieve_fields_batch(
-    user_ids: list[int], db: AsyncSession
-) -> dict[int, dict[str, Any]]:
+    user_ids: list[uuid.UUID], db: AsyncSession
+) -> dict[uuid.UUID, dict[str, Any]]:
     """批量取回填源**冻结字段 dict**（跨 realm 语义，同单读）。
 
     - seam 打开（``user_http.enabled()``）：①**一次批量缓存读**（L1 逐个 + L2 单次 MGET）→
@@ -298,7 +348,7 @@ async def _retrieve_fields_batch(
         return {uid: fields for uid, (fields, _sv) in rows.items()}
 
     ids = sorted(set(user_ids))
-    out: dict[int, dict[str, Any]] = await user_cache.read_snaps(ids)
+    out: dict[uuid.UUID, dict[str, Any]] = await user_cache.read_snaps(ids)
     missing = [uid for uid in ids if uid not in out]
     for start in range(0, len(missing), BATCH_IDS_MAX):
         chunk = missing[start : start + BATCH_IDS_MAX]
@@ -351,7 +401,7 @@ class UserManagementItem:
     消费方接触到的仍是零 PII 的 ``UserSnapshot``。
     """
 
-    id: int
+    id: uuid.UUID
     username: str
     account_level: str
     is_locked: bool

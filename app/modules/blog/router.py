@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,7 +49,7 @@ async def create_blog_series(
 @router.put("/series/{series_id}", response_model=ApiResp[BlogSeriesInfo])
 @respond
 async def update_blog_series(
-    series_id: int,
+    series_id: uuid.UUID,
     info: BlogSeriesUpdate,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -58,7 +60,7 @@ async def update_blog_series(
 @router.delete("/series/{series_id}")
 @respond
 async def delete_blog_series(
-    series_id: int,
+    series_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> None:
@@ -75,7 +77,7 @@ async def delete_blog_series(
 )
 @respond
 async def put_blog_file(
-    series_id: int,
+    series_id: uuid.UUID,
     filepath: str,
     body: SeriesFileWrite,
     cur: CurrentUser = Depends(get_current_user),
@@ -88,7 +90,7 @@ async def put_blog_file(
 @router.post("/series/{series_id}/publish", response_model=ApiResp[ContentItemInfo])
 @respond
 async def publish_series_file_endpoint(
-    series_id: int,
+    series_id: uuid.UUID,
     body: SeriesPublish,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -105,7 +107,7 @@ async def publish_series_file_endpoint(
 @router.post("/series/{series_id}/star", response_model=ApiResp[BlogStarStatus])
 @respond
 async def star_blog_series(
-    series_id: int,
+    series_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> BlogStarStatus:
@@ -121,7 +123,7 @@ async def star_blog_series(
 )
 @respond
 async def create_blog_comment(
-    series_id: int,
+    series_id: uuid.UUID,
     info: BlogCommentCreate,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -132,8 +134,8 @@ async def create_blog_comment(
 @router.delete("/series/{series_id}/comments/{comment_id}")
 @respond
 async def delete_blog_comment(
-    series_id: int,
-    comment_id: int,
+    series_id: uuid.UUID,
+    comment_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> None:

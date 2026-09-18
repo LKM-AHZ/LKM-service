@@ -1,9 +1,10 @@
 """interaction 域（M6.6）：收藏幂等/计数、浏览记录 upsert 幂等与保留期清理。
 
-service 直测注入业务 ``db`` 与 auth ``auth_db``（业务行只写 auth realm 的裸 int id）。
+service 直测注入业务 ``db`` 与 auth ``auth_db``（业务行只写 auth realm 的裸 uuid 主键）。
 """
 
 import datetime
+import uuid
 
 import pytest
 from sqlalchemy import func, select
@@ -24,23 +25,26 @@ from app.modules.interaction.service import (
 )
 from tests.conftest import auth_user_uid
 
-
-async def _mk_user(auth_db: AsyncSession, username: str = "alice") -> int:
-    return int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@x.test",
-                nickname=username,
-                account_level="normal",
-                with_token=False,
-            )
-        ).id
-    )
+# 不存在的 content id（uuid 形态），用于未命中路径。
+_MISSING_CONTENT_ID = uuid.UUID("00000000-0000-7000-8000-000000009999")
 
 
-async def _mk_item(db: AsyncSession, author_id: int | None, title: str = "帖子") -> int:
+async def _mk_user(auth_db: AsyncSession, username: str = "alice") -> uuid.UUID:
+    return (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@x.test",
+            nickname=username,
+            account_level="normal",
+            with_token=False,
+        )
+    ).id
+
+
+async def _mk_item(
+    db: AsyncSession, author_id: uuid.UUID | None, title: str = "帖子"
+) -> uuid.UUID:
     board = Board(slug=f"b-{title}", title="B", description="", status="active")
     db.add(board)
     await db.flush()
@@ -54,10 +58,10 @@ async def _mk_item(db: AsyncSession, author_id: int | None, title: str = "帖子
     )
     db.add(item)
     await db.flush()
-    return int(item.id)
+    return item.id
 
 
-async def _fav_count(db: AsyncSession, item_id: int) -> int:
+async def _fav_count(db: AsyncSession, item_id: uuid.UUID) -> int:
     return int(
         await db.scalar(
             select(ContentItem.bookmark_count).where(ContentItem.id == item_id)
@@ -65,7 +69,9 @@ async def _fav_count(db: AsyncSession, item_id: int) -> int:
     )
 
 
-async def _view_rows(db: AsyncSession, user_id: int, item_id: int) -> list:
+async def _view_rows(
+    db: AsyncSession, user_id: uuid.UUID, item_id: uuid.UUID
+) -> list:
     return list(
         (
             await db.execute(
@@ -122,11 +128,11 @@ class TestFavorite:
     ) -> None:
         uid = await _mk_user(auth_db)
         with pytest.raises(BizError) as err:
-            await add_favorite(db, uid, 999999)
+            await add_favorite(db, uid, _MISSING_CONTENT_ID)
         assert err.value.errcode == InteractionErr.CONTENT_NOT_FOUND
 
         with pytest.raises(BizError) as err2:
-            await remove_favorite(db, uid, 999999)
+            await remove_favorite(db, uid, _MISSING_CONTENT_ID)
         assert err2.value.errcode == InteractionErr.CONTENT_NOT_FOUND
 
     async def test_list_favorites_inlines_content(
@@ -181,7 +187,7 @@ class TestViewLog:
     ) -> None:
         uid = await _mk_user(auth_db)
         with pytest.raises(BizError) as err:
-            await record_view(db, uid, 999999)
+            await record_view(db, uid, _MISSING_CONTENT_ID)
         assert err.value.errcode == InteractionErr.CONTENT_NOT_FOUND
 
     async def test_list_history_orders_by_viewed_at(

@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from app.core import redis as redis_client
@@ -31,14 +32,18 @@ COUNTER_FIELDS: frozenset[str] = frozenset(
 _KEY_SEGMENTS = 4
 
 
-def counter_key(field: str, obj_id: int) -> str:
+def counter_key(field: str, obj_id: uuid.UUID) -> str:
     if field not in COUNTER_FIELDS:
         raise ValueError(f"unsupported counter field: {field!r}")
     return make_key("count", field, obj_id)
 
 
-def parse_counter_key(key: str) -> tuple[str, int] | None:
-    """从 Redis 键解析 ``(field, obj_id)``；非计数键返回 ``None``。"""
+def parse_counter_key(key: str) -> tuple[str, uuid.UUID] | None:
+    """从 Redis 键解析 ``(field, obj_id)``；非计数键返回 ``None``。
+
+    ``obj_id`` 统一返回 ``uuid.UUID``（与写侧 :func:`counter_key` 收到的类型一致，也与
+    ``content_items.id`` 等主键类型一致）；Redis 键里是 ``str(uuid)``，此处解析回对象。
+    """
     parts = key.split(":")
     if len(parts) != _KEY_SEGMENTS:
         return None
@@ -46,12 +51,16 @@ def parse_counter_key(key: str) -> tuple[str, int] | None:
         return None
     payload = parts[-1]
     field, _, raw_id = payload.partition("|")
-    if field not in COUNTER_FIELDS or not raw_id.isdigit():
+    if field not in COUNTER_FIELDS:
         return None
-    return field, int(raw_id)
+    try:
+        obj_id = uuid.UUID(raw_id)
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return field, obj_id
 
 
-async def bump_counter(field: str, obj_id: int, delta: int) -> bool:
+async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
     """把差值记入 Redis。返回 ``True`` 表示已入 Redis（DB 待 flush 收敛）。"""
     client = await redis_client.get_redis()
     if client is None:
@@ -63,7 +72,7 @@ async def bump_counter(field: str, obj_id: int, delta: int) -> bool:
     return True
 
 
-async def pending_delta(field: str, obj_id: int) -> int:
+async def pending_delta(field: str, obj_id: uuid.UUID) -> int:
     """当前未落库差值（Redis 不可用/无键 → 0）。用于返回「DB 值 + 增量」的即时读数。"""
     client = await redis_client.get_redis()
     if client is None:
@@ -78,7 +87,7 @@ async def pending_delta(field: str, obj_id: int) -> int:
         return 0
 
 
-async def drain_counters() -> dict[tuple[str, int], int]:
+async def drain_counters() -> dict[tuple[str, uuid.UUID], int]:
     """原子取走全部待落库差值（``GETDEL``），返回 ``{(field, obj_id): delta}``。
 
     用 ``SCAN`` 而非维护 pending 集合：无「集合成员与实际键不同步」的竞态窗口，
@@ -89,7 +98,7 @@ async def drain_counters() -> dict[tuple[str, int], int]:
     if client is None:
         return {}
 
-    drained: dict[tuple[str, int], int] = {}
+    drained: dict[tuple[str, uuid.UUID], int] = {}
     pattern = make_key("count", "*")
     try:
         async for key in client.scan_iter(match=pattern, count=500):

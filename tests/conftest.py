@@ -22,6 +22,7 @@ schema，测末 drop cascade。每测试“单长活会话 override”保住了�
 import asyncio
 import contextlib
 import os
+import uuid
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -76,23 +77,31 @@ _hypothesis_settings.load_profile("lkm")
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_pg_trgm_extension() -> None:
-    """测试库确保装有 ``pg_trgm``（M6.9 搜索 P1 的 trgm 索引 opclass 依赖它）。
+def _ensure_pg_shared_objects() -> None:
+    """两个测试库（业务库 + auth 独立库）各自确保装有建表前置的共享对象。
 
-    索引 DDL 显式写作 ``public.gin_trgm_ops``，故扩展须在 public——而 schema-per-test
-    的 search_path 不含 public，扩展只能显式指定 schema 创建。幂等（IF NOT EXISTS）；
-    库不可达时静默跳过，交由既有 DB fixture 给出更明确的连接错误。
+    1. ``pg_trgm`` 扩展（M6.9 搜索 P1 的 trgm 索引 opclass 依赖它）；
+    2. ``public.uuid_generate_v7()``（UUID 主键列的 server_default 目标，RFC 9562 uuid7）。
+
+    两者都建在 **public**——而 schema-per-test 的 search_path 不含 public，故模型侧的
+    索引 opclass 与列 server_default 都显式限定 ``public.``。auth 是**独立 database**，
+    public schema 与业务库互不相通，必须各建一份。幂等；库不可达时静默跳过，交由既有
+    DB fixture 给出更明确的连接错误。
     """
 
     async def _run() -> None:
-        engine = create_async_engine(settings.database_url, poolclass=NullPool)
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(
-                    text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
-                )
-        finally:
-            await engine.dispose()
+        from app.db.init_db import UUID7_FUNCTION_SQL
+
+        for url in (settings.database_url, settings.auth_database_url):
+            engine = create_async_engine(url, poolclass=NullPool)
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
+                    )
+                    await conn.execute(text(UUID7_FUNCTION_SQL))
+            finally:
+                await engine.dispose()
 
     with contextlib.suppress(Exception):
         asyncio.run(_run())
@@ -373,7 +382,7 @@ async def auth_app_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
 class AuthUser:
     """在 auth 独立库 schema 建立的用户身份（S5 拆库常驻）。"""
 
-    id: int  # auth 库稳定 int：业务行 FK 引用此值
+    id: uuid.UUID  # auth 库 uuid 主键：业务行以裸 uuid 列引用此值
     username: str
     account_level: str
     token: str  # 该用户在 auth 库 mint 的 Web Bearer access token（需会话鉴权时代用）
@@ -393,8 +402,9 @@ async def auth_user_uid(
     """在 auth 独立库 schema 建一线用户并返回 :class:`AuthUser`。
 
     auth_db 是调用测试内连到 auth 独立 metadata/schema 的会话（Alembic/conftest
-    schema-per-test），故该用户 id 以 1 起始且本测内稳定；返回 token 供把该用户作为
-    "current 登录身份"发起业务 HTTP（须 seam 支持跨库裁决，或业务 local seam 直读）。
+    schema-per-test）。用户 id 为 uuid7（PG server_default 生成，本测内稳定）；返回 token
+    供把该用户作为 "current 登录身份"发起业务 HTTP（须 seam 支持跨库裁决，或业务 local
+    seam 直读）。
     """
     from app.modules.auth.models import Profile, User
     from app.modules.auth.security import create_access_token, hashpwd
@@ -419,12 +429,14 @@ async def auth_user_uid(
     token: str | None = None
     if with_token:
         token = create_access_token(
-            user_id=int(user.id),
+            user_id=user.id,
             account_level=str(user.account_level),
             role=role,
             token_version=user.token_version,
         )
-    return AuthUser(id=int(user.id), username=username, account_level=account_level, token=token or "")
+    return AuthUser(
+        id=user.id, username=username, account_level=account_level, token=token or ""
+    )
 
 
 @pytest.fixture
@@ -478,7 +490,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(_cfg, "auth_http_token", "internal-test-secret")
     monkeypatch.setattr(_cfg, "auth_http_timeout_s", 1.0)
 
-    async def _authz(*, user_id: int, **_: object) -> dict[str, object]:
+    async def _authz(*, user_id: uuid.UUID, **_: object) -> dict[str, object]:
         from sqlalchemy import select
 
         from app.modules.auth.models import Profile, User
@@ -490,7 +502,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             "role": None,
         }
         u = (
-            await carrier.execute(select(User).where(User.id == int(user_id)))
+            await carrier.execute(select(User).where(User.id == user_id))
         ).scalar_one_or_none()
         if u is None:
             state["cause"] = "not_found"
@@ -501,7 +513,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             return state
         prof = (
             await carrier.execute(
-                select(Profile).where(Profile.user_id == int(user_id))
+                select(Profile).where(Profile.user_id == user_id)
             )
         ).scalar_one_or_none()
         state["ok"] = True
@@ -509,24 +521,24 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         state["role"] = prof.role if prof else "member"
         return state
 
-    async def _fetch(user_id: int) -> Any:
+    async def _fetch(user_id: uuid.UUID) -> Any:
         from sqlalchemy import select
 
         from app.modules.auth.models import Profile, User
         from app.modules.auth.snapshot import UserSnapshot, _snap_to_dict
 
         u = (
-            await carrier.execute(select(User).where(User.id == int(user_id)))
+            await carrier.execute(select(User).where(User.id == user_id))
         ).scalar_one_or_none()
         if u is None:
             return None, None
         p = (
             await carrier.execute(
-                select(Profile).where(Profile.user_id == int(user_id))
+                select(Profile).where(Profile.user_id == user_id)
             )
         ).scalar_one_or_none()
         snap = UserSnapshot(
-            user_id=int(u.id),
+            user_id=u.id,
             username=u.username,
             display_name=(p.nickname or u.username) if p else u.username,
             avatar=p.avatar if p else None,
@@ -540,25 +552,25 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         version = version_of_updated_at(u.updated_at) if u.updated_at else None
         return _snap_to_dict(snap), version
 
-    async def _grant(*, kind: str, user_id: int, **kw: object) -> int:
+    async def _grant(*, kind: str, user_id: uuid.UUID, **kw: object) -> int:
         from app.modules.auth import service_authz
 
         if kind == "incubation":
-            return await service_authz.grant_incubation(carrier, int(user_id))
+            return await service_authz.grant_incubation(carrier, user_id)
         return await service_authz.grant_exam_unlock(
             carrier,
-            int(user_id),
+            user_id,
             unlock_level=kw.get("unlock_level"),
             unlock_role=kw.get("unlock_role"),
         )
 
     async def _fetch_batch(
-        user_ids: list[int],
-    ) -> dict[int, tuple[Any, int | None]]:
+        user_ids: list[uuid.UUID],
+    ) -> dict[uuid.UUID, tuple[Any, int | None]]:
         """批量替身（M6.5 by-ids）：逐 id 复用单条替身，缺行回 ``(None, None)``（同端点契约）。"""
-        out: dict[int, tuple[Any, int | None]] = {}
+        out: dict[uuid.UUID, tuple[Any, int | None]] = {}
         for uid in user_ids:
-            out[int(uid)] = await _fetch(int(uid))
+            out[uid] = await _fetch(uid)
         return out
 
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)

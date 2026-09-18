@@ -8,6 +8,8 @@ APIRouter 各自声明前缀，URL 契约（前端/集成测试续用）保持�
 * 时间线：匿名仅 ``hot``；登录可按需 ``follow``（关注流）/ ``hot``（全站热门）。
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
@@ -46,7 +48,7 @@ timeline_router = APIRouter(prefix="/timeline", tags=["timeline"])
 @user_follow_router.post("/{user_id}/follow", response_model=ApiResp[FollowToggle])
 @respond
 async def follow_a_user(
-    user_id: int,
+    user_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> FollowToggle:
@@ -57,7 +59,7 @@ async def follow_a_user(
 @user_follow_router.delete("/{user_id}/follow", response_model=ApiResp[FollowToggle])
 @respond
 async def unfollow_a_user(
-    user_id: int,
+    user_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> FollowToggle:
@@ -68,7 +70,7 @@ async def unfollow_a_user(
 @board_follow_router.post("/{board_id}/follow", response_model=ApiResp[FollowToggle])
 @respond
 async def follow_a_board(
-    board_id: int,
+    board_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> FollowToggle:
@@ -79,7 +81,7 @@ async def follow_a_board(
 @board_follow_router.delete("/{board_id}/follow", response_model=ApiResp[FollowToggle])
 @respond
 async def unfollow_a_board(
-    board_id: int,
+    board_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> FollowToggle:
@@ -105,7 +107,7 @@ async def my_following_users(
 @user_follow_router.get("/{user_id}/follow/status", response_model=ApiResp[FollowState])
 @respond
 async def user_follow_status(
-    user_id: int,
+    user_id: uuid.UUID,
     cur: CurrentUser | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_session),
 ) -> FollowState:

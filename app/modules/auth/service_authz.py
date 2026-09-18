@@ -14,6 +14,7 @@ auth 行**而必须外移到 auth 的写面（Phase 4 接线，把业务侧改�
 from __future__ import annotations
 
 import datetime as _dt
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
@@ -45,7 +46,7 @@ _IAT_TOLERANCE = _dt.timedelta(seconds=5)
 async def authorize_user(
     db: AsyncSession,
     *,
-    user_id: int,
+    user_id: uuid.UUID,
     expect_token_version: int,
     iat_ts: float | int | None,
     require_admin: bool,
@@ -108,7 +109,7 @@ def _rank_of(table: dict[str, int], value: object) -> int:
 
 async def grant_exam_unlock(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     *,
     unlock_level: str | None,
     unlock_role: str | None,
@@ -125,7 +126,7 @@ async def grant_exam_unlock(
 
 
 async def _apply_upgrades(
-    db: AsyncSession, user_id: int, unlock_level: str | None, unlock_role: str | None
+    db: AsyncSession, user_id: uuid.UUID, unlock_level: str | None, unlock_role: str | None
 ) -> int:
     """执行单向升权：有任一真实提升才 bump token + 失效；返回是否改（0/1）。"""
     row = (
@@ -175,7 +176,7 @@ async def _apply_upgrades(
     return 0
 
 
-async def grant_incubation(db: AsyncSession, user_id: int) -> int:
+async def grant_incubation(db: AsyncSession, user_id: uuid.UUID) -> int:
     """纳入成员升级（projects/service._apply_incubation 的 auth 侧语义）：
 
     - account_level 单向升 ``admin``（已是 admin 则不升）；
@@ -238,7 +239,7 @@ async def grant_incubation(db: AsyncSession, user_id: int) -> int:
 # auth 真值归属不变（写始终落在 auth realm 对应会话）。返回与底层原语同义的 ``changed``(0/1)。
 
 
-async def grant_incubation_from_business(db: AsyncSession, user_id: int) -> int:
+async def grant_incubation_from_business(db: AsyncSession, user_id: uuid.UUID) -> int:
     """business supplier 触发"纳入成员升级"的单向升权（auth realm 权威写）。"""
     if user_http.enabled():
         return await user_http.grant_via_seam(kind="incubation", user_id=user_id)
@@ -247,7 +248,7 @@ async def grant_incubation_from_business(db: AsyncSession, user_id: int) -> int:
 
 async def grant_exam_unlock_from_business(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     *,
     unlock_level: str | None,
     unlock_role: str | None,

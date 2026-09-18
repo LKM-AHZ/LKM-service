@@ -1,6 +1,7 @@
 """官方文章示例数据。用法：uv run python -m app.modules.articles.seed"""
 
 import asyncio
+import uuid
 from pathlib import Path
 
 from sqlalchemy import select
@@ -99,14 +100,14 @@ async def seed_categories(db: AsyncSession) -> int:
     return created
 
 
-async def _resolve_category_id(db: AsyncSession, slug: str) -> int:
+async def _resolve_category_id(db: AsyncSession, slug: str) -> uuid.UUID:
     """按分类 slug 解析 category_id；不存在则抛 KeyError（调用方保证分类已 seed）。"""
     category_id = await db.scalar(
         select(ArticleCategory.id).where(ArticleCategory.slug == slug)
     )
     if category_id is None:
         raise KeyError(f"article category slug not found: {slug}")
-    return int(category_id)
+    return category_id
 
 
 async def seed_articles(db: AsyncSession) -> int:

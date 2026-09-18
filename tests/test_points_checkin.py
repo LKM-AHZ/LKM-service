@@ -1,5 +1,7 @@
 """每日打卡（do_checkin）测试：奖励发放 / 幂等 / 打卡任务推进 / 打卡成就进度 / redis fail-open。"""
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,13 +17,15 @@ from app.modules.points.service import do_checkin, get_balance
 from tests.conftest import auth_user_uid
 
 
-async def _user(auth_db: AsyncSession, username: str = "checkin_user") -> int:
-    """在 auth realm 建一线用户，返回其裸 int id（业务 points 表以 int 引用）。"""
+async def _user(auth_db: AsyncSession, username: str = "checkin_user") -> uuid.UUID:
+    """在 auth realm 建一线用户，返回其 uuid 主键（业务 points 表以裸 uuid 引用）。"""
     u = await auth_user_uid(auth_db, username=username, email=f"{username}@e.com")
-    return int(u.id)
+    return u.id
 
 
-async def _achievement(db: AsyncSession, key: str, type_: str, threshold: int) -> int:
+async def _achievement(
+    db: AsyncSession, key: str, type_: str, threshold: int
+) -> uuid.UUID:
     a = Achievement(
         key=key,
         category="activity",
@@ -43,7 +47,7 @@ async def _task(
     category: str,
     requirement_count: int,
     reward_points: int,
-) -> int:
+) -> uuid.UUID:
     t = Task(
         key=key,
         title_key=f"t_{key}",

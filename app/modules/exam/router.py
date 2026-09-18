@@ -1,3 +1,4 @@
+import uuid
 from math import ceil
 from typing import Any
 
@@ -100,7 +101,7 @@ async def exam_list(
 @router.get("/{exam_id}", response_model=ApiResp[ExamOut])
 @respond
 async def exam_detail(
-    exam_id: int, db: AsyncSession = Depends(get_read_session)
+    exam_id: uuid.UUID, db: AsyncSession = Depends(get_read_session)
 ) -> ExamOut:
     async def load() -> ExamOut:
         return await get_exam_ex(db, exam_id)
@@ -113,7 +114,7 @@ async def exam_detail(
 @router.post("/{exam_id}/attempts", response_model=ApiResp[AttemptStartResp])
 @respond
 async def start_exam_attempt(
-    exam_id: int,
+    exam_id: uuid.UUID,
     cur: CurrentUser = RequireLevel("normal"),
     db: AsyncSession = Depends(get_session),
 ) -> AttemptStartResp:
@@ -123,7 +124,7 @@ async def start_exam_attempt(
 @router.post("/attempts/{attempt_id}/submit", response_model=ApiResp[SubmitResult])
 @respond
 async def submit_exam_attempt(
-    attempt_id: int,
+    attempt_id: uuid.UUID,
     payload: SubmitAnswersRequest,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -148,7 +149,7 @@ async def my_certificates(
 )
 @respond
 async def exam_leaderboard(
-    exam_id: int,
+    exam_id: uuid.UUID,
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
 ) -> PageData[LeaderboardEntry]:

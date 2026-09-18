@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
-class ArticleCategory(Base):
+class ArticleCategory(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "article_categories"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -22,7 +22,7 @@ class ArticleCategory(Base):
     articles: Mapped[list[Article]] = relationship(back_populates="category")
 
 
-class Article(Base):
+class Article(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "articles"
     # 文章列表热路径按 published 倒序，category_id 用于分组/聚合
     __table_args__: tuple[Index, ...] = (
@@ -30,13 +30,12 @@ class Article(Base):
         Index("ix_articles_category_published", "category_id", "published"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover: Mapped[str | None] = mapped_column(Text, nullable=True)
-    category_id: Mapped[int] = mapped_column(
-        ForeignKey("article_categories.id"), nullable=False
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("article_categories.id"), nullable=False
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft"
@@ -72,19 +71,18 @@ class Article(Base):
     )
 
 
-class ArticleComment(Base):
+class ArticleComment(UUIDPrimaryKeyMixin, Base):
     """文章评论。``parent_id`` 自引用支持一级回复（同 BlogComment 的写法）。"""
 
     __tablename__: str = "article_comments"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    parent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("article_comments.id"), nullable=True
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("article_comments.id"), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -94,8 +92,9 @@ class ArticleComment(Base):
     )
 
     article: Mapped[Article] = relationship(back_populates="comment_records")
+    # remote_side 用字符串：主键 id 来自 UUIDPrimaryKeyMixin，类体内无 `id` 名字绑定
     parent: Mapped[ArticleComment | None] = relationship(
-        remote_side=[id], back_populates="replies"
+        remote_side="ArticleComment.id", back_populates="replies"
     )
     replies: Mapped[list[ArticleComment]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
@@ -107,10 +106,10 @@ class ArticleLike(Base):
 
     __tablename__: str = "article_likes"
 
-    article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
@@ -118,12 +117,11 @@ class ArticleLike(Base):
     article: Mapped[Article] = relationship(back_populates="like_records")
 
 
-class Tag(Base):
+class Tag(UUIDPrimaryKeyMixin, Base):
     """文章标签。多对多关联到文章。"""
 
     __tablename__: str = "tags"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -139,11 +137,11 @@ class ArticleTag(Base):
 
     __tablename__: str = "article_tag"
 
-    article_id: Mapped[int] = mapped_column(
-        ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
     )
-    tag_id: Mapped[int] = mapped_column(
-        ForeignKey("tags.id"), primary_key=True, index=True
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("tags.id"), primary_key=True, index=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

@@ -19,6 +19,7 @@ auth/login``），前后台分离的 cookie 名 + audience 不变。
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 import jwt
@@ -131,7 +132,7 @@ def _clear_cookies(resp: Response) -> None:
 def _admin_user_dict(user: User) -> dict[str, Any]:
     """后台返回的管理员自身信息（对齐单体现行 AdminUserOut 字段，无 PII 富字段）。"""
     return {
-        "id": int(user.id),
+        "id": str(user.id),  # 主键已 UUID；JSON 无 uuid 类型，按字符串出 wire
         "username": str(user.username),
         "account_level": str(user.account_level),
         "created_at": user.created_at.isoformat() if user.created_at else None,
@@ -159,9 +160,11 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
     sub = payload.get("sub")
+    # sub 是 str(user.id)（UUID 串）；非法/缺失一律 FORBIDDEN，绝不 500。
+    # 先 str() 再解析：拒绝把裸 int 当 128-bit UUID 接受。
     try:
-        user_id = int(sub) if sub is not None else 0
-    except (TypeError, ValueError):
+        user_id = uuid.UUID(str(sub))
+    except (AttributeError, TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
 
     user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
@@ -344,7 +347,7 @@ async def admin_verify_2fa(
     """
     # 识别当前 admin（auth 库裁决）：无效/非 admin → FORBIDDEN
     user = await _require_admin_from_cookie(request, db)
-    await verify_user_totp(db, int(user.id), body.code)
+    await verify_user_totp(db, user.id, body.code)
 
     mfa_at = int(datetime.datetime.now(datetime.UTC).timestamp())
     access_token = create_admin_access_token(user, mfa_verified=True, mfa_at=mfa_at)

@@ -1,10 +1,14 @@
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import CommonErr
 from tests.conftest import auth_user_uid
 
 
-async def _setup_user(auth_db: AsyncSession, username="tester") -> tuple[int, str]:
+async def _setup_user(
+    auth_db: AsyncSession, username="tester"
+) -> tuple[uuid.UUID, str]:
     """在 auth realm(business 无 users)建 normal/member 用户，返回 (id, access token)。"""
     au = await auth_user_uid(
         auth_db,
@@ -14,7 +18,7 @@ async def _setup_user(auth_db: AsyncSession, username="tester") -> tuple[int, st
         account_level="normal",
         role="member",
     )
-    return int(au.id), au.token
+    return au.id, au.token
 
 
 class TestStarHopeRoutes:

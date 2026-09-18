@@ -1,5 +1,6 @@
 import datetime
 import json
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -76,7 +77,7 @@ def _dump_scalars(data: dict[str, Any]) -> dict[str, Any]:
 async def pull_entity(
     db: AsyncSession,
     entity: str,
-    user_id: int,
+    user_id: uuid.UUID,
     since: datetime.datetime | None,
 ) -> StarHopePullData[Any]:
     model, _in, out_schema = _lookup(entity)
@@ -106,7 +107,7 @@ async def pull_entity(
 async def push_entity(
     db: AsyncSession,
     entity: str,
-    user_id: int,
+    user_id: uuid.UUID,
     upserts: list[dict[str, Any]],
     deletes: list[StarHopeTombstone],
 ) -> StarHopePushResult:

@@ -10,6 +10,7 @@ Covers:
 
 import hashlib
 import time
+import uuid
 from typing import Any, cast
 
 import pytest
@@ -78,7 +79,7 @@ def _svc():
 
 
 def _FakeCurrentUser(
-    id: int, account_level: str = "local", role: str = "member"
+    id: uuid.UUID, account_level: str = "local", role: str = "member"
 ) -> CurrentUser:
     """测试辅助：构造一个满足 ``CurrentUser`` 类型的用户上下文。"""
     return CurrentUser(id=id, account_level=account_level, role=role)
@@ -106,7 +107,7 @@ async def _create_user(
     return user
 
 
-async def _enable_totp_for_user(db: AsyncSession, user_id: int) -> str:
+async def _enable_totp_for_user(db: AsyncSession, user_id: uuid.UUID) -> str:
     """Create a TOTP record with a known secret and mark enabled=True."""
     secret = generate_totp_secret()
     encrypted = encrypt_secret(secret)
@@ -556,7 +557,8 @@ class TestDeleteNot2FAGated:
             user_id=user.id, account_level="normal", role="member"
         )
         resp = await fused_front_client.delete(
-            "/api/v1/content/items/999999", headers=_auth(token)
+            "/api/v1/content/items/00000000-0000-7000-8000-000000000099",
+            headers=_auth(token),
         )
         # 能走到权限判定（而非被 2FA 门禁拦住）→ 不再是 401 code=4
         assert resp.status_code == 403

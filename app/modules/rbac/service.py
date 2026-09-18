@@ -4,6 +4,7 @@
 （RequirePermission / require_permission）抛 FORBIDDEN。
 """
 
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -43,7 +44,7 @@ async def role_has_permission(
 async def check_owner(
     db: AsyncSession,
     cur: CurrentUser,
-    obj_id: int,
+    obj_id: uuid.UUID,
     model: type[Any],
     id_field: str,
     permission: Permission,

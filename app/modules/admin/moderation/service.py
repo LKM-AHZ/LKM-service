@@ -1,5 +1,7 @@
 """审校规则 CRUD：增删改查 + 写后失效规则缓存。"""
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +52,9 @@ async def create_rule(db: AsyncSession, info: RuleCreate) -> RuleInfo:
     return RuleInfo.model_validate(rule)
 
 
-async def update_rule(db: AsyncSession, rule_id: int, info: RuleUpdate) -> RuleInfo:
+async def update_rule(
+    db: AsyncSession, rule_id: uuid.UUID, info: RuleUpdate
+) -> RuleInfo:
     rule = await db.get(ModerationRule, rule_id)
     if rule is None:
         raise BizError(ModerationErr.RULE_NOT_FOUND, "审校规则不存在")
@@ -75,7 +79,7 @@ async def update_rule(db: AsyncSession, rule_id: int, info: RuleUpdate) -> RuleI
     return RuleInfo.model_validate(rule)
 
 
-async def delete_rule(db: AsyncSession, rule_id: int) -> None:
+async def delete_rule(db: AsyncSession, rule_id: uuid.UUID) -> None:
     rule = await db.get(ModerationRule, rule_id)
     if rule is None:
         raise BizError(ModerationErr.RULE_NOT_FOUND, "审校规则不存在")

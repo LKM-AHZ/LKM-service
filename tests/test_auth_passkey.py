@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import struct
+import uuid
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -132,23 +133,23 @@ async def _register_passkey(
 
 class TestBeginPasskeyRegistration:
     async def should_produce_challenge(self, db):
-        await _reg_normal(db)
-        result = await _service().begin_passkey_registration(db, user_id=1)
+        user = await _reg_normal(db)
+        result = await _service().begin_passkey_registration(db, user_id=user.id)
         assert "challenge_id" in result
         pk = result["public_key"]
         assert pk["rp"]["name"] == "LKM Service"
         assert pk["pubKeyCredParams"]
 
     async def should_allow_local_user_to_begin_registration(self, db):
-        await _reg_local(db, username="alice")
+        user = await _reg_local(db, username="alice")
         svc = _service()
-        result = await svc.begin_passkey_registration(db, user_id=1)
+        result = await svc.begin_passkey_registration(db, user_id=user.id)
         assert "challenge_id" in result
 
     async def should_reject_nonexistent_user(self, db):
         svc = _service()
         with pytest.raises(BizError) as exc:
-            await svc.begin_passkey_registration(db, user_id=999)
+            await svc.begin_passkey_registration(db, user_id=uuid.uuid4())
         assert exc.value.errcode == AuthErr.USER_NOT_FOUND
 
     async def should_include_exclude_credentials(self, db):
@@ -550,8 +551,8 @@ class TestCredentialManagement:
 
     async def should_not_delete_other_user_credential(self, db):
         u1 = await _reg_normal(db, username="alice", email="alice@t.com")
-        await _reg_normal(db, username="bob", email="bob@t.com")
+        bob = await _reg_normal(db, username="bob", email="bob@t.com")
         await _register_passkey(db, u1.id, "alice-key")
         creds = await _service().list_credentials(db, u1.id)
         with pytest.raises(BizError):
-            await _service().delete_credential(db, 2, creds[0]["id"])
+            await _service().delete_credential(db, bob.id, creds[0]["id"])

@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,9 +18,9 @@ class FileCreate(BaseModel):
 class FileInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     original_name: str
-    uploader_id: int
+    uploader_id: uuid.UUID
     uploader_name: str = ""
     mime_type: str
     size: int

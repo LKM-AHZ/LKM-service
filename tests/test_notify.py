@@ -7,6 +7,7 @@
 
 import hashlib
 import json
+import uuid
 from typing import Any
 
 import boto3
@@ -16,6 +17,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.files.models import FileStatus, LibraryFile
+
+# 直传标记里的 uploader_id（uuid 字符串）；register 会以 uuid.UUID(...) 解析。
+_UPLOADER_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
 
 
 @pytest.fixture
@@ -235,7 +239,7 @@ class TestNotifyTask:
                 json.dumps(
                     {
                         "key": key,
-                        "uploader_id": 7,
+                        "uploader_id": str(_UPLOADER_ID),
                         "original_name": "讲座.pdf",
                         "mime_type": "application/pdf",
                         "category_id": "math",
@@ -247,13 +251,10 @@ class TestNotifyTask:
                 ),
             )
 
-            # PG 强外键：register 的 LibraryFile.uploader_id 必须指向真实 user。
-            # 标记里的 uploader_id=7 是断言契约（row.uploader_id==7），故让本 schema 第 7 个
-            # user 的自增 id==7。
+            # register 的 LibraryFile.uploader_id 必须指向真实 user；用固定 uuid 建对应行。
             from app.modules.auth.models import User
 
-            for i in range(1, 8):
-                db.add(User(username=f"pwup{i}", hashed_password="x"))
+            db.add(User(id=_UPLOADER_ID, username="pwup", hashed_password="x"))
             await db.flush()
 
             await notify_task.notify_upload(upload_id)
@@ -262,7 +263,7 @@ class TestNotifyTask:
             assert len(rows) == 1
             row = rows[0]
             assert row.status == FileStatus.PENDING
-            assert row.uploader_id == 7
+            assert row.uploader_id == _UPLOADER_ID
             assert row.original_name == "讲座.pdf"
             assert row.sha3_hash == hashlib.sha3_256(content).hexdigest()
             # 随机 key 已删，标记已被 GETDEL 取走
@@ -283,7 +284,7 @@ class TestNotifyTask:
         meta_raw = json.dumps(
             {
                 "key": "up/retry",
-                "uploader_id": 7,
+                "uploader_id": str(_UPLOADER_ID),
                 "original_name": "讲座.pdf",
                 "mime_type": "application/pdf",
                 "category_id": "math",

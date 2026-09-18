@@ -5,6 +5,7 @@
 普通用户删除自己的内容走各自的）前台端点（无 2FA）。
 """
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -60,8 +61,8 @@ async def admin_list_content_items(
 async def _audit_admin_delete(
     db: AsyncSession,
     request: Request,
-    admin_id: int,
-    target_user_id: int,
+    admin_id: uuid.UUID,
+    target_user_id: uuid.UUID,
     action: str,
     detail: str,
 ) -> None:
@@ -78,7 +79,7 @@ async def _audit_admin_delete(
 @router.delete("/item/{item_id}", response_model=ApiResp[dict[str, Any]])
 @respond
 async def admin_delete_content_item(
-    item_id: int,
+    item_id: uuid.UUID,
     request: Request,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
@@ -90,7 +91,7 @@ async def admin_delete_content_item(
         db,
         request,
         cur.id,
-        max(author_id, 0),
+        author_id,
         "admin_delete_content_item",
         f"item={item_id}",
     )
@@ -100,7 +101,7 @@ async def admin_delete_content_item(
 @router.delete("/series/{series_id}", response_model=ApiResp[dict[str, Any]])
 @respond
 async def admin_delete_series(
-    series_id: int,
+    series_id: uuid.UUID,
     request: Request,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
@@ -125,8 +126,8 @@ async def admin_delete_series(
 )
 @respond
 async def admin_delete_blog_comment(
-    series_id: int,
-    comment_id: int,
+    series_id: uuid.UUID,
+    comment_id: uuid.UUID,
     request: Request,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
@@ -150,7 +151,7 @@ async def admin_delete_blog_comment(
 @router.delete("/article-comment/{comment_id}", response_model=ApiResp[dict[str, Any]])
 @respond
 async def admin_delete_article_comment(
-    comment_id: int,
+    comment_id: uuid.UUID,
     request: Request,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),

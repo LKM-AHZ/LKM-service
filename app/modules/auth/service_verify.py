@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import hmac
 import secrets
+import uuid
 from typing import Any, cast
 
 from sqlalchemy import select
@@ -40,7 +41,7 @@ async def _create_verification(
     contact_attr: str,
     contact: str,
     purpose: str,
-) -> tuple[str, int]:
+) -> tuple[str, uuid.UUID]:
     """创建一条验证码记录并返回 (明文验证码, 记录ID)。"""
     code = generate_code()
     nonce = secrets.token_hex(8)
@@ -79,14 +80,14 @@ async def _latest_verification(
 
 async def create_email_verification(
     db: AsyncSession, email: str, purpose: str
-) -> tuple[str, int]:
+) -> tuple[str, uuid.UUID]:
     """创建一个 EmailVerification 记录并返回 (明文验证码, 记录ID)。"""
     return await _create_verification(db, EmailVerification, "email", email, purpose)
 
 
 async def create_phone_verification(
     db: AsyncSession, phone: str, purpose: str
-) -> tuple[str, int]:
+) -> tuple[str, uuid.UUID]:
     """创建一个 PhoneVerification 记录并返回 (明文验证码, 记录ID)。"""
     return await _create_verification(db, PhoneVerification, "phone", phone, purpose)
 

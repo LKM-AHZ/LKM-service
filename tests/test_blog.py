@@ -61,6 +61,9 @@ async def _auth_seam_for_http(auth_seam_fused) -> None:
 # ---- fixtures ----
 # db 与 client fixture 均由 tests/conftest.py 提供（PG schema-per-test 会话 + httpx.AsyncClient）
 
+# 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
+
 
 @pytest.fixture
 def blog_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
@@ -75,7 +78,7 @@ def blog_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
 
 async def _user(
     db: AsyncSession, username: str = "alice", email: str = "alice@example.com"
-) -> int:
+) -> uuid.UUID:
     from app.modules.auth.models import Profile, User
 
     user = User(
@@ -92,7 +95,7 @@ async def _user(
 
 
 async def _series(
-    db: AsyncSession, user_id: int = 1, repo_name: str = "my-blog"
+    db: AsyncSession, user_id: uuid.UUID, repo_name: str = "my-blog"
 ) -> BlogSeriesInfo:
     return await create_series(
         db,
@@ -122,7 +125,7 @@ class TestBlogSeries:
         user_id = await _user(db)
         series = await _series(db, user_id=user_id)
 
-        assert series.id == 1
+        assert isinstance(series.id, uuid.UUID)
         assert series.owner_id == user_id
         assert series.title == "My Blog"
         assert series.status == BlogSeriesStatus.ACTIVE
@@ -136,11 +139,11 @@ class TestBlogSeries:
     async def should_reject_duplicate_repo_name(
         self, db: AsyncSession, blog_dir: str
     ) -> None:
-        await _user(db)
-        await _series(db, repo_name="taken")
+        user_id = await _user(db)
+        await _series(db, user_id=user_id, repo_name="taken")
 
         with pytest.raises(BizError) as exc:
-            await _series(db, repo_name="taken")
+            await _series(db, user_id=user_id, repo_name="taken")
 
         assert exc.value.errcode == CommonErr.INVALID_INPUT
 
@@ -195,7 +198,7 @@ class TestBlogSeries:
 
     async def should_reject_nonexistent_series(self, db: AsyncSession) -> None:
         with pytest.raises(BizError) as exc:
-            await get_series(db, 999)
+            await get_series(db, _MISSING_ID)
 
         assert exc.value.errcode == BlogErr.SERIES_NOT_FOUND
 
@@ -293,7 +296,7 @@ class TestBlogStars:
 
     async def should_reject_star_nonexistent_series(self, db: AsyncSession) -> None:
         with pytest.raises(BizError) as exc:
-            await toggle_star(db, 999, 1)
+            await toggle_star(db, _MISSING_ID, uuid.uuid4())
         assert exc.value.errcode == BlogErr.SERIES_NOT_FOUND
 
     async def should_count_stars_correctly(
@@ -313,7 +316,7 @@ class TestBlogStars:
 # ---- M3.A残项: 评论作者 ProfileInfo 经 auth 读缝组装，blank-when-unset 保真 ----
 async def _user_nick(
     db: AsyncSession, username: str, nickname: str | None
-) -> int:
+) -> uuid.UUID:
     from app.modules.auth.models import Profile, User
 
     user = User(
@@ -373,7 +376,7 @@ class TestBlogComments:
         comment = await create_comment(
             db, series.id, user_id, BlogCommentCreate(content="Nice post!")
         )
-        assert comment.id == 1
+        assert isinstance(comment.id, uuid.UUID)
         assert comment.content == "Nice post!"
         assert comment.parent_id is None
         assert comment.replies == []
@@ -420,7 +423,9 @@ class TestBlogComments:
 
     async def should_reject_comment_nonexistent_series(self, db: AsyncSession) -> None:
         with pytest.raises(BizError) as exc:
-            await create_comment(db, 999, 1, BlogCommentCreate(content="Bad"))
+            await create_comment(
+                db, _MISSING_ID, uuid.uuid4(), BlogCommentCreate(content="Bad")
+            )
         assert exc.value.errcode == BlogErr.SERIES_NOT_FOUND
 
     async def should_reject_reply_to_nonexistent_parent(
@@ -434,7 +439,7 @@ class TestBlogComments:
                 db,
                 series.id,
                 user_id,
-                BlogCommentCreate(content="Bad reply", parent_id=999),
+                BlogCommentCreate(content="Bad reply", parent_id=_MISSING_ID),
             )
         assert exc.value.errcode == CommonErr.INVALID_INPUT
 
@@ -504,7 +509,7 @@ class TestBlogComments:
         series = await _series(db, user_id=user_id)
 
         with pytest.raises(BizError) as exc:
-            await delete_comment(db, series.id, 999, user_id)
+            await delete_comment(db, series.id, _MISSING_ID, user_id)
         assert exc.value.errcode == BlogErr.COMMENT_NOT_FOUND
 
     async def should_show_comment_with_profile(
@@ -537,7 +542,7 @@ class TestBlogFiles:
 
     async def should_reject_file_nonexistent_series(self, db: AsyncSession) -> None:
         with pytest.raises(BizError) as exc:
-            await get_file_content(db, 999, "README.md")
+            await get_file_content(db, _MISSING_ID, "README.md")
         assert exc.value.errcode == BlogErr.SERIES_NOT_FOUND
 
     async def should_reject_missing_file(self, db: AsyncSession, blog_dir: str) -> None:
@@ -565,7 +570,7 @@ class TestBlogFiles:
 
 
 class TestBlogRoutes:
-    async def _setup_user(self, db: AsyncSession) -> tuple[int, str]:
+    async def _setup_user(self, db: AsyncSession) -> tuple[uuid.UUID, str]:
         """Create a user and return (user_id, bearer_token)."""
         user_id = await _user(db, username="testuser", email="test@example.com")
         token = create_access_token(
@@ -591,7 +596,7 @@ class TestBlogRoutes:
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert data["id"] == 1
+        assert isinstance(data["id"], str) and data["id"]
         assert data["repo_name"] == "api-blog"
         assert await asyncio.to_thread(
             os.path.isdir, os.path.join(blog_dir, "api-blog.git")
@@ -630,13 +635,14 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
         await client.post(
-            "/api/v1/blog/series/1/star", headers=self._auth_header(token)
+            f"/api/v1/blog/series/{sid}/star", headers=self._auth_header(token)
         )
 
         # 星标是写操作保留；读取经 GraphQL：blogSeries 走游客视角（current_user_id=None），
@@ -656,18 +662,19 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         data = await _run_graphql(
             client,
             """
-            query($id: Int!) { blogSeriesDetail(seriesId: $id) { id title fileTree { name type } } }
+            query($id: ID!) { blogSeriesDetail(seriesId: $id) { id title fileTree { name type } } }
             """,
-            {"id": 1},
+            {"id": sid},
         )
         detail = data["blogSeriesDetail"]
         assert detail["title"] == "A"
@@ -677,14 +684,15 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         resp = await client.put(
-            "/api/v1/blog/series/1",
+            f"/api/v1/blog/series/{sid}",
             headers=self._auth_header(token),
             json={"title": "Updated"},
         )
@@ -694,18 +702,21 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         # create second user
-        await _user(db, username="other", email="other@example.com")
-        token2 = create_access_token(user_id=2, account_level="normal", role="member")
+        other_id = await _user(db, username="other", email="other@example.com")
+        token2 = create_access_token(
+            user_id=other_id, account_level="normal", role="member"
+        )
 
         resp = await client.put(
-            "/api/v1/blog/series/1",
+            f"/api/v1/blog/series/{sid}",
             headers=self._auth_header(token2),
             json={"title": "Stolen"},
         )
@@ -715,23 +726,24 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         resp = await client.delete(
-            "/api/v1/blog/series/1", headers=self._auth_header(token)
+            f"/api/v1/blog/series/{sid}", headers=self._auth_header(token)
         )
         assert resp.status_code == 200
         # verify gone：经 GraphQL blogSeriesDetail（不存在的系列 resolver 返回 null）
         data = await _run_graphql(
             client,
             """
-            query($id: Int!) { blogSeriesDetail(seriesId: $id) { id } }
+            query($id: ID!) { blogSeriesDetail(seriesId: $id) { id } }
             """,
-            {"id": 1},
+            {"id": sid},
         )
         assert data["blogSeriesDetail"] is None
 
@@ -739,20 +751,21 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         resp = await client.post(
-            "/api/v1/blog/series/1/star", headers=self._auth_header(token)
+            f"/api/v1/blog/series/{sid}/star", headers=self._auth_header(token)
         )
         assert resp.json()["data"]["starred"]
         assert resp.json()["data"]["star_count"] == 1
 
         resp = await client.post(
-            "/api/v1/blog/series/1/star", headers=self._auth_header(token)
+            f"/api/v1/blog/series/{sid}/star", headers=self._auth_header(token)
         )
         assert not resp.json()["data"]["starred"]
         assert resp.json()["data"]["star_count"] == 0
@@ -761,14 +774,15 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
 
         resp = await client.post(
-            "/api/v1/blog/series/1/comments",
+            f"/api/v1/blog/series/{sid}/comments",
             headers=self._auth_header(token),
             json={"content": "Great!"},
         )
@@ -779,20 +793,21 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
+        sid = created.json()["data"]["id"]
         resp = await client.post(
-            "/api/v1/blog/series/1/comments",
+            f"/api/v1/blog/series/{sid}/comments",
             headers=self._auth_header(token),
             json={"content": "Root"},
         )
         parent_id = resp.json()["data"]["id"]
 
         await client.post(
-            "/api/v1/blog/series/1/comments",
+            f"/api/v1/blog/series/{sid}/comments",
             headers=self._auth_header(token),
             json={"content": "Child", "parent_id": parent_id},
         )
@@ -801,11 +816,11 @@ class TestBlogRoutes:
         data = await _run_graphql(
             client,
             """
-            query($id: Int!) {
+            query($id: ID!) {
               blogSeriesComments(seriesId: $id) { id content replies { content } }
             }
             """,
-            {"id": 1},
+            {"id": sid},
         )
         items = data["blogSeriesComments"]
         assert len(items) == 1
@@ -816,28 +831,31 @@ class TestBlogRoutes:
         self, client: AsyncClient, db: AsyncSession, blog_dir: str
     ) -> None:
         _, token = await self._setup_user(db)
-        await client.post(
+        created = await client.post(
             "/api/v1/blog/series",
             headers=self._auth_header(token),
             json={"title": "A", "repo_name": "a"},
         )
-        await client.post(
-            "/api/v1/blog/series/1/comments",
+        sid = created.json()["data"]["id"]
+        commented = await client.post(
+            f"/api/v1/blog/series/{sid}/comments",
             headers=self._auth_header(token),
             json={"content": "Delete me"},
         )
+        cmt_id = commented.json()["data"]["id"]
 
         resp = await client.delete(
-            "/api/v1/blog/series/1/comments/1", headers=self._auth_header(token)
+            f"/api/v1/blog/series/{sid}/comments/{cmt_id}",
+            headers=self._auth_header(token),
         )
         assert resp.status_code == 200
 
         data = await _run_graphql(
             client,
             """
-            query($id: Int!) { blogSeriesComments(seriesId: $id) { id } }
+            query($id: ID!) { blogSeriesComments(seriesId: $id) { id } }
             """,
-            {"id": 1},
+            {"id": sid},
         )
         assert data["blogSeriesComments"] == []
 
@@ -846,14 +864,14 @@ class TestBlogRoutes:
         data = await _run_graphql(
             client,
             """
-            query($id: Int!) { blogSeriesDetail(seriesId: $id) { id } }
+            query($id: ID!) { blogSeriesDetail(seriesId: $id) { id } }
             """,
-            {"id": 999},
+            {"id": str(_MISSING_ID)},
         )
         assert data["blogSeriesDetail"] is None
 
     async def should_require_auth_for_star(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/blog/series/1/star")
+        resp = await client.post(f"/api/v1/blog/series/{_MISSING_ID}/star")
         assert resp.status_code == 403
 
 
@@ -868,7 +886,7 @@ class TestBlogWriteFiles:
 
     async def _create_series(
         self, client: AsyncClient, token: str, repo_name: str
-    ) -> int:
+    ) -> uuid.UUID:
         unique_repo = f"{repo_name}_{uuid.uuid4().hex[:8]}"
         resp = await client.post(
             "/api/v1/blog/series",
@@ -876,7 +894,7 @@ class TestBlogWriteFiles:
             json={"title": "Write Test", "repo_name": unique_repo},
         )
         assert resp.status_code == 200
-        return resp.json()["data"]["id"]
+        return uuid.UUID(resp.json()["data"]["id"])
 
     async def should_write_and_read_back_file(
         self, client: AsyncClient, db: AsyncSession
@@ -943,7 +961,7 @@ slug: {slug}
             user_id=user_id, account_level="normal", role="member"
         )
 
-    async def _make_series(self, client: AsyncClient, token: str) -> int:
+    async def _make_series(self, client: AsyncClient, token: str) -> uuid.UUID:
         """建一个 repo 名带 uuid 唯一后缀的系列，返回 id。"""
         repo = f"pub_{uuid.uuid4().hex[:8]}"
         resp = await client.post(
@@ -952,10 +970,15 @@ slug: {slug}
             json={"title": "Publish Series", "repo_name": repo},
         )
         assert resp.status_code == 200
-        return resp.json()["data"]["id"]
+        return uuid.UUID(resp.json()["data"]["id"])
 
     async def _write_file(
-        self, client: AsyncClient, token: str, sid: int, filepath: str, content: str
+        self,
+        client: AsyncClient,
+        token: str,
+        sid: uuid.UUID,
+        filepath: str,
+        content: str,
     ) -> None:
         resp = await client.put(
             f"/api/v1/blog/series/{sid}/files/{filepath}",
@@ -1134,7 +1157,9 @@ slug: {slug}
 class TestBlogContent:
     """DB 主存储下 blog_content 行的行为：upsert 幂等、版本递增、发布闭环。"""
 
-    async def _get_row(self, db: AsyncSession, series_id: int, path: str) -> Any:
+    async def _get_row(
+        self, db: AsyncSession, series_id: uuid.UUID, path: str
+    ) -> Any:
         from app.modules.blog.models import BlogContent
 
         return (
@@ -1214,7 +1239,7 @@ class TestBlogContent:
             json={"title": "Content", "repo_name": repo},
         )
         assert resp.status_code == 200
-        sid = resp.json()["data"]["id"]
+        sid = uuid.UUID(resp.json()["data"]["id"])
 
         # 直接用服务层写（DB 主存），再经 DB 读取发布
         mdx = "---\ntitle: 从DB\ncategory: engineering\nslug: from-db\n---\n# 正文"

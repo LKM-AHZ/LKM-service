@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.event_failure import EventFailure
@@ -62,13 +63,20 @@ async def should_be_idempotent_on_rerun(db: AsyncSession) -> None:
 
 async def should_respect_persisted_watermark(db: AsyncSession) -> None:
     await _seed_failures(db, 3)
-    # 预置水位=2：只剩第 3 行待导
-    client = FakeClickHouseClient(watermarks={FAILURES_TABLE: 2})
+    # uuid7 主键：预置「中间一行」的字符串 id 作水位，只剩最后一行待导
+    # （字典序即时间序；用真实 id 而非硬编码，避免依赖生成时刻）。
+    ids = (
+        (await db.execute(select(EventFailure.id).order_by(EventFailure.id)))
+        .scalars()
+        .all()
+    )
+    client = FakeClickHouseClient(watermarks={FAILURES_TABLE: str(ids[1])})
 
     total = await export_event_failures(db, client, window=10)
 
     assert total == 1
     assert client.inserted_rows() == 1
+    assert client.inserts[0][1][0][0] == str(ids[2])
 
 
 async def should_raise_on_ch_failure(db: AsyncSession) -> None:
@@ -82,14 +90,11 @@ async def should_raise_on_ch_failure(db: AsyncSession) -> None:
 async def should_export_audit_logs_with_empty_text_columns(
     auth_db: AsyncSession,
 ) -> None:
-    auth_db.add_all(
-        [
-            AuditLog(action="login_fail", detail=None, ip_address=None),
-            AuditLog(
-                action="permission_change", detail="granted", ip_address="1.2.3.4"
-            ),
-        ]
-    )
+    logs = [
+        AuditLog(action="login_fail", detail=None, ip_address=None),
+        AuditLog(action="permission_change", detail="granted", ip_address="1.2.3.4"),
+    ]
+    auth_db.add_all(logs)
     await auth_db.commit()
     client = FakeClickHouseClient()
 
@@ -100,7 +105,11 @@ async def should_export_audit_logs_with_empty_text_columns(
     _, data, cols = client.inserts[0]
     assert data[0][cols.index("detail")] == ""
     assert data[0][cols.index("ip_address")] == ""
-    assert client.watermarks[AUDITS_TABLE] == 2
+    # uuid 主键/用户列以字符串形式落 CH String 列（uuid 对象不能直接进 String 列）
+    assert data[0][cols.index("id")] == str(min(logs, key=lambda r: r.id).id)
+    assert data[0][cols.index("user_id")] is None  # 未关联用户 → Nullable(String) 落 NULL
+    # 水位推进到本批最大 id（字符串形式，CH 侧 max(id) 下一次读回同值）
+    assert client.watermarks[AUDITS_TABLE] == str(max(logs, key=lambda r: r.id).id)
 
 
 async def should_audit_export_be_idempotent(auth_db: AsyncSession) -> None:

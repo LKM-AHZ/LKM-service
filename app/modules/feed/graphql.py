@@ -19,14 +19,14 @@ from app.modules.feed.service import get_timeline
 
 @strawberry.type
 class GraphFollowUser:
-    userId: int
+    userId: strawberry.ID
     displayName: str
     avatar: str | None
 
 
 @strawberry.type
 class GraphFollowBoard:
-    boardId: int
+    boardId: strawberry.ID
     title: str
 
 
@@ -36,13 +36,13 @@ class GraphFollowBoard:
 @strawberry.type
 class GraphFeedItem:
     itemType: str
-    id: int
-    authorId: int | None
+    id: strawberry.ID
+    authorId: strawberry.ID | None
     authorName: str
     title: str
     contentPreview: str
     createdAt: str
-    boardId: int | None = None
+    boardId: strawberry.ID | None = None
     url: str
 
 

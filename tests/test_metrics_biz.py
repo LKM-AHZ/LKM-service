@@ -5,6 +5,8 @@
 - post_created_total 按 content_type 分系列；notify_failed_total 亦已注册（占位在 /metrics 可见）。
 """
 
+import uuid
+
 import pytest
 from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,12 +27,14 @@ def _sample_value(name: str, labels: dict[str, str]) -> float:
     return val if val is not None else 0.0
 
 
-async def _discussion_created(db: AsyncSession, author_id: int | None = None) -> None:
+async def _discussion_created(
+    db: AsyncSession, author_id: uuid.UUID | None = None
+) -> None:
     """直接调统一 content/service.create_item 成功建一帖（真实计数链路之一）。
 
     content_items.board_id(强 FK)+author_id(设了就需存在) 在 PG 是被校验的外键：
-    裸 board_id=1 / author_id=1 而 schema 无真实 board/user 会被 FK 拦截。
-    这里先落真实 board + 作者，取自增 id 作父。
+    裸 board_id / author_id 而 schema 无真实 board/user 会被 FK 拦截。
+    这里先落真实 board + 作者，取其 uuid 主键作父。
     """
     from app.modules.auth.models import User
     from app.modules.content.models import Board

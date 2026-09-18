@@ -11,6 +11,8 @@ content 端点（/api/v1/content/items）与 content schema（discussion 发帖�
 - 权限点 RolePermission + Exam/ExamCertificate 仍落业务 realm(Base, 符合生产)。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,11 +44,11 @@ def _h(au: AuthUser) -> dict[str, str]:
     return {"Authorization": f"Bearer {au.token}"}
 
 
-async def _mk_board(db: DB, *, owner_id: int | None = None) -> int:
+async def _mk_board(db: DB, *, owner_id: uuid.UUID | None = None) -> uuid.UUID:
     board = Board(slug="b1", title="B", description="", owner_id=owner_id)
     db.add(board)
     await db.flush()
-    return int(board.id)
+    return board.id
 
 
 async def _seed_perm(db: DB, role: str, permission: str) -> None:
@@ -85,11 +87,11 @@ async def test_normal_can_post(
     r = await client.post(
         "/api/v1/content/items",
         headers=_h(user),
-        json={"board_id": board, "title": "t", "content": "c"},
+        json={"board_id": str(board), "title": "t", "content": "c"},
     )
     assert r.status_code == 200
     assert r.json()["code"] == 0
-    assert r.json()["data"]["author_id"] == user.id
+    assert r.json()["data"]["author_id"] == str(user.id)
     assert r.json()["data"]["content_type"] == "discussion"
 
 
@@ -102,7 +104,7 @@ async def test_local_cannot_post(
     r = await client.post(
         "/api/v1/content/items",
         headers=_h(user),
-        json={"board_id": board, "title": "t", "content": "c"},
+        json={"board_id": str(board), "title": "t", "content": "c"},
     )
     assert r.status_code == 403
 
@@ -127,7 +129,7 @@ async def test_uncertified_blocked_on_certified_board(
     r = await client.post(
         "/api/v1/content/items",
         headers=_h(novice),
-        json={"board_id": int(board.id), "title": "t", "content": "c"},
+        json={"board_id": str(board.id), "title": "t", "content": "c"},
     )
 
     assert r.status_code == 403
@@ -154,7 +156,7 @@ async def test_certified_allowed_on_certified_board(
     r = await client.post(
         "/api/v1/content/items",
         headers=_h(cert_user),
-        json={"board_id": int(board.id), "title": "t", "content": "c"},
+        json={"board_id": str(board.id), "title": "t", "content": "c"},
     )
 
     assert r.status_code == 200
@@ -171,7 +173,7 @@ async def test_foreign_cannot_delete(
     rp = await client.post(
         "/api/v1/content/items",
         headers=_h(a),
-        json={"board_id": board, "title": "t", "content": "c"},
+        json={"board_id": str(board), "title": "t", "content": "c"},
     )
     item_id = rp.json()["data"]["id"]
     r = await client.delete(f"/api/v1/content/items/{item_id}", headers=_h(b))
@@ -188,7 +190,7 @@ async def test_owner_can_delete(
     rp = await client.post(
         "/api/v1/content/items",
         headers=_h(a),
-        json={"board_id": board, "title": "t", "content": "c"},
+        json={"board_id": str(board), "title": "t", "content": "c"},
     )
     item_id = rp.json()["data"]["id"]
     r = await client.delete(f"/api/v1/content/items/{item_id}", headers=_h(a))

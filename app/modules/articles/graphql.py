@@ -25,7 +25,7 @@ class GraphArticleListItem:
     title: str
     description: str | None
     cover: str | None
-    categoryId: int
+    categoryId: strawberry.ID
     categoryTitle: str
     published: str | None
     views: int

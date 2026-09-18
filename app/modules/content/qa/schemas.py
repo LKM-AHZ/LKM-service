@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,8 +18,8 @@ class QuestionCreate(BaseModel):
 class QuestionOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    author_id: int
+    id: uuid.UUID
+    author_id: uuid.UUID
     title: str
     situation: str
     content: str
@@ -28,7 +29,7 @@ class QuestionOut(BaseModel):
     bounty_distributed: int
     status: str
     category: str = "help"
-    accepted_answer_id: int | None = None
+    accepted_answer_id: uuid.UUID | None = None
     answer_count: int = 0
     created_at: datetime.datetime
     author_name: str = ""  # 提问者昵称（service 组装，供列表/详情直接展示）
@@ -41,9 +42,9 @@ class AnswerCreate(BaseModel):
 class AnswerOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    question_id: int
-    author_id: int
+    id: uuid.UUID
+    question_id: uuid.UUID
+    author_id: uuid.UUID
     content: str
     is_accepted: bool
     created_at: datetime.datetime

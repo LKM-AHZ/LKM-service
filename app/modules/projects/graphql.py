@@ -12,9 +12,9 @@ from app.modules.projects.service import get_project_ex, list_projects
 
 @strawberry.type
 class GraphProjectMember:
-    id: int
-    projectId: int
-    userId: int | None
+    id: strawberry.ID
+    projectId: strawberry.ID
+    userId: strawberry.ID | None
     displayName: str
     roleInProject: str
     sortOrder: int
@@ -22,11 +22,11 @@ class GraphProjectMember:
 
 @strawberry.type
 class GraphProject:
-    id: int
+    id: strawberry.ID
     title: str
     summary: str
     description: str
-    applicantId: int
+    applicantId: strawberry.ID
     isIncubated: bool
     status: str
     members: list[GraphProjectMember]
@@ -74,7 +74,9 @@ class ProjectsQuery:
         return GraphProjectList(items=[_map_project(p) for p in rows])
 
     @strawberry.field
-    async def project(self, info: Info, projectId: int) -> GraphProject | None:
+    async def project(
+        self, info: Info, projectId: strawberry.ID
+    ) -> GraphProject | None:
         db = _get_db(info)
         try:
             p = await get_project_ex(db, projectId)

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import settings
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,11 @@ MAX_TRIES = 5
 _BACKOFF_CAP_S = 3600
 
 
-class OutboxMessage(Base):
+class OutboxMessage(UUIDPrimaryKeyMixin, Base):
     """待投递事件。payload 与业务同事务落库，relay 按 routing_key 投总线后置 published。"""
 
     __tablename__: str = "outbox_events"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 幂等键：投递去重/防重复副作用以此全局 UUID 为准
     event_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
     # 逻辑主题 = 现有 topic exchange routing_key（event.apply_point/…），relay 按它 publish
@@ -74,6 +73,23 @@ def _backoff_seconds(attempt: int) -> int:
     return min(2 ** int(attempt), _BACKOFF_CAP_S)
 
 
+def _jsonable(value: Any) -> Any:
+    """递归把 UUID 转成字符串——payload 要经 JSONB 落库、再经 Pulsar JSON 编码投递，
+    两者都无法编码 UUID 对象（UUID 为主键后 payload 里的 id 必然是 UUID 实例）。
+
+    **消费侧契约**：handler 经事件链路收到的是**字符串形式**的 uuid，而直接调用路径
+    传入的是 UUID 对象。SQLAlchemy 的 ``Uuid`` 列对两者都接受（asyncpg 实测兼容字符串），
+    故 handler 无需显式还原；但 handler 内不得对 id 参数调用 UUID 专有属性（如 ``.hex``）。
+    """
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(v) for v in value]
+    return value
+
+
 async def enqueue_outbox(
     db: AsyncSession,
     routing_key: str,
@@ -107,7 +123,7 @@ async def enqueue_outbox(
     row = OutboxMessage(
         event_id=eid,
         routing_key=routing_key,
-        payload_json=payload,
+        payload_json=_jsonable(payload),
     )
     db.add(row)
     return True

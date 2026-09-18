@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from fastapi import (
@@ -108,20 +109,20 @@ async def get_user_by_username(
     return await get_profile_by_username(db, username)
 
 
-@router.get("/{user_id:int}", response_model=ApiResp[ProfileInfo])
+@router.get("/{user_id}", response_model=ApiResp[ProfileInfo])
 @respond
 async def get_user(
-    user_id: int,
+    user_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_auth_session),
 ) -> ProfileInfo:
     return await get_profile(db, user_id)
 
 
-@router.put("/{user_id:int}/profile", response_model=ApiResp[ProfileInfo])
+@router.put("/{user_id}/profile", response_model=ApiResp[ProfileInfo])
 @respond
 async def edit_profile(
-    user_id: int,
+    user_id: uuid.UUID,
     info: ProfileUpdate,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_auth_session),
@@ -146,7 +147,7 @@ async def upload_avatar(
 
 @router.get("/avatar/{user_id}")
 async def get_avatar(
-    user_id: int,
+    user_id: uuid.UUID,
     db: AsyncSession = Depends(get_auth_session),
 ) -> StreamingResponse:
     """代理回读某用户头像字节（immutable 长缓存）；无头像 → 404。"""

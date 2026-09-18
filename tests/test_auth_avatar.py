@@ -12,6 +12,7 @@ S5 把 User/Profile 物理迁出业务 Base（auth 独立 realm）后，/api/v1/
 import asyncio
 import pathlib
 import re
+import uuid
 
 import pytest
 from httpx import AsyncClient
@@ -22,7 +23,7 @@ from app.core.err import CommonErr
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.security import create_access_token, hashpwd
 
-_KEY_RE = re.compile(r"^avatars/\d+/v\d+\.webp$")
+_KEY_RE = re.compile(r"^avatars/[0-9a-f-]{36}/v\d+\.webp$")
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ async def _user(
     auth_db: AsyncSession,
     username: str = "avatar",
     email: str = "avatar@example.com",
-) -> int:
+) -> uuid.UUID:
     from app.modules.auth.models import Profile, User
 
     user = User(
@@ -55,10 +56,10 @@ async def _user(
     await auth_db.flush()
     auth_db.add(Profile(user_id=user.id, nickname="头像用户"))
     await auth_db.flush()
-    return int(user.id)
+    return user.id
 
 
-async def _avatar_key(auth_db: AsyncSession, user_id: int) -> str | None:
+async def _avatar_key(auth_db: AsyncSession, user_id: uuid.UUID) -> str | None:
     from app.modules.auth.models import Profile
 
     profile = (
@@ -73,7 +74,7 @@ async def _physical_exists(tmp_path: pathlib.Path, key: str) -> bool:
     return (tmp_path / key).exists()
 
 
-async def _authed(auth_db: AsyncSession) -> tuple[int, str]:
+async def _authed(auth_db: AsyncSession) -> tuple[uuid.UUID, str]:
     user_id = await _user(auth_db)
     token = create_access_token(
         user_id=user_id, account_level="normal", role="member"
@@ -216,7 +217,9 @@ class TestAvatarServe:
     async def test_serve_404_for_unknown_user(
         self, auth_front_client: AsyncClient
     ):
-        resp = await auth_front_client.get("/api/v1/auth/avatar/999")
+        resp = await auth_front_client.get(
+            "/api/v1/auth/avatar/00000000-0000-7000-8000-000000000001"
+        )
 
         assert resp.status_code == 404
         assert resp.json()["code"] == AuthErr.AVATAR_NOT_FOUND

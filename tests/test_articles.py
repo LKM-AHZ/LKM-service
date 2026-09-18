@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import Any
 
 from httpx import AsyncClient
@@ -26,17 +27,17 @@ async def _run_graphql(
 _CATEGORY_TITLES: dict[str, str] = {"news": "科技新闻"}
 
 
-async def _resolve_or_create_category(db, slug: str) -> int:
+async def _resolve_or_create_category(db, slug: str) -> uuid.UUID:
     """按 slug 取分类；不存在则新建，返回分类 id（幂等）。"""
     existing_id = await db.scalar(
         select(ArticleCategory.id).where(ArticleCategory.slug == slug)
     )
     if existing_id is not None:
-        return int(existing_id)
+        return existing_id
     cat = ArticleCategory(slug=slug, title=_CATEGORY_TITLES.get(slug, slug), sort=0)
     db.add(cat)
     await db.flush()
-    return int(cat.id)
+    return cat.id
 
 
 async def _make_article(

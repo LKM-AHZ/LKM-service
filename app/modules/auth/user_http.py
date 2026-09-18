@@ -23,6 +23,7 @@ monolith 进程缓存 miss）应跨 HTTP 打到 AUTH 进程自己的读端点，
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import httpx
@@ -58,7 +59,7 @@ def enabled() -> bool:
     return bool(settings.auth_http_url and reveal(settings.auth_http_token))
 
 
-def _endpoint_path(user_id: int) -> str:
+def _endpoint_path(user_id: uuid.UUID) -> str:
     """拼该用户读端点的绝对路径（api_prefix 前缀 + 内部 auth router 路径）。"""
     return f"{settings.api_prefix}/auth/internal/users/{user_id}/snapshot"
 
@@ -71,7 +72,7 @@ def _build_client() -> httpx.AsyncClient:
 
 
 async def fetch_user_http_payload(
-    user_id: int,
+    user_id: uuid.UUID,
 ) -> tuple[dict[str, Any] | None, int | None]:
     """经 AUTH 读端点按 id 拉单用户快照**冻结字段 dict**。返回 ``(fields_dict, source_version)``。
 
@@ -106,8 +107,8 @@ async def fetch_user_http_payload(
 
 
 async def fetch_users_http_batch(
-    user_ids: list[int],
-) -> dict[int, tuple[dict[str, Any] | None, int | None]]:
+    user_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, tuple[dict[str, Any] | None, int | None]]:
     """经 AUTH 读端点**一次**拉一批快照（M6.5），返回 ``{user_id: (fields_dict|None, sv|None)}``。
 
     调用方保证单次 ``len(user_ids) <= snapshot.BATCH_IDS_MAX``（超限端点回 400 → 本函数抛
@@ -123,7 +124,7 @@ async def fetch_users_http_batch(
         "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
-    params = {"ids": ",".join(str(int(i)) for i in user_ids)}
+    params = {"ids": ",".join(str(i) for i in user_ids)}
     try:
         async with _build_client() as client:
             resp = await client.get(url, headers=headers, params=params)
@@ -139,12 +140,12 @@ async def fetch_users_http_batch(
     items = payload.get("items")
     if not isinstance(items, list):
         raise UserHttpUnavailable("auth_http batch payload missing items")
-    out: dict[int, tuple[dict[str, Any] | None, int | None]] = {}
+    out: dict[uuid.UUID, tuple[dict[str, Any] | None, int | None]] = {}
     for item in items:
         if not isinstance(item, dict) or "user_id" not in item:
             raise UserHttpUnavailable("auth_http batch malformed item")
         try:
-            uid = int(item["user_id"])
+            uid = uuid.UUID(str(item["user_id"]))
         except (TypeError, ValueError):
             raise UserHttpUnavailable("auth_http batch malformed user_id") from None
         data = item.get("data")
@@ -193,7 +194,7 @@ _AUTHZ_FIELDS: tuple[str, ...] = ("ok", "account_level", "role")
 
 async def authorize_via_seam(
     *,
-    user_id: int,
+    user_id: uuid.UUID,
     expect_token_version: int,
     iat_ts: float | int | None,
     require_admin: bool = False,
@@ -211,7 +212,7 @@ async def authorize_via_seam(
         "Accept": "application/json",
     }
     body = {
-        "user_id": user_id,
+        "user_id": str(user_id),
         "expect_token_version": expect_token_version,
         "iat_ts": iat_ts,
         "require_admin": require_admin,
@@ -256,7 +257,7 @@ _GRANT_FIELDS: tuple[str, ...] = ("changed",)
 async def grant_via_seam(
     *,
     kind: str,
-    user_id: int,
+    user_id: uuid.UUID,
     unlock_level: str | None = None,
     unlock_role: str | None = None,
 ) -> int:
@@ -270,7 +271,7 @@ async def grant_via_seam(
         "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
-    body: dict[str, object] = {"kind": kind, "user_id": int(user_id)}
+    body: dict[str, object] = {"kind": kind, "user_id": str(user_id)}
     if unlock_level is not None:
         body["unlock_level"] = unlock_level
     if unlock_role is not None:

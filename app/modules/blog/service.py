@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import uuid
 from typing import Any, cast
 
 from sqlalchemy import func, select
@@ -57,7 +58,7 @@ def _comment_to_info(
 # ---- star helpers ----
 
 
-async def _star_count(db: AsyncSession, series_id: int) -> int:
+async def _star_count(db: AsyncSession, series_id: uuid.UUID) -> int:
     return (
         await db.scalar(
             select(func.count(BlogStar.user_id)).where(BlogStar.series_id == series_id)
@@ -66,7 +67,9 @@ async def _star_count(db: AsyncSession, series_id: int) -> int:
     )
 
 
-async def _is_starred(db: AsyncSession, series_id: int, user_id: int) -> bool:
+async def _is_starred(
+    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
     return (
         await db.execute(
             select(BlogStar).where(
@@ -76,7 +79,9 @@ async def _is_starred(db: AsyncSession, series_id: int, user_id: int) -> bool:
     ).scalars().first() is not None
 
 
-async def _star_counts(db: AsyncSession, series_ids: list[int]) -> dict[int, int]:
+async def _star_counts(
+    db: AsyncSession, series_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
     """批量统计多个系列的 star 数量，避免逐条查询的 N+1。"""
     if not series_ids:
         return {}
@@ -91,8 +96,8 @@ async def _star_counts(db: AsyncSession, series_ids: list[int]) -> dict[int, int
 
 
 async def _starred_ids(
-    db: AsyncSession, series_ids: list[int], user_id: int
-) -> set[int]:
+    db: AsyncSession, series_ids: list[uuid.UUID], user_id: uuid.UUID
+) -> set[uuid.UUID]:
     """批量查当前用户 star 了哪些系列，避免逐条查询的 N+1。"""
     if not series_ids:
         return set()
@@ -106,7 +111,7 @@ async def _starred_ids(
     return {sid for (sid,) in rows}
 
 
-async def _get_profile(db: AsyncSession, user_id: int) -> ProfileInfo | None:
+async def _get_profile(db: AsyncSession, user_id: uuid.UUID) -> ProfileInfo | None:
     """评论作者 ProfileInfo，经 auth 读缝取（M3.A残项：不再直读 Profile）。"""
     snap = await get_user_snapshot(db, user_id=user_id)
     if snap is None:
@@ -115,8 +120,8 @@ async def _get_profile(db: AsyncSession, user_id: int) -> ProfileInfo | None:
 
 
 async def _get_profiles(
-    db: AsyncSession, user_ids: set[int]
-) -> dict[int, ProfileInfo | None]:
+    db: AsyncSession, user_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, ProfileInfo | None]:
     """批量取评论作者 ProfileInfo（经 auth 批量读缝一次查齐，避免逐条补 profile 的散读）。"""
     snaps = await get_user_snapshot_batch(db, user_ids=list(user_ids))
     return {uid: profile_info_from_snap(snaps[uid]) for uid in snaps}
@@ -176,7 +181,7 @@ def _paths_to_file_tree(paths: list[str]) -> list[dict[str, Any]]:
 
 
 async def _get_content_row(
-    db: AsyncSession, series_id: int, filepath: str
+    db: AsyncSession, series_id: uuid.UUID, filepath: str
 ) -> BlogContent:
     row = (
         (
@@ -199,7 +204,7 @@ async def _get_content_row(
 
 
 async def create_series(
-    db: AsyncSession, user_id: int, info: BlogSeriesCreate
+    db: AsyncSession, user_id: uuid.UUID, info: BlogSeriesCreate
 ) -> BlogSeriesInfo:
     existing = (
         (
@@ -230,7 +235,7 @@ async def create_series(
 
 async def list_series(
     db: AsyncSession,
-    current_user_id: int | None = None,
+    current_user_id: uuid.UUID | None = None,
     page: int = 1,
     limit: int | None = None,
 ) -> PageData[BlogSeriesInfo]:
@@ -246,7 +251,9 @@ async def list_series(
     ids = [s.id for s in items]
     counts = await _star_counts(db, ids)
     starred_ids = (
-        await _starred_ids(db, ids, current_user_id) if current_user_id else set[int]()
+        await _starred_ids(db, ids, current_user_id)
+        if current_user_id
+        else set[uuid.UUID]()
     )
     return PageData(
         items=[
@@ -262,7 +269,7 @@ async def list_series(
 
 
 async def get_series(
-    db: AsyncSession, series_id: int, current_user_id: int | None = None
+    db: AsyncSession, series_id: uuid.UUID, current_user_id: uuid.UUID | None = None
 ) -> BlogSeriesDetail:
     series = await get_or_raise(
         db,
@@ -295,7 +302,7 @@ async def get_series(
 
 
 async def update_series(
-    db: AsyncSession, series_id: int, user_id: int, info: BlogSeriesUpdate
+    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogSeriesUpdate
 ) -> BlogSeriesInfo:
     series = await get_or_raise(
         db,
@@ -321,8 +328,8 @@ async def update_series(
 
 
 async def delete_series(
-    db: AsyncSession, series_id: int, user_id: int, as_admin: bool = False
-) -> int:
+    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, as_admin: bool = False
+) -> uuid.UUID:
     series = await get_or_raise(
         db,
         BlogSeries,
@@ -353,7 +360,9 @@ async def delete_series(
     return owner_id
 
 
-async def toggle_star(db: AsyncSession, series_id: int, user_id: int) -> BlogStarStatus:
+async def toggle_star(
+    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID
+) -> BlogStarStatus:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
@@ -387,7 +396,7 @@ async def toggle_star(db: AsyncSession, series_id: int, user_id: int) -> BlogSta
 
 
 async def create_comment(
-    db: AsyncSession, series_id: int, user_id: int, info: BlogCommentCreate
+    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogCommentCreate
 ) -> BlogCommentInfo:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
@@ -428,7 +437,9 @@ async def create_comment(
     return _comment_to_info(loaded_comment, profile=await _get_profile(db, user_id))
 
 
-async def list_comments(db: AsyncSession, series_id: int) -> list[BlogCommentInfo]:
+async def list_comments(
+    db: AsyncSession, series_id: uuid.UUID
+) -> list[BlogCommentInfo]:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
@@ -449,7 +460,7 @@ async def list_comments(db: AsyncSession, series_id: int) -> list[BlogCommentInf
     user_ids = {c.user_id for c in comments}
     profiles = await _get_profiles(db, user_ids)
 
-    comment_map: dict[int, BlogCommentInfo] = {}
+    comment_map: dict[uuid.UUID, BlogCommentInfo] = {}
     roots: list[BlogCommentInfo] = []
 
     for c in comments:
@@ -468,11 +479,11 @@ async def list_comments(db: AsyncSession, series_id: int) -> list[BlogCommentInf
 
 async def delete_comment(
     db: AsyncSession,
-    series_id: int,
-    comment_id: int,
-    user_id: int,
+    series_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    user_id: uuid.UUID,
     as_admin: bool = False,
-) -> int:
+) -> uuid.UUID:
     comment = await get_or_raise(
         db,
         BlogComment,
@@ -492,7 +503,7 @@ async def delete_comment(
 
 
 async def get_file_content(
-    db: AsyncSession, series_id: int, filepath: str
+    db: AsyncSession, series_id: uuid.UUID, filepath: str
 ) -> dict[str, Any]:
     await get_or_raise(
         db,
@@ -507,8 +518,8 @@ async def get_file_content(
 
 async def write_series_file(
     db: AsyncSession,
-    series_id: int,
-    user_id: int,
+    series_id: uuid.UUID,
+    user_id: uuid.UUID,
     filepath: str,
     content: str,
     message: str | None = None,
@@ -560,7 +571,7 @@ async def write_series_file(
 # ---- publish ----
 
 
-async def _ensure_board(db: AsyncSession, slug: str) -> int:
+async def _ensure_board(db: AsyncSession, slug: str) -> uuid.UUID:
     """blog 发布时按 slug 解析板块（统一分类轴）；不存在则自动建并返回 board_id。"""
     existing = await db.scalar(select(Board.id).where(Board.slug == slug))
     if existing is not None:
@@ -573,11 +584,11 @@ async def _ensure_board(db: AsyncSession, slug: str) -> int:
 
 async def publish_series_file(
     db: AsyncSession,
-    series_id: int,
-    user_id: int,
+    series_id: uuid.UUID,
+    user_id: uuid.UUID,
     filepath: str,
     override: dict[str, Any] | None = None,
-) -> int:
+) -> uuid.UUID:
     """把 series 指定 MDX 读出来、解析 frontmatter、落库为 content_items（blog_post，幂等更新）。
 
     返回统一内容项 id；category 前端自由标签映射为 boards（get-or-create）。

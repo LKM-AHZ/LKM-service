@@ -9,6 +9,7 @@ auth server 信封，隔离验证 deps 侧的 seam 映射（不连真实网络�
 from __future__ import annotations
 
 import datetime as _dt
+import uuid
 from typing import Any
 
 import httpx
@@ -50,7 +51,7 @@ def _enable_seam(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
 
 
-def _default_user_token(user_id: int) -> str:
+def _default_user_token(user_id: uuid.UUID) -> str:
     return create_access_token(
         user_id=user_id,
         account_level="normal",
@@ -72,7 +73,9 @@ def _inject_client(
     user_http._client_factory = _factory  # type: ignore[attr-defined]
 
 
-async def _mk_active(db: AsyncSession, prefix: str, *, locked: bool = False) -> int:
+async def _mk_active(
+    db: AsyncSession, prefix: str, *, locked: bool = False
+) -> uuid.UUID:
     user = User(
         username=f"{prefix}_u",
         email=f"{prefix}@example.com",
@@ -88,7 +91,7 @@ async def _mk_active(db: AsyncSession, prefix: str, *, locked: bool = False) -> 
     await db.flush()
     db.add(Profile(user_id=user.id, role="member"))
     await db.flush()
-    return int(user.id)
+    return user.id
 
 
 async def test_seam_on_settles_auth_not_local_db(db: DB, monkeypatch) -> None:
@@ -157,7 +160,7 @@ async def test_seam_off_stays_local_lock(db: DB, monkeypatch) -> None:
 # —— 后台 admin seam（get_current_admin require_admin=True） ——
 
 
-async def _mk_admin(db: AsyncSession) -> tuple[int, str]:
+async def _mk_admin(db: AsyncSession) -> tuple[uuid.UUID, str]:
     user = User(
         username="adminseam",
         email="adminseam@example.com",
@@ -169,7 +172,7 @@ async def _mk_admin(db: AsyncSession) -> tuple[int, str]:
     await db.flush()
     db.add(Profile(user_id=user.id, role="member"))
     await db.flush()
-    return int(user.id), create_admin_access_token(user)
+    return user.id, create_admin_access_token(user)
 
 
 async def test_admin_seam_ok(db: DB, monkeypatch) -> None:

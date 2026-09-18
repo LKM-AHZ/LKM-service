@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +40,7 @@ _COLUMNS: dict[str, sa.Column[int]] = {
 }
 
 # 真相源：字段名 → 明细表的 content_id 列
-_DETAIL_SOURCES: dict[str, sa.Column[int]] = {
+_DETAIL_SOURCES: dict[str, sa.Column[uuid.UUID]] = {
     "like_count": ContentLike.content_id,
     "comment_count": ContentComment.content_id,
     "bookmark_count": InteractionFavorite.content_id,
@@ -46,7 +48,7 @@ _DETAIL_SOURCES: dict[str, sa.Column[int]] = {
 
 
 async def _direct_bump(
-    db: AsyncSession, item_id: int, field: str, delta: int
+    db: AsyncSession, item_id: uuid.UUID, field: str, delta: int
 ) -> int:
     """fail-open 通道：原子 UPDATE 直改 DB（限定下限 0），返回新值。"""
     col = _COLUMNS[field]
@@ -63,7 +65,7 @@ async def _direct_bump(
 
 
 async def bump_content_counter(
-    db: AsyncSession, item_id: int, field: str, delta: int
+    db: AsyncSession, item_id: uuid.UUID, field: str, delta: int
 ) -> int:
     """记一次计数增减，返回**即时读数**（DB 值 + 未落库差值）。
 
@@ -83,7 +85,7 @@ async def bump_content_counter(
     return await _direct_bump(db, item_id, field, delta)
 
 
-async def read_count(db: AsyncSession, item_id: int, field: str) -> int:
+async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     """即时读数：DB 计数列 + 未落库差值（Redis 不可用时即 DB 值）。"""
     col = _COLUMNS[field]
     base = await db.scalar(select(col).where(ContentItem.id == item_id))
@@ -127,7 +129,9 @@ async def reconcile_counts(
     """
     scanned = 0
     affected = 0
-    last_id = 0
+    # 键集水位：uuid 主键无 0 起点，用最小值 nil UUID 作首窗下界（PG uuid 按字节序，
+    # UUID(int=0) 全零即最小），后续直接取回上行 uuid，无需 int() 转换。
+    last_id = uuid.UUID(int=0)
     while True:
         real_cols = [
             select(func.count())
@@ -164,7 +168,7 @@ async def reconcile_counts(
             break
 
         for row in rows:
-            item_id = int(row[0])
+            item_id = row[0]
             current = (int(row[1]), int(row[2]), int(row[3]))
             real = (int(row[4]), int(row[5]), int(row[6]))
             if real == current:
@@ -182,6 +186,6 @@ async def reconcile_counts(
             affected += 1
 
         scanned += len(rows)
-        last_id = int(rows[-1][0])
+        last_id = rows[-1][0]
 
     return scanned, affected

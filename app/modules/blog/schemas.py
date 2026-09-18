@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -25,7 +26,7 @@ class BlogSeriesUpdate(BaseModel):
 
 class BlogCommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
-    parent_id: int | None = None
+    parent_id: uuid.UUID | None = None
 
 
 # ---- response schemas ----
@@ -39,8 +40,8 @@ class BlogStarStatus(BaseModel):
 class BlogSeriesInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    owner_id: int
+    id: uuid.UUID
+    owner_id: uuid.UUID
     title: str
     description: str | None = None
     cover_url: str | None = None
@@ -55,8 +56,8 @@ class BlogSeriesInfo(BaseModel):
 class BlogSeriesDetail(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    owner_id: int
+    id: uuid.UUID
+    owner_id: uuid.UUID
     title: str
     description: str | None = None
     cover_url: str | None = None
@@ -72,11 +73,11 @@ class BlogSeriesDetail(BaseModel):
 class BlogCommentInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    user_id: int
-    series_id: int
+    id: uuid.UUID
+    user_id: uuid.UUID
+    series_id: uuid.UUID
     content: str
-    parent_id: int | None = None
+    parent_id: uuid.UUID | None = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
     profile: ProfileInfo | None = None

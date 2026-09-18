@@ -18,9 +18,9 @@ from app.modules.content.columns.service import (
 
 @strawberry.type
 class GraphColumn:
-    id: int
-    ownerId: int
-    applicationId: int | None
+    id: strawberry.ID
+    ownerId: strawberry.ID
+    applicationId: strawberry.ID | None
     title: str
     description: str
     slug: str | None
@@ -36,15 +36,15 @@ class GraphColumn:
     articleCount: int
     tags: list[str]
     badges: list[str]
-    boardId: int | None
+    boardId: strawberry.ID | None
     status: str
 
 
 @strawberry.type
 class GraphColumnPost:
-    id: int
-    columnId: int
-    authorId: int
+    id: strawberry.ID
+    columnId: strawberry.ID
+    authorId: strawberry.ID
     title: str
     summary: str | None
     content: str
@@ -167,7 +167,7 @@ class ColumnsQuery:
         )
 
     @strawberry.field
-    async def column(self, info: Info, id: int) -> GraphColumn | None:
+    async def column(self, info: Info, id: strawberry.ID) -> GraphColumn | None:
         db = _get_db(info)
         try:
             c = await get_column(db, id)
@@ -194,7 +194,11 @@ class ColumnsQuery:
 
     @strawberry.field
     async def columnPosts(
-        self, info: Info, columnId: int, page: int = 1, pageSize: int | None = None
+        self,
+        info: Info,
+        columnId: strawberry.ID,
+        page: int = 1,
+        pageSize: int | None = None,
     ) -> GraphColumnPostPage:
         db = _get_db(info)
         try:

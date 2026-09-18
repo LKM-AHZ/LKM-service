@@ -160,6 +160,41 @@ def _sync_additive_schema(conn: Any) -> list[str]:
     return changed
 
 
+UUID7_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
+DECLARE
+  us bigint;
+  b  bytea;
+BEGIN
+  us := (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
+  b  := uuid_send(gen_random_uuid());
+  b  := overlay(b PLACING substring(int8send(us >> 12) FROM 3) FROM 1 FOR 6);
+  b  := set_byte(b, 6, (112 + ((us >> 8) & 15))::int);
+  b  := set_byte(b, 7, (us & 255)::int);
+  b  := set_byte(b, 8, (get_byte(b, 8) & 63) + 128);
+  RETURN encode(b, 'hex')::uuid;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+"""
+
+
+async def _ensure_shared_objects(conn: Any) -> None:
+    """建表前必须就绪的库级共享对象（幂等）。
+
+    1. ``pg_trgm`` 扩展：M6.9 trgm 索引的 opclass 依赖它，索引 DDL 显式写
+       ``public.gin_trgm_ops``，故扩展须在 public（schema-per-test 的 search_path 不含 public）。
+    2. ``public.uuid_generate_v7()``：UUID 主键列的 ``server_default`` 目标（RFC 9562 uuid7，
+       时间有序）。**必须在 ``create_all`` 之前建**——PG 建表即解析 DEFAULT 表达式，
+       函数不存在会直接报错。建在 public，故模型侧 ``server_default`` 显式限定 schema。
+
+    ``gen_random_uuid()`` 自 PG13 起是 core 内置，无需 pgcrypto 扩展。
+    """
+    import sqlalchemy as sa
+
+    await conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"))
+    await conn.execute(sa.text(UUID7_FUNCTION_SQL))
+
+
 async def _create_all() -> None:
     """create_all 降级通道：按 Base.metadata 建缺失的表，并补已存在表缺失的列/索引。
 
@@ -168,8 +203,6 @@ async def _create_all() -> None:
     metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
     各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`。
     """
-    import sqlalchemy as sa
-
     from app.db.base import Base
     from app.db.model_registry import ensure_all_models
     from app.db.session import get_async_engine
@@ -179,11 +212,7 @@ async def _create_all() -> None:
     if engine is None:
         return
     async with engine.begin() as conn:
-        # M6.9 搜索 P1：trgm 索引的 opclass 依赖 pg_trgm 扩展（索引 DDL 显式写
-        # ``public.gin_trgm_ops``），故 create_all 前先幂等建扩展；否则建索引即失败。
-        await conn.execute(
-            sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
-        )
+        await _ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
 
@@ -267,6 +296,9 @@ async def _create_auth_all() -> None:
     ensure_all_models()
     engine = get_auth_engine()
     async with engine.begin() as conn:
+        # auth 库是**独立 database**，其 public schema 与业务库互不相通，
+        # uuid7 函数须各自建一份（表的 id 列 server_default 指向 public.uuid_generate_v7()）。
+        await _ensure_shared_objects(conn)
         await conn.run_sync(auth_metadata.create_all)
 
 

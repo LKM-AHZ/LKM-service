@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -93,7 +94,7 @@ async def get_applications(
 )
 @respond
 async def get_application_detail(
-    application_id: int,
+    application_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> ColumnApplicationInfo:
@@ -115,7 +116,7 @@ async def get_application_detail(
 )
 @respond
 async def review_column_application(
-    application_id: int,
+    application_id: uuid.UUID,
     info: ColumnApplicationReview,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
@@ -134,7 +135,7 @@ async def review_column_application(
 @router.post("/{column_id}/posts", response_model=ApiResp[ColumnPostInfo])
 @respond
 async def publish_column_post(
-    column_id: int,
+    column_id: uuid.UUID,
     info: ColumnPostCreate,
     cur: CurrentUser = RequirePermission(Permission.columns_publish),
     db: AsyncSession = Depends(get_session),

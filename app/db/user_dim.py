@@ -36,8 +36,9 @@ db/ 基座的这些已确立落位收敛。字段语义仍严格对齐 auth 源�
 from __future__ import annotations
 
 import datetime
+import uuid
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UTCDateTime, now_iso
@@ -53,7 +54,7 @@ class UserDim(Base):
     __tablename__: str = "user_dim"
 
     # PK 即源 user_id（宽表每用户恒一行，报表按 id 关联/过滤）。非自增——id 由 auth 源 ETL 显式给定
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     username: Mapped[str] = mapped_column(String(100), nullable=False)  # ← users.username
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)  # ← users.email
     nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)  # ← profiles.nickname

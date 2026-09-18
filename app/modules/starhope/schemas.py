@@ -1,5 +1,6 @@
 import datetime
 import json
+import uuid
 from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -37,7 +38,7 @@ class _Out(BaseModel):
 
 class StarHopeQuestionOut(_Out):
     id: str
-    user_id: int
+    user_id: uuid.UUID
     type: str
     content: str
     options: list[str] | None = None
@@ -91,7 +92,7 @@ class StarHopeQuestionIn(BaseModel):
 
 class StarHopeFolderOut(_Out):
     id: str
-    user_id: int
+    user_id: uuid.UUID
     name: str
     parent_id: str | None = None
     sort: int
@@ -109,7 +110,7 @@ class StarHopeFolderIn(BaseModel):
 
 class StarHopeSessionOut(_Out):
     id: str
-    user_id: int
+    user_id: uuid.UUID
     type: str
     mode: str
     question_ids: list[str]
@@ -158,7 +159,7 @@ class StarHopeSessionIn(BaseModel):
 
 class StarHopeAgentOut(_Out):
     id: str
-    user_id: int
+    user_id: uuid.UUID
     name: str
     avatar: str | None = None
     system_prompt: str

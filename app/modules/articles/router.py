@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -66,7 +67,7 @@ async def add_article_comment(
 @router.delete("/comments/{comment_id}", response_model=ApiResp[None])
 @respond
 async def remove_article_comment(
-    comment_id: int,
+    comment_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> None:
@@ -157,7 +158,7 @@ async def add_category(
 @router.patch("/categories/{category_id}", response_model=ApiResp[CategoryOut])
 @respond
 async def update_category(
-    category_id: int,
+    category_id: uuid.UUID,
     info: CategoryCreate,
     cur: CurrentUser = RequirePermission(Permission.articles_category_manage),
     db: AsyncSession = Depends(get_session),
@@ -168,7 +169,7 @@ async def update_category(
 @router.delete("/categories/{category_id}", response_model=ApiResp[dict[str, bool]])
 @respond
 async def delete_category(
-    category_id: int,
+    category_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.articles_category_manage),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:

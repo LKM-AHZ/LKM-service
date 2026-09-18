@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import (
@@ -10,14 +11,20 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意 db.base 而非 db.models
+from app.db.base import (  # 注意 db.base 而非 db.models
+    Base,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 
-class Report(Base):
+class Report(UUIDPrimaryKeyMixin, Base):
     """后台举报记录：用户对帖子/评论/文件等目标发起的举报，供后台审核。"""
 
     __tablename__: str = "reports"
@@ -27,11 +34,12 @@ class Report(Base):
         Index("ix_reports_target", "type", "target_id"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # post/comment/file
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)
     target_title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
-    reporter_id: Mapped[int] = mapped_column(Integer, nullable=True)  # S5: auth user_id
+    reporter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True
+    )  # S5: auth user_id
     reporter_name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     reason: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
@@ -43,13 +51,12 @@ class Report(Base):
     )
 
 
-class RolePermission(Base):
+class RolePermission(UUIDPrimaryKeyMixin, Base):
     """RBAC：复合角色→权限点 映射。角色即 ``{account_level}:{profile.role}``。"""
 
     __tablename__ = "role_permissions"
     __table_args__ = (UniqueConstraint("role_name", "permission"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     role_name: Mapped[str] = mapped_column(String(40), nullable=False)
     permission: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -57,7 +64,7 @@ class RolePermission(Base):
     )
 
 
-class ModerationRule(Base):
+class ModerationRule(UUIDPrimaryKeyMixin, Base):
     """自动审校规则（关键词/域名黑名单，正则可选）：读时降权 / 隐藏。
 
     * ``action="derank"``：命中后按 ``weight`` 压低 sort_score，不剔除。
@@ -67,7 +74,6 @@ class ModerationRule(Base):
 
     __tablename__: str = "moderation_rules"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 关键词 / 域名 / 正则（is_regex=True）
     pattern: Mapped[str] = mapped_column(String(255), nullable=False)
     is_regex: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -86,7 +92,7 @@ class ModerationRule(Base):
     )
 
 
-class DlqMessage(Base):
+class DlqMessage(UUIDPrimaryKeyMixin, Base):
     """死信消息落库：worker_dlq 消费 lkm.dlq 队列持久化，供人工重投/审计。
 
     时间列遵循本文件既有约定：用 UTCDateTime 类型 + ``now_iso()`` 默认值
@@ -95,7 +101,6 @@ class DlqMessage(Base):
 
     __tablename__: str = "dlq_messages"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     routing_key: Mapped[str] = mapped_column(String(255), index=True)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     exchange: Mapped[str] = mapped_column(String(255), default="lkm.events")

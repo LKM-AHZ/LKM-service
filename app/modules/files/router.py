@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -124,7 +125,7 @@ async def confirm_upload_endpoint(
 @router.get("/{file_id}", response_model=ApiResp[FileInfo])
 @respond
 async def get_file_detail(
-    file_id: int, db: AsyncSession = Depends(get_session)
+    file_id: uuid.UUID, db: AsyncSession = Depends(get_session)
 ) -> FileInfo:
     return await get_file(db, file_id, bump_view=True)
 
@@ -132,7 +133,7 @@ async def get_file_detail(
 @router.post("/{file_id}/download", response_model=ApiResp[dict[str, Any]])
 @respond
 async def download_file(
-    file_id: int,
+    file_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.files_download),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -142,7 +143,7 @@ async def download_file(
 @router.post("/{file_id}/review", response_model=ApiResp[FileInfo])
 @respond
 async def review_uploaded_file(
-    file_id: int,
+    file_id: uuid.UUID,
     _cur: Annotated[CurrentUser, require_admin_2fa],
     status: FileStatus = Form(...),
     review_comment: str | None = Form(default=None),
@@ -170,7 +171,7 @@ async def review_uploaded_file(
 @router.post("/{file_id}/delete", response_model=ApiResp[FileInfo])
 @respond
 async def delete_uploaded_file(
-    file_id: int,
+    file_id: uuid.UUID,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> FileInfo:
@@ -194,7 +195,7 @@ async def delete_uploaded_file(
 
 @router.get("/{file_id}/preview")
 async def preview_file(
-    file_id: int,
+    file_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.files_download),
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
@@ -205,7 +206,7 @@ async def preview_file(
 @router.get("/{file_id}/download/url", response_model=ApiResp[DownloadUrlInfo])
 @respond
 async def download_file_url(
-    file_id: int,
+    file_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.files_download),
     db: AsyncSession = Depends(get_session),
 ) -> DownloadUrlInfo:
@@ -215,7 +216,7 @@ async def download_file_url(
 
 @router.get("/{file_id}/content")
 async def download_file_content(
-    file_id: int,
+    file_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.files_download),
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:

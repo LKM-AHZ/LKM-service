@@ -7,6 +7,7 @@ import os
 import secrets
 import struct
 import time
+import uuid
 from typing import Any
 from urllib.parse import quote
 
@@ -60,7 +61,7 @@ _AUD_ADMIN = "lkm:admin"  # 后台 access cookie
 
 
 def create_access_token(
-    user_id: int,
+    user_id: uuid.UUID,
     account_level: str,
     role: str,
     trust_device: bool = False,
@@ -71,7 +72,8 @@ def create_access_token(
     now = int(time.time())
     verified_at = mfa_at if mfa_at is not None else now
     payload: dict[str, Any] = {
-        "user_id": user_id,
+        # JWT 载荷要经 json.dumps，UUID 必须转字符串；读侧由 deps 还原为 UUID
+        "user_id": str(user_id),
         "account_level": account_level,
         "role": role,
         "trust_device": trust_device,
@@ -108,11 +110,11 @@ _TEMP_EXPIRE_SECONDS = 60
 
 
 def create_temp_token(
-    user_id: int, purpose: str = "2fa", txn_id: str | None = None
+    user_id: uuid.UUID, purpose: str = "2fa", txn_id: str | None = None
 ) -> str:
     now = int(time.time())
     payload: dict[str, Any] = {
-        "user_id": user_id,
+        "user_id": str(user_id),
         "type": _TEMP_TYPE,
         "purpose": purpose,
         "aud": _AUD_TEMP,

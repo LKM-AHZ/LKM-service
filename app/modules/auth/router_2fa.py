@@ -8,6 +8,7 @@ DELETE /auth/2fa                  RequireLevel("normal")  禁用 2FA
 """
 
 import hashlib
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -46,17 +47,25 @@ from app.modules.auth.service_verify import check_code_rate_limit
 router = APIRouter(prefix="/auth/2fa", tags=["auth-2fa"])
 
 
-def _decode_setup_temp_token(temp_token: str) -> tuple[str, int]:
-    """解码并验证 setup 临时令牌，返回 (token_hash, user_id)。"""
+def _decode_setup_temp_token(temp_token: str) -> tuple[str, uuid.UUID]:
+    """解码并验证 setup 临时令牌，返回 (token_hash, user_id)。
+
+    ``security.create_temp_token`` 把 user_id 编为 ``str(user_id)``（JSON 无 uuid 类型），
+    此处还原为 ``uuid.UUID``；缺失/畸形一律 TOKEN_INVALID。
+    """
     try:
         payload = security.decode_temp_token(temp_token)
     except Exception as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
     if payload.get("purpose") != "setup":
         raise BizError(AuthErr.TOKEN_INVALID, "Not a setup token")
-    user_id = payload.get("user_id")
-    if not user_id:
+    raw_user_id = payload.get("user_id")
+    if not raw_user_id:
         raise BizError(AuthErr.TOKEN_INVALID)
+    try:
+        user_id = uuid.UUID(str(raw_user_id))
+    except (AttributeError, TypeError, ValueError):
+        raise BizError(AuthErr.TOKEN_INVALID) from None
     token_hash = hashlib.sha256(temp_token.encode()).hexdigest()
     return token_hash, user_id
 
@@ -178,9 +187,10 @@ async def verify_2fa(
     # 按用户分桶（而非全站共享）：防止单个攻击者刷错耗尽共享额度封锁所有用户的 2FA
     # 登录。临时令牌可解码出 user_id；无法解码（本就会 400）用低熵兜底桶，避免泄漏失败面。
     try:
-        _v_uid = int(security.decode_temp_token(body.temp_token).get("user_id", 0))
+        _raw_uid = security.decode_temp_token(body.temp_token).get("user_id")
+        _v_uid = str(_raw_uid) if _raw_uid else "0"
     except Exception:
-        _v_uid = 0
+        _v_uid = "0"
     await check_code_rate_limit(
         f"2fa:verify:user:{_v_uid}",
         max_count=GLOBAL_VERIFY_MAX_PER_WINDOW,
@@ -248,7 +258,7 @@ async def step_up_2fa(
     return {
         "access_token": access_token,
         "refresh_token": raw_refresh,
-        "user_id": int(user.id),
+        "user_id": str(user.id),  # 主键已 UUID；JSON 无 uuid 类型，按字符串出 wire
         "account_level": str(user.account_level),
         "mfa_verified": True,
     }

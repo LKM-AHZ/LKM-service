@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jobs import RKEY_POINTS
@@ -20,7 +22,7 @@ RULE_DELTAS: dict[str, int] = {
 
 
 async def enqueue_points_event(
-    db: AsyncSession, user_id: int, event: str, ref_id: str
+    db: AsyncSession, user_id: uuid.UUID, event: str, ref_id: str
 ) -> None:
     """把用户行为事件排进 outbox（与业务同事务落库，relay 会投给 points worker 入账）。
 

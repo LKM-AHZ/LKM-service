@@ -1,6 +1,7 @@
 """积分事件消费副作用：更新行为计数 + 解锁成就 + 推进当日任务并达标另发奖励分。"""
 
 import datetime
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -53,7 +54,7 @@ def _today() -> str:
 
 
 async def _get_or_create_stats(
-    db: AsyncSession, user_id: int, *, for_update: bool = False
+    db: AsyncSession, user_id: uuid.UUID, *, for_update: bool = False
 ) -> UserBehaviorStat:
     """惰性取/建用户行为统计行。
 
@@ -94,7 +95,7 @@ async def _get_or_create_stats(
     return stat
 
 
-async def _bump_count(db: AsyncSession, user_id: int, key: str) -> int:
+async def _bump_count(db: AsyncSession, user_id: uuid.UUID, key: str) -> int:
     """把某行为计数字段 +1，返回新值。
 
     JSON 列的 in-place 变更不会被 SQLAlchemy 追踪，需整列重赋以标记 dirty。
@@ -111,7 +112,12 @@ _PROCESSED_KEY = "processed_events"
 
 
 async def _already_processed(
-    db: AsyncSession, user_id: int, event: str, ref_id: str, *, namespace: str = "legacy"
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    event: str,
+    ref_id: str,
+    *,
+    namespace: str = "legacy",
 ) -> bool:
     """该 (namespace, event, ref_id) 是否已消费过？仅由各副作用入口经行锁调用。
 
@@ -124,7 +130,12 @@ async def _already_processed(
 
 
 async def _mark_processed(
-    db: AsyncSession, user_id: int, event: str, ref_id: str, *, namespace: str = "legacy"
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    event: str,
+    ref_id: str,
+    *,
+    namespace: str = "legacy",
 ) -> None:
     """记录该 (namespace, event, ref_id) 已消费，与副作用同一事务原子落库。"""
     stat = await _get_or_create_stats(db, user_id, for_update=True)
@@ -137,7 +148,7 @@ async def _mark_processed(
 
 async def apply_event_side_effects(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     event: str,
     ref_id: str,
     *,
@@ -168,7 +179,7 @@ async def apply_event_side_effects(
 
 
 async def apply_stats_side_effects(
-    db: AsyncSession, user_id: int, event: str, ref_id: str
+    db: AsyncSession, user_id: uuid.UUID, event: str, ref_id: str
 ) -> None:
     """points-stats 订阅入口：仅行为计数 + 成就重算（独立幂等命名空间 stats）。
 
@@ -187,7 +198,7 @@ async def apply_stats_side_effects(
 
 async def apply_task_side_effects(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     event: str,
     ref_id: str,
     *,
@@ -206,7 +217,7 @@ async def apply_task_side_effects(
     await _advance_tasks(db, user_id, event, today=today or _today())
 
 
-async def _progress_for(db: AsyncSession, user_id: int, type_: str) -> int:
+async def _progress_for(db: AsyncSession, user_id: uuid.UUID, type_: str) -> int:
     """计算某成就类型的当前进度（读 UserBehaviorStat.stats）。"""
     stat = await _get_or_create_stats(db, user_id)
     key = {  # 成就 type → stats 键
@@ -227,7 +238,9 @@ async def _progress_for(db: AsyncSession, user_id: int, type_: str) -> int:
     return int(stat.stats.get(key, 0))
 
 
-async def _recheck_achievements(db: AsyncSession, user_id: int, stat_key: str) -> None:
+async def _recheck_achievements(
+    db: AsyncSession, user_id: uuid.UUID, stat_key: str
+) -> None:
     """对受影响的成就重算进度，达阈值即解锁。"""
     type_ = STAT_TO_ACHIEVEMENT_TYPE.get(stat_key)
     if type_ is None:
@@ -262,7 +275,7 @@ async def _recheck_achievements(db: AsyncSession, user_id: int, stat_key: str) -
 
 
 async def _advance_tasks(
-    db: AsyncSession, user_id: int, event: str, *, today: str
+    db: AsyncSession, user_id: uuid.UUID, event: str, *, today: str
 ) -> None:
     """推进当日任务进度，达标且未奖励的发放额外积分。"""
     cat = EVENT_TASK_KEY.get(event)

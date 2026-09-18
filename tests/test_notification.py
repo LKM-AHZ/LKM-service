@@ -2,6 +2,8 @@
 以及消费者侧「事件 → 通知 + WS 推送」链路。
 """
 
+import uuid
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,23 +37,26 @@ from app.modules.notification.service import (
 )
 from tests.conftest import auth_user_uid
 
-
-async def _mk_user(auth_db: AsyncSession, username: str) -> int:
-    return int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@x.test",
-                nickname=username,
-                account_level="normal",
-                with_token=False,
-            )
-        ).id
-    )
+# 聚合目标 id（Notification.target_id 为 uuid 列）；同一测试内多次复用同一值。
+_TARGET_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
 
 
-async def _mk_item(db: AsyncSession, author_id: int, title: str = "帖子") -> int:
+async def _mk_user(auth_db: AsyncSession, username: str) -> uuid.UUID:
+    return (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@x.test",
+            nickname=username,
+            account_level="normal",
+            with_token=False,
+        )
+    ).id
+
+
+async def _mk_item(
+    db: AsyncSession, author_id: uuid.UUID, title: str = "帖子"
+) -> uuid.UUID:
     board = Board(slug=f"b-{title}", title="B", description="", status="active")
     db.add(board)
     await db.flush()
@@ -65,12 +70,16 @@ async def _mk_item(db: AsyncSession, author_id: int, title: str = "帖子") -> i
     )
     db.add(item)
     await db.flush()
-    return int(item.id)
+    return item.id
 
 
 async def _mk_comment(
-    db: AsyncSession, item_id: int, user_id: int, *, parent_id: int | None = None
-) -> int:
+    db: AsyncSession,
+    item_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    parent_id: uuid.UUID | None = None,
+) -> uuid.UUID:
     floor = (
         await db.scalar(
             select(func.count())
@@ -88,10 +97,10 @@ async def _mk_comment(
     )
     db.add(c)
     await db.flush()
-    return int(c.id)
+    return c.id
 
 
-async def _rows(db: AsyncSession, user_id: int) -> list[Notification]:
+async def _rows(db: AsyncSession, user_id: uuid.UUID) -> list[Notification]:
     return list(
         (
             await db.execute(
@@ -124,7 +133,7 @@ def patched_handler(monkeypatch: pytest.MonkeyPatch, db: AsyncSession):
     async def _fake_publish(user_id, payload, *, event_id=None, version=None) -> None:
         pushed.append((user_id, payload, event_id, version))
 
-    async def _fake_snapshot(_db: AsyncSession, *, user_id: int) -> _FakeSnap:
+    async def _fake_snapshot(_db: AsyncSession, *, user_id: uuid.UUID) -> _FakeSnap:
         return _FakeSnap()
 
     monkeypatch.setattr(notif_tasks, "new_session", _new_session)
@@ -165,7 +174,7 @@ class TestService:
             user_id=uid,
             type=NotificationType.CONTENT_LIKED,
             actor_id=actor,
-            target_id=7,
+            target_id=_TARGET_ID,
             payload={"title": "t"},
         )
         merged = await create_notification(
@@ -173,7 +182,7 @@ class TestService:
             user_id=uid,
             type=NotificationType.CONTENT_LIKED,
             actor_id=actor,
-            target_id=7,
+            target_id=_TARGET_ID,
             payload={"title": "t"},
         )
 
@@ -192,7 +201,7 @@ class TestService:
             user_id=uid,
             type=NotificationType.CONTENT_LIKED,
             actor_id=actor,
-            target_id=7,
+            target_id=_TARGET_ID,
             payload={},
         )
         await mark_read(db, uid, ids=[], all_=True)
@@ -202,7 +211,7 @@ class TestService:
             user_id=uid,
             type=NotificationType.CONTENT_LIKED,
             actor_id=actor,
-            target_id=7,
+            target_id=_TARGET_ID,
             payload={},
         )
 
@@ -303,9 +312,9 @@ class TestConsumeEvents:
         user_id, payload, event_id, version = patched_handler[0]
         assert user_id == author
         assert payload["event"] == "notification_created"
-        assert payload["notification_id"] == row.id
+        assert payload["notification_id"] == str(row.id)
         assert event_id == f"notification:{row.id}"  # 同一通知重推 payload 一致
-        assert version == row.id
+        assert version == row.id.int  # WS version 用 uuid 的 128 位整数
 
     async def test_self_like_not_notified(
         self, db: AsyncSession, auth_db: AsyncSession, patched_handler: list
@@ -403,7 +412,7 @@ class TestConsumeEvents:
         async def _new_session() -> AsyncSession:
             return db
 
-        async def _boom(_db: AsyncSession, *, user_id: int) -> None:
+        async def _boom(_db: AsyncSession, *, user_id: uuid.UUID) -> None:
             raise RuntimeError("snapshot down")
 
         monkeypatch.setattr(notif_tasks, "new_session", _new_session)

@@ -6,6 +6,8 @@
   各自重跑幂等（``stats:``/``tasks:`` 命名空间互不误跳过）。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,14 +43,14 @@ def test_three_subscriptions_same_topic_distinct_handlers() -> None:
     assert len(set(handlers)) == 3
 
 
-async def _uid(auth_db: AsyncSession, username: str = "alice") -> int:
+async def _uid(auth_db: AsyncSession, username: str = "alice") -> uuid.UUID:
     u = await auth_user_uid(auth_db, username=username, email=f"{username}@e.com")
-    return int(u.id)
+    return u.id
 
 
 async def _task(
     db: AsyncSession, key: str, category: str, requirement_count: int
-) -> int:
+) -> uuid.UUID:
     t = Task(
         key=key,
         title_key=f"t_{key}",

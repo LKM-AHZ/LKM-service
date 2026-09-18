@@ -33,23 +33,23 @@ CHANNELS: frozenset[str] = frozenset({CHANNEL_UPLOAD, CHANNEL_NOTIFY})
 _CHANNEL_PREFIX = "ws"
 
 
-def ws_channel(user_id: int, channel: str) -> str:
+def ws_channel(user_id: uuid.UUID, channel: str) -> str:
     """返回某用户某通道的 Redis 通道名（``ws:{user_id}:{channel}``）。"""
     return f"{_CHANNEL_PREFIX}:{user_id}:{channel}"
 
 
-def upload_channel(uploader_id: int) -> str:
+def upload_channel(uploader_id: uuid.UUID) -> str:
     """上传通道名（兼容旧调用点）。"""
     return ws_channel(uploader_id, CHANNEL_UPLOAD)
 
 
-def parse_channel(channel: str) -> tuple[int, str] | None:
+def parse_channel(channel: str) -> tuple[uuid.UUID, str] | None:
     """解析 ``ws:{user_id}:{channel}``；格式不符或通道不在白名单返回 None。"""
     parts = channel.split(":", 2)
     if len(parts) != 3 or parts[0] != _CHANNEL_PREFIX:
         return None
     try:
-        user_id = int(parts[1])
+        user_id = uuid.UUID(parts[1])
     except ValueError:
         return None
     if parts[2] not in CHANNELS:
@@ -58,7 +58,7 @@ def parse_channel(channel: str) -> tuple[int, str] | None:
 
 
 async def publish(
-    user_id: int,
+    user_id: uuid.UUID,
     channel: str,
     payload: dict[str, Any],
     *,
@@ -84,13 +84,13 @@ async def publish(
         return
 
 
-async def publish_upload_bound(uploader_id: int, payload: dict[str, Any]) -> None:
+async def publish_upload_bound(uploader_id: uuid.UUID, payload: dict[str, Any]) -> None:
     """把登记完成的 payload 发布到该 uploader 的 upload 通道。"""
     await publish(uploader_id, CHANNEL_UPLOAD, payload)
 
 
 async def publish_notification(
-    user_id: int,
+    user_id: uuid.UUID,
     payload: dict[str, Any],
     *,
     event_id: str | None = None,

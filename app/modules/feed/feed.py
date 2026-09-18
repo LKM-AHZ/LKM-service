@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -46,7 +47,9 @@ def _preview_of(text: str | None, limit: int = _PREVIEW_LEN) -> str:
     return cleaned[:limit].rstrip() + "..."
 
 
-async def _author_map(db: AsyncSession, user_ids: set[int]) -> dict[int, str]:
+async def _author_map(
+    db: AsyncSession, user_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     if not user_ids:
         return {}
     snaps = await get_user_snapshot_batch(db, user_ids=list(user_ids))
@@ -57,7 +60,7 @@ def _before_conds(
     col_time: Any,
     model_id: Any,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
 ) -> list[Any]:
     """(created_at, id) 游标下滤条件。before_time 为 None 时返回空（首页）。"""
     if before_time is None:
@@ -72,12 +75,17 @@ def _after_conds(
     col_time: Any,
     model_id: Any,
     after_time: datetime,
-    after_id: int,
+    after_id: uuid.UUID | None,
 ) -> list[Any]:
     """(created_at, id) 水位上滤条件（M6.11 fanout 增量扫描用，升序配套）。
 
     与 :func:`_before_conds` 严格互补：``> after`` 或 ``== after 且 id >``。
+
+    首次运行无水位（``after_id is None``）时退化为纯 ``col_time > after_time``——
+    不能写成 ``model_id > NULL``：SQL 里该式恒为 NULL，会让「同一时刻的条目」被全部漏掉。
     """
+    if after_id is None:
+        return [col_time > after_time]
     return [
         (col_time > after_time) | ((col_time == after_time) & (model_id > after_id))
     ]
@@ -88,9 +96,9 @@ def _cursor_order(
     model_id: Any,
     conditions: list[Any],
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     after_time: datetime | None,
-    after_id: int,
+    after_id: uuid.UUID | None,
 ) -> tuple[Any, ...]:
     """按游标方向**就地**给 ``conditions`` 追加过滤，返回 ``order_by`` 元组。
 
@@ -113,13 +121,13 @@ def _cursor_order(
 
 async def _fetch_discussion(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     conditions: list[Any] = [
         ContentItem.content_type == "discussion",
@@ -174,13 +182,13 @@ def _discussion_heat(r: Any) -> float:
 
 async def _fetch_article(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     conditions: list[Any] = [Article.status == "published"]
     order_by = _cursor_order(
@@ -222,13 +230,13 @@ def _article_heat(r: Article) -> float:
 
 async def _fetch_column(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     conditions: list[Any] = [ColumnPost.status == ColumnPostStatus.PUBLISHED]
     if author_ids is not None:
@@ -272,13 +280,13 @@ def _column_heat(r: ColumnPost) -> float:
 
 async def _fetch_qa(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     conditions: list[Any] = [QAQuestion.status.in_(["open", "accepted"])]
     if author_ids is not None:
@@ -318,13 +326,13 @@ async def _fetch_qa(
 
 async def _fetch_project(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     conditions: list[Any] = [Project.status == "active"]
     if author_ids is not None:
@@ -359,13 +367,13 @@ async def _fetch_project(
 
 async def _fetch_blog(
     db: AsyncSession,
-    author_ids: set[int] | None,
-    board_ids: set[int] | None,
+    author_ids: set[uuid.UUID] | None,
+    board_ids: set[uuid.UUID] | None,
     before_time: datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
     after_time: datetime | None = None,
-    after_id: int = 0,
+    after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
     """博客发布产物（统一内容表中 content_type==blog_post）。
 
@@ -395,7 +403,11 @@ async def _fetch_blog(
             item_type="blog",
             id=r.id,
             author_id=r.author_id,
-            author_name=names.get(r.author_id or -1, r.publisher or ""),
+            author_name=(
+                names.get(r.author_id, r.publisher or "")
+                if r.author_id is not None
+                else (r.publisher or "")
+            ),
             title=r.title,
             content_preview=_preview_of(r.excerpt or r.content),
             created_at=r.created_at,

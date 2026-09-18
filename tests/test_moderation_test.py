@@ -10,6 +10,7 @@ profile.role=super_admin)；``admin.moderation_manage`` 权限点(RolePermission
   带 2FA 信任管理 cookie 后返回命中明细。
 """
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,7 @@ from app.modules.admin.moderation.schemas import RuleCreate
 from tests.conftest import DB, auth_user_uid
 
 
-def _admin_cookie_tok(user_id: int, *, mfa_verified: bool) -> str:
+def _admin_cookie_tok(user_id: uuid.UUID, *, mfa_verified: bool) -> str:
     """给 auth realm 建好的 admin(id) 签发后台 access cookie(token_version=0,acct=admin)。"""
     fake = SimpleNamespace(id=user_id, account_level="admin", token_version=0)
     return create_admin_access_token(fake, mfa_verified=mfa_verified)
@@ -61,8 +62,8 @@ class TestTestRulesService:
 class TestTestRulesHttp:
     async def _mk_admin(
         self, db: DB, auth_db, username: str = "root"
-    ) -> int:
-        """auth realm 建 super_admin；业务 realm 授 moderation 权限点。返回其 id。"""
+    ) -> uuid.UUID:
+        """auth realm 建 super_admin；业务 realm 授 moderation 权限点。返回其 uuid id。"""
         from app.modules.admin.models import RolePermission
 
         au = await auth_user_uid(
@@ -81,7 +82,7 @@ class TestTestRulesHttp:
             )
         )
         await db.flush()
-        return int(au.id)
+        return au.id
 
     async def test_requires_2fa_trusted_admin(
         self, db: DB, auth_db, auth_seam_realm: None, client: AsyncClient

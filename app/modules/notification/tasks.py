@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, NamedTuple
 
 from sqlalchemy import select
@@ -43,18 +44,21 @@ logger = logging.getLogger(__name__)
 class _Target(NamedTuple):
     """一条待生成通知的目标：收件人 + 类型 + 聚合目标 + 展示字段。"""
 
-    owner_id: int
+    owner_id: uuid.UUID
     kind: str
-    target_id: int
+    target_id: uuid.UUID
     payload: dict[str, Any]
 
 
-def _split_ref(ref_id: str) -> tuple[str, int] | None:
+def _split_ref(ref_id: str) -> tuple[str, uuid.UUID] | None:
     """解析 ``{prefix}:{id}`` 形式的 ref_id；格式不符返回 None。"""
     prefix, sep, raw = ref_id.partition(":")
-    if not sep or not raw.isdigit():
+    if not sep:
         return None
-    return prefix, int(raw)
+    try:
+        return prefix, uuid.UUID(raw)
+    except ValueError:
+        return None
 
 
 async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_Target]:
@@ -70,9 +74,9 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
             return []
         return [
             _Target(
-                owner_id=int(item.author_id),
+                owner_id=item.author_id,
                 kind=NotificationType.CONTENT_LIKED,
-                target_id=int(item.id),
+                target_id=item.id,
                 payload={
                     "title": item.title,
                     "url": f"/content/posts/{item.id}",
@@ -94,15 +98,15 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         base: dict[str, Any] = {
             "title": item.title,
             "url": f"/content/posts/{item.id}",
-            "comment_id": int(comment.id),
+            "comment_id": str(comment.id),
         }
         targets: list[_Target] = []
         if item.author_id is not None:
             targets.append(
                 _Target(
-                    owner_id=int(item.author_id),
+                    owner_id=item.author_id,
                     kind=NotificationType.CONTENT_COMMENTED,
-                    target_id=int(item.id),
+                    target_id=item.id,
                     payload=dict(base),
                 )
             )
@@ -113,9 +117,9 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
             if parent is not None:
                 targets.append(
                     _Target(
-                        owner_id=int(parent.user_id),
+                        owner_id=parent.user_id,
                         kind=NotificationType.COMMENT_REPLIED,
-                        target_id=int(item.id),
+                        target_id=item.id,
                         payload=dict(base),
                     )
                 )
@@ -124,7 +128,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
     return []
 
 
-async def _actor_name(db: AsyncSession, actor_id: int) -> str:
+async def _actor_name(db: AsyncSession, actor_id: uuid.UUID) -> str:
     """触发者展示名（展示增强项：任何失败都降级为空串，不能让通知丢失）。
 
     snapshot 读缝自身对「AUTH 不可达」是 fail-open 的，但若 seam 关闭且业务库无
@@ -140,10 +144,10 @@ async def _actor_name(db: AsyncSession, actor_id: int) -> str:
     return snap.display_name if snap is not None else ""
 
 
-async def notify_from_point_event(actor_id: int, event: str, ref_id: str) -> None:
+async def notify_from_point_event(actor_id: uuid.UUID, event: str, ref_id: str) -> None:
     """订阅 handler：解析事件 → 落站内信 → 提交后推送（best-effort）。"""
     db = await new_session()
-    pending: list[tuple[int, int, str, dict[str, Any], bool]] = []
+    pending: list[tuple[uuid.UUID, uuid.UUID, str, dict[str, Any], bool]] = []
     try:
         targets = await _resolve_targets(db, event, ref_id)
         if targets:
@@ -160,7 +164,7 @@ async def notify_from_point_event(actor_id: int, event: str, ref_id: str) -> Non
                     target_id=t.target_id,
                     payload={
                         **t.payload,
-                        "actor_id": actor_id,
+                        "actor_id": str(actor_id),
                         "actor_name": actor_name,
                     },
                     aggregate_window_s=settings.notification_aggregate_window_s,
@@ -183,12 +187,12 @@ async def notify_from_point_event(actor_id: int, event: str, ref_id: str) -> Non
             user_id,
             {
                 "event": "notification_created",
-                "notification_id": nid,
+                "notification_id": str(nid),
                 "type": type_,
                 "payload": payload,
             },
             event_id=f"notification:{nid}",
-            version=nid,
+            version=nid.int,
         )
 
 

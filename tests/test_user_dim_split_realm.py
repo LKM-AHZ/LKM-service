@@ -8,6 +8,8 @@ S5 物理拆库后 ``User``/``Profile`` 在 auth 库、``UserDim`` 在业务库�
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +43,7 @@ async def _mk_user(
     return u
 
 
-async def _dim(db: AsyncSession, user_id: int) -> UserDim | None:
+async def _dim(db: AsyncSession, user_id: uuid.UUID) -> UserDim | None:
     return (
         await db.execute(select(UserDim).where(UserDim.user_id == user_id))
     ).scalar_one_or_none()
@@ -52,10 +54,10 @@ async def test_sync_reads_auth_writes_business(auth_db: AsyncSession, db: AsyncS
     u = await _mk_user(auth_db, "realm1", nickname="R1", role="editor")
     await auth_db.commit()
 
-    assert (await sync_dim_for_ids(auth_db, db, [int(u.id)])) == 1
+    assert (await sync_dim_for_ids(auth_db, db, [u.id])) == 1
     await db.commit()
 
-    row = await _dim(db, int(u.id))
+    row = await _dim(db, u.id)
     assert row is not None
     assert row.username == "realm1"
     assert row.nickname == "R1"
@@ -70,15 +72,15 @@ async def test_refresh_and_reconcile_across_realms(
     u2 = await _mk_user(auth_db, "s2", nickname="S2")
     await auth_db.commit()
 
-    assert (await refresh_user_dim(auth_db, db, user_id=int(u1.id))) == 1
+    assert (await refresh_user_dim(auth_db, db, user_id=u1.id)) == 1
     await db.commit()
-    assert (await _dim(db, int(u1.id))) is not None
+    assert (await _dim(db, u1.id)) is not None
 
     # u2 未物化 → 对账补上 u2；u1 已最新 → 不再重写
     n = await reconcile_user_dim_incremental(auth_db, db, window=10)
     await db.commit()
     assert n == 1
-    assert (await _dim(db, int(u2.id))) is not None
+    assert (await _dim(db, u2.id)) is not None
 
     # 收敛：无未物化/无源变更 → 0
     assert (await reconcile_user_dim_incremental(auth_db, db, window=10)) == 0

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from enum import StrEnum
 from typing import Any
 
@@ -49,10 +50,10 @@ NOTIFICATION_TYPES: tuple[str, ...] = tuple(t.value for t in NotificationType)
 async def create_notification(
     db: AsyncSession,
     *,
-    user_id: int,
+    user_id: uuid.UUID,
     type: str,
-    actor_id: int | None = None,
-    target_id: int | None = None,
+    actor_id: uuid.UUID | None = None,
+    target_id: uuid.UUID | None = None,
     payload: dict[str, Any] | None = None,
     aggregate_window_s: float = 3600.0,
 ) -> Notification:
@@ -106,7 +107,7 @@ async def create_notification(
 
 async def list_notifications(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     page: int = 1,
     limit: int = 20,
     unread_only: bool = False,
@@ -141,7 +142,7 @@ async def list_notifications(
     )
 
 
-async def unread_count(db: AsyncSession, user_id: int) -> int:
+async def unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
     return int(
         await db.scalar(
             select(func.count())
@@ -153,7 +154,7 @@ async def unread_count(db: AsyncSession, user_id: int) -> int:
 
 
 async def mark_read(
-    db: AsyncSession, user_id: int, ids: list[int], all_: bool = False
+    db: AsyncSession, user_id: uuid.UUID, ids: list[uuid.UUID], all_: bool = False
 ) -> int:
     """标记已读：``all_`` 优先；否则按 ids（只命中自己的未读行）。返回更新行数。"""
     conditions = [Notification.user_id == user_id, Notification.read_at.is_(None)]
@@ -169,7 +170,7 @@ async def mark_read(
     return int(result.rowcount or 0)
 
 
-async def list_preferences(db: AsyncSession, user_id: int) -> list[PreferenceOut]:
+async def list_preferences(db: AsyncSession, user_id: uuid.UUID) -> list[PreferenceOut]:
     """返回全部已知类型 + 其开关（无行 = 默认开）。"""
     rows = (
         (
@@ -189,7 +190,7 @@ async def list_preferences(db: AsyncSession, user_id: int) -> list[PreferenceOut
 
 
 async def set_preferences(
-    db: AsyncSession, user_id: int, items: list[tuple[str, bool]]
+    db: AsyncSession, user_id: uuid.UUID, items: list[tuple[str, bool]]
 ) -> list[PreferenceOut]:
     """局部更新偏好（白名单校验后 upsert），返回更新后的全量偏好。"""
     now = datetime.datetime.now(datetime.UTC)
@@ -208,7 +209,7 @@ async def set_preferences(
     return await list_preferences(db, user_id)
 
 
-async def is_type_enabled(db: AsyncSession, user_id: int, type: str) -> bool:
+async def is_type_enabled(db: AsyncSession, user_id: uuid.UUID, type: str) -> bool:
     """该用户该类型是否开启实时推送（无行 = 开）。"""
     enabled = await db.scalar(
         select(NotificationPreference.enabled).where(
@@ -220,7 +221,7 @@ async def is_type_enabled(db: AsyncSession, user_id: int, type: str) -> bool:
 
 
 async def register_token(
-    db: AsyncSession, user_id: int, token: str, platform: str = "web"
+    db: AsyncSession, user_id: uuid.UUID, token: str, platform: str = "web"
 ) -> TokenOut:
     """注册推送 token：同 (user_id, token) 幂等（刷新 platform）。"""
     now = datetime.datetime.now(datetime.UTC)
@@ -247,7 +248,7 @@ async def register_token(
     return TokenOut.model_validate(row)
 
 
-async def delete_token(db: AsyncSession, user_id: int, token: str) -> int:
+async def delete_token(db: AsyncSession, user_id: uuid.UUID, token: str) -> int:
     """注销推送 token（只能删自己的）。"""
     result = await db.execute(
         delete(NotificationToken).where(

@@ -6,18 +6,19 @@
 - ``interaction_view_logs`` 代理主键 + ``(user_id, content_id)`` 唯一约束 —— 重复上报同内容
   走 upsert 只刷新 ``viewed_at``，行数上界 = 用户数 × 内容数（保留策略见 tasks.py）。
 
-``user_id`` 一律裸 Integer（S5 拆库后 auth 库才是用户权威，业务库不做物理外键）。
+``user_id`` 一律裸 UUID（S5 拆库后 auth 库才是用户权威，业务库不做物理外键）。
 """
 
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Integer, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class InteractionFavorite(Base):
@@ -29,16 +30,16 @@ class InteractionFavorite(Base):
         Index("ix_interaction_fav_user_created", "user_id", "created_at"),
     )
 
-    content_id: Mapped[int] = mapped_column(
-        ForeignKey("content_items.id", ondelete="CASCADE"), primary_key=True
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_items.id", ondelete="CASCADE"), primary_key=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
 
 
-class InteractionViewLog(Base):
+class InteractionViewLog(UUIDPrimaryKeyMixin, Base):
     """浏览记录：``(user_id, content_id)`` 唯一，重复上报只推进 ``viewed_at``。"""
 
     __tablename__: str = "interaction_view_logs"
@@ -52,10 +53,9 @@ class InteractionViewLog(Base):
         Index("ix_interaction_view_viewed", "viewed_at"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    content_id: Mapped[int] = mapped_column(
-        ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False
     )
     viewed_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

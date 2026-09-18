@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -58,7 +59,7 @@ async def project_list(
 @router.get("/{project_id}", response_model=ApiResp[ProjectOut])
 @respond
 async def project_detail(
-    project_id: int,
+    project_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
 ) -> ProjectOut:
     """项目广场详情（只读）：单项目含成员与进展报告。"""
@@ -80,7 +81,7 @@ async def submit_app(
 )
 @respond
 async def review_app(
-    app_id: int,
+    app_id: uuid.UUID,
     body: ReviewProjectApplicationRequest,
     _cur: Annotated[CurrentUser, require_admin_2fa],
     db: AsyncSession = Depends(get_session),

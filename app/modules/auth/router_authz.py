@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends
@@ -35,7 +36,7 @@ router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 
 
 class _AuthzIn(BaseModel):
-    user_id: int
+    user_id: uuid.UUID
     # 会话描述：monolith 已在其侧自行解码 JWT(用共享 jwt_secret)，把“需 auth 侧复核/裁决”的关键
     # 载荷原样送来复审；不带 email/phone→ 缝不透 PII。
     expect_token_version: int = 0
@@ -45,7 +46,7 @@ class _AuthzIn(BaseModel):
 
 class _GrantIn(BaseModel):
     kind: Literal["exam_unlock", "incubation"]
-    user_id: int
+    user_id: uuid.UUID
     # 仅 kind=exam_unlock 用到：考试解锁目标 level/role（可空，空则该侧不升）
     unlock_level: str | None = None
     unlock_role: str | None = None

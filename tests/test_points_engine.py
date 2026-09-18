@@ -1,5 +1,7 @@
 """积分事件副作用测试：行为计数 / 成就解锁 / 任务推进与达标发分。"""
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,15 +22,17 @@ from app.modules.points.service import get_balance
 from tests.conftest import auth_user_uid
 
 
-async def _user(auth_db: AsyncSession, username: str = "alice") -> int:
-    """在 auth realm 建一线用户，返回其裸 int id（业务 points 表以 int 引用）。"""
+async def _user(auth_db: AsyncSession, username: str = "alice") -> uuid.UUID:
+    """在 auth realm 建一线用户，返回其 uuid 主键（业务 points 表以裸 uuid 引用）。"""
     u = await auth_user_uid(
         auth_db, username=username, email=f"{username}@e.com"
     )
-    return int(u.id)
+    return u.id
 
 
-async def _achievement(db: AsyncSession, key: str, type_: str, threshold: int) -> int:
+async def _achievement(
+    db: AsyncSession, key: str, type_: str, threshold: int
+) -> uuid.UUID:
     a = Achievement(
         key=key,
         category="special",
@@ -50,7 +54,7 @@ async def _task(
     category: str,
     requirement_count: int,
     reward_points: int,
-) -> int:
+) -> uuid.UUID:
     t = Task(
         key=key,
         title_key=f"t_{key}",

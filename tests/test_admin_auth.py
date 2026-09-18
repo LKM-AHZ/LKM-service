@@ -19,6 +19,8 @@ S5-A2 Step1 后拓扑：
 RolePermission(super_admin 默认 grants) 与内容表仍在业务 realm(Base)，由 ``db`` 直插。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,7 +107,7 @@ class TestAdminMe:
         assert body["code"] == 0
         assert body["data"]["account_level"] == "admin"
         assert body["data"]["role"] == "super_admin"
-        assert body["data"]["id"] == int(admin.id)
+        assert body["data"]["id"] == str(admin.id)
 
     async def should_fail_closed_when_seam_verdict_revoked(
         self,
@@ -127,7 +129,7 @@ class TestAdminMe:
         monkeypatch.setattr(_cfg, "auth_http_url", "http://auth-realm-test")
         monkeypatch.setattr(_cfg, "auth_http_token", "x")
 
-        async def _revoked(*, user_id: int, **_: object) -> dict[str, object]:
+        async def _revoked(*, user_id: uuid.UUID, **_: object) -> dict[str, object]:
             return {
                 "ok": False,
                 "cause": "password_changed",
@@ -145,7 +147,7 @@ class TestAdminMe:
 # danger —— require_admin_2fa 内容删除门禁（monolith + seam）
 # ===================================================================
 
-CONTENT_DELETE = "/api/v1/admin/content/item/99999"
+CONTENT_DELETE = "/api/v1/admin/content/item/00000000-0000-7000-8000-000000000099"
 
 
 class TestAdminDangerContentDelete:

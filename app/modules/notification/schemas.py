@@ -1,6 +1,7 @@
 """notification REST 出入参。"""
 
 import datetime
+import uuid
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,10 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class NotificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     type: str
-    actor_id: int | None = None
-    target_id: int | None = None
+    actor_id: uuid.UUID | None = None
+    target_id: uuid.UUID | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     read_at: datetime.datetime | None = None
     created_at: datetime.datetime
@@ -25,7 +26,7 @@ class UnreadCountOut(BaseModel):
 class MarkReadIn(BaseModel):
     """标记已读：给 ``ids`` 或 ``all=true``（二者都空则 no-op）。"""
 
-    ids: list[int] = Field(default_factory=list)
+    ids: list[uuid.UUID] = Field(default_factory=list)
     all: bool = False
 
 
@@ -59,7 +60,7 @@ class TokenIn(BaseModel):
 class TokenOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     token: str
     platform: str
     created_at: datetime.datetime

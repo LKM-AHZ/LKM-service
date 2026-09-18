@@ -15,15 +15,14 @@ from sqlalchemy import Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
-class EventFailure(Base):
+class EventFailure(UUIDPrimaryKeyMixin, Base):
     """relay 发布耗竭(outbox attempt>=MAX)而迁移的归档事件。event_id 即审计锚点。"""
 
     __tablename__: str = "event_failures"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     # 逻辑主题 = 将投失败时的 routing_key
     routing_key: Mapped[str] = mapped_column(String(64), nullable=False)

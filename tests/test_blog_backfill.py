@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -34,10 +35,11 @@ def fake_git(monkeypatch):
     return fg
 
 
-async def _owner_user(db, username: str = "owner", email: str = "owner@example.com") -> int:
-    """建真实 owner（PG 强外键下裸插 owner_id=1 孤儿会 FK 失败）。
+async def _owner_user(
+    db, username: str = "owner", email: str = "owner@example.com"
+) -> uuid.UUID:
+    """建真实 owner（owner_id 现为 auth realm uuid；先落真实 User + Profile）。
 
-    逐步 create_all 的 conftest db 里先落真实 User + Profile，用其自增 id 作 FK 之父。
     与 tests/test_blog.py 的 ``_user`` 同范（仅此文件没走 create_series 服务不需要 role）。
     """
     from app.modules.auth.models import Profile, User

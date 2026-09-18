@@ -14,6 +14,7 @@
 
 import asyncio
 import json
+import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -33,7 +34,7 @@ _BAD_REQUEST_CLOSE = 4400
 _HEARTBEAT_S = 30.0
 
 
-async def _authorize(token: str) -> int | None:
+async def _authorize(token: str) -> uuid.UUID | None:
     """校验 access token，返回 user_id；缺失/无效返回 None。"""
     if not token:
         return None

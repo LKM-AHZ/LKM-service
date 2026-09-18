@@ -19,6 +19,8 @@ HTTP 认证的用例均须注入 ``auth_db``(+``auth_seam_realm`` 使 grant/auth
   from_business seam 开时经写缝落 auth_db（否则业务 db 无 users 会崩）。
 """
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +37,9 @@ from app.modules.exam.service import (
     submit_attempt,
 )
 from tests.conftest import AuthUser, auth_user_uid
+
+# 不存在的考试 id（uuid 形态），用于路由未命中路径。
+_MISSING_EXAM_ID = uuid.UUID("00000000-0000-7000-8000-0000000000ee")
 
 
 def _exam_create() -> ExamCreate:
@@ -87,19 +92,21 @@ async def _mk_au(
     )
 
 
-async def _user_row(auth_db: AsyncSession, user_id: int) -> User:
+async def _user_row(auth_db: AsyncSession, user_id: uuid.UUID) -> User:
     return (
-        await auth_db.execute(select(User).where(User.id == int(user_id)))
+        await auth_db.execute(select(User).where(User.id == user_id))
     ).scalars().one()
 
 
-async def _profile_row(auth_db: AsyncSession, user_id: int) -> Profile | None:
+async def _profile_row(
+    auth_db: AsyncSession, user_id: uuid.UUID
+) -> Profile | None:
     return (
-        await auth_db.execute(select(Profile).where(Profile.user_id == int(user_id)))
+        await auth_db.execute(select(Profile).where(Profile.user_id == user_id))
     ).scalars().first()
 
 
-async def _make_published_exam(db: AsyncSession) -> int:
+async def _make_published_exam(db: AsyncSession) -> uuid.UUID:
     exam = await create_exam_ex(db, _exam_create())
     obj = (await db.execute(select(Exam).where(Exam.id == exam.id))).scalars().first()
     assert obj is not None
@@ -108,7 +115,7 @@ async def _make_published_exam(db: AsyncSession) -> int:
     return exam.id
 
 
-def _correct_answers(questions) -> dict[int, str]:
+def _correct_answers(questions) -> dict[uuid.UUID, str]:
     """按题型给出 fixture 的正确作答（单选取 A、判断取 T）。
 
     QuestionForAttempt 刻意不带 answer 字段，故测试须自行构造正确答案
@@ -318,12 +325,12 @@ class TestExamRoute:
             with_token=True,
         )
         # 未登录 → 403（缺 Authorization）
-        resp = await client.post("/api/v1/exam/1/attempts")
+        resp = await client.post(f"/api/v1/exam/{_MISSING_EXAM_ID}/attempts")
         assert resp.status_code == 403
 
         # 已登录 normal → 无该考试 404（路由与认证通过，落到业务查找）
         resp = await client.post(
-            "/api/v1/exam/1/attempts",
+            f"/api/v1/exam/{_MISSING_EXAM_ID}/attempts",
             headers={"Authorization": f"Bearer {u.token}"},
         )
         assert resp.status_code == 404

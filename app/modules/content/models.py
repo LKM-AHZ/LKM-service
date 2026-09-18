@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -12,11 +13,17 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Uuid,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意是 db.base 不是 db.models
+from app.db.base import (  # 注意是 db.base 不是 db.models
+    Base,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 from app.modules.content.column_models import (
     ColumnApplicationStatus,
     ColumnPostStatus,
@@ -28,19 +35,18 @@ if TYPE_CHECKING:
     from app.modules.feed.models import BoardFollow
 
 
-class ColumnApplication(Base):
+class ColumnApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "column_applications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # S5 拆库后 user FK 断为逻辑 user_id（auth 独立库权威，此处不再物理外键）
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     title: Mapped[str] = mapped_column(String(80), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[ColumnApplicationStatus] = mapped_column(
         String(20), nullable=False, default=ColumnApplicationStatus.PENDING
     )
-    reviewer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -53,12 +59,11 @@ class ColumnApplication(Base):
     )
 
 
-class Column(Base):
+class Column(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "columns"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id 逻辑引用
-    application_id: Mapped[int | None] = mapped_column(
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id 逻辑引用
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("column_applications.id"), unique=True, nullable=True
     )
     title: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -77,7 +82,9 @@ class Column(Base):
     article_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     badges: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    board_id: Mapped[int | None] = mapped_column(ForeignKey("boards.id"), nullable=True)
+    board_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("boards.id"), nullable=True
+    )
     status: Mapped[ColumnStatus] = mapped_column(
         String(20), nullable=False, default=ColumnStatus.ACTIVE
     )
@@ -96,12 +103,13 @@ class Column(Base):
     )
 
 
-class ColumnPost(Base):
+class ColumnPost(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "column_posts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    column_id: Mapped[int] = mapped_column(ForeignKey("columns.id"), nullable=False)
-    author_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id 逻辑引用
+    column_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("columns.id"), nullable=False
+    )
+    author_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id 逻辑引用
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     summary: Mapped[str | None] = mapped_column(String(300), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -167,7 +175,7 @@ SEARCH_VECTOR_SQL = (
 )
 
 
-class ContentItem(Base):
+class ContentItem(UUIDPrimaryKeyMixin, Base):
     """统一内容表：五套旧内容表（forum_posts/articles/column_posts/blog 发布产物）收敛。
 
     用 ``content_type`` 判别（discussion/article/column_post/blog_post），``board_id``
@@ -212,22 +220,25 @@ class ContentItem(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     content_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # 统一分类轴
-    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), nullable=False)
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("boards.id"), nullable=False
+    )
     # 作者：user id（S5 拆库后逻辑 user_id，auth 独立库权威）与官方字符串二选一
-    author_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True, index=True
+    )
     publisher: Mapped[str | None] = mapped_column(String(100), nullable=True)
     department: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # 专栏连载容器（仅 column_post）
-    column_id: Mapped[int | None] = mapped_column(
-        ForeignKey("columns.id"), nullable=True, index=True
+    column_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("columns.id"), nullable=True, index=True
     )
     slug: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # QA 提问关联（仅 content_type == 'qa'）：指向 qa_questions，论坛条目可跳转提问详情
-    qa_question_id: Mapped[int | None] = mapped_column(
-        ForeignKey("qa_questions.id"), nullable=True, index=True
+    qa_question_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("qa_questions.id"), nullable=True, index=True
     )
     # 内容本体
     title: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -280,7 +291,7 @@ class ContentItem(Base):
     )
 
 
-class ContentComment(Base):
+class ContentComment(UUIDPrimaryKeyMixin, Base):
     """统一内容评论（对齐原 forum_comments 的完整模式：floor_number/parent_id/like_count）。"""
 
     __tablename__: str = "content_comments"
@@ -288,15 +299,14 @@ class ContentComment(Base):
         Index("ix_content_comments_item_floor", "content_id", "floor_number"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    content_id: Mapped[int] = mapped_column(
-        ForeignKey("content_items.id"), nullable=False
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_items.id"), nullable=False
     )
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     floor_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    parent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("content_comments.id"), nullable=True
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("content_comments.id"), nullable=True
     )
     like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -304,8 +314,10 @@ class ContentComment(Base):
     )
 
     content_item: Mapped[ContentItem] = relationship(back_populates="comments")
+    # remote_side 用字符串：主键 id 来自 UUIDPrimaryKeyMixin，类体内无 `id` 名字绑定
+    # （写 [id] 会解析到内置函数 id，configure_mappers 直接报错）
     parent: Mapped[ContentComment | None] = relationship(
-        remote_side=[id], back_populates="replies"
+        remote_side="ContentComment.id", back_populates="replies"
     )
     replies: Mapped[list[ContentComment]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
@@ -317,10 +329,10 @@ class ContentLike(Base):
 
     __tablename__: str = "content_likes"
 
-    content_id: Mapped[int] = mapped_column(
-        ForeignKey("content_items.id"), primary_key=True
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_items.id"), primary_key=True
     )
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
@@ -328,7 +340,7 @@ class ContentLike(Base):
     content: Mapped[ContentItem] = relationship(back_populates="like_records")
 
 
-class QAQuestion(Base):
+class QAQuestion(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "qa_questions"
     # 问答列表按 category + id 倒序，status 用于状态筛选；无索引则列表页全表扫
     __table_args__: tuple[Index, ...] = (
@@ -336,8 +348,9 @@ class QAQuestion(Base):
         Index("ix_qa_question_status_id", "status", "id"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    author_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    author_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     situation: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -351,8 +364,8 @@ class QAQuestion(Base):
     category: Mapped[str] = mapped_column(
         String(20), nullable=False, default="help"
     )  # help|volunteer（前端 tab 分类）
-    accepted_answer_id: Mapped[int | None] = mapped_column(
-        ForeignKey("qa_answers.id"), nullable=True
+    accepted_answer_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("qa_answers.id"), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -362,7 +375,7 @@ class QAQuestion(Base):
     )
 
 
-class QAAnswer(Base):
+class QAAnswer(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "qa_answers"
     # 按 question_id 拉回答 / 判定是否已采纳；无索引时按提问拉回答全表扫
     __table_args__: tuple[Index, ...] = (
@@ -370,11 +383,12 @@ class QAAnswer(Base):
         Index("ix_qa_answer_question_accepted", "question_id", "is_accepted"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    question_id: Mapped[int] = mapped_column(
-        ForeignKey("qa_questions.id"), nullable=False
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("qa_questions.id"), nullable=False
     )
-    author_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    author_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     content: Mapped[str] = mapped_column(Text, nullable=False)
     is_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -382,15 +396,14 @@ class QAAnswer(Base):
     )
 
 
-class QAQuestionImage(Base):
+class QAQuestionImage(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "qa_question_images"
     __table_args__: tuple[Index, ...] = (
         Index("ix_qa_question_image_question", "question_id"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    question_id: Mapped[int] = mapped_column(
-        ForeignKey("qa_questions.id"), nullable=False
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("qa_questions.id"), nullable=False
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
     sort: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -399,19 +412,18 @@ class QAQuestionImage(Base):
     )
 
 
-class Board(Base):
+class Board(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "boards"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    owner_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, nullable=True
     )  # S5: auth user_id
     # 子板块挂父板块（板块广场嵌套展示：父=大分类，子=细分板块）
-    parent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("boards.id"), nullable=True, index=True
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("boards.id"), nullable=True, index=True
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active"
@@ -432,7 +444,7 @@ class Board(Base):
     )
 
     parent: Mapped[Board | None] = relationship(
-        remote_side=[id], back_populates="children"
+        remote_side="Board.id", back_populates="children"
     )
     children: Mapped[list[Board]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
@@ -444,12 +456,11 @@ class Board(Base):
     )
 
 
-class BoardApplication(Base):
+class BoardApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "board_applications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    applicant_id: Mapped[int] = mapped_column(
-        Integer, nullable=False
+    applicant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
     )  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -458,7 +469,7 @@ class BoardApplication(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )  # pending|approved|rejected
-    reviewer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -468,14 +479,17 @@ class BoardApplication(Base):
     )
 
 
-class BoardBan(Base):
+class BoardBan(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "board_bans"
     __table_args__ = (Index("ix_board_bans_board_user", "board_id", "user_id"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), nullable=False)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
-    created_by: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("boards.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     reason: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(

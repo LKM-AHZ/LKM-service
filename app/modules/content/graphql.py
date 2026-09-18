@@ -30,22 +30,22 @@ PUBLISHED_STATUS = ContentStatus.PUBLISHED.value
 
 @strawberry.type
 class ContentAuthor:
-    id: int
+    id: strawberry.ID
     name: str
 
 
 @strawberry.type
 class GraphContentItem:
-    id: int
+    id: strawberry.ID
     contentType: str
-    boardId: int
-    authorId: int | None
+    boardId: strawberry.ID
+    authorId: strawberry.ID | None
     authorName: str
     publisher: str | None
     department: str | None
-    columnId: int | None
+    columnId: strawberry.ID | None
     columnTitle: str
-    qaQuestionId: int | None
+    qaQuestionId: strawberry.ID | None
     slug: str | None
     title: str
     excerpt: str
@@ -69,13 +69,13 @@ class GraphContentItem:
 
 @strawberry.type
 class GraphContentComment:
-    id: int
-    contentId: int
-    authorId: int
+    id: strawberry.ID
+    contentId: strawberry.ID
+    authorId: strawberry.ID
     authorName: str
     content: str
     floorNumber: int
-    parentId: int | None
+    parentId: strawberry.ID | None
     likeCount: int
     createdAt: str
     children: list["GraphContentComment"] = strawberry.field(default_factory=list)
@@ -99,12 +99,12 @@ class GraphCommentPage:
 
 @strawberry.type
 class GraphBoard:
-    id: int
+    id: strawberry.ID
     slug: str
     title: str
     description: str
-    parentId: int | None
-    ownerId: int | None
+    parentId: strawberry.ID | None
+    ownerId: strawberry.ID | None
     status: str
     requireCertified: bool
     dailyPostLimit: int
@@ -172,7 +172,7 @@ class ContentQuery:
         info: Info,
         page: int = 1,
         pageSize: int = 20,
-        boardId: int | None = None,
+        boardId: strawberry.ID | None = None,
         contentType: str | None = None,
     ) -> GraphContentPage:
         db = _get_db(info)
@@ -187,7 +187,9 @@ class ContentQuery:
         )
 
     @strawberry.field
-    async def contentItem(self, info: Info, id: int) -> GraphContentItem | None:
+    async def contentItem(
+        self, info: Info, id: strawberry.ID
+    ) -> GraphContentItem | None:
         db = _get_db(info)
         try:
             item = await get_item(db, id, bump_view=False)
@@ -217,7 +219,7 @@ class ContentQuery:
 
     @strawberry.field
     async def contentComments(
-        self, info: Info, itemId: int, page: int = 1, pageSize: int = 20
+        self, info: Info, itemId: strawberry.ID, page: int = 1, pageSize: int = 20
     ) -> GraphCommentPage:
         db = _get_db(info)
         try:
@@ -256,7 +258,7 @@ class ContentQuery:
 
     @strawberry.field
     async def itemCommentTree(
-        self, info: Info, itemId: int
+        self, info: Info, itemId: strawberry.ID
     ) -> list[GraphContentComment]:
         """某内容的完整评论树（根为 parent_id is None 的楼层评论）。"""
         db = _get_db(info)

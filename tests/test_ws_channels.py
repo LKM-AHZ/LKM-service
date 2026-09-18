@@ -9,6 +9,7 @@
 """
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -19,6 +20,13 @@ from app.ws.manager import ConnectionManager
 
 UPLOAD = ws_broker.CHANNEL_UPLOAD
 NOTIFY = ws_broker.CHANNEL_NOTIFY
+
+# 稳定的 uuid7 形态用户 id（第 3 段以 7 开头、第 4 段以 8 开头）。
+_UID1 = uuid.UUID("00000000-0000-7000-8000-000000000001")
+_UID2 = uuid.UUID("00000000-0000-7000-8000-000000000002")
+_UID3 = uuid.UUID("00000000-0000-7000-8000-000000000003")
+# 通知主键（payload 透传用，uuid7 形态）。
+_NOTIFICATION_ID = uuid.UUID("00000000-0000-7000-8000-000000000010")
 
 
 class _FakeWS:
@@ -45,21 +53,21 @@ class _RecordingRedis:
 
 class TestChannelNaming:
     def test_ws_channel_prefixes_user_id(self) -> None:
-        assert ws_broker.ws_channel(7, UPLOAD) == "ws:7:upload"
-        assert ws_broker.ws_channel(7, NOTIFY) == "ws:7:notify"
+        assert ws_broker.ws_channel(_UID1, UPLOAD) == f"ws:{_UID1}:upload"
+        assert ws_broker.ws_channel(_UID1, NOTIFY) == f"ws:{_UID1}:notify"
 
     def test_parse_channel_round_trip(self) -> None:
-        assert ws_broker.parse_channel("ws:7:upload") == (7, UPLOAD)
-        assert ws_broker.parse_channel("ws:7:notify") == (7, NOTIFY)
+        assert ws_broker.parse_channel(f"ws:{_UID1}:upload") == (_UID1, UPLOAD)
+        assert ws_broker.parse_channel(f"ws:{_UID1}:notify") == (_UID1, NOTIFY)
 
     @pytest.mark.parametrize(
         "channel",
         [
-            "ws:7:evil",  # 白名单外通道
-            "ws:upload:7",  # 段序错（user_id 非数字）
-            "ws:7",  # 段数不足
-            "ws:7:upload:extra",  # 段数超出（split(":", 2) 后第三段含冒号）
-            "other:7:upload",  # 前缀不符
+            f"ws:{_UID1}:evil",  # 白名单外通道
+            f"ws:upload:{_UID1}",  # 段序错（user_id 段非 uuid）
+            f"ws:{_UID1}",  # 段数不足
+            f"ws:{_UID1}:upload:extra",  # 段数超出（split(":", 2) 后第三段含冒号）
+            f"other:{_UID1}:upload",  # 前缀不符
         ],
     )
     def test_parse_channel_rejects_invalid(self, channel: str) -> None:
@@ -70,11 +78,11 @@ class TestMultiChannelFanout:
     async def test_channels_do_not_crosstalk(self) -> None:
         m = ConnectionManager()
         uploader, notifiee = _FakeWS(), _FakeWS()
-        await m.register(7, uploader, (UPLOAD,))
-        await m.register(7, notifiee, (NOTIFY,))
+        await m.register(_UID1, uploader, (UPLOAD,))
+        await m.register(_UID1, notifiee, (NOTIFY,))
 
-        await m.dispatch(7, UPLOAD, "u-frame")
-        await m.dispatch(7, NOTIFY, "n-frame")
+        await m.dispatch(_UID1, UPLOAD, "u-frame")
+        await m.dispatch(_UID1, NOTIFY, "n-frame")
 
         assert uploader.sent == ["u-frame"]
         assert notifiee.sent == ["n-frame"]
@@ -83,10 +91,10 @@ class TestMultiChannelFanout:
     async def test_single_connection_may_subscribe_many_channels(self) -> None:
         m = ConnectionManager()
         ws = _FakeWS()
-        await m.register(7, ws, (UPLOAD, NOTIFY))
+        await m.register(_UID1, ws, (UPLOAD, NOTIFY))
 
-        await m.dispatch(7, UPLOAD, "u-frame")
-        await m.dispatch(7, NOTIFY, "n-frame")
+        await m.dispatch(_UID1, UPLOAD, "u-frame")
+        await m.dispatch(_UID1, NOTIFY, "n-frame")
 
         assert ws.sent == ["u-frame", "n-frame"]
         await m.close()
@@ -94,10 +102,10 @@ class TestMultiChannelFanout:
     async def test_other_user_not_reached(self) -> None:
         m = ConnectionManager()
         mine, other = _FakeWS(), _FakeWS()
-        await m.register(7, mine, (NOTIFY,))
-        await m.register(8, other, (NOTIFY,))
+        await m.register(_UID1, mine, (NOTIFY,))
+        await m.register(_UID2, other, (NOTIFY,))
 
-        await m.dispatch(7, NOTIFY, "payload")
+        await m.dispatch(_UID1, NOTIFY, "payload")
 
         assert mine.sent == ["payload"]
         assert other.sent == []
@@ -107,10 +115,10 @@ class TestMultiChannelFanout:
         """不传 channels 时按旧语义只订阅 upload（前端零改动）。"""
         m = ConnectionManager()
         ws = _FakeWS()
-        await m.register(7, ws)
+        await m.register(_UID1, ws)
 
-        await m.dispatch(7, UPLOAD, "u-frame")
-        await m.dispatch(7, NOTIFY, "n-frame")
+        await m.dispatch(_UID1, UPLOAD, "u-frame")
+        await m.dispatch(_UID1, NOTIFY, "n-frame")
 
         assert ws.sent == ["u-frame"]
         await m.close()
@@ -118,27 +126,27 @@ class TestMultiChannelFanout:
     async def test_unregister_removes_all_channels(self) -> None:
         m = ConnectionManager()
         ws = _FakeWS()
-        await m.register(7, ws, (UPLOAD, NOTIFY))
+        await m.register(_UID1, ws, (UPLOAD, NOTIFY))
 
-        await m.unregister(7, ws)
+        await m.unregister(_UID1, ws)
 
-        await m.dispatch(7, UPLOAD, "u-frame")
-        await m.dispatch(7, NOTIFY, "n-frame")
+        await m.dispatch(_UID1, UPLOAD, "u-frame")
+        await m.dispatch(_UID1, NOTIFY, "n-frame")
         assert ws.sent == []
-        assert m._connections.get(7) is None
+        assert m._connections.get(_UID1) is None
         await m.close()
 
     async def test_dead_connection_pruned_within_channel(self) -> None:
         m = ConnectionManager()
         bad, good = _FakeWS(dead=True), _FakeWS()
-        await m.register(9, bad, (NOTIFY,))
-        await m.register(9, good, (NOTIFY,))
+        await m.register(_UID3, bad, (NOTIFY,))
+        await m.register(_UID3, good, (NOTIFY,))
 
-        await m.dispatch(9, NOTIFY, "payload")
+        await m.dispatch(_UID3, NOTIFY, "payload")
 
         assert good.sent == ["payload"]
         async with m._lock:
-            live = list(m._connections.get(9, {}).get(NOTIFY, ()))
+            live = list(m._connections.get(_UID3, {}).get(NOTIFY, ()))
         assert bad not in live and good in live
         await m.close()
 
@@ -159,12 +167,12 @@ class TestPublishPayload:
         self, recorder: _RecordingRedis
     ) -> None:
         await ws_broker.publish_notification(
-            7, {"event": "notification_created"}, event_id="e-1", version=3
+            _UID1, {"event": "notification_created"}, event_id="e-1", version=3
         )
 
         channel, data = recorder.calls[0]
         body = json.loads(data)
-        assert channel == "ws:7:notify"
+        assert channel == f"ws:{_UID1}:notify"
         assert body["event"] == "notification_created"
         assert body["event_id"] == "e-1"
         assert body["version"] == 3
@@ -173,14 +181,17 @@ class TestPublishPayload:
         self, recorder: _RecordingRedis
     ) -> None:
         """同 event_id 重推 → body 逐字段一致，前端可据此去重。"""
-        payload = {"event": "notification_created", "notification_id": 5}
-        await ws_broker.publish_notification(7, payload, event_id="e-2", version=1)
-        await ws_broker.publish_notification(7, payload, event_id="e-2", version=1)
+        payload = {
+            "event": "notification_created",
+            "notification_id": str(_NOTIFICATION_ID),
+        }
+        await ws_broker.publish_notification(_UID1, payload, event_id="e-2", version=1)
+        await ws_broker.publish_notification(_UID1, payload, event_id="e-2", version=1)
 
         assert recorder.calls[0] == recorder.calls[1]
         assert json.loads(recorder.calls[0][1]) == {
             "event": "notification_created",
-            "notification_id": 5,
+            "notification_id": str(_NOTIFICATION_ID),
             "event_id": "e-2",
             "version": 1,
         }
@@ -188,8 +199,8 @@ class TestPublishPayload:
     async def test_generated_event_id_differs_per_call(
         self, recorder: _RecordingRedis
     ) -> None:
-        await ws_broker.publish_upload_bound(7, {"event": "upload_registered"})
-        await ws_broker.publish_upload_bound(7, {"event": "upload_registered"})
+        await ws_broker.publish_upload_bound(_UID1, {"event": "upload_registered"})
+        await ws_broker.publish_upload_bound(_UID1, {"event": "upload_registered"})
 
         first = json.loads(recorder.calls[0][1])
         second = json.loads(recorder.calls[1][1])
@@ -200,7 +211,7 @@ class TestPublishPayload:
     async def test_unknown_channel_not_published(
         self, recorder: _RecordingRedis
     ) -> None:
-        await ws_broker.publish(7, "evil", {"event": "x"})
+        await ws_broker.publish(_UID1, "evil", {"event": "x"})
 
         assert recorder.calls == []
 

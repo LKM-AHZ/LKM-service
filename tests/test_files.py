@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import pathlib
+import uuid
 from typing import Any
 
 import pytest
@@ -42,6 +43,9 @@ from app.modules.files.service import (
 )
 from app.modules.storage.s3 import S3Storage
 from tests.conftest import AuthUser, auth_user_uid
+
+# 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +91,7 @@ async def _file(
     category_id: str = "math",
     tags: tuple[str, ...] = ("数学",),
 ) -> FileInfo:
-    """以 uploader 建一件文件。uploader_id 引用 auth realm 的裸 int id。
+    """以 uploader 建一件文件。uploader_id 引用 auth realm 的 uuid 主键。
 
     注：create_file 尾会经 seam(_uploader_map)解析展示名，故须 seam ON + auth user 在 auth_db。
     """
@@ -119,7 +123,7 @@ class TestFilesService:
 
         f = await _file(db, auth_db, uploader)
 
-        assert f.id == 1
+        assert isinstance(f.id, uuid.UUID)
         assert f.uploader_id == uploader.id
         assert f.uploader_name == "爱丽丝"
         assert f.tags == ["数学"]
@@ -232,7 +236,7 @@ class TestFilesService:
 
     async def should_reject_nonexistent_file(self, db: AsyncSession):
         with pytest.raises(BizError) as exc:
-            await get_file(db, 999)
+            await get_file(db, _MISSING_ID)
 
         assert exc.value.errcode == FileErr.NOT_FOUND
 
@@ -376,7 +380,7 @@ class TestFilesRoutes:
         assert resp.status_code == 200
         assert resp.json()["code"] == 0
         data = resp.json()["data"]
-        assert data["uploader_id"] == uploader.id
+        assert data["uploader_id"] == str(uploader.id)
         assert data["original_name"] == "讲义.pdf"
         assert data["mime_type"] == "application/pdf"
         assert data["size"] == len(b"%PDF-1.4 content")
@@ -450,7 +454,7 @@ class TestFilesRoutes:
     async def should_reject_nonexistent_file_detail(
         self, client: Any, db: AsyncSession
     ):
-        resp = await client.get("/api/v1/files/999")
+        resp = await client.get(f"/api/v1/files/{_MISSING_ID}")
 
         assert resp.status_code == 404
         assert resp.json()["code"] == FileErr.NOT_FOUND
@@ -728,9 +732,9 @@ class TestFilesPhase2AEndpoints:
         self,
         db: AsyncSession,
         auth_db: AsyncSession,
-        user_id: int,
+        user_id: uuid.UUID,
         approved: bool = True,
-    ) -> int:
+    ) -> uuid.UUID:
         f = await create_file(
             db,
             user_id,
@@ -1109,7 +1113,7 @@ class TestFilesPhase2BUploadInit:
             assert init.upload_id is not None
             meta_raw = fake._data[svc._upload_key(init.upload_id)]
             meta = json.loads(meta_raw)
-            assert meta["uploader_id"] == uploader.id
+            assert meta["uploader_id"] == str(uploader.id)
 
     async def test_confirm_missing_marker_raises_expired(
         self,

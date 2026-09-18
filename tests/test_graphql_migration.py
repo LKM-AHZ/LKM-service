@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 import pytest
@@ -6,6 +7,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.modules.content import service as content_service
 from app.modules.content.models import Board, ContentItem, ContentStatus, ContentType
+
+# 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
 
 async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> Any:
@@ -74,15 +78,15 @@ class TestContentGraphQL:
 
         data = await _run(
             client,
-            "query($id: Int!) { contentItem(id: $id) { id title content } }",
-            {"id": draft.id},
+            "query($id: ID!) { contentItem(id: $id) { id title content } }",
+            {"id": str(draft.id)},
         )
         assert data["contentItem"] is None
 
         data = await _run(
             client,
-            "query($id: Int!) { contentItem(id: $id) { id title content } }",
-            {"id": published.id},
+            "query($id: ID!) { contentItem(id: $id) { id title content } }",
+            {"id": str(published.id)},
         )
         assert data["contentItem"] is not None
         assert data["contentItem"]["title"] == "已发布"
@@ -217,14 +221,14 @@ class TestColumnsGraphQL:
         data = await _run(
             client,
             """
-            query($id: Int!) {
+            query($id: ID!) {
               columnPosts(columnId: $id, page: 1) {
                 items { id title summary viewCount }
                 total
               }
             }
             """,
-            {"id": 1},
+            {"id": str(_MISSING_ID)},
         )
         assert "columnPosts" in data
 
@@ -251,14 +255,14 @@ class TestBlogGraphQL:
         data = await _run(
             client,
             """
-            query($id: Int!) {
+            query($id: ID!) {
               blogSeriesDetail(seriesId: $id) {
                 id title
                 fileTree { name type children { name type } }
               }
             }
             """,
-            {"id": 1},
+            {"id": str(_MISSING_ID)},
         )
         # 不存在的 series 应返回 null（resolver 捕获异常）
         assert data["blogSeriesDetail"] is None
@@ -267,13 +271,13 @@ class TestBlogGraphQL:
         data = await _run(
             client,
             """
-            query($id: Int!, $filepath: String!) {
+            query($id: ID!, $filepath: String!) {
               blogFileContent(seriesId: $id, filepath: $filepath) {
                 filepath content
               }
             }
             """,
-            {"id": 999999, "filepath": "README.md"},
+            {"id": str(_MISSING_ID), "filepath": "README.md"},
         )
         # 不存在的 series 应返回 null（resolver 捕获 SERIES_NOT_FOUND）
         assert data["blogFileContent"] is None
@@ -300,11 +304,11 @@ class TestProjectsGraphQL:
         data = await _run(
             client,
             """
-            query($id: Int!) {
+            query($id: ID!) {
               project(projectId: $id) { id title summary }
             }
             """,
-            {"id": 1},
+            {"id": str(_MISSING_ID)},
         )
         # 不存在的 project 应返回 null（resolver 捕获 NOT_FOUND）
         assert data["project"] is None

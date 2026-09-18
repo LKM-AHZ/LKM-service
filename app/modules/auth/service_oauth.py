@@ -5,6 +5,7 @@
 """
 
 import secrets
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -28,7 +29,7 @@ from app.modules.auth.service_auth import (
 
 
 async def generate_oauth_state(
-    db: AsyncSession, purpose: str, user_id: int | None = None
+    db: AsyncSession, purpose: str, user_id: uuid.UUID | None = None
 ) -> str:
     """生成一个高熵的 OAuth state 令牌，存储并返回它。bind 场景关联发起用户。"""
     state = secrets.token_urlsafe(32)
@@ -62,7 +63,7 @@ async def consume_oauth_state(db: AsyncSession, state: str, purpose: str) -> OAu
 
 
 async def get_github_auth_url(
-    db: AsyncSession, purpose: str = "login", user_id: int | None = None
+    db: AsyncSession, purpose: str = "login", user_id: uuid.UUID | None = None
 ) -> str:
     """兼容入口：GitHub 授权 URL。"""
     return await get_oauth_auth_url(db, GithubOAuth.name, purpose, user_id)
@@ -72,7 +73,7 @@ async def get_oauth_auth_url(
     db: AsyncSession,
     provider_name: str,
     purpose: str = "login",
-    user_id: int | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> str:
     state = await generate_oauth_state(db, purpose, user_id)
     return get_provider(provider_name).authorize_url(state)
@@ -111,7 +112,7 @@ async def handle_oauth_callback(
             db,
             User,
             AuthErr.USER_NOT_FOUND,
-            User.id == int(oauth.user_id),
+            User.id == oauth.user_id,
             options=(selectinload(User.profile),),
         )
         return await _oauth_login_response(db, user)
@@ -141,7 +142,7 @@ async def handle_oauth_callback(
 
     db.add(
         UserOAuth(
-            user_id=int(user.id),
+            user_id=user.id,
             provider=provider.name,
             provider_user_id=info.provider_user_id,
             provider_email=info.provider_email,
@@ -193,7 +194,7 @@ async def bind_oauth(
 
     db.add(
         UserOAuth(
-            user_id=int(user.id),
+            user_id=user.id,
             provider=provider.name,
             provider_user_id=info.provider_user_id,
             provider_email=info.provider_email,

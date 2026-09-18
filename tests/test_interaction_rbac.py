@@ -4,6 +4,8 @@
 ``auth_db``+``auth_seam_realm``，权限点落业务库 ``role_permissions``（生产口径）。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,9 @@ from app.core.err import CommonErr
 from app.modules.admin.models import RolePermission
 from app.modules.content.models import Board, ContentItem, ContentStatus, ContentType
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
+
+# 不存在的 content id（uuid 形态），用于未命中路径。
+_MISSING_CONTENT_ID = uuid.UUID("00000000-0000-7000-8000-000000009999")
 
 
 async def _mk_au(
@@ -44,7 +49,7 @@ async def _seed_perm(db: DB, role: str, permission: str) -> None:
         await db.flush()
 
 
-async def _mk_item(db: DB, author_id: int | None = None) -> int:
+async def _mk_item(db: DB, author_id: uuid.UUID | None = None) -> uuid.UUID:
     board = Board(slug="i1", title="B", description="", status="active")
     db.add(board)
     await db.flush()
@@ -58,7 +63,7 @@ async def _mk_item(db: DB, author_id: int | None = None) -> int:
     )
     db.add(item)
     await db.flush()
-    return int(item.id)
+    return item.id
 
 
 async def test_anonymous_favorite_rejected(
@@ -105,7 +110,7 @@ async def test_normal_can_favorite_and_unfavorite(
 
     assert added.status_code == 200 and added.json()["code"] == CommonErr.OK
     assert added.json()["data"] == {
-        "content_id": item_id,
+        "content_id": str(item_id),
         "favorited": True,
         "bookmark_count": 1,
     }
@@ -120,7 +125,9 @@ async def test_missing_content_returns_404(
     await _seed_perm(db, "normal:member", "interaction.favorite")
     user = await _mk_au(auth_db, "nomo2")
 
-    r = await client.post("/api/v1/interaction/favorites/999999", headers=_h(user))
+    r = await client.post(
+        f"/api/v1/interaction/favorites/{_MISSING_CONTENT_ID}", headers=_h(user)
+    )
 
     assert r.status_code == 404
 
@@ -139,7 +146,7 @@ async def test_my_favorites_requires_login_only(
     body = r.json()
     assert body["code"] == CommonErr.OK
     assert body["data"]["total"] == 1
-    assert body["data"]["items"][0]["content_id"] == item_id
+    assert body["data"]["items"][0]["content_id"] == str(item_id)
 
 
 async def test_local_cannot_report_view(

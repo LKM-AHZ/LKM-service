@@ -23,6 +23,7 @@ handler：三种事件在快照语义上都只需失效该 user 的缓存，路�
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,19 +41,19 @@ logger = logging.getLogger("lkm.auth.events")
 _EVENT_FN = "invalidate_user_snap"
 
 
-async def notify_user_updated(db: AsyncSession, user_id: int) -> None:
+async def notify_user_updated(db: AsyncSession, user_id: uuid.UUID) -> None:
     """常规身份变更（profile 编改/头像/升降级等）→ 同事务入队 ``event.user.updated``。"""
     await enqueue_outbox(db, RKEY_USER_UPDATED, {"fn": _EVENT_FN, "args": [user_id]})
 
 
-async def notify_user_session_revoke(db: AsyncSession, user_id: int) -> None:
+async def notify_user_session_revoke(db: AsyncSession, user_id: uuid.UUID) -> None:
     """密码重置/全量会话吊销 → 同事务入队 ``event.user.session_revoke``。"""
     await enqueue_outbox(
         db, RKEY_USER_SESSION_REVOKE, {"fn": _EVENT_FN, "args": [user_id]}
     )
 
 
-async def notify_user_banned_committed(user_id: int) -> None:
+async def notify_user_banned_committed(user_id: uuid.UUID) -> None:
     """账户自动锁定的失效事件，以**独立会话**提交（与 savepoint 隔离的锁定同寿命）。
 
     失败登录触达锁定阈值时，``login_password`` 会对该请求抛出认证错误并让外层

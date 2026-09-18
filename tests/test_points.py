@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import uuid
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -29,7 +30,7 @@ from tests.conftest import auth_user_uid
 
 async def _spend_in_session(
     factory: async_sessionmaker[AsyncSession],
-    uid: int,
+    uid: uuid.UUID,
     amount: int,
     ref_type: str,
     ref_id: str,
@@ -42,12 +43,12 @@ async def _spend_in_session(
 
 async def _user(
     auth_db: AsyncSession, username: str = "alice", nickname: str | None = None
-) -> int:
-    """在 auth realm 建一线用户返回其裸 int id（Nickname 落 auth Profile，供榜展示）。"""
+) -> uuid.UUID:
+    """在 auth realm 建一线用户返回其 uuid 主键（Nickname 落 auth Profile，供榜展示）。"""
     u = await auth_user_uid(
         auth_db, username=username, email=f"{username}@e.com", nickname=nickname
     )
-    return int(u.id)
+    return u.id
 
 
 class TestReward:
@@ -163,9 +164,9 @@ class TestConcurrency:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         factory = async_sessionmaker(engine, expire_on_commit=False)
-        # 种子同 schema；points 只用裸 int user_id（无 identity/FK 依赖）→ 用字面 int 直接发分
+        # 种子同 schema；points 的 user_id 是裸 uuid（无 identity/FK 依赖）→ 用字面 uuid 直接发分
         async with factory() as seed:
-            uid = 1
+            uid = uuid.UUID("00000000-0000-7000-8000-000000000001")
             await reward(seed, uid, 100, "test", "cc", "0")
             await seed.commit()
         results = await asyncio.gather(

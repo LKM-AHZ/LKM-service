@@ -7,22 +7,23 @@
   故新增通知类型无需回填历史用户。
 - ``notification_tokens``：``(user_id, token)`` 唯一，token 换绑同用户幂等。
 
-``user_id`` 一律裸 Integer（S5 拆库后 auth 库是用户权威，业务库不建物理外键）。
+``user_id`` 一律裸 UUID（S5 拆库后 auth 库是用户权威，业务库不建物理外键）。
 """
 
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Index, String, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
-class Notification(Base):
+class Notification(UUIDPrimaryKeyMixin, Base):
     """站内信正本（一条 = 一次对某用户的可见通知）。"""
 
     __tablename__: str = "notifications"
@@ -42,13 +43,12 @@ class Notification(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     type: Mapped[str] = mapped_column(String(40), nullable=False)
     # 触发者（auth user id）；系统通知为 None
-    actor_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     # 目标实体 id（当前为 content_items.id）；系统通知为 None
-    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     read_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
@@ -63,7 +63,7 @@ class NotificationPreference(Base):
 
     __tablename__: str = "notification_preferences"
 
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     type: Mapped[str] = mapped_column(String(40), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     updated_at: Mapped[datetime.datetime] = mapped_column(
@@ -71,7 +71,7 @@ class NotificationPreference(Base):
     )
 
 
-class NotificationToken(Base):
+class NotificationToken(UUIDPrimaryKeyMixin, Base):
     """移动/浏览器推送 token（(user_id, token) 唯一，换绑幂等）。"""
 
     __tablename__: str = "notification_tokens"
@@ -79,8 +79,7 @@ class NotificationToken(Base):
         UniqueConstraint("user_id", "token", name="uq_notification_token"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     token: Mapped[str] = mapped_column(String(255), nullable=False)
     platform: Mapped[str] = mapped_column(String(20), nullable=False, default="web")
     created_at: Mapped[datetime.datetime] = mapped_column(

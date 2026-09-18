@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import logging
 import secrets
+import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy import case, select
@@ -81,7 +82,7 @@ def hash_refresh_token(raw: str) -> str:
 
 async def store_refresh_token(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     raw: str,
     mfa_verified: bool = False,
     mfa_at: datetime.datetime | None = None,
@@ -447,7 +448,7 @@ async def _check_admin_totp_required(
     return {
         "access_token": None,
         "refresh_token": None,
-        "user_id": int(user.id),
+        "user_id": user.id,
         "account_level": str(user.account_level),
         "requires_2fa": True,
         "setup_required": True,
@@ -746,7 +747,7 @@ async def refresh_access_token(db: AsyncSession, raw_refresh: str) -> dict[str, 
     return {"access_token": access_token, "refresh_token": raw_new}
 
 
-async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
+async def revoke_all_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> None:
     """撤销指定用户所有未撤销的刷新令牌，并使其所有访问令牌失效。"""
     await db.execute(
         sa_update(RefreshToken)
@@ -764,7 +765,7 @@ async def revoke_all_refresh_tokens(db: AsyncSession, user_id: int) -> None:
 
 async def log_audit(
     db: AsyncSession,
-    user_id: int | None,
+    user_id: uuid.UUID | None,
     action: str,
     detail: str | None = None,
     ip_address: str | None = None,

@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,7 +65,7 @@ async def qa_list(
 @router.get("/questions/{question_id}", response_model=ApiResp[QuestionDetail])
 @respond
 async def qa_detail(
-    question_id: int, db: AsyncSession = Depends(get_read_session)
+    question_id: uuid.UUID, db: AsyncSession = Depends(get_read_session)
 ) -> QuestionDetail:
     return await get_question(db, question_id)
 
@@ -81,7 +83,7 @@ async def qa_ask(
 @router.post("/questions/{question_id}/answers", response_model=ApiResp[AnswerOut])
 @respond
 async def qa_answer(
-    question_id: int,
+    question_id: uuid.UUID,
     info: AnswerCreate,
     cur: CurrentUser = RequireLevel("normal"),
     db: AsyncSession = Depends(get_session),
@@ -92,26 +94,26 @@ async def qa_answer(
 @router.post("/questions/{question_id}/accept", response_model=ApiResp[AnswerOut])
 @respond
 async def qa_accept(
-    question_id: int,
-    body: dict[str, int],  # {"answer_id": int}
+    question_id: uuid.UUID,
+    body: dict[str, uuid.UUID],  # {"answer_id": uuid}
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> AnswerOut:
     answer_id = body.get("answer_id")
     if not answer_id:
         raise BizError(QaErr.ANSWER_NOT_FOUND)
-    return await accept_answer(db, question_id, int(answer_id), cur.id)
+    return await accept_answer(db, question_id, answer_id, cur.id)
 
 
 @router.post("/questions/{question_id}/close", response_model=ApiResp[QuestionOut])
 @respond
 async def qa_close(
-    question_id: int,
-    body: dict[str, int] | None = None,
+    question_id: uuid.UUID,
+    body: dict[str, uuid.UUID] | None = None,
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> QuestionOut:
     acc_id = (body or {}).get("accepted_answer_id")
     return await close_question(
-        db, question_id, cur.id, accepted_answer_id=int(acc_id) if acc_id else None
+        db, question_id, cur.id, accepted_answer_id=acc_id or None
     )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import uuid
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
@@ -43,7 +44,7 @@ def _bigv_key() -> str:
     return make_key("feed", "bigv")
 
 
-async def bigv_authors() -> set[int]:
+async def bigv_authors() -> set[uuid.UUID]:
     """当前被标记为「大 V」的作者 id 集合（Redis 不可用 → 空集，读路径退化为纯物化）。"""
     client = await redis_client.get_redis()
     if client is None:
@@ -52,30 +53,30 @@ async def bigv_authors() -> set[int]:
         members = await client.smembers(_bigv_key())
     except Exception:
         return set()
-    out: set[int] = set()
+    out: set[uuid.UUID] = set()
     for m in members or ():
         try:
-            out.add(int(m))
+            out.add(uuid.UUID(m))
         except (TypeError, ValueError):
             continue
     return out
 
 
-async def _mark_bigv(author_id: int) -> None:
+async def _mark_bigv(author_id: uuid.UUID) -> None:
     client = await redis_client.get_redis()
     if client is None:
         return
     try:
-        await client.sadd(_bigv_key(), author_id)
+        await client.sadd(_bigv_key(), str(author_id))
     except Exception:
         logger.warning("mark bigv failed for author %s", author_id, exc_info=True)
 
 
 async def _follower_ids(
-    db: AsyncSession, author_id: int | None, board_id: int | None
-) -> set[int]:
+    db: AsyncSession, author_id: uuid.UUID | None, board_id: uuid.UUID | None
+) -> set[uuid.UUID]:
     """该条目的受众：关注作者的人 ∪ 关注该内容版块的人（均过滤软删）。"""
-    followers: set[int] = set()
+    followers: set[uuid.UUID] = set()
     if author_id is not None:
         rows = await db.execute(
             select(UserFollow.follower_id).where(
@@ -144,7 +145,7 @@ async def _load_state(db: AsyncSession, source: str) -> FeedFanoutState:
         state = FeedFanoutState(
             source=source,
             last_created_at=datetime.datetime.now(datetime.UTC),
-            last_id=0,
+            last_id=None,
         )
         db.add(state)
         await db.flush()
@@ -166,7 +167,7 @@ async def fanout_batch(db: AsyncSession, per_source_limit: int = 200) -> int:
             None,
             None,
             None,
-            0,
+            None,
             per_source_limit,
             after_time=state.last_created_at,
             after_id=state.last_id,
@@ -183,16 +184,14 @@ async def fanout_batch(db: AsyncSession, per_source_limit: int = 200) -> int:
 
 
 async def backfill_author(
-    db: AsyncSession, follower_id: int, author_id: int, limit: int
+    db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, limit: int
 ) -> int:
     """把作者最近 ``limit`` 条内容补进该关注者的物化 feed（新关注时调用，幂等）。"""
     values: list[dict[str, object]] = []
     for name in feed_src.FOLLOW_SOURCES:
         fetch = feed_src.SOURCES[name]
         # discussion 源要求 author/board 两个集合都给才按作者过滤，故传空版块集
-        items: list[FeedItem] = await fetch(
-            db, {author_id}, set(), None, 0, limit
-        )
+        items: list[FeedItem] = await fetch(db, {author_id}, set(), None, None, limit)
         values.extend(
             {
                 "user_id": follower_id,
@@ -218,11 +217,11 @@ async def backfill_author(
 
 
 async def backfill_board(
-    db: AsyncSession, follower_id: int, board_id: int, limit: int
+    db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, limit: int
 ) -> int:
     """把版块最近 ``limit`` 条讨论帖补进该关注者的物化 feed（新关注版块时调用）。"""
     items: list[FeedItem] = await feed_src.SOURCES["discussion"](
-        db, set(), {board_id}, None, 0, limit
+        db, set(), {board_id}, None, None, limit
     )
     if not items:
         return 0
@@ -249,7 +248,7 @@ async def backfill_board(
 
 
 async def remove_author_items(
-    db: AsyncSession, follower_id: int, author_id: int
+    db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID
 ) -> int:
     """取消关注某作者时清理其条目（否则物化 feed 会残留已取关的内容）。"""
     result = await db.execute(
@@ -263,7 +262,10 @@ async def remove_author_items(
 
 
 async def remove_board_items(
-    db: AsyncSession, follower_id: int, board_id: int, keep_authors: set[int]
+    db: AsyncSession,
+    follower_id: uuid.UUID,
+    board_id: uuid.UUID,
+    keep_authors: set[uuid.UUID],
 ) -> int:
     """取消关注版块时清理该版块条目。
 
@@ -284,7 +286,7 @@ async def remove_board_items(
     return int(result.rowcount or 0)
 
 
-async def count_materialized(db: AsyncSession, user_id: int) -> int:
+async def count_materialized(db: AsyncSession, user_id: uuid.UUID) -> int:
     """某用户物化 feed 的条目数（读路径判「物化是否可用」，以及测试断言用）。"""
     return (
         await db.scalar(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -28,18 +29,22 @@ _EXPECTED_KEYS = {
     "url",
 }
 
+_ITEM_ID = uuid.UUID("00000000-0000-7000-8000-000000000001")
+_AUTHOR_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
+_BOARD_ID = uuid.UUID("00000000-0000-7000-8000-000000000003")
+
 
 def _item(**over: Any) -> FeedItem:
     base: dict[str, Any] = {
         "item_type": "article",
-        "id": 1,
-        "author_id": 7,
+        "id": _ITEM_ID,
+        "author_id": _AUTHOR_ID,
         "author_name": "张三",
         "title": "标题",
         "content_preview": "预览",
         "created_at": datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC),
         "sort_score": 1.5,
-        "board_id": 3,
+        "board_id": _BOARD_ID,
         "url": "/content/1",
     }
     base.update(over)

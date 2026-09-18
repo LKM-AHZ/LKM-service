@@ -1,6 +1,7 @@
 import datetime as _dt
 import json
 import re
+import uuid
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
@@ -119,7 +120,7 @@ def _comment_to_schema(c: ContentComment, author_name: str) -> ContentCommentInf
     )
 
 
-async def _author_map(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
+async def _author_map(db: AsyncSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
     ids = {i for i in user_ids if i}
     if not ids:
         return {}
@@ -127,7 +128,9 @@ async def _author_map(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
     return {uid: s.display_name for uid, s in snaps.items()}
 
 
-async def _column_title_map(db: AsyncSession, column_ids: list[int]) -> dict[int, str]:
+async def _column_title_map(
+    db: AsyncSession, column_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     if not column_ids:
         return {}
     result = await db.execute(select(Column).where(Column.id.in_(set(column_ids))))
@@ -139,7 +142,7 @@ async def list_items(
     db: AsyncSession,
     page: int = 1,
     limit: int = 20,
-    board_id: int | None = None,
+    board_id: uuid.UUID | None = None,
     content_type: str | None = None,
 ) -> PageData[ContentItemInfo]:
     base = select(ContentItem).where(ContentItem.status == ContentStatus.PUBLISHED)
@@ -177,8 +180,8 @@ async def list_items(
     out = [
         _item_to_schema(
             i,
-            names.get(i.author_id or -1, "") if i.author_id else (i.publisher or ""),
-            cols.get(i.column_id or -1) if i.column_id else None,
+            names.get(i.author_id, "") if i.author_id else (i.publisher or ""),
+            cols.get(i.column_id) if i.column_id else None,
         )
         for i in items
     ]
@@ -198,7 +201,7 @@ async def _new_write_session() -> AsyncSession:
     return await new_session()
 
 
-async def bump_item_view(item_id: int) -> None:
+async def bump_item_view(item_id: uuid.UUID) -> None:
     """原子地给内容项 view_count +1（供公开详情阅读计数增长路径）。
 
     前端详情走 GraphQL ``contentItem``，此前 get_item 恒 bump_view=False 且 REST 无详情
@@ -218,7 +221,7 @@ async def bump_item_view(item_id: int) -> None:
 
 
 async def get_item(
-    db: AsyncSession, item_id: int, bump_view: bool = False
+    db: AsyncSession, item_id: uuid.UUID, bump_view: bool = False
 ) -> ContentItemInfo:
     item = await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
@@ -276,7 +279,7 @@ async def _require_unique_slug(db: AsyncSession, slug: str | None) -> None:
 
 async def create_item(
     db: AsyncSession,
-    author_id: int,
+    author_id: uuid.UUID,
     info: ContentItemCreate,
 ) -> ContentItemInfo:
     # 发言准入：板块存在 / 认证 / 日限发（仅社区用户写作体裁）
@@ -350,15 +353,15 @@ async def create_item(
 
 async def delete_item(
     db: AsyncSession,
-    item_id: int,
-    current_user_id: int,
+    item_id: uuid.UUID,
+    current_user_id: uuid.UUID,
     as_admin: bool = False,
-) -> int:
-    """删除统一内容项并返回作者 id（admin 代删时可能无作者返回 0）。"""
+) -> uuid.UUID:
+    """删除统一内容项并返回作者 id（admin 代删时可能无作者，返回 nil UUID）。"""
     item = await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
-    author_id = item.author_id or -1
+    author_id = item.author_id or uuid.UUID(int=0)
     await db.delete(item)
     await db.flush()
     await bump_collection_version("content")
@@ -369,7 +372,7 @@ def _now() -> _dt.datetime:
     return _dt.datetime.now(_dt.UTC)
 
 
-async def like_item(db: AsyncSession, item_id: int, user_id: int) -> int:
+async def like_item(db: AsyncSession, item_id: uuid.UUID, user_id: uuid.UUID) -> int:
     await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
@@ -395,7 +398,7 @@ async def like_item(db: AsyncSession, item_id: int, user_id: int) -> int:
     return await bump_content_counter(db, item_id, "like_count", 1)
 
 
-async def unlike_item(db: AsyncSession, item_id: int, user_id: int) -> int:
+async def unlike_item(db: AsyncSession, item_id: uuid.UUID, user_id: uuid.UUID) -> int:
     await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
     )
@@ -420,7 +423,7 @@ async def unlike_item(db: AsyncSession, item_id: int, user_id: int) -> int:
 
 async def list_comments(
     db: AsyncSession,
-    item_id: int,
+    item_id: uuid.UUID,
     page: int = 1,
     limit: int = 20,
 ) -> PageData[ContentCommentInfo]:
@@ -454,7 +457,7 @@ async def list_comments(
     )
 
 
-async def list_all_comments(db: AsyncSession, item_id: int) -> list[ContentCommentInfo]:
+async def list_all_comments(db: AsyncSession, item_id: uuid.UUID) -> list[ContentCommentInfo]:
     """一次取回某内容的全部评论（floor 升序），供 GraphQL 组装评论树。"""
     await get_or_raise(
         db, ContentItem, ContentErr.CONTENT_NOT_FOUND, ContentItem.id == item_id
@@ -472,8 +475,8 @@ async def list_all_comments(db: AsyncSession, item_id: int) -> list[ContentComme
 
 async def create_comment(
     db: AsyncSession,
-    item_id: int,
-    user_id: int,
+    item_id: uuid.UUID,
+    user_id: uuid.UUID,
     info: ContentCommentCreate,
 ) -> ContentCommentInfo:
     await get_or_raise(
@@ -519,16 +522,16 @@ async def create_comment(
 
 async def publish_blog_item(
     db: AsyncSession,
-    owner_id: int,
+    owner_id: uuid.UUID,
     *,
-    board_id: int,
+    board_id: uuid.UUID,
     slug: str | None,
     title: str,
     content: str,
     summary: str | None,
     cover: str | None,
     tags: list[str],
-) -> int:
+) -> uuid.UUID:
     """把 blog 发布产物落成一条 content_items（content_type=blog_post）。
 
     幂等：同 slug 更新现有行（重发），否则新建。返回 content_items.id。
@@ -604,7 +607,7 @@ def get_column_plan() -> dict[str, Any]:
 
 
 async def create_application(
-    db: AsyncSession, user_id: int, info: ColumnApplicationCreate
+    db: AsyncSession, user_id: uuid.UUID, info: ColumnApplicationCreate
 ) -> ColumnApplicationInfo:
     app = ColumnApplication(
         user_id=user_id,
@@ -635,7 +638,7 @@ async def list_applications(
 
 
 async def get_application(
-    db: AsyncSession, application_id: int
+    db: AsyncSession, application_id: uuid.UUID
 ) -> ColumnApplicationInfo:
     return ColumnApplicationInfo.model_validate(
         await get_or_raise(
@@ -649,9 +652,9 @@ async def get_application(
 
 async def review_application(
     db: AsyncSession,
-    application_id: int,
+    application_id: uuid.UUID,
     info: ColumnApplicationReview,
-    reviewer_id: int,
+    reviewer_id: uuid.UUID,
 ) -> dict[str, Any]:
     app = await get_or_raise(
         db,
@@ -710,7 +713,7 @@ async def list_columns(
     )
 
 
-async def get_column(db: AsyncSession, column_id: int) -> ColumnInfo:
+async def get_column(db: AsyncSession, column_id: uuid.UUID) -> ColumnInfo:
     async def _load() -> dict[str, Any]:
         return ColumnInfo.model_validate(
             await get_or_raise(
@@ -741,7 +744,7 @@ async def get_column_by_slug(db: AsyncSession, slug: str) -> ColumnInfo:
 
 
 async def create_post(
-    db: AsyncSession, column_id: int, info: ColumnPostCreate, author_id: int
+    db: AsyncSession, column_id: uuid.UUID, info: ColumnPostCreate, author_id: uuid.UUID
 ) -> ColumnPostInfo:
     await get_or_raise(db, Column, ColumnErr.NOT_FOUND, Column.id == column_id)
 
@@ -763,7 +766,7 @@ async def create_post(
 
 
 async def list_posts(
-    db: AsyncSession, column_id: int, page: int = 1, limit: int | None = None
+    db: AsyncSession, column_id: uuid.UUID, page: int = 1, limit: int | None = None
 ) -> PageData[ColumnPostInfo]:
     await get_or_raise(db, Column, ColumnErr.NOT_FOUND, Column.id == column_id)
     total = (
@@ -791,7 +794,7 @@ async def list_posts(
 
 
 async def get_post(
-    db: AsyncSession, post_id: int, column_id: int | None = None
+    db: AsyncSession, post_id: uuid.UUID, column_id: uuid.UUID | None = None
 ) -> ColumnPostInfo:
     filters = [ColumnPost.id == post_id]
     if column_id is not None:
@@ -853,7 +856,7 @@ def _bb_application_to_schema(a: BoardApplication) -> BoardApplicationOut:
 
 # ————— Board CRUD —————
 async def create_board_ex(
-    db: AsyncSession, info: BoardCreate, owner_id: int | None
+    db: AsyncSession, info: BoardCreate, owner_id: uuid.UUID | None
 ) -> BoardOut:
     conflict = await db.scalar(select(Board.id).where(Board.slug == info.slug))
     if conflict is not None:
@@ -878,14 +881,14 @@ async def list_boards(db: AsyncSession) -> list[BoardOut]:
     return [_board_to_schema(b) for b in rows]
 
 
-async def get_board_ex(db: AsyncSession, board_id: int) -> Board:
+async def get_board_ex(db: AsyncSession, board_id: uuid.UUID) -> Board:
     return await get_or_raise(db, Board, BoardErr.BOARD_NOT_FOUND, Board.id == board_id)
 
 
 async def update_board_ex(
     db: AsyncSession,
-    board_id: int,
-    owner_id: int,
+    board_id: uuid.UUID,
+    owner_id: uuid.UUID,
     patch: BoardUpdate,
     *,
     is_admin: bool = False,
@@ -899,7 +902,7 @@ async def update_board_ex(
     return _board_to_schema(board)
 
 
-def _assert_owner(board: Board, current_user_id: int, is_admin: bool = False) -> None:
+def _assert_owner(board: Board, current_user_id: uuid.UUID, is_admin: bool = False) -> None:
     # 防御性断言：非属主且非 admin(代管) → 拒。路由层 check_owner 已先做对象级
     # 判定(board_owner_manage)，此处 is_admin 由路由传 cur.role=="super_admin" 放行代管。
     if board.owner_id != current_user_id and not is_admin:
@@ -908,7 +911,7 @@ def _assert_owner(board: Board, current_user_id: int, is_admin: bool = False) ->
 
 # ————— 板块申请/审核 —————
 async def submit_application(
-    db: AsyncSession, applicant_id: int, info: BoardApplicationCreate
+    db: AsyncSession, applicant_id: uuid.UUID, info: BoardApplicationCreate
 ) -> BoardApplicationOut:
     # slug 为全局唯一命名空间：既不能与已存在的板块冲突，也不能与待审申请冲突
     conflict = await db.scalar(
@@ -937,8 +940,8 @@ async def submit_application(
 # 以原同名 `review_application` 重导出，保持 boards/router 与测试的既有调用不变。
 async def review_board_application(
     db: AsyncSession,
-    application_id: int,
-    reviewer_id: int,
+    application_id: uuid.UUID,
+    reviewer_id: uuid.UUID,
     body: ReviewBoardApplicationRequest,
 ) -> BoardApplicationOut:
     app_ = await get_or_raise(
@@ -980,7 +983,7 @@ async def review_board_application(
 async def ban_user(
     db: AsyncSession,
     board: Board,
-    actor_id: int,
+    actor_id: uuid.UUID,
     body: BanRequest,
     *,
     is_admin: bool = False,
@@ -1010,8 +1013,8 @@ async def ban_user(
 async def unban_user(
     db: AsyncSession,
     board: Board,
-    actor_id: int,
-    target_user_id: int,
+    actor_id: uuid.UUID,
+    target_user_id: uuid.UUID,
     *,
     is_admin: bool = False,
 ) -> None:
@@ -1025,7 +1028,7 @@ async def unban_user(
     await db.flush()
 
 
-async def is_banned(db: AsyncSession, board_id: int, user_id: int) -> bool:
+async def is_banned(db: AsyncSession, board_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     row = await db.scalar(
         select(BoardBan.id).where(
             BoardBan.board_id == board_id,
@@ -1037,7 +1040,7 @@ async def is_banned(db: AsyncSession, board_id: int, user_id: int) -> bool:
 
 
 # ————— 发言准入（供 forum create_post 调用）—————
-async def check_post_allowed(db: AsyncSession, board_id: int, user_id: int) -> None:
+async def check_post_allowed(db: AsyncSession, board_id: uuid.UUID, user_id: uuid.UUID) -> None:
     """校验用户在板块的发帖资格：板块存在 / 可见 / 未禁言 / 认证 / 日限发。异常抛相应 BoardErr。"""
     board = await get_board_ex(db, board_id)
     if not board.is_public:
@@ -1089,7 +1092,7 @@ async def check_post_allowed(db: AsyncSession, board_id: int, user_id: int) -> N
 
 
 async def create_question(
-    db: AsyncSession, author_id: int, info: QuestionCreate
+    db: AsyncSession, author_id: uuid.UUID, info: QuestionCreate
 ) -> QuestionOut:
     """发问：spend 锁定总悬赏 + 写 Question（同事务）。"""
     total = info.bounty_people * info.bounty_per_person
@@ -1122,7 +1125,7 @@ async def create_question(
     return _question_to_schema(q, names.get(q.author_id, ""))
 
 
-async def _ensure_qa_board(db: AsyncSession) -> int:
+async def _ensure_qa_board(db: AsyncSession) -> uuid.UUID:
     """确保存在 qa 板块（统一分类轴），QA 提问的论坛条目挂到它。"""
     existing = await db.scalar(select(Board.id).where(Board.slug == "qa"))
     if existing is not None:
@@ -1134,7 +1137,7 @@ async def _ensure_qa_board(db: AsyncSession) -> int:
 
 
 async def _sync_question_content_item(
-    db: AsyncSession, author_id: int, q: QAQuestion
+    db: AsyncSession, author_id: uuid.UUID, q: QAQuestion
 ) -> None:
     """QA 提问同步为论坛可见条目（content_items，content_type='qa'）。"""
     board_id = await _ensure_qa_board(db)
@@ -1163,7 +1166,9 @@ def _qa_plain(text: str, limit: int = 150) -> str:
     return t[:limit].rstrip() + ("..." if len(t) > limit else "")
 
 
-async def _qa_author_names(db: AsyncSession, author_ids: list[int]) -> dict[int, str]:
+async def _qa_author_names(
+    db: AsyncSession, author_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     """批量取作者展示名（id → 昵称/用户名），委托 auth 只读缝批次读。
     """
     ids = {i for i in author_ids if i}
@@ -1222,7 +1227,7 @@ async def list_questions(
     )
 
 
-async def get_question(db: AsyncSession, question_id: int) -> QuestionDetail:
+async def get_question(db: AsyncSession, question_id: uuid.UUID) -> QuestionDetail:
     q = await get_or_raise(
         db, QAQuestion, QaErr.QUESTION_NOT_FOUND, QAQuestion.id == question_id
     )
@@ -1263,7 +1268,7 @@ async def get_question(db: AsyncSession, question_id: int) -> QuestionDetail:
 
 
 async def create_answer(
-    db: AsyncSession, question_id: int, author_id: int, info: AnswerCreate
+    db: AsyncSession, question_id: uuid.UUID, author_id: uuid.UUID, info: AnswerCreate
 ) -> AnswerOut:
     q = await get_or_raise(
         db, QAQuestion, QaErr.QUESTION_NOT_FOUND, QAQuestion.id == question_id
@@ -1278,7 +1283,7 @@ async def create_answer(
 
 
 async def accept_answer(
-    db: AsyncSession, question_id: int, answer_id: int, asker_id: int
+    db: AsyncSession, question_id: uuid.UUID, answer_id: uuid.UUID, asker_id: uuid.UUID
 ) -> AnswerOut:
     """发问者采纳回答：防超发派发人均积分给回答者（同事务）。"""
     q = await get_or_raise(
@@ -1330,9 +1335,9 @@ async def accept_answer(
 
 async def close_question(
     db: AsyncSession,
-    question_id: int,
-    asker_id: int,
-    accepted_answer_id: int | None = None,
+    question_id: uuid.UUID,
+    asker_id: uuid.UUID,
+    accepted_answer_id: uuid.UUID | None = None,
 ) -> QuestionOut:
     """发问者关闭问题：可同时采纳一个回答；剩余 escrow 退回发问者。"""
     q = await get_or_raise(

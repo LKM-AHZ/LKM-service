@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -94,7 +95,7 @@ async def submit_app(
 )
 @respond
 async def review_app(
-    app_id: int,
+    app_id: uuid.UUID,
     body: ReviewBoardApplicationRequest,
     _cur: Admin2FADep,
     db: AsyncSession = Depends(get_session),
@@ -113,7 +114,7 @@ async def review_app(
 @router.patch("/{board_id}", response_model=ApiResp[BoardOut])
 @respond
 async def owner_update_board(
-    board_id: int,
+    board_id: uuid.UUID,
     patch: BoardUpdate,
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
@@ -133,7 +134,7 @@ async def owner_update_board(
 @router.post("/{board_id}/bans", response_model=ApiResp[dict[str, bool]])
 @respond
 async def ban(
-    board_id: int,
+    board_id: uuid.UUID,
     body: BanRequest,
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
@@ -151,8 +152,8 @@ async def ban(
 )
 @respond
 async def unban(
-    board_id: int,
-    target_user_id: int,
+    board_id: uuid.UUID,
+    target_user_id: uuid.UUID,
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:

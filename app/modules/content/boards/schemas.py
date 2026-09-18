@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,7 +9,7 @@ class BoardCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=50, pattern=r"^[a-z0-9-]+$")
     title: str = Field(..., min_length=1, max_length=100)
     description: str = Field(default="", max_length=500)
-    parent_id: int | None = Field(default=None, ge=1)
+    parent_id: uuid.UUID | None = Field(default=None)
     require_certified: bool = False
     daily_post_limit: int = Field(default=0, ge=0)
     is_public: bool = True
@@ -17,12 +18,12 @@ class BoardCreate(BaseModel):
 class BoardOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     slug: str
     title: str
     description: str = ""
-    parent_id: int | None = None
-    owner_id: int | None = None
+    parent_id: uuid.UUID | None = None
+    owner_id: uuid.UUID | None = None
     status: str
     require_certified: bool
     daily_post_limit: int
@@ -33,7 +34,7 @@ class BoardOut(BaseModel):
 class BoardUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=500)
-    parent_id: int | None = Field(default=None, ge=1)
+    parent_id: uuid.UUID | None = Field(default=None)
     require_certified: bool | None = None
     daily_post_limit: int | None = Field(default=None, ge=0)
     is_public: bool | None = None
@@ -49,8 +50,8 @@ class BoardApplicationCreate(BaseModel):
 class BoardApplicationOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    applicant_id: int
+    id: uuid.UUID
+    applicant_id: uuid.UUID
     title: str
     description: str
     reason: str
@@ -67,6 +68,6 @@ class ReviewBoardApplicationRequest(BaseModel):
 
 
 class BanRequest(BaseModel):
-    user_id: int
+    user_id: uuid.UUID
     reason: str = Field(default="", max_length=200)
     hours: int = Field(default=7 * 24, ge=1, le=7 * 24)  # 1 小时到 7 天（小时数）

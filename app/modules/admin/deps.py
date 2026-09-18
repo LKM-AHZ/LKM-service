@@ -16,6 +16,7 @@ import 复用（方向 admin→auth，owner-leaf 合规）。
 """
 
 import datetime
+import uuid
 from typing import Any
 
 from fastapi import Depends, Request
@@ -82,9 +83,11 @@ async def get_current_admin(
     sub = payload.get("sub")
     if not sub:
         raise BizError(CommonErr.FORBIDDEN, "Admin session missing subject")
+    # admin JWT 的 sub 是 str(user.id)，user.id 现为 UUID；解析失败保持原 FORBIDDEN 语义（非 500）。
+    # 先 str() 再解析：拒绝把裸 int 当 128-bit UUID 接受。
     try:
-        user_id = int(sub)
-    except (TypeError, ValueError):
+        user_id = uuid.UUID(str(sub))
+    except (AttributeError, TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
 
     # seam-only：未配置 authz seam → fail-closed（business 无本地 auth 真值可判，宁可拒）
@@ -99,7 +102,7 @@ async def get_current_admin(
 
 
 async def _resolve_admin_via_seam(
-    user_id: int, expect_token_version: int, iat_ts: object
+    user_id: uuid.UUID, expect_token_version: int, iat_ts: object
 ) -> CurrentUser:
     """后台 seam 判定：复用 auth.deps 的 seam 解析（require_admin=True），并把失败统一为 FORBIDDEN。
 

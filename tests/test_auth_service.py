@@ -92,15 +92,15 @@ class TestRegisterLocal:
         result = await _reg_local(db, username="alice", password="secret123456")
         assert result["access_token"]
         assert result["refresh_token"]
-        assert result["user_id"] == 1
+        uid = result["user_id"]
         assert result["account_level"] == "local"
 
-        user = await _get(db, User, User.id == 1)
+        user = await _get(db, User, User.id == uid)
         assert user.username == "alice"
         assert user.account_level == "local"
         assert "$" in user.hashed_password
 
-        profile = await _get(db, Profile, Profile.user_id == 1)
+        profile = await _get(db, Profile, Profile.user_id == uid)
         assert profile is not None
         assert profile.role == "member"
 
@@ -120,9 +120,9 @@ class TestLoginPassword:
     # --- success paths ---
 
     async def should_login_by_username(self, db: AsyncSession):
-        await _reg_local(db, username="alice", password="secret123456")
+        reg = await _reg_local(db, username="alice", password="secret123456")
         result = await _login(db, "alice", "secret123456")
-        assert result["user_id"] == 1
+        assert result["user_id"] == reg["user_id"]
         assert result["access_token"]
         assert result["refresh_token"]
         assert result["account_level"] == "local"
@@ -130,25 +130,25 @@ class TestLoginPassword:
     async def should_login_by_email(self, db: AsyncSession):
         from app.modules.auth.models import User
 
-        await _reg_local(db, username="alice", password="secret123456")
+        reg = await _reg_local(db, username="alice", password="secret123456")
         # give the user an email manually
-        user = await _get(db, User, User.id == 1)
+        user = await _get(db, User, User.id == reg["user_id"])
         user.email = "alice@example.com"
         await db.flush()
 
         result = await _login(db, "alice@example.com", "secret123456")
-        assert result["user_id"] == 1
+        assert result["user_id"] == reg["user_id"]
 
     async def should_login_by_phone(self, db: AsyncSession):
         from app.modules.auth.models import User
 
-        await _reg_local(db, username="alice", password="secret123456")
-        user = await _get(db, User, User.id == 1)
+        reg = await _reg_local(db, username="alice", password="secret123456")
+        user = await _get(db, User, User.id == reg["user_id"])
         user.phone = "13800001111"
         await db.flush()
 
         result = await _login(db, "13800001111", "secret123456")
-        assert result["user_id"] == 1
+        assert result["user_id"] == reg["user_id"]
 
     # --- failure paths ---
 
@@ -187,7 +187,7 @@ class TestLoginPassword:
     async def should_reset_failed_counter_on_success(self, db: AsyncSession):
         from app.modules.auth.models import User
 
-        await _reg_local(db, username="alice", password="secret123456")
+        reg = await _reg_local(db, username="alice", password="secret123456")
         # 2 failures
         for _ in range(2):
             try:
@@ -197,7 +197,7 @@ class TestLoginPassword:
 
         # then success
         result = await _login(db, "alice", "secret123456")
-        assert result["user_id"] == 1
+        assert result["user_id"] == reg["user_id"]
 
         user = await _get(db, User, User.username == "alice")
         assert user.failed_login_attempts == 0
@@ -351,9 +351,15 @@ class TestUpgrade:
 
 class TestRefresh:
     async def should_refresh_valid_token(self, db: AsyncSession):
-        await _reg_local(db, username="alice", password="secret123456")
+        reg = await _reg_local(db, username="alice", password="secret123456")
         tokens = (
-            (await db.execute(select(RefreshToken).where(RefreshToken.user_id == 1)))
+            (
+                await db.execute(
+                    select(RefreshToken).where(
+                        RefreshToken.user_id == reg["user_id"]
+                    )
+                )
+            )
             .scalars()
             .all()
         )
@@ -443,15 +449,21 @@ class TestRefresh:
 
 class TestRevokeAll:
     async def should_revoke_all_user_tokens(self, db: AsyncSession):
-        await _reg_local(db, username="alice")
-        await _reg_local(db, username="bob")
+        alice = await _reg_local(db, username="alice")
+        bob = await _reg_local(db, username="bob")
 
         svc = _service()
-        await svc.revoke_all_refresh_tokens(db, 1)
+        await svc.revoke_all_refresh_tokens(db, alice["user_id"])
 
         # alice's tokens revoked
         tok1 = (
-            (await db.execute(select(RefreshToken).where(RefreshToken.user_id == 1)))
+            (
+                await db.execute(
+                    select(RefreshToken).where(
+                        RefreshToken.user_id == alice["user_id"]
+                    )
+                )
+            )
             .scalars()
             .all()
         )
@@ -460,7 +472,11 @@ class TestRevokeAll:
 
         # bob's tokens untouched
         tok2 = (
-            (await db.execute(select(RefreshToken).where(RefreshToken.user_id == 2)))
+            (
+                await db.execute(
+                    select(RefreshToken).where(RefreshToken.user_id == bob["user_id"])
+                )
+            )
             .scalars()
             .all()
         )
@@ -477,14 +493,22 @@ class TestAuditLog:
     async def should_create_audit_log(self, db: AsyncSession):
         from app.modules.auth.models import AuditLog
 
-        await _reg_local(db, username="alice")
+        alice = await _reg_local(db, username="alice")
         svc = _service()
         await svc.log_audit(
-            db, 1, "login", detail="password login", ip_address="127.0.0.1"
+            db,
+            alice["user_id"],
+            "login",
+            detail="password login",
+            ip_address="127.0.0.1",
         )
 
         logs = (
-            (await db.execute(select(AuditLog).where(AuditLog.user_id == 1)))
+            (
+                await db.execute(
+                    select(AuditLog).where(AuditLog.user_id == alice["user_id"])
+                )
+            )
             .scalars()
             .all()
         )
@@ -507,7 +531,7 @@ class TestRefreshKindIsolation:
             refresh_access_token,
         )
 
-        # 先落一个真实用户（PG 强制外键，裸插 user_id=1 孤儿会 IntegrityError）。
+        # 先落一个真实用户（PG 强制外键，裸插不存在的 user_id 孤儿会 IntegrityError）。
         # token 宿主身份与语意无关，只要存在即可。
         owner = User(username="tkowner_adminkind", hashed_password="x")
         db.add(owner)

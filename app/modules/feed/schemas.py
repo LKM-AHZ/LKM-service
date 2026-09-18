@@ -5,6 +5,7 @@
 feed 域，两类无重名、语义独立，合居此文件。
 """
 
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ class FollowState(BaseModel):
 class FollowUser(BaseModel):
     """「我关注的用户」列表项。"""
 
-    user_id: int
+    user_id: uuid.UUID
     display_name: str
     avatar: str | None = None
 
@@ -33,7 +34,7 @@ class FollowUser(BaseModel):
 class FollowBoard(BaseModel):
     """「我关注的版块」列表项。"""
 
-    board_id: int
+    board_id: uuid.UUID
     title: str
 
 
@@ -41,14 +42,14 @@ class FeedItem(BaseModel):
     """统一 feed 条目（跨源归一后）。"""
 
     item_type: str  # discussion | article | column | qa | project | blog
-    id: int
-    author_id: int | None  # Article 无作者外键 → None
+    id: uuid.UUID
+    author_id: uuid.UUID | None  # Article 无作者外键 → None
     author_name: str
     title: str
     content_preview: str
     created_at: datetime
     sort_score: float
-    board_id: int | None = None
+    board_id: uuid.UUID | None = None
     url: str
 
 

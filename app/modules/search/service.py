@@ -20,6 +20,8 @@ auth.snapshot 读缝），已在 pyproject 的 import-linter 契约中精确豁�
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +45,9 @@ def _like_pattern(term: str) -> str:
     return f"%{escaped}%"
 
 
-async def _author_map(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
+async def _author_map(
+    db: AsyncSession, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     ids = {i for i in user_ids if i}
     if not ids:
         return {}

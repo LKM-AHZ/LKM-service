@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import select
@@ -52,20 +53,22 @@ from app.modules.feed.models import (
 from app.modules.feed.schemas import FeedItem, FeedResponse
 
 
-def _following_key(user_id: int) -> str:
+def _following_key(user_id: uuid.UUID) -> str:
     return make_key("follow", "following", user_id)
 
 
-def _board_ids_key(user_id: int) -> str:
+def _board_ids_key(user_id: uuid.UUID) -> str:
     return make_key("follow", "boards", user_id)
 
 
-async def _invalidate_follow_cache(user_id: int) -> None:
+async def _invalidate_follow_cache(user_id: uuid.UUID) -> None:
     """关注集合缓存显式失效（follow/unfollow 低频但需即时）。"""
     await cache_invalidate(_following_key(user_id), _board_ids_key(user_id))
 
 
-async def follow_user(db: AsyncSession, follower_id: int, following_id: int) -> None:
+async def follow_user(
+    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
+) -> None:
     """follower 关注 following（幂等：重复关注静默成功）。"""
     if follower_id == following_id:
         raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能关注自己")
@@ -94,7 +97,9 @@ async def follow_user(db: AsyncSession, follower_id: int, following_id: int) -> 
     await _invalidate_follow_cache(follower_id)
 
 
-async def unfollow_user(db: AsyncSession, follower_id: int, following_id: int) -> None:
+async def unfollow_user(
+    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
+) -> None:
     """follower 取消关注 following（幂等：末关注时静默成功）。"""
     if follower_id == following_id:
         raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能操作自己的关注")
@@ -112,7 +117,9 @@ async def unfollow_user(db: AsyncSession, follower_id: int, following_id: int) -
         await _invalidate_follow_cache(follower_id)
 
 
-async def follow_board(db: AsyncSession, follower_id: int, board_id: int) -> None:
+async def follow_board(
+    db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID
+) -> None:
     """follower 关注版块（幂等）。"""
     target = await db.get(Board, board_id)
     if target is None:
@@ -138,7 +145,9 @@ async def follow_board(db: AsyncSession, follower_id: int, board_id: int) -> Non
     await _invalidate_follow_cache(follower_id)
 
 
-async def unfollow_board(db: AsyncSession, follower_id: int, board_id: int) -> None:
+async def unfollow_board(
+    db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID
+) -> None:
     """follower 取消关注版块（幂等）。"""
     row = await db.scalar(
         select(BoardFollow).where(
@@ -155,10 +164,10 @@ async def unfollow_board(db: AsyncSession, follower_id: int, board_id: int) -> N
         await _invalidate_follow_cache(follower_id)
 
 
-async def get_following_ids(db: AsyncSession, user_id: int) -> list[int]:
+async def get_following_ids(db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
     """我关注的所有用户 id（缓存，供时间线过滤）。"""
 
-    async def load() -> list[int]:
+    async def load() -> list[uuid.UUID]:
         rows = (
             (
                 await db.execute(
@@ -176,10 +185,12 @@ async def get_following_ids(db: AsyncSession, user_id: int) -> list[int]:
     return await cached_read(_following_key(user_id), TTL_ITEM_S, load)
 
 
-async def get_followed_board_ids(db: AsyncSession, user_id: int) -> list[int]:
+async def get_followed_board_ids(
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[uuid.UUID]:
     """我关注的所有版块 id（缓存，供时间线过滤）。"""
 
-    async def load() -> list[int]:
+    async def load() -> list[uuid.UUID]:
         rows = (
             (
                 await db.execute(
@@ -198,7 +209,7 @@ async def get_followed_board_ids(db: AsyncSession, user_id: int) -> list[int]:
 
 
 async def is_following_user(
-    db: AsyncSession, follower_id: int, following_id: int
+    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
 ) -> bool:
     """follower 当前是否关注 following（软删过滤）。"""
     row = await db.scalar(
@@ -212,8 +223,8 @@ async def is_following_user(
 
 
 async def list_following_users(
-    db: AsyncSession, user_id: int
-) -> list[tuple[int, str, str | None]]:
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str, str | None]]:
     """我关注的用户列表：(user_id, display_name, avatar)。
 
     display_name 取 ``nickname or username``（沿用 points 榜惯例；缝的 display_name
@@ -233,7 +244,9 @@ async def list_following_users(
     ]
 
 
-async def list_followed_boards(db: AsyncSession, user_id: int) -> list[tuple[int, str]]:
+async def list_followed_boards(
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str]]:
     """我关注的版块列表：(board_id, title)。"""
     ids = await get_followed_board_ids(db, user_id)
     if not ids:
@@ -256,28 +269,28 @@ async def _fill_authors(db: AsyncSession, items: list[FeedItem]) -> None:
     if not author_ids:
         return
     snaps = await get_user_snapshot_batch(db, user_ids=list(author_ids))
-    name_of: dict[int, str] = {
-        uid: s.display_name for uid, s in snaps.items()
-    }
+    name_of: dict[uuid.UUID, str] = {uid: s.display_name for uid, s in snaps.items()}
     for it in items:
-        if it.author_id in name_of and not it.author_name:
+        if it.author_id is not None and it.author_id in name_of and not it.author_name:
             it.author_name = name_of[it.author_id]
 
 
-def _encode_cursor(created_at: datetime.datetime, item_id: int) -> str:
+def _encode_cursor(created_at: datetime.datetime, item_id: uuid.UUID) -> str:
     raw = f"{created_at.isoformat()}|{item_id}"
     return base64.urlsafe_b64encode(raw.encode()).decode()
 
 
-def _decode_cursor(cursor: str | None) -> tuple[datetime.datetime | None, int]:
+def _decode_cursor(
+    cursor: str | None,
+) -> tuple[datetime.datetime | None, uuid.UUID | None]:
     if not cursor:
-        return None, 0
+        return None, None
     try:
         raw = base64.urlsafe_b64decode(cursor.encode()).decode()
         time_s, id_s = raw.rsplit("|", 1)
-        return datetime.datetime.fromisoformat(time_s), int(id_s)
+        return datetime.datetime.fromisoformat(time_s), uuid.UUID(id_s)
     except (ValueError, UnicodeDecodeError):
-        return None, 0
+        return None, None
 
 
 def _recency_multiplier(created_at: datetime.datetime, now: datetime.datetime) -> float:
@@ -287,7 +300,7 @@ def _recency_multiplier(created_at: datetime.datetime, now: datetime.datetime) -
 
 async def _compute_scores(
     items: list[FeedItem],
-    following_ids: set[int] | None,
+    following_ids: set[uuid.UUID] | None,
     rules: list[Any],
 ) -> list[FeedItem]:
     now = datetime.datetime.now(datetime.UTC)
@@ -314,7 +327,7 @@ async def _compute_scores(
 async def get_timeline(
     db: AsyncSession,
     *,
-    user_id: int | None,
+    user_id: uuid.UUID | None,
     mode: str,
     cursor: str | None,
     limit: int,
@@ -336,12 +349,12 @@ async def get_timeline(
     )
 
 
-def _materialized_key(user_id: int, cursor: str | None) -> str:
+def _materialized_key(user_id: uuid.UUID, cursor: str | None) -> str:
     return make_key("feed", user_id, cursor or "")
 
 
 async def _materialized_timeline(
-    db: AsyncSession, *, user_id: int, cursor: str | None, limit: int
+    db: AsyncSession, *, user_id: uuid.UUID, cursor: str | None, limit: int
 ) -> FeedResponse | None:
     """物化读：feed_items + 大 V 实时补拉。返回 ``None`` 表示应回退实时合流。"""
     before_time, before_id = _decode_cursor(cursor)
@@ -392,9 +405,9 @@ async def _materialized_timeline(
 
 async def _load_materialized_page(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     before_time: datetime.datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
 ) -> list[FeedItem]:
     """从物化表取一页（(created_at, id) 游标下滤，时间倒序）。"""
@@ -442,10 +455,10 @@ async def _load_materialized_page(
 
 async def _realtime_for_authors(
     db: AsyncSession,
-    author_ids: set[int],
-    board_ids: set[int],
+    author_ids: set[uuid.UUID],
+    board_ids: set[uuid.UUID],
     before_time: datetime.datetime | None,
-    before_id: int,
+    before_id: uuid.UUID | None,
     limit: int,
 ) -> list[FeedItem]:
     """大 V 补拉：只对这些作者走实时源（与 follow 模式同一过滤语义）。"""
@@ -462,7 +475,7 @@ async def _realtime_for_authors(
 async def _realtime_timeline(
     db: AsyncSession,
     *,
-    user_id: int | None,
+    user_id: uuid.UUID | None,
     mode: str,
     cursor: str | None,
     limit: int,
@@ -470,8 +483,8 @@ async def _realtime_timeline(
     """实时多源合流（原实现）：物化未命中时的兜底读路径。"""
     before_time, before_id = _decode_cursor(cursor)
 
-    following_ids: set[int] | None = None
-    board_ids: set[int] | None = None
+    following_ids: set[uuid.UUID] | None = None
+    board_ids: set[uuid.UUID] | None = None
     if mode == "follow":
         if user_id is None:
             mode = "hot"  # 匿名只能看全站热门

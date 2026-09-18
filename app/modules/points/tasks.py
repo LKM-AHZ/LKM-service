@@ -11,6 +11,8 @@ Pulsar 同一 topic ``biz/points.apply`` 挂三个 Shared subscription，各收�
 用 app.db.session.new_session() 自建会话。
 """
 
+import uuid
+
 from app.core.messaging import (
     SUB_POINTS_REWARD,
     SUB_POINTS_STATS,
@@ -22,7 +24,7 @@ from app.modules.points.rules import RULE_DELTAS
 from app.modules.points.service import reward
 
 
-async def apply_point_reward(user_id: int, event: str, ref_id: str) -> None:
+async def apply_point_reward(user_id: uuid.UUID, event: str, ref_id: str) -> None:
     """points-reward 订阅：积分入账（幂等靠 ledger ref 唯一约束）。"""
     db = await new_session()
     try:
@@ -38,7 +40,7 @@ async def apply_point_reward(user_id: int, event: str, ref_id: str) -> None:
         await db.close()
 
 
-async def apply_point_stats(user_id: int, event: str, ref_id: str) -> None:
+async def apply_point_stats(user_id: uuid.UUID, event: str, ref_id: str) -> None:
     """points-stats 订阅：行为计数 + 成就重算。"""
     from app.modules.points.engine import apply_stats_side_effects
 
@@ -53,7 +55,7 @@ async def apply_point_stats(user_id: int, event: str, ref_id: str) -> None:
         await db.close()
 
 
-async def apply_point_daily_tasks(user_id: int, event: str, ref_id: str) -> None:
+async def apply_point_daily_tasks(user_id: uuid.UUID, event: str, ref_id: str) -> None:
     """points-tasks 订阅：每日任务推进 + 达标奖励。"""
     from app.modules.points.engine import apply_task_side_effects
 

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, now_iso
+from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class BlogSeriesStatus(StrEnum):
@@ -62,11 +63,10 @@ BLOG_TABLE_PLAN = {
 }
 
 
-class BlogSeries(Base):
+class BlogSeries(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "blog_series"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    owner_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
+    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -95,9 +95,9 @@ class BlogSeries(Base):
 class BlogStar(Base):
     __tablename__: str = "blog_stars"
 
-    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)  # S5: auth user_id
-    series_id: Mapped[int] = mapped_column(
-        ForeignKey("blog_series.id"), primary_key=True
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)  # S5: auth user_id
+    series_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("blog_series.id"), primary_key=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -106,15 +106,16 @@ class BlogStar(Base):
     series: Mapped[BlogSeries] = relationship(back_populates="stars")
 
 
-class BlogComment(Base):
+class BlogComment(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "blog_comments"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False)  # S5: auth user_id
-    series_id: Mapped[int] = mapped_column(ForeignKey("blog_series.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    series_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("blog_series.id"), nullable=False
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    parent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("blog_comments.id"), nullable=True
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("blog_comments.id"), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -124,15 +125,17 @@ class BlogComment(Base):
     )
 
     series: Mapped[BlogSeries] = relationship(back_populates="comments")
+    # remote_side 用字符串：主键 id 来自 UUIDPrimaryKeyMixin，类体内无 `id` 名字绑定
+    # （写 [id] 会解析到内置函数 id，configure_mappers 直接报错）
     parent: Mapped[BlogComment | None] = relationship(
-        remote_side=[id], back_populates="replies"
+        remote_side="BlogComment.id", back_populates="replies"
     )
     replies: Mapped[list[BlogComment]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
     )
 
 
-class BlogContent(Base):
+class BlogContent(UUIDPrimaryKeyMixin, Base):
     """系列仓库内单个文件的正文（DB 为主存储）。
 
     每 series 下每个 path 一行（UniqueConstraint(series_id, path)），保存当前内容。
@@ -145,9 +148,8 @@ class BlogContent(Base):
         UniqueConstraint("series_id", "path", name="uq_blog_content_series_path"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    series_id: Mapped[int] = mapped_column(
-        ForeignKey("blog_series.id"), nullable=False, index=True
+    series_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("blog_series.id"), nullable=False, index=True
     )
     path: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -163,7 +165,7 @@ class BlogContent(Base):
     series: Mapped[BlogSeries] = relationship()
 
 
-class BlogRepoQuarantine(Base):
+class BlogRepoQuarantine(UUIDPrimaryKeyMixin, Base):
     """被周对账隔离的孤儿 git 仓库台账（隔离=仅入库不移动目录）。
 
     repo_name 对应 ``<repo_name>.git``；src_dir 记录隔离前绝对路径便于恢复。
@@ -175,7 +177,6 @@ class BlogRepoQuarantine(Base):
         UniqueConstraint("repo_name", name="uq_blog_repo_quarantine_repo_name"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     repo_name: Mapped[str] = mapped_column(String(120), nullable=False)
     src_dir: Mapped[str] = mapped_column(String(500), nullable=False)
     quarantined_at: Mapped[datetime.datetime] = mapped_column(

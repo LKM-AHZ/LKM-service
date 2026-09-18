@@ -1,5 +1,6 @@
 import datetime
 import json
+import uuid
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,13 +21,13 @@ class ColumnApplicationCreate(BaseModel):
 class ColumnApplicationInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    user_id: int
+    id: uuid.UUID
+    user_id: uuid.UUID
     title: str
     description: str
     reason: str
     status: ColumnApplicationStatus = ColumnApplicationStatus.PENDING
-    reviewer_id: int | None = None
+    reviewer_id: uuid.UUID | None = None
     review_note: str | None = None
     created_at: datetime.datetime
     reviewed_at: datetime.datetime | None = None
@@ -40,9 +41,9 @@ class ColumnApplicationReview(BaseModel):
 class ColumnInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    owner_id: int
-    application_id: int | None = None
+    id: uuid.UUID
+    owner_id: uuid.UUID
+    application_id: uuid.UUID | None = None
     title: str
     description: str
     slug: str | None = None
@@ -58,7 +59,7 @@ class ColumnInfo(BaseModel):
     article_count: int = 0
     tags: list[str] = Field(default_factory=list)
     badges: list[str] = Field(default_factory=list)
-    board_id: int | None = None
+    board_id: uuid.UUID | None = None
     status: ColumnStatus = ColumnStatus.ACTIVE
     created_at: datetime.datetime
     updated_at: datetime.datetime
@@ -88,9 +89,9 @@ class ColumnPostCreate(BaseModel):
 class ColumnPostInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    column_id: int
-    author_id: int
+    id: uuid.UUID
+    column_id: uuid.UUID
+    author_id: uuid.UUID
     title: str
     summary: str | None = None
     content: str = ""

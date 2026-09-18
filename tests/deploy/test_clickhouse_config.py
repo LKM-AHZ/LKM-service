@@ -7,6 +7,7 @@ sink 表名、三处服务的 CH 配置下发。每条断言都对应一个可�
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -26,6 +27,19 @@ def _services() -> dict:
 
 def _init_sql() -> str:
     return (_CH_DIR / "init.sql").read_text(encoding="utf-8")
+
+
+def _table_block(table: str) -> str:
+    """取某张表 CREATE 语句的**列定义**片段（到第一个分号，去 -- 注释行）。
+
+    去注释是为了断言列类型时不被「由 UInt64 改为 String」这类说明文字误伤。
+    """
+    sql = _init_sql()
+    start = sql.index(f"CREATE TABLE IF NOT EXISTS {table}")
+    block = sql[start : sql.index(";", start)]
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("--")
+    )
 
 
 def _vector_toml() -> str:
@@ -91,6 +105,29 @@ def should_dedupe_exported_tables_by_id() -> None:
     # 日志表由 vector 直写，无业务 id，按 service+ts 排序
     assert "ENGINE = MergeTree" in sql
     assert "ORDER BY (service, ts)" in sql
+
+
+def should_store_uuid_ids_as_string_columns() -> None:
+    # 业务主键已改 uuid7；CH 侧若仍是 UInt64/Int64，导出 insert 会因类型不匹配失败。
+    # 必须以字符串形式存（String）：uuid7 字符串字典序 == 时间序，max(id) 水位与
+    # ORDER BY id 语义保持不变。断言「规则」（uuid id 列为 String、无整数残留），
+    # 不照抄实现的具体空白/对齐。
+    for table in ("lkm.event_failures", "lkm.audit_logs"):
+        block = _table_block(table)
+        assert re.search(r"^\s*id\s+String\b", block, re.MULTILINE), block
+        assert "UInt64" not in block, block
+    # audit_logs.user_id 是 users.id(uuid)，行可无用户 → Nullable(String)
+    audit = _table_block("lkm.audit_logs")
+    assert re.search(r"^\s*user_id\s+Nullable\(String\)", audit, re.MULTILINE), audit
+    assert "Int64" not in audit, audit
+
+
+def should_document_rebuild_for_destructive_schema_change() -> None:
+    # init.sql 只在数据卷首启执行；整型→String 属破坏性变更，必须显式提示重建卷/手动
+    # ALTER，否则已有部署静默保持旧 schema、导出插入全失败。
+    sql = _init_sql()
+    assert "down -v" in sql
+    assert "MODIFY COLUMN" in sql
 
 
 def should_apply_ttl_and_partitioning() -> None:

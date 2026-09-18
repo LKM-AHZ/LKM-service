@@ -10,6 +10,8 @@
 - seed_categories 幂等且含 engineering；seed_articles 用 category_id 正常
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -39,13 +41,16 @@ from app.modules.articles.service import (
 )
 from tests.conftest import AuthUser, auth_user_uid
 
+# 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
-async def _category(db: AsyncSession, slug: str = "news") -> int:
+
+async def _category(db: AsyncSession, slug: str = "news") -> uuid.UUID:
     """新建一个分类，返回分类 id（news / sci / 自定义 slug 均支持缩微定位）。"""
     return (await create_category_ex(db, CategoryCreate(slug=slug, title=slug))).id
 
 
-async def _article(db: AsyncSession, category_id: int, slug: str = "a1") -> str:
+async def _article(db: AsyncSession, category_id: uuid.UUID, slug: str = "a1") -> str:
     """以 draft 状态创建一篇归属指定分类的文章，返回 slug。"""
     await create_article_ex(
         db,
@@ -105,7 +110,7 @@ class TestArticleWrite:
         with pytest.raises(BizError) as e:
             await create_article_ex(
                 db,
-                ArticleCreate(title="t", slug="x", content="c", category_id=999),
+                ArticleCreate(title="t", slug="x", content="c", category_id=_MISSING_ID),
             )
         assert e.value.errcode == ArticleErr.CATEGORY_NOT_FOUND
 
@@ -293,7 +298,12 @@ class TestArticlePermission:
         resp = await client.post(
             "/api/v1/articles",
             headers=headers,
-            json={"title": "t", "slug": "s1", "content": "c", "category_id": 1},
+            json={
+                "title": "t",
+                "slug": "s1",
+                "content": "c",
+                "category_id": str(_MISSING_ID),
+            },
         )
         assert resp.status_code == 403
         assert resp.json().get("code") == CommonErr.FORBIDDEN
@@ -322,7 +332,7 @@ class TestArticlePermission:
                 "title": "官方发稿",
                 "slug": "official-1",
                 "content": "正文内容",
-                "category_id": cid,
+                "category_id": str(cid),
                 "status": "published",
                 "tags": ["官方"],
             },
@@ -338,7 +348,12 @@ class TestArticlePermission:
         """未带 token 调写端点 → 403。"""
         resp = await client.post(
             "/api/v1/articles",
-            json={"title": "t", "slug": "s2", "content": "c", "category_id": 1},
+            json={
+                "title": "t",
+                "slug": "s2",
+                "content": "c",
+                "category_id": str(_MISSING_ID),
+            },
         )
         assert resp.status_code == 403
         assert resp.json().get("code") == CommonErr.FORBIDDEN

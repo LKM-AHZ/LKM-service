@@ -23,7 +23,8 @@ class FakeClickHouseClient:
     """内存 ClickHouse 客户端替身（M5 7.2.6 测试用）。
 
     - 记录全部 ``query``/``insert`` 调用（断言命令数与参数化）；
-    - ``watermarks`` 维护各表 ``max(id)``，``insert`` 时按 ``id`` 列推进，测「重跑 diff=0」；
+    - ``watermarks`` 维护各表 ``max(id)``（uuid7 字符串，字典序即时间序），``insert`` 时
+      按 ``id`` 列推进，测「重跑 diff=0」；
     - ``fail_insert=True`` 时 insert 抛错，测失败不被静默吞；
     - admin 查询用 ``count``/``rows``/``columns`` 预设返回值。
     """
@@ -34,7 +35,7 @@ class FakeClickHouseClient:
         count: int = 0,
         rows: list[tuple[Any, ...]] | None = None,
         columns: list[str] | None = None,
-        watermarks: dict[str, int] | None = None,
+        watermarks: dict[str, str] | None = None,
         fail_insert: bool = False,
     ) -> None:
         self.count = count
@@ -71,7 +72,12 @@ class FakeClickHouseClient:
         if "id" in column_names:
             i = list(column_names).index("id")
             for row in data:
-                self.watermarks[table] = max(self.watermarks.get(table, 0), int(row[i]))
+                value = str(row[i])
+                current = self.watermarks.get(table)
+                # uuid7 字符串字典序 == 时间序，故 max() 即「最新已导出行」。
+                self.watermarks[table] = (
+                    value if current is None else max(current, value)
+                )
 
     async def command(self, sql: str) -> None:
         return None

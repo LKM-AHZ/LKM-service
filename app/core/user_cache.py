@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -64,15 +65,15 @@ _EPOCH_ABSENT = 0
 _MAX_CAS_RETRY = 8
 
 
-def _snap_key(user_id: int) -> str:
+def _snap_key(user_id: uuid.UUID) -> str:
     return make_key("user:snap", user_id)
 
 
-def _epoch_key(user_id: int) -> str:
+def _epoch_key(user_id: uuid.UUID) -> str:
     return make_key("user:snap:ver", user_id)
 
 
-def get_user_cache_key(user_id: int) -> str:
+def get_user_cache_key(user_id: uuid.UUID) -> str:
     """单用户快照的缓存键（导出，测试/观测断言用）。"""
     return _snap_key(user_id)
 
@@ -100,7 +101,24 @@ async def _get_redis() -> _AsyncRedis | None:
     return await redis_client.get_redis()
 
 
-async def current_epoch(user_id: int) -> int:
+def _normalize_snap(data: dict[str, Any]) -> dict[str, Any]:
+    """把快照 dict 内的 ``user_id`` 归一为 ``uuid.UUID``。
+
+    Redis 里 uuid 以 JSON 字符串存放（写侧 :func:`write_if_newer` 用 ``default=str``），而
+    DB 直读路径给出的是 ``uuid.UUID``；不归一会让「缓存命中」与「miss 回填」重建出的
+    ``UserSnapshot.user_id`` 类型不一致（str vs UUID），下游按 id 比较随即失真。已是 UUID
+    或本无该字段则原样返回。
+    """
+    uid = data.get("user_id")
+    if isinstance(uid, str):
+        try:
+            return {**data, "user_id": uuid.UUID(uid)}
+        except ValueError:
+            return data
+    return data
+
+
+async def current_epoch(user_id: uuid.UUID) -> int:
     """读当前失效代次（快照读缝 DB 回填前调用、作为写时 expected_epoch）。fail-open→0。"""
     redis = await _get_redis()
     if redis is None:
@@ -119,7 +137,7 @@ def _to_int(raw: Any) -> int:
         return _EPOCH_ABSENT
 
 
-async def read_snap(user_id: int) -> dict[str, Any] | None:
+async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
     """读快照数据 dict（L1 本地 → L2 Redis）；未命中/Redis 故障 → None（miss 由 DB 兜底）。
 
     L1 命中直接返回（免 L2 往返）；L1 miss 才查 L2，L2 命中后按 L1 TTL 回填本地。L1 条目
@@ -135,7 +153,7 @@ async def read_snap(user_id: int) -> dict[str, Any] | None:
             data = entry.get("data")
             if isinstance(data, dict):
                 user_snap_cache_total.labels("l1", "hit").inc()
-                return data
+                return _normalize_snap(data)
             local_cache.l1_delete(key)
         user_snap_cache_total.labels("l1", "miss").inc()
     try:
@@ -153,6 +171,7 @@ async def read_snap(user_id: int) -> dict[str, Any] | None:
         data = payload.get("data")
         if not isinstance(data, dict):
             return None
+        data = _normalize_snap(data)
         if _l1_on():
             sv = payload.get("sv")
             local_cache.l1_set(
@@ -165,7 +184,7 @@ async def read_snap(user_id: int) -> dict[str, Any] | None:
         return None
 
 
-async def read_snaps(user_ids: list[int]) -> dict[int, dict[str, Any]]:
+async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
     """批量读快照（L1 逐个 → L2 一次 MGET，命中回填 L1）；未命中的 id 不在结果里。
 
     语义与逐 id 调 :func:`read_snap` 等价（同一套 L1/L2 与命中指标），差别只在把 N 次 L2
@@ -178,14 +197,14 @@ async def read_snaps(user_ids: list[int]) -> dict[int, dict[str, Any]]:
     if redis is None:
         return {}
     l1 = _l1_on()
-    out: dict[int, dict[str, Any]] = {}
-    pending: list[int] = []
+    out: dict[uuid.UUID, dict[str, Any]] = {}
+    pending: list[uuid.UUID] = []
     for uid in user_ids:
         if l1:
             entry = local_cache.l1_get(_snap_key(uid))
             if isinstance(entry, dict) and isinstance(entry.get("data"), dict):
                 user_snap_cache_total.labels("l1", "hit").inc()
-                out[uid] = entry["data"]
+                out[uid] = _normalize_snap(entry["data"])
                 continue
             if entry is not None and not isinstance(entry, dict):
                 local_cache.l1_delete(_snap_key(uid))  # 脏形态即删，不放大问题
@@ -210,6 +229,7 @@ async def read_snaps(user_ids: list[int]) -> dict[int, dict[str, Any]]:
         data = payload.get("data")
         if not isinstance(data, dict):
             continue
+        data = _normalize_snap(data)
         out[uid] = data
         if l1:
             sv = payload.get("sv")
@@ -222,7 +242,7 @@ async def read_snaps(user_ids: list[int]) -> dict[int, dict[str, Any]]:
 
 
 async def read_snap_with_version(
-    user_id: int,
+    user_id: uuid.UUID,
 ) -> tuple[int | None, dict[str, Any] | None]:
     """读缓存返回 `(sv, data)`（测试断言存内源版本用）；未命中/故障返回 `(None, None)`。
 
@@ -238,7 +258,7 @@ async def read_snap_with_version(
             data = entry.get("data")
             if isinstance(data, dict):
                 sv = entry.get("sv")
-                return (int(sv) if sv is not None else None), data
+                return (int(sv) if sv is not None else None), _normalize_snap(data)
             local_cache.l1_delete(key)
     try:
         raw = await redis.get(key)
@@ -250,6 +270,8 @@ async def read_snap_with_version(
         p = json.loads(raw)
         sv = _to_int(p.get("sv")) if p.get("sv") is not None else None
         data = p.get("data")
+        if isinstance(data, dict):
+            data = _normalize_snap(data)
         if _l1_on() and isinstance(data, dict):
             local_cache.l1_set(
                 key, {"sv": sv, "data": data}, settings.user_snap_l1_ttl_s
@@ -260,7 +282,7 @@ async def read_snap_with_version(
 
 
 async def write_if_newer(
-    user_id: int,
+    user_id: uuid.UUID,
     data: dict[str, Any],
     source_version: int,
     expected_epoch: int,
@@ -278,7 +300,11 @@ async def write_if_newer(
 
     key = _snap_key(user_id)
     ekey = _epoch_key(user_id)
-    value = json.dumps({"sv": source_version, "data": data}, ensure_ascii=False)
+    # default=str：快照 data 内的 user_id 是 uuid.UUID（DB 直读路径），JSON 无原生 uuid；
+    # 序列化成 str 后由读侧 _normalize_snap 还原，保证 L1/L2 与 DB 读路径类型一致。
+    value = json.dumps(
+        {"sv": source_version, "data": data}, ensure_ascii=False, default=str
+    )
     try:
         async with redis.pipeline(transaction=True) as pipe:
             for _ in range(_MAX_CAS_RETRY):
@@ -324,7 +350,7 @@ def _extract_sv(raw_snap: str) -> int | None:
         return None
 
 
-async def invalidate_user_snap(user_id: int) -> None:
+async def invalidate_user_snap(user_id: uuid.UUID) -> None:
     """失效单用户快照 —— **A7 的调用口**：INCR epoch + DEL snap 原子一步，再清 L1 并广播。
 
     INCR 让改动前捕获旧 epoch 的在途回填在写时判不匹配拒写 → 缓存保持空、陈旧不复活；

@@ -1,18 +1,19 @@
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
 
 class BalanceOut(BaseModel):
-    user_id: int
+    user_id: uuid.UUID
     balance: int
 
 
 class LedgerEntry(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     delta: int
     balance_after: int
     reason: str
@@ -22,7 +23,7 @@ class LedgerEntry(BaseModel):
 
 
 class LeaderboardEntry(BaseModel):
-    user_id: int
+    user_id: uuid.UUID
     display_name: str
     balance: int
     title: str = (
@@ -31,7 +32,7 @@ class LeaderboardEntry(BaseModel):
 
 
 class AchievementOut(BaseModel):
-    id: int
+    id: uuid.UUID
     key: str
     category: str
     icon: str
@@ -46,7 +47,7 @@ class AchievementOut(BaseModel):
 
 
 class TaskOut(BaseModel):
-    id: int
+    id: uuid.UUID
     key: str
     title_key: str
     desc_key: str
@@ -59,7 +60,7 @@ class TaskOut(BaseModel):
 
 
 class ExchangeItemOut(BaseModel):
-    id: int
+    id: uuid.UUID
     key: str
     name_key: str
     desc_key: str

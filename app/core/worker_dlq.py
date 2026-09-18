@@ -11,6 +11,7 @@ re-publish 回原 routing_key。
 
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,7 +58,7 @@ async def _persist(model: DlqMessage) -> None:
         await db.close()
 
 
-async def requeue(db: Any, dlq_id: int) -> bool:
+async def requeue(db: Any, dlq_id: uuid.UUID) -> bool:
     """把一条 pending 死信 re-publish 回原 routing_key，标记 requeued。"""
     m = await db.scalar(select(DlqMessage).where(DlqMessage.id == dlq_id))
     if m is None or m.status != "pending":

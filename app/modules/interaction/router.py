@@ -3,6 +3,8 @@
 写操作走权限点（interaction.favorite / interaction.history），读自己的列表只要求登录。
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,7 +53,7 @@ async def interaction_status() -> ModuleStatus:
 @router.post("/favorites/{content_id}", response_model=ApiResp[FavoriteState])
 @respond
 async def favorite(
-    content_id: int,
+    content_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.interaction_favorite),
     db: AsyncSession = Depends(get_session),
 ) -> FavoriteState:
@@ -61,7 +63,7 @@ async def favorite(
 @router.delete("/favorites/{content_id}", response_model=ApiResp[FavoriteState])
 @respond
 async def unfavorite(
-    content_id: int,
+    content_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.interaction_favorite),
     db: AsyncSession = Depends(get_session),
 ) -> FavoriteState:
@@ -81,7 +83,7 @@ async def my_favorites(
 @router.post("/views/{content_id}", response_model=ApiResp[ViewState])
 @respond
 async def report_view(
-    content_id: int,
+    content_id: uuid.UUID,
     cur: CurrentUser = RequirePermission(Permission.interaction_history),
     db: AsyncSession = Depends(get_session),
 ) -> ViewState:

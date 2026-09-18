@@ -12,6 +12,7 @@ WS upgrade），故握手拒绝路径以 ``_authorize`` 单测覆盖，扇出/�
 """
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -23,6 +24,11 @@ from app.ws import broker as ws_broker
 from app.ws import router as ws_router
 from app.ws.manager import ConnectionManager
 
+# 稳定的 uuid7 形态用户 id（第 3 段以 7 开头、第 4 段以 8 开头）。
+_UID1 = uuid.UUID("00000000-0000-7000-8000-000000000001")
+_UID2 = uuid.UUID("00000000-0000-7000-8000-000000000002")
+_UID3 = uuid.UUID("00000000-0000-7000-8000-000000000003")
+
 
 @pytest.fixture
 async def db(fused_db_session: AsyncSession) -> AsyncSession:
@@ -30,7 +36,7 @@ async def db(fused_db_session: AsyncSession) -> AsyncSession:
     return fused_db_session
 
 
-async def _insert_user(db: AsyncSession, username: str = "wsuser") -> int:
+async def _insert_user(db: AsyncSession, username: str = "wsuser") -> uuid.UUID:
     u = User(
         username=username,
         email=f"{username}@example.com",
@@ -43,7 +49,7 @@ async def _insert_user(db: AsyncSession, username: str = "wsuser") -> int:
     db.add(u)
     await db.flush()
     await db.refresh(u)
-    return int(u.id)
+    return u.id
 
 
 class TestAuthorize:
@@ -90,13 +96,13 @@ class TestConnectionManagerFanout:
         m = ConnectionManager()
         target = _FakeWS()
         other = _FakeWS()
-        await m.register(7, target)
-        await m.register(8, other)
+        await m.register(_UID1, target)
+        await m.register(_UID2, other)
 
         payload = json.dumps(
             {"event": "upload_registered", "upload_id": "abc123", "file": {}}
         )
-        await m.dispatch(7, ws_broker.CHANNEL_UPLOAD, payload)
+        await m.dispatch(_UID1, ws_broker.CHANNEL_UPLOAD, payload)
 
         assert target.sent and "abc123" in target.sent[0]
         assert other.sent == []  # 其它用户不收到
@@ -105,14 +111,16 @@ class TestConnectionManagerFanout:
     async def test_dispatch_prunes_dead_connections(self) -> None:
         m = ConnectionManager()
         bad, good = _FakeWS(dead=True), _FakeWS()
-        await m.register(9, bad)
-        await m.register(9, good)
+        await m.register(_UID3, bad)
+        await m.register(_UID3, good)
 
-        await m.dispatch(9, ws_broker.CHANNEL_UPLOAD, "payload")
+        await m.dispatch(_UID3, ws_broker.CHANNEL_UPLOAD, "payload")
 
         assert good.sent == ["payload"]  # 好连接仍收到
         async with m._lock:
-            live = list(m._connections.get(9, {}).get(ws_broker.CHANNEL_UPLOAD, ()))
+            live = list(
+                m._connections.get(_UID3, {}).get(ws_broker.CHANNEL_UPLOAD, ())
+            )
         assert bad not in live  # 坏连接被清理
         assert good in live
         await m.close()
@@ -121,8 +129,8 @@ class TestConnectionManagerFanout:
 class TestBroker:
     def test_channel_naming(self) -> None:
         # M6.7 泛化后：ws:{user_id}:{channel}（原 ws:upload:{user_id}）
-        assert ws_broker.upload_channel(42) == "ws:42:upload"
-        assert ws_broker.ws_channel(42, "notify") == "ws:42:notify"
+        assert ws_broker.upload_channel(_UID1) == f"ws:{_UID1}:upload"
+        assert ws_broker.ws_channel(_UID1, "notify") == f"ws:{_UID1}:notify"
 
     async def test_publish_fail_open_without_redis(
         self, monkeypatch: pytest.MonkeyPatch
@@ -132,7 +140,7 @@ class TestBroker:
             return None
 
         monkeypatch.setattr(ws_broker, "get_redis", _no_redis)
-        await ws_broker.publish_upload_bound(1, {"event": "upload_registered"})
+        await ws_broker.publish_upload_bound(_UID1, {"event": "upload_registered"})
 
     async def test_publish_suppresses_broken_redis(
         self, monkeypatch: pytest.MonkeyPatch
@@ -154,4 +162,4 @@ class TestBroker:
             "get_redis",
             _fake_redis,  # type: ignore[arg-type]
         )
-        await ws_broker.publish_upload_bound(1, {"event": "upload_registered"})
+        await ws_broker.publish_upload_bound(_UID1, {"event": "upload_registered"})

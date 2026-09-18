@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,7 +21,7 @@ class QuestionCreate(BaseModel):
 class QuestionOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     kind: str
     content: str
     options: list[dict[str, str]]
@@ -49,7 +50,7 @@ class ExamCreate(BaseModel):
 class ExamOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     type: str
     title: str
     subject: str
@@ -74,7 +75,7 @@ class QuestionForAttempt(BaseModel):
     都能满分，认证判分与竞赛榜单将失去意义。答案仅留在服务端 exam.questions 供判分。
     """
 
-    id: int
+    id: uuid.UUID
     kind: str
     content: str
     options: list[dict[str, str]]
@@ -84,34 +85,34 @@ class QuestionForAttempt(BaseModel):
 
 
 class AttemptStartResp(BaseModel):
-    attempt_id: int
-    exam_id: int
+    attempt_id: uuid.UUID
+    exam_id: uuid.UUID
     questions: list[QuestionForAttempt]
     time_limit_min: int
     deadline: datetime.datetime | None = None
 
 
 class SubmitAnswersRequest(BaseModel):
-    answers: dict[int, str] = Field(default_factory=dict)
+    answers: dict[uuid.UUID, str] = Field(default_factory=dict)
 
 
 class SubmitResult(BaseModel):
-    attempt_id: int
-    exam_id: int
+    attempt_id: uuid.UUID
+    exam_id: uuid.UUID
     score: int
     pass_score: int
     passed: bool
     unlock_level: str | None = None
     unlock_role: str | None = None
-    certificate_id: int | None = None
+    certificate_id: uuid.UUID | None = None
 
 
 class CertificateOut(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
-    id: int
-    exam_id: int
-    user_id: int
+    id: uuid.UUID
+    exam_id: uuid.UUID
+    user_id: uuid.UUID
     exam_title: str = ""
     score: int
     passed: bool
@@ -120,7 +121,7 @@ class CertificateOut(BaseModel):
 
 
 class LeaderboardEntry(BaseModel):
-    user_id: int
+    user_id: uuid.UUID
     display_name: str
     score: int
     certified: bool = False

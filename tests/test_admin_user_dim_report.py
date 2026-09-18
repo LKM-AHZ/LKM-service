@@ -18,6 +18,7 @@ S5-A2 Step2：在线 A4 列表的 user 真值在 **auth 库**——admin 经 ``a
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 
 import pytest
@@ -43,9 +44,15 @@ async def _reg() -> AsyncIterator[None]:
     yield
 
 
+# 固定 uuid7 形态用户 id（原 42/43/44；跨断言复用）
+_UID_A = uuid.UUID("00000000-0000-7000-8000-000000000042")
+_UID_B = uuid.UUID("00000000-0000-7000-8000-000000000043")
+_UID_C = uuid.UUID("00000000-0000-7000-8000-000000000044")
+
+
 def _dim_row(
     *,
-    user_id: int,
+    user_id: uuid.UUID,
     username: str,
     account_level: str = "local",
     email: str | None = None,
@@ -127,7 +134,7 @@ class TestReportReadReadsDim:
     ) -> None:
         db.add(
             _dim_row(
-                user_id=42,
+                user_id=_UID_A,
                 username="repuser",
                 email="repuser@example.com",
                 nickname="报表客",
@@ -137,7 +144,7 @@ class TestReportReadReadsDim:
         rows, total = await dim_report.list_user_dim(db, include_pii=True)
         assert total >= 1
         hit = next(r for r in rows if r.username == "repuser")
-        assert hit.user_id == 42
+        assert hit.user_id == _UID_A
         assert hit.email == "repuser@example.com"  # PII: include_pii=True 才带
         assert hit.nickname == "报表客"
         assert hit.account_level == "local"
@@ -149,7 +156,7 @@ class TestReportReadReadsDim:
     ) -> None:
         db.add(
             _dim_row(
-                user_id=43,
+                user_id=_UID_B,
                 username="repuser",
                 email="repuser@example.com",
                 nickname="报表客",
@@ -163,7 +170,7 @@ class TestReportReadReadsDim:
     async def test_keyword_filters_and_counts(
         self, db: AsyncSession, _reg: None
     ) -> None:
-        db.add(_dim_row(user_id=44, username="repuser"))
+        db.add(_dim_row(user_id=_UID_C, username="repuser"))
         await db.commit()
         rows, total = await dim_report.list_user_dim(db, q="repuse", include_pii=False)
         assert total >= 1

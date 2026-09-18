@@ -1,6 +1,7 @@
 """积分服务：balance 原子写 + ledger 幂等流水，reward/spend/transfer/排行榜/每日打卡。"""
 
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import func, select
@@ -40,7 +41,7 @@ from app.modules.points.schemas import (
 )
 
 
-async def ensure_balance(db: AsyncSession, user_id: int) -> UserBalance:
+async def ensure_balance(db: AsyncSession, user_id: uuid.UUID) -> UserBalance:
     """惰性取/建用户 balance 行。"""
     row = await db.get(UserBalance, user_id)
     if row is not None:
@@ -52,7 +53,7 @@ async def ensure_balance(db: AsyncSession, user_id: int) -> UserBalance:
 
 
 async def _apply_delta(
-    db: AsyncSession, user_id: int, delta: int, allow_negative: bool
+    db: AsyncSession, user_id: uuid.UUID, delta: int, allow_negative: bool
 ) -> int:
     """原子增减 balance 并返回变动后的新余额。
 
@@ -76,7 +77,7 @@ async def _apply_delta(
 
 async def reward(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     delta: int,
     reason: str,
     ref_type: str,
@@ -151,7 +152,7 @@ async def reward(
 
 async def spend(
     db: AsyncSession,
-    user_id: int,
+    user_id: uuid.UUID,
     amount: int,
     reason: str,
     ref_type: str,
@@ -165,8 +166,8 @@ async def spend(
 
 async def transfer(
     db: AsyncSession,
-    from_id: int,
-    to_id: int,
+    from_id: uuid.UUID,
+    to_id: uuid.UUID,
     amount: int,
     reason: str,
     ref_type: str,
@@ -209,7 +210,7 @@ async def transfer(
     return LedgerEntry.model_validate(out_entry), LedgerEntry.model_validate(in_entry)
 
 
-async def get_balance(db: AsyncSession, user_id: int) -> int:
+async def get_balance(db: AsyncSession, user_id: uuid.UUID) -> int:
     """取用户当前余额（读缓存；缺失按 0）。"""
 
     async def load() -> int:
@@ -224,7 +225,7 @@ async def get_balance(db: AsyncSession, user_id: int) -> int:
 
 
 async def list_ledger(
-    db: AsyncSession, user_id: int, page: int = 1, limit: int = 20
+    db: AsyncSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
 ) -> PageData[LedgerEntry]:
     """分页列出用户的积分流水（新→旧）。"""
     total = (
@@ -263,7 +264,9 @@ def _title_from_keys(unlocked: set[str]) -> str:
     return "active"
 
 
-async def _titles_for(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
+async def _titles_for(
+    db: AsyncSession, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     """一次 IN 查询批量返回多个用户已解锁成就合成的 title，避免榜上 N+1 查询。"""
     if not user_ids:
         return {}
@@ -277,7 +280,7 @@ async def _titles_for(db: AsyncSession, user_ids: list[int]) -> dict[int, str]:
             )
         )
     ).all()
-    unlocked_by_user: dict[int, set[str]] = {}
+    unlocked_by_user: dict[uuid.UUID, set[str]] = {}
     for key, uid in rows:
         unlocked_by_user.setdefault(uid, set()).add(key)
     return {uid: _title_from_keys(keys) for uid, keys in unlocked_by_user.items()}
@@ -287,10 +290,10 @@ async def _fill_titles(db: AsyncSession, items: list[dict[str, Any]]) -> None:
     """就地给榜单 items 每项补 title（一次批量查询），为空列表时直接跳过。"""
     if not items:
         return
-    uid_list = [int(item["user_id"]) for item in items]
+    uid_list = [item["user_id"] for item in items]
     titles = await _titles_for(db, uid_list)
     for item in items:
-        item["title"] = titles.get(int(item["user_id"]), "active")
+        item["title"] = titles.get(item["user_id"], "active")
 
 
 async def leaderboard(
@@ -408,7 +411,7 @@ _ACH_TYPE_TO_STAT: dict[str, str] = {
 }
 
 
-async def _read_progress(db: AsyncSession, user_id: int, type_: str) -> int:
+async def _read_progress(db: AsyncSession, user_id: uuid.UUID, type_: str) -> int:
     """只读计算某成就类型的当前进度（读 UserBehaviorStat.stats，不写库）。"""
     stat = await db.get(UserBehaviorStat, user_id)
     key = _ACH_TYPE_TO_STAT.get(type_)
@@ -418,7 +421,7 @@ async def _read_progress(db: AsyncSession, user_id: int, type_: str) -> int:
 
 
 async def list_achievements(
-    db: AsyncSession, *, user_id: int | None = None
+    db: AsyncSession, *, user_id: uuid.UUID | None = None
 ) -> list[AchievementOut]:
     """成就定义全量 + 当前用户进度（无登录则不显示进度，归默认值）。"""
     achievements = (
@@ -426,7 +429,7 @@ async def list_achievements(
         .scalars()
         .all()
     )
-    progress_map: dict[int, tuple[int, bool]] = {}
+    progress_map: dict[uuid.UUID, tuple[int, bool]] = {}
     if user_id is not None:
         ua_rows = (
             (
@@ -444,7 +447,11 @@ async def list_achievements(
         if a.id in progress_map:
             prog, unlocked = progress_map[a.id]
         else:
-            prog = min(await _read_progress(db, user_id or 0, a.type), a.threshold)
+            prog = (
+                min(await _read_progress(db, user_id, a.type), a.threshold)
+                if user_id is not None
+                else 0
+            )
             unlocked = False
         out.append(
             AchievementOut(
@@ -465,10 +472,12 @@ async def list_achievements(
     return out
 
 
-async def list_tasks(db: AsyncSession, *, user_id: int | None = None) -> list[TaskOut]:
+async def list_tasks(
+    db: AsyncSession, *, user_id: uuid.UUID | None = None
+) -> list[TaskOut]:
     """任务定义全量 + 当前用户今日进度（无登录则默认值）。"""
     tasks = (await db.execute(select(Task).order_by(Task.sort_order))).scalars().all()
-    prog_map: dict[int, tuple[int, bool]] = {}
+    prog_map: dict[uuid.UUID, tuple[int, bool]] = {}
     if user_id is not None:
         today = datetime.date.today().isoformat()
         up_rows = (
@@ -527,7 +536,7 @@ async def list_exchange_items(db: AsyncSession) -> list[ExchangeItemOut]:
     ]
 
 
-async def do_checkin(db: AsyncSession, user_id: int) -> dict:
+async def do_checkin(db: AsyncSession, user_id: uuid.UUID) -> dict:
     """每日打卡：幂等（同日已打返回 today_checked=True, earned=0）。
 
     返回 ``{success, earned, checkin_streak, today_checked}``。非幂等路径推进打卡
