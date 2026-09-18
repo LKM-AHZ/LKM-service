@@ -39,7 +39,7 @@ def test_import_task_modules_marks_import_complete(
 def test_scheduler_has_cron_jobs() -> None:
     s = scheduler.build_scheduler()
     jobs = s.get_jobs()
-    assert len(jobs) == 5
+    assert len(jobs) == 8
     triggers = {(j.id, type(j.trigger).__name__) for j in jobs}
     assert ("cleanup_expired_uploads", "CronTrigger") in triggers
     assert ("reconcile_blog_repos", "CronTrigger") in triggers
@@ -49,6 +49,15 @@ def test_scheduler_has_cron_jobs() -> None:
         "purge_stale_view_logs",
         "CronTrigger",
     ) in triggers  # M6.6 浏览记录保留期清理(每天)
+    assert (
+        "flush_content_counters",
+        "CronTrigger",
+    ) in triggers  # M6.10 互动计数增量落库(每分钟)
+    assert (
+        "reconcile_content_counts",
+        "CronTrigger",
+    ) in triggers  # M6.10 互动计数对账(每 15 分钟)
+    assert ("fanout_feed_items", "CronTrigger") in triggers  # M6.11 时间线写扩散(每 2 分钟)
 
 
 def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
@@ -66,6 +75,9 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "reconcile_user_dim",
         "export_analytics_clickhouse",  # M5 7.2.6
         "purge_stale_view_logs",  # M6.6
+        "flush_content_counters",  # M6.10
+        "reconcile_content_counts",  # M6.10
+        "fanout_feed_items",  # M6.11
     }
     s = scheduler.build_scheduler()
     job_fns = {str(j.kwargs.get("fn")) for j in s.get_jobs()}

@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     # （行数上界是「用户数 × 内容数」，但历史内容多的站点仍需按时间收敛）。
     interaction_view_log_retention_days: int = 90
 
+    # ---- feed/timeline 物化（M6.11）----
+    # fanout 写放大封顶：一条内容的受众（关注作者 ∪ 关注版块）超过此数即整条跳过写扩散，
+    # 只把作者记入 Redis 大 V 集合，由读路径实时补拉（既不写放大也不丢内容）。
+    feed_fanout_max_followers: int = 2000
+    # 新关注一位作者时回填其最近 N 条内容进该关注者的物化 feed（0 = 不回填）。
+    feed_backfill_limit: int = 50
+
     # ---- notification 域（M6.8）----
     # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为
     # 一条（payload.count 累加），防「一次动作扇出大量通知」的通知风暴。0 = 关闭聚合。

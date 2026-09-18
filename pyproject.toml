@@ -138,6 +138,7 @@ ignore_imports = [
     "app.core.task_registry -> app.modules.auth.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.blog.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.content.tasks",  # 任务注册枢纽（M6.10 计数落库/对账）
+    "app.core.task_registry -> app.modules.feed.tasks",  # 任务注册枢纽（M6.11 时间线 fanout）
     "app.core.task_registry -> app.modules.files.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.interaction.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.notification.tasks",  # 任务注册枢纽

@@ -30,18 +30,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import (
     TTL_ITEM_S,
+    TTL_LIST_S,
     cache_invalidate,
     cached_read,
     make_key,
 )
+from app.core.config import settings
 from app.core.err import BizError
 from app.db.base import now_iso
 from app.modules.admin.moderation.engine import evaluate, load_active_rules
 from app.modules.auth.snapshot import get_user_snapshot, get_user_snapshot_batch
 from app.modules.content.models import Board
+from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.errors import FollowErr
-from app.modules.feed.models import BoardFollow, UserFollow
+from app.modules.feed.models import (
+    BoardFollow,
+    FeedItemMaterialized,
+    UserFollow,
+)
 from app.modules.feed.schemas import FeedItem, FeedResponse
 
 
@@ -73,11 +80,17 @@ async def follow_user(db: AsyncSession, follower_id: int, following_id: int) -> 
             UserFollow.following_id == following_id,
         )
     )
+    created = row is None or row.deleted_at is not None
     if row is None:
         db.add(UserFollow(follower_id=follower_id, following_id=following_id))
     elif row.deleted_at is not None:
         row.deleted_at = None
     await db.flush()
+    if created and settings.feed_backfill_limit > 0:
+        # M6.11：新关注即回填该作者最近内容，令物化 feed 当场可用（否则要等新内容 fanout）
+        await fanout.backfill_author(
+            db, follower_id, following_id, settings.feed_backfill_limit
+        )
     await _invalidate_follow_cache(follower_id)
 
 
@@ -94,6 +107,8 @@ async def unfollow_user(db: AsyncSession, follower_id: int, following_id: int) -
     if row is not None and row.deleted_at is None:
         row.deleted_at = now_iso()
         await db.flush()
+        # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）
+        await fanout.remove_author_items(db, follower_id, following_id)
         await _invalidate_follow_cache(follower_id)
 
 
@@ -109,11 +124,17 @@ async def follow_board(db: AsyncSession, follower_id: int, board_id: int) -> Non
             BoardFollow.board_id == board_id,
         )
     )
+    created = row is None or row.deleted_at is not None
     if row is None:
         db.add(BoardFollow(follower_id=follower_id, board_id=board_id))
     elif row.deleted_at is not None:
         row.deleted_at = None
     await db.flush()
+    if created and settings.feed_backfill_limit > 0:
+        # M6.11：新关注版块即回填该版块最近讨论帖
+        await fanout.backfill_board(
+            db, follower_id, board_id, settings.feed_backfill_limit
+        )
     await _invalidate_follow_cache(follower_id)
 
 
@@ -128,6 +149,9 @@ async def unfollow_board(db: AsyncSession, follower_id: int, board_id: int) -> N
     if row is not None and row.deleted_at is None:
         row.deleted_at = now_iso()
         await db.flush()
+        # M6.11：取关版块即清理其物化条目（保留仍因作者关注而可见的行）
+        keep = set(await get_following_ids(db, follower_id))
+        await fanout.remove_board_items(db, follower_id, board_id, keep)
         await _invalidate_follow_cache(follower_id)
 
 
@@ -295,6 +319,155 @@ async def get_timeline(
     cursor: str | None,
     limit: int,
 ) -> FeedResponse:
+    """时间线读入口：物化读模型优先，未命中回退实时多源合流（M6.11）。
+
+    只有**登录用户的 follow 流**有物化意义（hot 流是个性化无关的全站榜，沿用实时）。
+    物化的两条来源：``feed_items``（fanout 写入）+ 大 V 作者的实时补拉；两者都为空时
+    返回 ``None`` → 兜底实时合流（覆盖「刚关注/物化未回填」的用户）。
+    """
+    if mode == "follow" and user_id is not None:
+        materialized = await _materialized_timeline(
+            db, user_id=user_id, cursor=cursor, limit=limit
+        )
+        if materialized is not None:
+            return materialized
+    return await _realtime_timeline(
+        db, user_id=user_id, mode=mode, cursor=cursor, limit=limit
+    )
+
+
+def _materialized_key(user_id: int, cursor: str | None) -> str:
+    return make_key("feed", user_id, cursor or "")
+
+
+async def _materialized_timeline(
+    db: AsyncSession, *, user_id: int, cursor: str | None, limit: int
+) -> FeedResponse | None:
+    """物化读：feed_items + 大 V 实时补拉。返回 ``None`` 表示应回退实时合流。"""
+    before_time, before_id = _decode_cursor(cursor)
+    following_ids = set(await get_following_ids(db, user_id))
+    board_ids = set(await get_followed_board_ids(db, user_id))
+    if not following_ids and not board_ids:
+        return FeedResponse(items=[], next_cursor=None)
+
+    bigv = (await fanout.bigv_authors()) & following_ids
+
+    async def _load() -> dict[str, Any]:
+        # 多取一条以判定「是否还有下一页」（两路各自 +1，合并后仍能判出）
+        items = await _load_materialized_page(
+            db, user_id, before_time, before_id, limit + 1
+        )
+        if bigv:
+            items += await _realtime_for_authors(
+                db, bigv, board_ids, before_time, before_id, limit + 1
+            )
+        if not items:
+            return {}
+
+        await _fill_authors(db, items)
+        rules = await load_active_rules(db)
+        kept = [
+            it
+            for it in items
+            if not evaluate(f"{it.title} {it.content_preview}", rules).should_hide
+        ]
+        await _compute_scores(kept, following_ids, rules)
+        kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
+        page = kept[:limit]
+        next_cursor: str | None = None
+        if len(kept) > limit and page:
+            last = page[-1]
+            next_cursor = _encode_cursor(last.created_at, last.id)
+        return FeedResponse(items=page, next_cursor=next_cursor).model_dump(
+            mode="json"
+        )
+
+    cached = await cached_read(
+        _materialized_key(user_id, cursor), TTL_LIST_S, _load
+    )
+    if not cached:
+        return None
+    return FeedResponse.model_validate(cached)
+
+
+async def _load_materialized_page(
+    db: AsyncSession,
+    user_id: int,
+    before_time: datetime.datetime | None,
+    before_id: int,
+    limit: int,
+) -> list[FeedItem]:
+    """从物化表取一页（(created_at, id) 游标下滤，时间倒序）。"""
+    conds: list[Any] = [FeedItemMaterialized.user_id == user_id]
+    if before_time is not None:
+        conds.extend(
+            feed_src._before_conds(
+                FeedItemMaterialized.created_at,
+                FeedItemMaterialized.id,
+                before_time,
+                before_id,
+            )
+        )
+    rows = (
+        (
+            await db.execute(
+                select(FeedItemMaterialized)
+                .where(*conds)
+                .order_by(
+                    FeedItemMaterialized.created_at.desc(),
+                    FeedItemMaterialized.id.desc(),
+                )
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        FeedItem(
+            item_type=r.item_type,
+            id=r.source_id,
+            author_id=r.author_id,
+            author_name="",
+            title=r.title,
+            content_preview=r.content_preview,
+            created_at=r.created_at,
+            sort_score=r.sort_score,
+            board_id=r.board_id,
+            url=r.url,
+        )
+        for r in rows
+    ]
+
+
+async def _realtime_for_authors(
+    db: AsyncSession,
+    author_ids: set[int],
+    board_ids: set[int],
+    before_time: datetime.datetime | None,
+    before_id: int,
+    limit: int,
+) -> list[FeedItem]:
+    """大 V 补拉：只对这些作者走实时源（与 follow 模式同一过滤语义）。"""
+
+    async def _fetch_one(name: str) -> list[FeedItem]:
+        fetch = feed_src.SOURCES[name]
+        b_ids = board_ids if name == "discussion" else None
+        return await fetch(db, author_ids, b_ids, before_time, before_id, limit)
+
+    groups = await asyncio.gather(*(_fetch_one(n) for n in feed_src.FOLLOW_SOURCES))
+    return [it for group in groups for it in group]
+
+
+async def _realtime_timeline(
+    db: AsyncSession,
+    *,
+    user_id: int | None,
+    mode: str,
+    cursor: str | None,
+    limit: int,
+) -> FeedResponse:
+    """实时多源合流（原实现）：物化未命中时的兜底读路径。"""
     before_time, before_id = _decode_cursor(cursor)
 
     following_ids: set[int] | None = None

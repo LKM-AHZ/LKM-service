@@ -68,6 +68,7 @@ def import_task_modules() -> None:
     import app.modules.auth.tasks
     import app.modules.blog.tasks
     import app.modules.content.tasks
+    import app.modules.feed.tasks
     import app.modules.files.tasks
     import app.modules.interaction.tasks
     import app.modules.notification.tasks

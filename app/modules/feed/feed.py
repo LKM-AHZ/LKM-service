@@ -68,6 +68,44 @@ def _before_conds(
     ]
 
 
+def _after_conds(
+    col_time: Any,
+    model_id: Any,
+    after_time: datetime,
+    after_id: int,
+) -> list[Any]:
+    """(created_at, id) 水位上滤条件（M6.11 fanout 增量扫描用，升序配套）。
+
+    与 :func:`_before_conds` 严格互补：``> after`` 或 ``== after 且 id >``。
+    """
+    return [
+        (col_time > after_time) | ((col_time == after_time) & (model_id > after_id))
+    ]
+
+
+def _cursor_order(
+    col_time: Any,
+    model_id: Any,
+    conditions: list[Any],
+    before_time: datetime | None,
+    before_id: int,
+    after_time: datetime | None,
+    after_id: int,
+) -> tuple[Any, ...]:
+    """按游标方向**就地**给 ``conditions`` 追加过滤，返回 ``order_by`` 元组。
+
+    - 给 ``after_time`` → 升序增量扫描（M6.11 fanout 按源水位取新内容）；
+    - 否则按 ``before_time`` 降序（读路径分页）。
+    两方向互斥（调用方只传一个）；各源共用本函数以保证「同源两路条件永不漂移」。
+    """
+    if after_time is not None:
+        conditions.extend(_after_conds(col_time, model_id, after_time, after_id))
+        return (col_time.asc(), model_id.asc())
+    if before_time is not None:
+        conditions.extend(_before_conds(col_time, model_id, before_time, before_id))
+    return (col_time.desc(), model_id.desc())
+
+
 # ---------------------------------------------------------------------------
 # Discussion（讨论帖，content_items 中 content_type==discussion）
 # ---------------------------------------------------------------------------
@@ -80,6 +118,8 @@ async def _fetch_discussion(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     conditions: list[Any] = [
         ContentItem.content_type == "discussion",
@@ -90,16 +130,14 @@ async def _fetch_discussion(
         conditions.append(
             ContentItem.author_id.in_(author_ids) | ContentItem.board_id.in_(board_ids)
         )
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(
-                ContentItem.created_at, ContentItem.id, before_time, before_id
-            )
-        )
+    order_by = _cursor_order(
+        ContentItem.created_at, ContentItem.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(ContentItem)
         .where(*conditions)
-        .order_by(ContentItem.created_at.desc(), ContentItem.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -141,16 +179,18 @@ async def _fetch_article(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     conditions: list[Any] = [Article.status == "published"]
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(Article.created_at, Article.id, before_time, before_id)
-        )
+    order_by = _cursor_order(
+        Article.created_at, Article.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(Article)
         .where(*conditions)
-        .order_by(Article.created_at.desc(), Article.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -187,18 +227,20 @@ async def _fetch_column(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     conditions: list[Any] = [ColumnPost.status == ColumnPostStatus.PUBLISHED]
     if author_ids is not None:
         conditions.append(ColumnPost.author_id.in_(author_ids))
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(ColumnPost.created_at, ColumnPost.id, before_time, before_id)
-        )
+    order_by = _cursor_order(
+        ColumnPost.created_at, ColumnPost.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(ColumnPost)
         .where(*conditions)
-        .order_by(ColumnPost.created_at.desc(), ColumnPost.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -235,18 +277,20 @@ async def _fetch_qa(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     conditions: list[Any] = [QAQuestion.status.in_(["open", "accepted"])]
     if author_ids is not None:
         conditions.append(QAQuestion.author_id.in_(author_ids))
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(QAQuestion.created_at, QAQuestion.id, before_time, before_id)
-        )
+    order_by = _cursor_order(
+        QAQuestion.created_at, QAQuestion.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(QAQuestion)
         .where(*conditions)
-        .order_by(QAQuestion.created_at.desc(), QAQuestion.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -279,18 +323,20 @@ async def _fetch_project(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     conditions: list[Any] = [Project.status == "active"]
     if author_ids is not None:
         conditions.append(Project.applicant_id.in_(author_ids))
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(Project.created_at, Project.id, before_time, before_id)
-        )
+    order_by = _cursor_order(
+        Project.created_at, Project.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(Project)
         .where(*conditions)
-        .order_by(Project.created_at.desc(), Project.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
@@ -318,6 +364,8 @@ async def _fetch_blog(
     before_time: datetime | None,
     before_id: int,
     limit: int,
+    after_time: datetime | None = None,
+    after_id: int = 0,
 ) -> list[FeedItem]:
     """博客发布产物（统一内容表中 content_type==blog_post）。
 
@@ -330,16 +378,14 @@ async def _fetch_blog(
     ]
     if author_ids is not None:
         conditions.append(ContentItem.author_id.in_(author_ids))
-    if before_time is not None:
-        conditions.extend(
-            _before_conds(
-                ContentItem.created_at, ContentItem.id, before_time, before_id
-            )
-        )
+    order_by = _cursor_order(
+        ContentItem.created_at, ContentItem.id, conditions, before_time, before_id,
+        after_time, after_id,
+    )
     stmt = (
         select(ContentItem)
         .where(*conditions)
-        .order_by(ContentItem.created_at.desc(), ContentItem.id.desc())
+        .order_by(*order_by)
         .limit(limit)
     )
     rows = (await db.execute(stmt)).scalars().all()
