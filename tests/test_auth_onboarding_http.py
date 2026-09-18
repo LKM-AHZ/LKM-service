@@ -12,6 +12,7 @@ S5 把这些端点与其会话依赖收敛到 ``get_auth_session``（auth 独立
 前台认证语意用例同款收敛。
 """
 
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +41,7 @@ async def _create_user(auth_db: AsyncSession, username: str) -> User:
     return user
 
 
-async def _token(token_user_id: int) -> str:
+async def _token(token_user_id: uuid.UUID) -> str:
     return create_access_token(
         user_id=token_user_id, account_level="normal", role="member"
     )

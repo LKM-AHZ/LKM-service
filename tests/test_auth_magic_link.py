@@ -129,7 +129,7 @@ class TestRequestMagicLink:
 
 class TestVerifyMagicLink:
     async def should_return_auth_tokens_on_valid_link(self, db: AsyncSession):
-        await _create_user(db, email="alice@example.com")
+        user = await _create_user(db, email="alice@example.com")
         raw_token, _ = await _make_magic_link(db, "alice@example.com")
 
         svc = _service()
@@ -137,7 +137,7 @@ class TestVerifyMagicLink:
 
         assert result["access_token"] is not None
         assert result["refresh_token"] is not None
-        assert result["user_id"] == 1
+        assert result["user_id"] == user.id
         assert result["account_level"] == "normal"
         assert result["requires_2fa"] is False
 

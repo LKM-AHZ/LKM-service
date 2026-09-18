@@ -7,6 +7,7 @@
 - auth 侧的授权原语（grant_exam_unlock/grant_incubation）直接以 service 层覆盖单向提升与幂等。
 """
 
+import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -61,7 +62,7 @@ async def _mk_user(
     *,
     account_level: str = "normal",
     role: str = "member",
-) -> int:
+) -> uuid.UUID:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -75,7 +76,7 @@ async def _mk_user(
     return user.id
 
 
-async def _level(db: AsyncSession, uid: int) -> tuple[str, str, int]:
+async def _level(db: AsyncSession, uid: uuid.UUID) -> tuple[str, str, int]:
     row = (
         await db.execute(
             select(User.account_level, Profile.role, User.token_version)
@@ -92,7 +93,10 @@ async def test_internal_seams_fail_closed_without_token(
     """内部写缝未配 token 时 fail-closed(401)——不成为公网面。"""
     monkeypatch.setattr(settings, "auth_http_token", "")
     for path, payload in (
-        ("/api/v1/auth/internal/grant", {"kind": "incubation", "user_id": 1}),
+        (
+            "/api/v1/auth/internal/grant",
+            {"kind": "incubation", "user_id": str(uuid.uuid4())},
+        ),
         (
             "/api/v1/auth/internal/verify-password",
             {"username": "bob", "password": "x"},
@@ -116,7 +120,7 @@ async def test_grant_exam_unlock_upgrades_and_bumps_token(
         "/api/v1/auth/internal/grant",
         json={
             "kind": "exam_unlock",
-            "user_id": uid,
+            "user_id": str(uid),
             "unlock_level": "admin",
             "unlock_role": "author",
         },
@@ -145,7 +149,7 @@ async def test_grant_exam_unlock_is_monotonic_no_downgrade(
         "/api/v1/auth/internal/grant",
         json={
             "kind": "exam_unlock",
-            "user_id": uid,
+            "user_id": str(uid),
             "unlock_level": "normal",
             "unlock_role": "member",
         },
@@ -168,7 +172,7 @@ async def test_grant_incubation_sets_admin_and_member_role(
 
     r = await client.post(
         "/api/v1/auth/internal/grant",
-        json={"kind": "incubation", "user_id": uid},
+        json={"kind": "incubation", "user_id": str(uid)},
         headers=_auth_headers(),
     )
     await db.commit()

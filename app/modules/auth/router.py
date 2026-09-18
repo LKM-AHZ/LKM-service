@@ -109,7 +109,7 @@ async def get_user_by_username(
     return await get_profile_by_username(db, username)
 
 
-@router.get("/{user_id}", response_model=ApiResp[ProfileInfo])
+@router.get("/{user_id:uuid}", response_model=ApiResp[ProfileInfo])
 @respond
 async def get_user(
     user_id: uuid.UUID,
@@ -119,7 +119,7 @@ async def get_user(
     return await get_profile(db, user_id)
 
 
-@router.put("/{user_id}/profile", response_model=ApiResp[ProfileInfo])
+@router.put("/{user_id:uuid}/profile", response_model=ApiResp[ProfileInfo])
 @respond
 async def edit_profile(
     user_id: uuid.UUID,

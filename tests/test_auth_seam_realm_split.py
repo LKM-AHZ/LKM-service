@@ -11,6 +11,8 @@
 
 真双 PG（monolith=lkm / auth=lkm_auth）各建 schema 亦可跑。
 """
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,8 +76,9 @@ async def test_snapshot_batch_display_reads_from_auth_realm(
     au = await auth_user_uid(
         auth_db, username="bob", nickname="狮子bob", account_level="normal", role="member"
     )
-    snaps = await get_user_snapshot_batch(db, user_ids=[au.id, 99999])
-    assert 99999 not in snaps  # 权威缺：缺行跳过（不回落、不缓存缺行）
+    missing_id = uuid.UUID("00000000-0000-7000-8000-000000000099")
+    snaps = await get_user_snapshot_batch(db, user_ids=[au.id, missing_id])
+    assert missing_id not in snaps  # 权威缺：缺行跳过（不回落、不缓存缺行）
     assert au.id in snaps
     assert snaps[au.id].display_name == "狮子bob"
     assert snaps[au.id].username == "bob"
