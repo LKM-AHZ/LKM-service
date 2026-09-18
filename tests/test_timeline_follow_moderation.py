@@ -1,6 +1,6 @@
 """follow 关注 + 时间线 read-time 合流 + 自动审校降权 集成测试。
 
-拆库(M3.B S5 dual 真 PG)：关注/内容作者 user_id 均为引用 auth realm 用户的裸 int(business 无
+拆库(M3.B S5 dual 真 PG)：关注/内容作者 user_id 均为引用 auth realm 用户的裸 uuid(business 无
 users)。建用户走 auth_user_uid(auth_db) 取 id；follow 目标存在(follow_user 单读)/时间线作者名
 (get_timeline→_fill_authors 批读)均经 auth snapshot 缝，故本域用例逐测显式开 ``auth_seam_realm``
 把缝指到本测 auth_db 真值(seam 关则回落就地 select(User)打已拆走的业务 users)。
@@ -12,6 +12,8 @@ users)。建用户走 auth_user_uid(auth_db) 取 id；follow 目标存在(follow
 - 审校：hide 命中剔除、derank 压低 sort_score、admin CRUD 后规则生效
 - moderation.evaluate 纯函数行为
 """
+
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -30,30 +32,28 @@ from app.modules.feed.service import get_timeline
 from tests.conftest import auth_user_uid
 
 
-async def _user(auth_db: AsyncSession, username: str) -> int:
-    """在 auth realm(business 无 users) 建 normal/member 用户，返回裸 int user_id。"""
-    return int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@ex.com",
-                nickname=username,
-                account_level="normal",
-                role="member",
-                with_token=False,
-            )
-        ).id
-    )
+async def _user(auth_db: AsyncSession, username: str) -> uuid.UUID:
+    """在 auth realm(business 无 users) 建 normal/member 用户，返回裸 uuid user_id。"""
+    return (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@ex.com",
+            nickname=username,
+            account_level="normal",
+            role="member",
+            with_token=False,
+        )
+    ).id
 
 
-async def _board(db: AsyncSession, slug: str) -> int:
+async def _board(db: AsyncSession, slug: str) -> uuid.UUID:
     return (await create_board_ex(db, BoardCreate(slug=slug, title=slug), None)).id
 
 
 async def _forum_post(
-    db: AsyncSession, author_id: int, board_id: int, title: str
-) -> int:
+    db: AsyncSession, author_id: uuid.UUID, board_id: uuid.UUID, title: str
+) -> uuid.UUID:
     """讨论帖数据源已收敛到 content_items（content_type==discussion）。"""
     item = ContentItem(
         content_type="discussion",
@@ -69,7 +69,7 @@ async def _forum_post(
     return item.id
 
 
-async def _article(db: AsyncSession, slug: str, title: str) -> int:
+async def _article(db: AsyncSession, slug: str, title: str) -> uuid.UUID:
     cat = ArticleCategory(slug=slug, title=slug)
     db.add(cat)
     await db.flush()
@@ -87,8 +87,8 @@ async def _article(db: AsyncSession, slug: str, title: str) -> int:
 
 
 async def _blog_item(
-    db: AsyncSession, author_id: int, board_id: int, title: str
-) -> int:
+    db: AsyncSession, author_id: uuid.UUID, board_id: uuid.UUID, title: str
+) -> uuid.UUID:
     """博客发布产物：只落统一内容表 content_items（content_type=blog_post）。"""
     item = ContentItem(
         content_type="blog_post",

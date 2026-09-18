@@ -8,6 +8,7 @@ Project/Application/Member 仍落 db。approve 路径的孵化升级经 grant se
 """
 
 import json
+import uuid
 
 import pytest
 from sqlalchemy import select, update
@@ -29,6 +30,9 @@ from app.modules.projects.service import (
 )
 from tests.conftest import AuthUser, auth_user_uid
 
+# 不存在的用户 / 项目 id（uuid7 形态），用于校验失败与未命中路径。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
+
 
 async def _mk_au(
     auth_db: AsyncSession,
@@ -47,7 +51,7 @@ async def _mk_au(
     )
 
 
-async def _user_level(auth_db: AsyncSession, user_id: int) -> str:
+async def _user_level(auth_db: AsyncSession, user_id: uuid.UUID) -> str:
     return str(
         (await auth_db.execute(select(User.account_level).where(User.id == user_id)))
         .scalars()
@@ -55,13 +59,13 @@ async def _user_level(auth_db: AsyncSession, user_id: int) -> str:
     )
 
 
-async def _profile_role(auth_db: AsyncSession, user_id: int) -> str | None:
+async def _profile_role(auth_db: AsyncSession, user_id: uuid.UUID) -> str | None:
     return (
         await auth_db.execute(select(Profile.role).where(Profile.user_id == user_id))
     ).scalars().first()
 
 
-async def _token_version(auth_db: AsyncSession, user_id: int) -> int:
+async def _token_version(auth_db: AsyncSession, user_id: uuid.UUID) -> int:
     v = (
         await auth_db.execute(select(User.token_version).where(User.id == user_id))
     ).scalars().first()
@@ -157,7 +161,11 @@ class TestProjectApplicationService:
                 summary="s",
                 description="d",
                 member_claims=[
-                    {"display_name": "无人", "role_in_project": "r", "user_id": 99999}
+                    {
+                        "display_name": "无人",
+                        "role_in_project": "r",
+                        "user_id": _MISSING_ID,
+                    }
                 ],
             ),
         )
@@ -315,7 +323,7 @@ class TestProjectApplicationService:
 
 async def _make_approved(
     db: AsyncSession, auth_db: AsyncSession, username: str = "alice"
-) -> int:
+) -> uuid.UUID:
     applicant_au = await _mk_au(auth_db, username)
     reviewer = (await _mk_au(auth_db, f"rv_{username}", level="admin")).id
     app = await submit_application(
@@ -350,7 +358,7 @@ class TestProjectReadService:
 
     async def test_get_missing_raises(self, db: AsyncSession):
         with pytest.raises(BizError) as e:
-            await get_project(db, 999)
+            await get_project(db, _MISSING_ID)
         assert e.value.errcode == ProjectErr.PROJECT_NOT_FOUND
 
 

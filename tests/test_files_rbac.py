@@ -3,7 +3,7 @@
 拆库后业务库(Base=53,无 users)不再有 User/Profile 表；users/profiles 迁 auth 库
 (AuthBase=18)。业务文件行的 uploader_id / 登录身份的裁决与展示名一律走 auth realm：
 - 测试先经 ``auth_user_uid(auth_db,...)`` 在“本测 auth schema”写真实 User(+Profile)，
-  取其稳定 int ``.id`` / ``.token`` 作为登录身份。
+  取其稳定 uuid ``.id`` / ``.token`` 作为登录身份。
 - relevant 涉及 HTTP 鉴权 / 展示读的用例注入 ``auth_db`` + ``auth_seam_realm`` fixture：
   seam(替身直读本测 auth_db)裁决 current user 权威 account_level/role——业务端绝不摸
   users。RBAC 权限点 RolePermission 仍落在业务 realm(Base, 符合生产) 由 db 直插。
@@ -71,7 +71,7 @@ async def _mk_file(
     monkeypatch,
     uploader: AuthUser,
     approved: bool = False,
-) -> int:
+) -> str:
     """造一个文件：先以 uploader 上传，再（可选）由 super_admin 审核通过。
 
     需把 files_store_dir 指到 tmp_path 使落盘可用。上传者与审核者都建在 auth realm，
@@ -135,7 +135,7 @@ async def test_member_with_upload_perm_can_upload(
     u = await _mk_au(auth_db, "u_ok", level="normal", role="member")
     r = await _upload(client, _h(u))
     assert r.status_code == 200
-    assert r.json()["data"]["uploader_id"] == u.id
+    assert r.json()["data"]["uploader_id"] == str(u.id)
 
 
 # ---- 下载 ----

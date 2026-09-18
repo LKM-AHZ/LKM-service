@@ -1,5 +1,6 @@
 import datetime as dt
 import re
+import uuid
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -76,7 +77,7 @@ class TestCreateEmailVerification:
         )
 
         assert re.fullmatch(r"\d{6}", code)
-        assert isinstance(record_id, int)
+        assert isinstance(record_id, uuid.UUID)
 
         record = await _get(db, EmailVerification, EmailVerification.id == record_id)
         assert record is not None
@@ -99,7 +100,7 @@ class TestCreatePhoneVerification:
         code, record_id = await create_phone_verification(db, "13800138000", "login")
 
         assert re.fullmatch(r"\d{6}", code)
-        assert isinstance(record_id, int)
+        assert isinstance(record_id, uuid.UUID)
 
         record = await _get(db, PhoneVerification, PhoneVerification.id == record_id)
         assert record is not None

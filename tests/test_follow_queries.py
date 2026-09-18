@@ -1,6 +1,6 @@
 """follow 查询端点测试：关注状态、我关注的用户/版块列表。
 
-拆库(M3.B S5 dual 真 PG)：users/profiles 迁 auth realm。feed 表只存用户裸 int user_id，
+拆库(M3.B S5 dual 真 PG)：users/profiles 迁 auth realm。feed 表只存用户裸 uuid user_id，
 涉及身份是性(follow 目标存在)/展示名(list_following)的读走 auth snapshot 缝——业务 service
 不直读 auth.users。故本域测试用户在 auth_db(auth_user_uid) 建、取稳定 id+token，并逐测显式打开
 ``auth_seam_realm`` 把缝指到本测 auth 真值(seam 关则回落就地 select(User)打已拆走的业务 users)。
@@ -10,6 +10,8 @@
 - HTTP：GET /users/me/following、GET /boards/me/following（均需登录）、
         GET /users/{id}/follow/status（匿名恒 False、已登录看实际状态）
 """
+
+import uuid
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +41,7 @@ def _hdr(u: AuthUser) -> dict[str, str]:
     return {"Authorization": f"Bearer {u.token}"}
 
 
-async def _board(db: AsyncSession, slug: str) -> int:
+async def _board(db: AsyncSession, slug: str) -> uuid.UUID:
     from app.modules.content.boards.schemas import BoardCreate
     from app.modules.content.boards.service import create_board_ex
 
@@ -112,7 +114,7 @@ class TestFollowHttp:
         resp = await client.get("/api/v1/users/me/following", headers=_hdr(me))
         assert resp.status_code == 200
         ids = {it["user_id"] for it in resp.json()["data"]["items"]}
-        assert ids == {b1.id, b2.id}
+        assert ids == {str(b1.id), str(b2.id)}
 
     async def test_following_boards_list(
         self, db: AsyncSession, auth_db: AsyncSession,
@@ -124,7 +126,7 @@ class TestFollowHttp:
         resp = await client.get("/api/v1/content/boards/me/following", headers=_hdr(me))
         assert resp.status_code == 200
         items = resp.json()["data"]["items"]
-        assert items[0]["board_id"] == bid and items[0]["title"] == "dev"
+        assert items[0]["board_id"] == str(bid) and items[0]["title"] == "dev"
 
     async def test_following_requires_login(
         self, client: AsyncClient

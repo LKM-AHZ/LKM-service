@@ -48,7 +48,9 @@ class PointsLedger(UUIDPrimaryKeyMixin, Base):
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(String(50), nullable=False)
     ref_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    ref_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 幂等引用键：如 ``<question_uuid>:<answer_uuid>``（73 字符）——uuid 化后两个 36 字符
+    # uuid 加分隔已超原 String(64)，故加宽
+    ref_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )

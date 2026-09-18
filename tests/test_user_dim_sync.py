@@ -20,6 +20,7 @@ user_dim 绝不动源；reconcile 增量收敛、跨库批式命令恒定 4（�
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -40,6 +41,9 @@ from app.modules.auth.user_dim_sync import (
     refresh_user_dim,
     sync_dim_for_ids,
 )
+
+# 合法 uuid7 形态的不存在 id（sync 应被 join 丢弃）。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
 
 async def _mk_engine():
@@ -133,7 +137,7 @@ async def _mk_user(
     return u
 
 
-async def _dim_row(session: AsyncSession, user_id: int) -> UserDim | None:
+async def _dim_row(session: AsyncSession, user_id: uuid.UUID) -> UserDim | None:
     return (
         await session.execute(select(UserDim).where(UserDim.user_id == user_id))
     ).scalar_one_or_none()
@@ -277,7 +281,7 @@ async def test_sync_batch_idempotent_reupdate(DB) -> None:
     await session.commit()
     # 建 2 个 id 批量(含不存在 id, 应被 join 丢弃只 upd 真存在者)
     count["n"] = 0
-    assert (await sync_dim_for_ids(session, session, [u.id, 999999])) == 1
+    assert (await sync_dim_for_ids(session, session, [u.id, _MISSING_ID])) == 1
     assert count["n"] == 2
     p = (
         await session.execute(select(Profile).where(Profile.user_id == u.id))

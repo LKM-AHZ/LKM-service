@@ -9,6 +9,8 @@
 RolePermission 权限点仍在业务 realm（Base, 符合生产），由 db 直插。
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +48,7 @@ async def _grant(db: DB, role_name: str, *perms: str) -> None:
 
 
 async def _set_admin_mfa_cookie(
-    client: Client, auth_db: AsyncSession, au_id: int
+    client: Client, auth_db: AsyncSession, au_id: uuid.UUID
 ) -> None:
     # review 端点走 require_admin_2fa（后台 cookie + step-up 2FA 信任）→ 越过 2FA 门槛
     # 才触达 handler 内 boards.review_application 权限点判定。token 从 auth realm 现查
@@ -77,22 +79,22 @@ async def test_org_cannot_review_application(
 
     await _grant(db, "admin:org_member", "boards.create_application")
     applicant = await _mk_au(auth_db, "org3", account_level="normal", role="member")
-    # 先建一个待审申请（直插 DB，applicant_id = auth realm 稳定 int）
-    db.add(
-        BoardApplication(
-            applicant_id=applicant.id,
-            title="t",
-            description="d",
-            reason="r",
-            slug="z1",
-            status="pending",
-        )
+    # 先建一个待审申请（直插 DB，applicant_id = auth realm 稳定 uuid）
+    app = BoardApplication(
+        applicant_id=applicant.id,
+        title="t",
+        description="d",
+        reason="r",
+        slug="z1",
+        status="pending",
     )
+    db.add(app)
     await db.flush()
     org = await _mk_au(auth_db, "org0", account_level="admin", role="org_member")
     await _set_admin_mfa_cookie(client, auth_db, org.id)
     r = await client.post(
-        "/api/v1/content/boards/applications/1/review", json={"approve": True}
+        f"/api/v1/content/boards/applications/{app.id}/review",
+        json={"approve": True},
     )
     assert r.status_code == 403
 
@@ -106,20 +108,20 @@ async def test_super_admin_can_review_application(
     await _grant(db, "admin:super_admin", "boards.review_application")
     applicant = await _mk_au(auth_db, "ba2", account_level="normal", role="member")
     sa = await _mk_au(auth_db, "sadmin", account_level="admin", role="super_admin")
-    db.add(
-        BoardApplication(
-            applicant_id=applicant.id,
-            title="t",
-            description="d",
-            reason="r",
-            slug="z2",
-            status="pending",
-        )
+    app = BoardApplication(
+        applicant_id=applicant.id,
+        title="t",
+        description="d",
+        reason="r",
+        slug="z2",
+        status="pending",
     )
+    db.add(app)
     await db.flush()
     await _set_admin_mfa_cookie(client, auth_db, sa.id)
     r = await client.post(
-        "/api/v1/content/boards/applications/1/review", json={"approve": True}
+        f"/api/v1/content/boards/applications/{app.id}/review",
+        json={"approve": True},
     )
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "approved"

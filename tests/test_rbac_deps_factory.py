@@ -4,6 +4,8 @@
 直接以构造的 CurrentUser + db 调用，验证其判定逻辑。
 """
 
+import uuid
+
 import pytest
 
 from app.core.err import BizError, CommonErr
@@ -14,7 +16,7 @@ from app.modules.rbac.permissions import Permission
 from tests.conftest import DB
 
 
-def _actor(user_id: int, level: str, role: str) -> CurrentUser:
+def _actor(user_id: uuid.UUID, level: str, role: str) -> CurrentUser:
     return CurrentUser(
         id=user_id,
         account_level=level,
@@ -37,9 +39,10 @@ async def test_granted_role_passes(db: DB) -> None:
         )
     )
     await db.flush()
-    got = await _check(db, _actor(1, "normal", "member"), Permission.content_create)
+    actor = _actor(uuid.uuid4(), "normal", "member")
+    got = await _check(db, actor, Permission.content_create)
     assert got is not None
-    assert got.id == 1
+    assert got.id == actor.id
 
 
 async def test_ungranted_role_forbidden(db: DB) -> None:
@@ -51,11 +54,13 @@ async def test_ungranted_role_forbidden(db: DB) -> None:
     await db.flush()
     with pytest.raises(BizError) as exc:
         await _check(
-            db, _actor(2, "normal", "member"), Permission.article_owner_comment_delete
+            db,
+            _actor(uuid.uuid4(), "normal", "member"),
+            Permission.article_owner_comment_delete,
         )
     assert exc.value.errcode == CommonErr.FORBIDDEN
 
 
 async def test_no_role_row_forbidden(db: DB) -> None:
     with pytest.raises(BizError):
-        await _check(db, _actor(3, "local", "member"), Permission.content_create)
+        await _check(db, _actor(uuid.uuid4(), "local", "member"), Permission.content_create)

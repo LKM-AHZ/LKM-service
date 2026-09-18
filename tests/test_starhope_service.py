@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -12,21 +13,19 @@ from app.modules.starhope.service import pull_entity, push_entity
 from tests.conftest import auth_user_uid
 
 
-async def _user(auth_db: AsyncSession, username: str = "alice") -> int:
-    """拆库(M3.B S5 dual 真 PG)：user_id 为 auth realm 裸 int(business 无 users)；作纯整数
-    分片键(push/pull 只按 int 过滤,不读身份/展示),故只在 auth_db 建用户取稳定 id 即可,无需 seam。"""
-    return int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@x.com",
-                nickname=username,
-                account_level="normal",
-                with_token=False,
-            )
-        ).id
-    )
+async def _user(auth_db: AsyncSession, username: str = "alice") -> uuid.UUID:
+    """拆库(M3.B S5 dual 真 PG)：user_id 为 auth realm uuid(business 无 users)；作纯 uuid
+    分片键(push/pull 只按 uuid 过滤,不读身份/展示),故只在 auth_db 建用户取稳定 id 即可,无需 seam。"""
+    return (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@x.com",
+            nickname=username,
+            account_level="normal",
+            with_token=False,
+        )
+    ).id
 
 
 def _q(**over) -> dict:

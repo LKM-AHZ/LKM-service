@@ -1,9 +1,11 @@
 """columns × boards 关联：Column 携带 board_id，板块存在则映射、缺失则兜底 None。
 
-拆库(M3.B S5 dual 真 PG)：users 迁 auth realm。Column.owner_id 为裸 int 引用 auth realm 用户，
+拆库(M3.B S5 dual 真 PG)：users 迁 auth realm。Column.owner_id 为裸 uuid 引用 auth realm 用户，
 测试在 auth_db 建 owner 取其 id。seed_columns 需经 auth 缝造 owner（跨 realm），此处不再依赖实体
 seed 的副作用，改装在业务库直插与 seed 同构的 Column 行来验证 board 映射/兜底语义（保住断言）。
 """
+
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,25 +18,23 @@ from app.modules.content.models import Board, Column
 from tests.conftest import auth_user_uid
 
 
-async def _board(db: AsyncSession, slug: str, title: str = "") -> int:
+async def _board(db: AsyncSession, slug: str, title: str = "") -> uuid.UUID:
     return (
         await create_board_ex(db, BoardCreate(slug=slug, title=title or slug), None)
     ).id
 
 
-async def _owner(auth_db: AsyncSession, username: str = "cowner") -> int:
-    return int(
-        (
-            await auth_user_uid(
-                auth_db,
-                username=username,
-                email=f"{username}@e.com",
-                nickname=username,
-                account_level="normal",
-                with_token=False,
-            )
-        ).id
-    )
+async def _owner(auth_db: AsyncSession, username: str = "cowner") -> uuid.UUID:
+    return (
+        await auth_user_uid(
+            auth_db,
+            username=username,
+            email=f"{username}@e.com",
+            nickname=username,
+            account_level="normal",
+            with_token=False,
+        )
+    ).id
 
 
 class TestColumnBoardRelation:

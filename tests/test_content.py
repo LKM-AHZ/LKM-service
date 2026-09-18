@@ -1,7 +1,7 @@
 """统一内容模型（content_items 收敛五套旧内容表）。
 
 拆库后业务库(Base 无 users)不再有 User/Profile；content_items.author_id/owner_id 是
-auth realm 稳定裸 int。凡"需要作者身份 / 读回作者名 author_name / 属主裁决/评论"的用例：
+auth realm 稳定裸 uuid。凡"需要作者身份 / 读回作者名 author_name / 属主裁决/评论"的用例：
 - ``_au(auth_db,...)`` 建 auth realm 用户并以裸 ``.id`` 给业务行；
 - ``auth_seam_realm``：content service 的 create/list/get/comment 会跨 realm 回填
   author_name（display），须 seam 开 (指本测 auth_db) 才能读到——否则业务端直查 users 报错。
@@ -19,6 +19,8 @@ auth realm 稳定裸 int。凡"需要作者身份 / 读回作者名 author_name 
 - pinned 置顶排序 / view_count 自增 / 分页 / board 过滤（由 forum 测试迁移）
 - 删帖（delete_item）后详情 CONTENT_NOT_FOUND
 """
+
+import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +48,9 @@ from app.modules.content.service import (
 )
 from tests.conftest import AuthUser, auth_user_uid
 
+# 合法 uuid7 形态的不存在内容 id。
+_MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
+
 
 async def _au(
     auth_db: AsyncSession, username: str = "alice", nickname: str | None = None
@@ -60,7 +65,9 @@ async def _au(
     )
 
 
-async def _make_board(db: AsyncSession, slug: str, owner_id: int | None = None) -> int:
+async def _make_board(
+    db: AsyncSession, slug: str, owner_id: uuid.UUID | None = None
+) -> uuid.UUID:
     return (
         await create_board_ex(
             db, BoardCreate(slug=slug, title=slug, description="d"), owner_id
@@ -68,7 +75,9 @@ async def _make_board(db: AsyncSession, slug: str, owner_id: int | None = None) 
     ).id
 
 
-async def _make_column(db: AsyncSession, owner_id: int, board_id: int) -> int:
+async def _make_column(
+    db: AsyncSession, owner_id: uuid.UUID, board_id: uuid.UUID
+) -> uuid.UUID:
     col = Column(
         owner_id=owner_id,
         title="引力笔记",
@@ -252,7 +261,7 @@ async def test_get_nonexistent_item_raises(
     await create_item(db, uid, ContentItemCreate(board_id=bid, title="t", content="c"))
 
     with pytest.raises(BizError) as e:
-        await get_item(db, 999)
+        await get_item(db, _MISSING_ID)
     assert e.value.errcode == ContentErr.CONTENT_NOT_FOUND
 
 

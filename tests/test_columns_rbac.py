@@ -120,9 +120,10 @@ async def test_super_admin_can_review_application(
     applicant = await _mk_au(auth_db, "app_owner", account_level="normal", role="member")
     await _grant(db, "admin:super_admin", "columns.application_review")
     sa = await _mk_super_admin(auth_db, "cap_member")
-    db.add(
-        ColumnApplication(user_id=applicant.id, title="t", description="d", reason="r")
+    app = ColumnApplication(
+        user_id=applicant.id, title="t", description="d", reason="r"
     )
+    db.add(app)
     await db.flush()
     _set_admin_mfa_cookie(
         client,
@@ -131,7 +132,7 @@ async def test_super_admin_can_review_application(
         ).scalar_one(),
     )
     r = await client.post(
-        "/api/v1/content/columns/applications/1/review",
+        f"/api/v1/content/columns/applications/{app.id}/review",
         json={"status": "approved"},
     )
     assert r.status_code in (200, 201)
@@ -162,9 +163,10 @@ async def test_org_member_cannot_review_application(
     from app.modules.content.models import ColumnApplication
 
     applicant = await _mk_au(auth_db, "org_rev_app", role="member")
-    db.add(
-        ColumnApplication(user_id=applicant.id, title="t", description="d", reason="r")
+    app = ColumnApplication(
+        user_id=applicant.id, title="t", description="d", reason="r"
     )
+    db.add(app)
     await db.flush()
     # org_member 持有 columns.application_create（可申请）但【不授】application_review。
     await _grant(db, "admin:org_member", "columns.application_create")
@@ -175,7 +177,7 @@ async def test_org_member_cannot_review_application(
         (await auth_db.execute(select(User).where(User.id == u.id))).scalar_one(),
     )
     r = await client.post(
-        "/api/v1/content/columns/applications/1/review",
+        f"/api/v1/content/columns/applications/{app.id}/review",
         json={"status": "approved"},
     )
     assert r.status_code == 403

@@ -253,7 +253,10 @@ async def submit_attempt(
     passed = score >= exam.pass_score
 
     attempt.status = "submitted"
-    attempt.answers = json.dumps(payload.answers, ensure_ascii=False)
+    # 作答键是题目 uuid：JSON 对象的键只能是字符串，直接 dumps 会 TypeError
+    attempt.answers = json.dumps(
+        {str(qid): ans for qid, ans in payload.answers.items()}, ensure_ascii=False
+    )
     attempt.score = score
     attempt.passed = passed
     attempt.submitted_at = now_iso()

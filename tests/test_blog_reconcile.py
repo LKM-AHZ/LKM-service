@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -26,12 +27,12 @@ async def _no_redis():
     return None
 
 
-async def _owner_user(auth_db: AsyncSession) -> int:
-    """blog_series.owner_id 拆库后为引用 auth realm 用户的裸 int(business 无 users,不再造
-    User/Profile)。在 auth_db(auth_user_uid)建 owner 取其 id,满足系列归属的数字主键语义。"""
-    return int(
-        (await auth_user_uid(auth_db, username="owner", email="owner@example.com")).id
-    )
+async def _owner_user(auth_db: AsyncSession) -> uuid.UUID:
+    """blog_series.owner_id 拆库后为引用 auth realm 用户的裸 uuid(business 无 users,不再造
+    User/Profile)。在 auth_db(auth_user_uid)建 owner 取其 id,满足系列归属的主键语义。"""
+    return (
+        await auth_user_uid(auth_db, username="owner", email="owner@example.com")
+    ).id
 
 
 async def _factory(db):
