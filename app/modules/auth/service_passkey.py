@@ -112,7 +112,7 @@ async def cleanup_expired_challenges() -> None:
     import asyncio
     import logging
 
-    from app.db.auth_session import get_auth_session
+    from app.db.auth_session import new_auth_session
 
     _log = logging.getLogger("passkey.cleanup")
 
@@ -120,7 +120,7 @@ async def cleanup_expired_challenges() -> None:
         await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         try:
             # S5 拆库后 PasskeyChallenge 在 auth 独立库 → 必须用 auth 会话，不能用业务 new_session。
-            db = await get_auth_session()
+            db = await new_auth_session()
             try:
                 from sqlalchemy import delete as sa_delete
                 from sqlalchemy import or_

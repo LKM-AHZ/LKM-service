@@ -137,21 +137,37 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
 
 # 事件 envelope JSON Schema（Pulsar schema registry 校验用）。
 #
-# **不要加 ``"required": [...]`**：Pulsar 的 JSON schema 解析器按旧 JSON-Schema 语义把
-# ``required`` 当 **boolean**，遇到数组会报
-# ``Invalid schema definition data for JSON schema ... Cannot deserialize value of type
-# java.lang.Boolean from Array value``，使 schema **注册被拒**（producer/consumer 双双
-# ``IncompatibleSchema``）。暴露条件很隐蔽：topic 由第一个订阅创建时**跳过** schema 检查，
-# 故单订阅 topic 看起来正常，直到第二个订阅/新 producer 出现才炸；pulsar 数据被清空
-# （compose「无状态化」每次重启）后更是全量复发——2026-09-17 真机定位。
-# ``fn`` 的存在性由应用层保证：``worker._consume`` 对无 ``fn``/未知 ``fn`` 的消息告警后丢弃。
+# **必须写成 Avro-``record`` 形式**，不能写成标准 JSON Schema 的
+# ``{"type": "object", "properties": {...}}``：broker 侧对 JSON schema 是以 Avro 表示的
+# （``SchemaRegistryServiceImpl.getSchemaVersionBySchemaData`` 把它直接交给
+# ``org.apache.avro.Schema.Parser``）。object 形式只在「本 topic 的第一个客户端」注册时
+# 侥幸通过（该路径不解析），一旦 topic 由 **consumer 先建、producer 后注册**，兼容性检查即抛
+# ``SchemaParseException: Type not supported: object``，producer 创建超时——outbox relay 因此
+# 投不出任何事件（2026-09-18 真机定位：points.apply 四个订阅先起，relay 的 producer 全线超时，
+# M6.8「事件→站内信」链路断）。真机对照实验：record 形式在同一 topic 上 consumer+producer
+# 均 PASS 且可发消息。
+#
+# 另注：**不要加 ``"required": [...]``**——Pulsar 旧版 JSON schema 解析把 ``required`` 当
+# boolean，数组会令注册被拒（``Cannot deserialize value of type java.lang.Boolean from Array
+# value``，2026-09-17 真机定位）。``fn`` 的存在性由应用层保证：``worker._consume`` 对无
+# ``fn``/未知 ``fn`` 的消息告警后丢弃。``args`` 用宽松 union——broker 默认不校验消息体
+# （``schemaValidationEnforced=false``），且 encode/decode 由本模块自定义（见 make_event_schema）。
 EVENT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "fn": {"type": "string"},
-        "args": {"type": "array"},
-        "event_id": {"type": "string"},
-    },
+    "type": "record",
+    "name": "EventEnvelope",
+    "namespace": "lkm.event",
+    "fields": [
+        {"name": "fn", "type": "string"},
+        {
+            "name": "args",
+            "type": {
+                "type": "array",
+                "items": ["null", "boolean", "long", "double", "string"],
+            },
+            "default": [],
+        },
+        {"name": "event_id", "type": ["null", "string"], "default": None},
+    ],
 }
 
 # 每个 topic 一份 schema（envelope 形态一致；集中定义便于审计 schema 演化）。
@@ -340,7 +356,11 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             return False
         try:
             producer = await _get_producer(topic)
-            await asyncio.to_thread(producer.send, data, properties=props)
+            # 传 **dict** 而非已编码的 ``data``：带 schema 的 producer 在 ``send`` 内部会调
+            # ``schema.encode(content)``（即本模块的 ``_encode_event``）做编码；若再喂 bytes，
+            # 那一层会对 bytes 做 ``json.dumps`` 并抛 ``TypeError: Object of type bytes is not
+            # JSON serializable``（2026-09-18 真机：schema 注册修好后才暴露的第二层问题）。
+            await asyncio.to_thread(producer.send, dict(payload), properties=props)
             return True
         except Exception:
             logger.exception("pulsar publish failed rk=%s topic=%s", routing_key, topic)

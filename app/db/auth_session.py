@@ -10,11 +10,20 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
 )
+
+from app.core.err import (
+    AuthErr,  # M3 peer: 并入共享 shared err
+    BizError,
+)
+from app.db.session import _is_unique_violation
 
 from app.core.config import settings
 from app.db.session import create_realm_async_engine
@@ -48,13 +57,41 @@ def _get_auth_session_local() -> async_sessionmaker[AsyncSession]:
     return _auth_AsyncSessionLocal
 
 
-async def get_auth_session() -> AsyncSession:
-    """创建 auth 独立库会话（供 auth 进程/迁移工具内部使用）。
+async def new_auth_session() -> AsyncSession:
+    """创建 auth 独立库会话（**供内部调用方自行 commit/rollback/close**）。
 
-    S1–S4 无调用方（monolith 不用它）；S5 迁表后 auth 进程的读写经此。调用方负责
-    commit/rollback/close（本模块不持有请求级生命周期）。
+    非路由场景（后台巡检、迁移/导出工具、双库同步）用它；FastAPI 依赖请用
+    :func:`get_auth_session`——后者负责请求级 commit，见其 docstring 的缺陷说明。
     """
     return _get_auth_session_local()()
+
+
+async def get_auth_session() -> AsyncIterator[AsyncSession]:
+    """FastAPI 依赖：提供 auth 库会话，负责 commit / rollback / close。
+
+    与 :func:`app.db.session.get_session` 同款语义——**绝大多数 auth 路由依赖它并
+    假定「外层会话会提交」**（service 层只 ``flush``）。曾因本函数是普通协程依赖
+    （仅 ``return session``）而无人提交：注册/登录等全部写入在请求结束时被回滚，
+    ``/auth/reg/local`` 返回 200 且给出 user_id，但 ``auth.users`` 始终 0 行
+    （2026-09-18 真机定位）。
+    """
+    factory = _get_auth_session_local()
+    db = factory()
+    try:
+        yield db
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_unique_violation(exc):
+            raise BizError(
+                AuthErr.ALREADY_REGISTERED, "Resource already exists"
+            ) from None
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
 
 
 async def dispose_auth_engine() -> None:

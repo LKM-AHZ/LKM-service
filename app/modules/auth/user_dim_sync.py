@@ -235,10 +235,10 @@ async def _open_session_pair() -> SessionPair:
 
     返回 ``(auth 源会话, 业务目标会话)``——两库物理分离，绝不合一。
     """
-    from app.db.auth_session import get_auth_session
+    from app.db.auth_session import new_auth_session
     from app.db.session import new_session
 
-    source = await get_auth_session()
+    source = await new_auth_session()
     try:
         target = await new_session()
     except Exception:

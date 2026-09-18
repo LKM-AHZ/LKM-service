@@ -38,13 +38,13 @@ async def run_event_failures_export(*, window: int | None = None) -> int:
 
 async def run_audit_logs_export(*, window: int | None = None) -> int:
     """auth 库 audit_logs → CH；未启用 CH 视为 no-op(0)，不报错。"""
-    from app.db.auth_session import get_auth_session
+    from app.db.auth_session import new_auth_session
     from app.modules.auth.audit_export import export_audit_logs
 
     if not clickhouse.is_enabled():
         return 0
     client = await clickhouse.get_client()
-    db = await get_auth_session()
+    db = await new_auth_session()
     try:
         return await export_audit_logs(db, client, window=_window(window))
     finally:

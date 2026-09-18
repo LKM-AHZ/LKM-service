@@ -38,6 +38,21 @@ def test_event_schema_omits_legacy_required_field() -> None:
         assert "required" not in schema, topic
 
 
+def test_event_schema_is_avro_record_form() -> None:
+    """防回潮：envelope 必须是 **Avro-record** 形式的 JSON schema。
+
+    broker 侧把 JSON schema 交给 Avro 解析器；标准 JSON Schema 的
+    ``{"type": "object", "properties": {...}}`` 只在「本 topic 第一个客户端」注册时侥幸
+    通过（该路径不解析），一旦 topic 由 consumer 先建、producer 后注册，兼容性检查即抛
+    ``SchemaParseException: Type not supported: object`` → producer 创建超时
+    （2026-09-18 真机定位：outbox relay 投不出事件，M6.8 通知链路断）。
+    """
+    assert messaging.EVENT_SCHEMA["type"] == "record"
+    assert messaging.EVENT_SCHEMA["fields"], "record 形式必须声明 fields"
+    for topic, schema in messaging.TOPIC_SCHEMAS.items():
+        assert schema["type"] == "record", topic
+
+
 def test_receive_loop_retries_when_consumer_creation_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -119,8 +134,10 @@ async def test_publish_uses_pulsar_producer(
     sent: list[tuple] = []
 
     class _FakeProducer:
-        def send(self, data: bytes, properties: dict[str, str]) -> None:
-            sent.append(("send", data, properties))
+        # 真 producer 在 send 内部调 ``schema.encode`` 编码（见 messaging.publish 注释），
+        # 故这里收到的是 **dict**；线上字节格式由 test_event_schema_roundtrip 守护。
+        def send(self, content: dict[str, object], properties: dict[str, str]) -> None:
+            sent.append(("send", content, properties))
 
     async def _fake_get_producer(topic: str) -> _FakeProducer:
         sent.append(("topic", topic))
@@ -132,10 +149,10 @@ async def test_publish_uses_pulsar_producer(
     )
     assert ok is True
     assert sent[0] == ("topic", messaging.TOPIC_EMAIL)
-    _, data, properties = sent[1]
+    _, content, properties = sent[1]
     assert properties["routing_key"] == messaging.RKEY_SEND_CODE
     assert properties["fn"] == "send_code"
-    assert json.loads(data) == {"fn": "send_code", "args": [1]}
+    assert content == {"fn": "send_code", "args": [1]}
 
 
 def test_event_schema_roundtrip() -> None:
