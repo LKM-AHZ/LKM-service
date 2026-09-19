@@ -20,6 +20,7 @@ user_dim 绝不动源；reconcile 增量收敛、跨库批式命令恒定 4（�
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -56,12 +57,12 @@ async def _mk_engine():
     """
     ensure_all_models()
     url = settings.database_url
-    schema = "uds"
+    schema = f"uds_{os.getpid()}"
     # (1) 干净建 schema（默认 schema 连接）
     boot = create_async_engine(url)
     async with boot.begin() as conn:
-        await conn.execute(text('DROP SCHEMA IF EXISTS "uds" CASCADE'))
-        await conn.execute(text('CREATE SCHEMA "uds"'))
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
     await boot.dispose()
     # (2) 目标引擎：search_path=uds 后 create_all 双 metadata（Base 业务表 + auth 用户表无冲突）
     eng = create_async_engine(

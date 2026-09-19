@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import os
 import uuid
 
 import pytest
@@ -149,17 +150,19 @@ class TestConcurrency:
         from app.core.config import settings
 
         url = settings.database_url
+        # schema 名含 pid：xdist 并行时各 worker 不撞名
+        schema = f"pts_{os.getpid()}"
         # 先以默认连接干净建 schema
         boot = create_async_engine(url)
         async with boot.begin() as conn:
-            await conn.execute(text('DROP SCHEMA IF EXISTS "pts" CASCADE'))
-            await conn.execute(text('CREATE SCHEMA "pts"'))
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         await boot.dispose()
-        # NullPool 每会话独立连接（server_settings 让每条都落 pts）
+        # NullPool 每会话独立连接（server_settings 让每条都落该 schema）
         engine: AsyncEngine = create_async_engine(
             url,
             poolclass=NullPool,
-            connect_args={"server_settings": {"search_path": "pts"}},
+            connect_args={"server_settings": {"search_path": schema}},
         )
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

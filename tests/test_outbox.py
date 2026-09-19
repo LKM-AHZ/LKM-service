@@ -5,6 +5,7 @@ enqueue（业务会话）与 relay（session_factory 注入同一 engine）读�
 经 monkeypatch new_session 走同一库。
 """
 
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -42,7 +43,7 @@ async def engine() -> AsyncEngine:
     """隔离 PG schema（业务库）：全量 ensure 模型 + set search_path 后 create_all 落此。"""
     ensure_all_models()
     url = settings.database_url
-    schema = "s_outbox"
+    schema = f"s_outbox_{os.getpid()}"
     eng = create_async_engine(url, poolclass=StaticPool)
     async with eng.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

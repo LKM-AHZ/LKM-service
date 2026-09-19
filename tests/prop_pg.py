@@ -12,6 +12,7 @@ drop cascade；example 之间的状态清理由各测试自己在 :meth:`run` �
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Coroutine
 from types import TracebackType
 from typing import Any
@@ -36,7 +37,8 @@ class PropPG:
     def __init__(self, schema: str, *, extra_metadata: list[Any] | None = None) -> None:
         # ensure_all_models 让 Base.metadata 含全部业务表（outbox/user_dim 等）
         ensure_all_models()
-        self.schema = schema
+        # schema 名含 pid：xdist 并行时各 worker 的独立进程不撞名
+        self.schema = f"{schema}_{os.getpid()}"
         self._metadata: list[Any] = [Base.metadata, *(extra_metadata or [])]
         self._loop = asyncio.new_event_loop()
         self.url = settings.database_url

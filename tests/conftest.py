@@ -1,19 +1,20 @@
 """全局 pytest fixtures 与配置。
 
-提供隔离数据库异步会话，唯一后端 = PostgreSQL 的 **schema-per-test**：为每个测试独占一个
-PostgreSQL schema，并把该测试唯一引擎所有连接的 search_path 指到它，``create_all`` 落在该
-schema，测末 drop cascade。每测试“单长活会话 override”保住了“POST 后再 GET/直查同见未提交
-数据”的既有语义（同一连接同一事务），跨测试靠 schema 隔离，无残留。
+提供隔离数据库异步会话，唯一后端 = PostgreSQL 的 **database-per-test**：session 级建好
+「含全部表」的模板库，每个测试用 ``CREATE DATABASE ... TEMPLATE`` 克隆出一个完全私有的库，
+测末 DROP。每测试“单长活会话 override”保住了“POST 后再 GET/直查同见未提交数据”的既有语义
+（同一连接同一事务），跨测试靠独立库隔离，无残留。
 
   配方推理：
-  - SQLAlchemy Async 不具备 join-external-transaction → schema-per-test 是 PG 唯一可靠等价。
-  - search_path 经连接级 URL options ``-csearch_path=<schema>`` 强制，比逐会话 SET 可靠
-    （连接池回取的每根连接都带同一 schema）。
-  - 建 schema 必须先于指向它的连接（否则 search_path 连不存在的 schema 会失败）。
+  - SQLAlchemy Async 不具备 join-external-transaction → 每测一个物理隔离单元是 PG 唯一可靠
+    等价；克隆只是把「建隔离单元」的成本从逐表 DDL（~1.26s/测）降到文件拷贝（~85ms/测）。
+  - 旧实现为 schema-per-test（每测在同一库上 create_all 全部表再 DROP CASCADE），实测建表
+    占单测总耗时七成，故改为模板克隆。细节与限制见下方 database-per-test 段落。
 
-- 主库 biz：``db`` 会话 → 用 :attr:`settings.database_url` 的 ``Base.metadata``。
-- auth 独立库：``auth_db`` 会话 → 用 :attr:`settings.auth_database_url` 的
-  ``auth_metadata``（auth 表建独立库测试 schema）。
+- 主库 biz：``db`` 会话 → 业务模板库（:attr:`settings.database_url` 的 ``Base.metadata``）。
+- auth 独立库：``auth_db`` 会话 → auth 模板库（:attr:`settings.auth_database_url` 的
+  ``auth_metadata``）。
+- 融合库：``fused_db_session`` → 单库含 biz+auth 双 metadata，供 monolith 时代迁移用例。
 - client：httpx.AsyncClient + ASGITransport。ASGITransport 默认不触发 app.lifespan，
   避免对真实控制面 init_db() 的副作用；``get_session``/``get_read_session`` 依赖覆盖到
   ``db`` 会话。
@@ -35,6 +36,7 @@ from httpx import ASGITransport, AsyncClient
 from hypothesis import HealthCheck
 from hypothesis import settings as _hypothesis_settings
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -48,6 +50,7 @@ from app.core import singleflight as _singleflight
 from app.core.config import settings
 from app.db.base import Base, now_iso
 from app.db.session import get_read_session, get_session
+from app.db.shared_objects import ensure_shared_objects
 from app.main import app
 from auth.db.base import auth_metadata
 
@@ -120,149 +123,209 @@ def _reset_local_caches() -> Iterator[None]:
 
 
 # ───────────────────────────────────────────────────────────────────────
-# schema-per-test 工具（PG 分支用）：建/命名/drop 一个测试专属 schema
+# database-per-test：模板库 + 文件级克隆
+#
+# 旧实现是 schema-per-test：在共享主库上为每个测试 ``create_all`` 全部表、测末 DROP
+# CASCADE。实测每测光建表就要 725ms（业务库 61 表）+ 186ms（auth 库 18 表），加 drop 共
+# ~1.26s，而单个测试总耗时才 ~1.7s —— 绝大多数测试并不改 schema，这部分纯属重复劳动。
+#
+# 改为：session 级把「已建好全部表」的库留作模板，每个测试用 PG 原生的
+# ``CREATE DATABASE ... TEMPLATE`` 克隆（文件级拷贝，实测 ~55ms），测末 DROP。
+# 隔离强度不降反升：每测拿到的是一个**完全私有、零残留**的库，而非共享库里的一个 schema。
+#
+#   配方推理：
+#   - SQLAlchemy Async 不具备 join-external-transaction → 每测一个物理隔离单元仍是 PG 唯一
+#     可靠等价（单长活会话内 POST→GET 同见未提交数据），clone 只是把「建隔离单元」的成本
+#     从逐表 DDL 降到文件拷贝。
+#   - 模板库名含 pid：pytest-xdist 各 worker 是独立进程且进程内测试串行，故各 worker 独占
+#     自己的模板库。这既避免争抢，也绕开 PG「模板库被其它会话占用时不可克隆」的限制
+#     （实测 8 路并发克隆同一模板库会随机抛 ObjectInUseError）。
+#   - CREATE/DROP DATABASE 不能在事务内执行 → 维护连接显式用 AUTOCOMMIT。
+#   - 克隆库随模板带来 public schema 里的 uuid_generate_v7()/pg_trgm，无需每测重建。
+#   - 融合库（biz+auth 双 metadata）单列一个模板，供 monolith 时代迁移用例克隆。
 # ───────────────────────────────────────────────────────────────────────
-_schema_counter = iter(range(10**9))
+_PID = os.getpid()
+_TMPL_BIZ = f"lkm_tmpl_{_PID}"
+_TMPL_AUTH = f"lkm_auth_tmpl_{_PID}"
+_TMPL_FUSED = f"lkm_fused_tmpl_{_PID}"
+
+_db_counter = iter(range(10**9))
 
 
-async def _pg_schema_engine(
-    url: str, schema: str, *, metadata: Any
-) -> AsyncEngine:
-    """建立指向测试专属 PG schema 的 StaticPool 单连接引擎，并已建好 DDL。
+def _next_db(kind: str) -> str:
+    """生成测试专属库名：``<kind><pid>_<n>``。
 
-    asyncpg 不接受 URL query ``options``；改用 StaticPool 保持单物理连接，在引擎那唯一
-    连接的会话上 ``SET search_path``（对连接级永久生效，无需逐回连重设），随后的
-    ``create_all`` 与所有测试会话都落在这个 schema（整测试共享同一连接、同见未 commit
-    数据），跨测试靠 schema 隔离。
+    pid 保证跨 xdist worker 不撞名（各 worker 独立进程、各自从 0 计数）；kind 区分业务库
+    (t)/auth 库 (a)/融合库 (f) —— 三者是同一 PG 实例上的不同 database，库名须全局唯一。
     """
-    eng: AsyncEngine = create_async_engine(url, poolclass=StaticPool)
-    async with eng.begin() as conn:
-        # DROP IF EXISTS + CREATE：保证残留/重复 run 也干净（schema 名 t<n> 独立不冲突）。
-        await conn.execute(text(f'DROP SCHEMA IF EXISTS "t{schema}" CASCADE'))
-        await conn.execute(text(f'CREATE SCHEMA "t{schema}"'))
-        await conn.execute(text(f'SET search_path TO "t{schema}"'))
-        await conn.run_sync(metadata.create_all)
-    return eng
+    return f"{kind}{_PID}_{next(_db_counter)}"
 
 
-async def _drop_schema(url: str, schema: str) -> None:
-    """用完清理测试 schema（隔离到别的测试不泄漏）。"""
-    eng = create_async_engine(url, poolclass=NullPool)
+def _db_url(base_url: str, db_name: str) -> str:
+    """把连接串的库名换成 ``db_name``，host/port/账号/口令原样保留。"""
+    return make_url(base_url).set(database=db_name).render_as_string(
+        hide_password=False
+    )
+
+
+def _maint_engine() -> AsyncEngine:
+    """维护连接：连主库、AUTOCOMMIT（建删库不能在事务内）、NullPool（可并发开多条）。"""
+    return create_async_engine(
+        settings.database_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
+    )
+
+
+async def _build_template(name: str, base_url: str, metadatas: tuple[Any, ...]) -> None:
+    """建模板库：template0 起底（不带主库既有数据/扩展）→ 共享对象 → 全量建表。"""
+    maint = _maint_engine()
     try:
-        async with eng.connect() as conn:
-            await conn.execute(text(f'DROP SCHEMA IF EXISTS "t{schema}" CASCADE'))
-            await conn.commit()
+        async with maint.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}" TEMPLATE template0'))
+    finally:
+        await maint.dispose()
+    eng = create_async_engine(_db_url(base_url, name), poolclass=StaticPool)
+    try:
+        async with eng.begin() as conn:
+            await ensure_shared_objects(conn)
+            for md in metadatas:
+                await conn.run_sync(md.create_all)
     finally:
         await eng.dispose()
+    await _seal_template(name)
+
+
+async def _seal_template(name: str) -> None:
+    """封库：踢掉模板库上的残留会话，并禁止再连。
+
+    本仓 PG 预载 timescaledb（见 docker-compose postgres 段），其后台 worker
+    （``TimescaleDB Worker Scheduler``）会附着到新建的库上。一旦它挂到模板库，
+    ``CREATE DATABASE ... TEMPLATE`` 就会随机抛 “source database ... is being accessed
+    by other users”（实测长时跑必然出现）。模板建好后不再需要被连接——克隆是文件级拷贝，
+    并不要求源库可连（``template0`` 本身就是 ``ALLOW_CONNECTIONS false``）——故封掉根治；
+    后续 worker 即便重试也会被拒连，不再占用。
+    """
+    maint = _maint_engine()
+    try:
+        async with maint.connect() as conn:
+            await conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :d AND pid <> pg_backend_pid()"
+                ),
+                {"d": name},
+            )
+            await conn.execute(text(f'ALTER DATABASE "{name}" ALLOW_CONNECTIONS false'))
+    finally:
+        await maint.dispose()
+
+
+async def _drop_database(name: str) -> None:
+    """删库（WITH FORCE 连残留会话一并清掉），幂等。"""
+    maint = _maint_engine()
+    try:
+        async with maint.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    finally:
+        await maint.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pg_templates() -> Iterator[None]:
+    """session 级建三个模板库（业务 / auth / 融合），测毕清理。"""
+
+    async def _build() -> None:
+        from app.db.model_registry import ensure_all_models
+
+        ensure_all_models()
+        await _build_template(_TMPL_BIZ, settings.database_url, (Base.metadata,))
+        await _build_template(_TMPL_AUTH, settings.auth_database_url, (auth_metadata,))
+        await _build_template(
+            _TMPL_FUSED, settings.database_url, (Base.metadata, auth_metadata)
+        )
+
+    async def _cleanup() -> None:
+        for name in (_TMPL_BIZ, _TMPL_AUTH, _TMPL_FUSED):
+            with contextlib.suppress(Exception):
+                await _drop_database(name)
+
+    asyncio.run(_build())
+    yield
+    asyncio.run(_cleanup())
+
+
+@contextlib.asynccontextmanager
+async def _cloned_session(
+    base_url: str, template: str, kind: str
+) -> AsyncGenerator[AsyncSession]:
+    """克隆模板库 → 交出一个长活会话，退出时删库。
+
+    会话仍是「单长活会话 override」语义（同一连接同一事务，POST→GET 同见未提交数据）。
+    删库放在 finally：库名含 pid、建前先 DROP IF EXISTS，故即便上轮崩溃残留也不影响正确性。
+    """
+    name = _next_db(kind)
+    maint = _maint_engine()
+    try:
+        async with maint.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "{template}"'))
+        engine: AsyncEngine = create_async_engine(
+            _db_url(base_url, name), poolclass=StaticPool
+        )
+        try:
+            # 预热：先建好那唯一物理连接（StaticPool 用毕归还、不关闭）。否则会话首次取连接
+            # 才做 provisioning，测试里的并发查询会撞
+            # “This session is provisioning a new connection; concurrent operations are not
+            # permitted”。旧实现由建表 DDL 天然预热，克隆库必须显式补上。
+            async with engine.connect() as conn:
+                await conn.execute(text("select 1"))
+            factory = async_sessionmaker(
+                autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
+            )
+            session: AsyncSession = factory()
+            try:
+                yield session
+            finally:
+                await session.close()
+        finally:
+            await engine.dispose()
+    finally:
+        with contextlib.suppress(Exception):
+            async with maint.connect() as conn:
+                await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        await maint.dispose()
 
 
 # ───────────────────────────────────────────────────────────────────────
 # db / auth_db / client
 # ───────────────────────────────────────────────────────────────────────
-async def _pg_realm_session(
-    url: str, metadata: Any
-) -> tuple[AsyncEngine, AsyncSession, str]:
-    """建一个指向独立测试 PG schema 的引擎与会话，返回 (engine, session, schema)。
-
-    ``schema`` 为 :func:`_pg_schema_engine` 建 schema 的计数串，测毕可直接交给
-    :func:`_drop_schema` 清场。
-    """
-    schema = str(next(_schema_counter))
-    engine: AsyncEngine = await _pg_schema_engine(url, schema, metadata=metadata)
-    session_factory = async_sessionmaker(
-        autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
-    )
-    session: AsyncSession = session_factory()
-    return engine, session, schema
-
-
 @pytest.fixture
 async def db() -> AsyncGenerator[AsyncSession]:
-    """主库（biz realm）隔离会话。
+    """主库（biz realm）隔离会话：克隆业务模板库，每测一个独立库 + 长活会话。
 
-    经 :func:`settings.database_url` 的真实 PostgreSQL 上建独立测试 schema（create_all 在其上），
-    每测一个长活会话 override，保证“POST 后再测内 GET/直查同见”；测末 drop schema 隔离。
+    保证“POST 后再测内 GET/直查同见”，测末整库删除隔离。
     """
-    url = settings.database_url
-    engine, session, schema = await _pg_realm_session(url, Base.metadata)
-    try:
+    async with _cloned_session(settings.database_url, _TMPL_BIZ, "t") as session:
         yield session
-    finally:
-        await session.close()
-        await engine.dispose()
-        await _drop_schema(url, schema)
 
 
 @pytest.fixture
 async def auth_db() -> AsyncGenerator[AsyncSession]:
-    """auth 独立库隔离会话。
-
-    auth 真实 PG（auth_database_url）上独立测试 schema，auth_metadata（AuthBase）create_all
-    落于此。会话/factory 语义与 :func:`db` 一致。
-    """
-    url = settings.auth_database_url
-    engine, session, schema = await _pg_realm_session(url, auth_metadata)
-    try:
+    """auth 独立库隔离会话：克隆 auth 模板库（AuthBase 18 表），语义同 :func:`db`。"""
+    async with _cloned_session(settings.auth_database_url, _TMPL_AUTH, "a") as session:
         yield session
-    finally:
-        await session.close()
-        await engine.dispose()
-        await _drop_schema(url, schema)
 
 
 @pytest.fixture
 async def fused_db_session() -> AsyncGenerator[AsyncSession]:
-    """S5 拆后迁移期装配：单 PG schema 内含 biz(Base)+auth(AuthBase) 双 metadata。
+    """S5 拆后迁移期装配：单库内含 biz(Base)+auth(AuthBase) 双 metadata。
 
     供「monolith 时代集成测试」迁用——它们单会话须同时见 auth(users/profile) 与业务
-    (content/blog/files…) 表。两 metadata 覆盖的表名互不相交(已核校验)，可安全同 schema
-    create_all。用 asyncpg ``server_settings.search_path`` 让本引擎每连接都落该 schema，
-    多会话/跨连接也稳定(纯 BEGIN 内 SET 会被 rollback 丢弃)。测毕 drop schema。
+    (content/blog/files…) 表。两 metadata 覆盖的表名互不相交(已核校验)，可安全同库
+    create_all（模板库构建时已建好两套）。测末整库删除。
     """
-
-    def _ensure() -> None:
-        from app.db.model_registry import ensure_all_models
-
-        ensure_all_models()
-
-    _ensure()
-    url = settings.database_url
-    schema = str(next(_schema_counter))
-    boot: AsyncEngine = create_async_engine(url)
-    try:
-        async with boot.begin() as conn:
-            await conn.execute(text(f'DROP SCHEMA IF EXISTS "f{schema}" CASCADE'))
-            await conn.execute(text(f'CREATE SCHEMA "f{schema}"'))
-    finally:
-        await boot.dispose()
-    engine: AsyncEngine = create_async_engine(
-        url,
-        poolclass=StaticPool,
-        connect_args={"server_settings": {"search_path": f"f{schema}"}},
-    )
-    from app.db.base import Base
-    from auth.db.base import auth_metadata
-
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            await conn.run_sync(auth_metadata.create_all)
-        session_factory = async_sessionmaker(
-            autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
-        )
-        session: AsyncSession = session_factory()
-        try:
-            yield session
-        finally:
-            await session.close()
-    finally:
-        await engine.dispose()
-        _drop_conn = create_async_engine(url, poolclass=NullPool)
-        try:
-            async with _drop_conn.begin() as conn:
-                await conn.execute(text(f'DROP SCHEMA IF EXISTS "f{schema}" CASCADE'))
-        finally:
-            await _drop_conn.dispose()
+    async with _cloned_session(settings.database_url, _TMPL_FUSED, "f") as session:
+        yield session
 
 
 @pytest.fixture

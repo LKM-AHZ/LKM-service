@@ -13,6 +13,7 @@ seam 指向独立内存库(全量 schema)，避免触碰真实默认 DB；两任
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -45,15 +46,17 @@ async def dim_db() -> AsyncIterator[tuple[Any, Any, Any]]:
     单会话读写可同时见二者。每连接 search_path=uds(server_settings) 保证稳定。"""
     ensure_all_models()
     url = settings.database_url
+    # schema 名含 pid：xdist 并行时同文件用例可能落不同 worker，固定名会互撞
+    schema = f"uds_{os.getpid()}"
     boot = create_async_engine(url)
     async with boot.begin() as conn:
-        await conn.execute(text('DROP SCHEMA IF EXISTS "uds" CASCADE'))
-        await conn.execute(text('CREATE SCHEMA "uds"'))
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
     await boot.dispose()
     engine = create_async_engine(
         url,
         poolclass=StaticPool,
-        connect_args={"server_settings": {"search_path": "uds"}},
+        connect_args={"server_settings": {"search_path": schema}},
     )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

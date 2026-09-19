@@ -1,5 +1,6 @@
 """模块5：init_db 多 worker 迁移锁（Redis 串行化；不可用 fail-open）。"""
 
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -116,7 +117,7 @@ async def test_invokes_rbac_seed(monkeypatch) -> None:
 
     # 建一个隔离 PG schema（业务库），StaticPool 单连接 + SET search_path → 该连接所有
     # 会话（含 seed 落库）都落此 schema，避免误写开发库；测毕 drop。模式与 conftest 一致。
-    schema = "s_rbac_seed"
+    schema = f"s_rbac_seed_{os.getpid()}"
     engine = create_async_engine(settings.database_url, poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -223,7 +224,7 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
     import auth.db.session as auth_session_mod
     from auth.db.base import auth_metadata
 
-    schema = "s_auth_init"
+    schema = f"s_auth_init_{os.getpid()}"
     engine = create_async_engine(settings.auth_database_url, poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
@@ -292,7 +293,7 @@ async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:
     from app.db.model_registry import ensure_all_models
 
     ensure_all_models()
-    schema = "s_additive"
+    schema = f"s_additive_{os.getpid()}"
     engine = create_async_engine(settings.database_url, poolclass=StaticPool)
     try:
         async with engine.begin() as conn:
@@ -343,7 +344,7 @@ async def test_additive_schema_sync_skips_not_null_without_default() -> None:
     from app.db.model_registry import ensure_all_models
 
     ensure_all_models()
-    schema = "s_additive2"
+    schema = f"s_additive2_{os.getpid()}"
     engine = create_async_engine(settings.database_url, poolclass=StaticPool)
     try:
         async with engine.begin() as conn:
@@ -409,7 +410,7 @@ async def test_timescale_assembly_is_optional_and_non_fatal() -> None:
     from app.db.model_registry import ensure_all_models
 
     ensure_all_models()
-    schema = "s_timescale"
+    schema = f"s_timescale_{os.getpid()}"
     engine = create_async_engine(settings.database_url, poolclass=StaticPool)
     try:
         async with engine.begin() as conn:

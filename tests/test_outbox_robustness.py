@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -32,7 +33,7 @@ from app.db.outbox_archive import OutboxArchived
 
 _RK = "event.apply_point"
 _PAYLOAD = {"fn": "apply_point_event", "args": [7, "post", "item:9"]}
-_SCHEMA = "s_outbox_rb"
+_SCHEMA = f"s_outbox_rb_{os.getpid()}"
 
 
 @pytest.fixture

@@ -14,6 +14,7 @@
 """
 
 import importlib.util
+import os
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -42,7 +43,7 @@ async def _build_engine():
     ensure_all_models()
     url = settings.database_url
     eng = create_async_engine(url, poolclass=StaticPool)
-    schema = "s_user_dim"
+    schema = f"s_user_dim_{os.getpid()}"
     async with eng.begin() as conn:
         await conn.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await conn.execute(sa.text(f'CREATE SCHEMA "{schema}"'))

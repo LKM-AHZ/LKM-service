@@ -17,6 +17,7 @@
    确定性、无需消息总线 worker（失效 handler 在进程内直接驱动，等价 worker 分派）。
 """
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -58,7 +59,7 @@ async def _fused_realm():
 
     ensure_all_models()
     url = settings.database_url
-    schema = "uci"
+    schema = f"uci_{os.getpid()}"
     boot = create_async_engine(url)
     async with boot.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
