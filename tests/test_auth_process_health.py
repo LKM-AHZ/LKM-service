@@ -1,4 +1,4 @@
-"""B1.1 AUTH 独立进程：main_auth 可导入装配 + 专属 liveness/readiness 健康缝。
+"""B1.1 AUTH 独立进程：auth.main 可导入装配 + 专属 liveness/readiness 健康缝。
 
 不依赖真实 DB/Redis（liveness 本就零外部依赖；readiness 用 monkeypatch 替换探子成
 up/disabled 回报，保持 hermetic，不触碰真实数据库 / 外部 redis）。
@@ -23,8 +23,8 @@ async def auth_client() -> AsyncGenerator[AsyncClient]:
 
 
 async def test_auth_entry_imports_and_app_assembles() -> None:
-    """main_auth 顶层装配成功：进程入口可被 import，且健康 router 只携带所命两个端点。"""
-    # main_auth 顶层 `app = create_auth_app()` 已跑过 → import 即装配成功。
+    """auth.main 顶层装配成功：进程入口可被 import，且健康 router 只携带所命两个端点。"""
+    # auth.main 顶层 `app = create_auth_app()` 已跑过 → import 即装配成功。
     # health router 直接定义 /liveness 与 /readiness（挂载进 app 后子 router 惰性展开）。
     from fastapi.routing import APIRoute
 

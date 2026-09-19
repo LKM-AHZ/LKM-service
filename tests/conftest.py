@@ -90,16 +90,14 @@ def _ensure_pg_shared_objects() -> None:
     """
 
     async def _run() -> None:
-        from app.db.init_db import UUID7_FUNCTION_SQL
+        # 与生产两条建库链同源（app.db.shared_objects），避免测试与生产漂移。
+        from app.db.shared_objects import ensure_shared_objects
 
         for url in (settings.database_url, settings.auth_database_url):
             engine = create_async_engine(url, poolclass=NullPool)
             try:
                 async with engine.begin() as conn:
-                    await conn.execute(
-                        text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
-                    )
-                    await conn.execute(text(UUID7_FUNCTION_SQL))
+                    await ensure_shared_objects(conn)
             finally:
                 await engine.dispose()
 
@@ -341,7 +339,7 @@ async def auth_app_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
     ``auth.db.session.get_auth_session`` override 到本测传入的 ``auth_db`` 会话，
     使请求打到 AUTH 进程而 DB 落在 auth 独立库（该测试专属 schema）。
 
-    注意 main_auth 的 ``app`` 与单体的 ``app.main.app`` 是不同实例，各自 dependency_overrides
+    注意 auth.main 的 ``app`` 与单体的 ``app.main.app`` 是不同实例，各自 dependency_overrides
     互不污染；测毕只撤销本 fixtest 注入的键。auth 写面端点在 auth_router/respond 都走
     ``resp_json``/BizError frame，读取与单体 client 一致（body.code / body.data）。
     """
@@ -604,7 +602,7 @@ async def auth_seam_fused(
 # ───────────────────────────────────────────────────────────────────────
 # 全局 engine 跨 loop 清理
 #
-# app/db/session.py 与 app/db/auth_session.py 各有一枚模块级惰性 engine 单例：一旦在
+# app/db/session.py 与 auth/db/session.py 各有一枚模块级惰性 engine 单例：一旦在
 # 某个测试的 event loop 内被 ``new_session()``/后台任务/未 override 的会话路径建立，就被
 # 绑定到那个 loop。后续测试用新 loop 复用连接池时会抛 asyncpg
 # 「got Future attached to a different loop」。每测后 dispose 两个单例，令各测试都在

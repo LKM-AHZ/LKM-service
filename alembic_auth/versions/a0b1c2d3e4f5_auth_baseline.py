@@ -5,7 +5,7 @@ Revises:
 Create Date: 2026-09-13
 
 auth 独立库全量基线（M3.B 真拆库后第一个正式迁移）。auth 表（users/profiles/
-refresh_tokens/totp/... 共 18 张，见 app/modules/auth/models.py）挂 ``AuthBase``/
+refresh_tokens/totp/... 共 18 张，见 auth/models.py）挂 ``AuthBase``/
 ``auth_metadata``，已物理迁出单体 ``Base.metadata``，故业务库 Alembic 链不再覆盖它们，
 由本第二迁移链负责。
 

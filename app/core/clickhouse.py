@@ -2,7 +2,7 @@
 
 蓝图《后端规划.md》§6.2：ClickHouse 承担**日志存储 / 分析 / 检索**，与 TimescaleDB
 连续聚合的「计数/度量聚合」并行互补。本模块只提供客户端基座，不承载业务 SQL——业务侧
-导出入口在 owner 域（``app/db/event_failure_export.py``、``app/modules/auth/audit_export.py``），
+导出入口在 owner 域（``app/db/event_failure_export.py``、``auth/audit_export.py``），
 查询入口在 admin 只读 port。
 
 设计要点（对齐 ``core.tracing`` 的 fail-open 范式）：

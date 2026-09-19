@@ -118,6 +118,8 @@ python-version = "3.13"
 # 架构边界门禁。
 # 允许依赖：modules/* → core/*（基础）、modules/A → modules/B（仅 B.__init__ 公共 API）、
 # api/main → modules（聚合层）。禁止：core/*→modules/*、db/*→modules/*。
+# auth 是顶层包：auth → app.core/app.db（基础设施）允许；app → auth 只允许走
+# auth 公开面（auth / auth.deps / auth.schemas / auth.snapshot / auth.seams / auth.entities）。
 # 下发是"指令式理想边界"，对架构固有的注册/消费路径用 ignore_imports 精确豁免
 # （注册枢纽、worker 消费业务、调度的降级分支、共享 repo 辅助等），其余强制。
 [tool.importlinter]
@@ -141,7 +143,7 @@ ignore_imports = [
     "app.core.task_registry -> app.modules.interaction.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.notification.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.points.tasks",  # 任务注册枢纽
-    # app.core.throttle -> app.modules.auth.errors 已随 M3-peer 摘环移除(AuthErr 并 app.core.err)
+    # app.core.throttle -> auth.errors 已随 M3-peer 摘环移除(AuthErr 并 app.core.err)
     "app.core.worker_dlq -> app.modules.admin.models",  # worker 消费业务模型(DlqMessage)
 ]
 

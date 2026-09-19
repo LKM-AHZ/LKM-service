@@ -7,7 +7,7 @@
 - **软删除动态判定**：模型上真有 ``deleted_at`` 列才施加过滤，无列零副作用；逃生口
   统一是 ``include_deleted=True``。
 - **事务归属：只 flush，永不 commit/begin/begin_nested**。唯一提交主体仍是会话依赖
-  （``app/db/session.py:get_session``、``app/db/auth_session.py:get_auth_session``）与
+  （``app/db/session.py:get_session``、``auth/db/session.py:get_auth_session``）与
   最外层 task。基类里出现第二个提交主体会破坏「service 只 flush」契约。
 - **只 import sqlalchemy / app.core / app.db**，守住 import-linter 契约②
   （``app.db`` 不得反向依赖 ``app.modules``）。业务域查询放

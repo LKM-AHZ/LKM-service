@@ -15,7 +15,7 @@ from app.core.err import (
 )
 
 # —— 主库（monolith，realm="default"）的惰性单例。M3.B 物理拆目标：monolith 主进程
-# 只触达 database_url（auth 独立库走单独的 app/db/auth_session.py，主进程不侧挂）。
+# 只触达 database_url（auth 独立库走单独的 auth/db/session.py，主进程不侧挂）。
 _async_engine: AsyncEngine | None = None
 _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 
@@ -29,7 +29,7 @@ def create_realm_async_engine(
 ) -> AsyncEngine:
     """按池参数建立 PostgreSQL(asyncpg) async 引擎。
 
-    供主库（:func:`get_async_engine`）与 auth 独立库（app/db/auth_session.py）共用的唯一
+    供主库（:func:`get_async_engine`）与 auth 独立库（auth/db/session.py）共用的唯一
     建池逻辑，避免两处策略漂移。
     """
     connect_args: dict[str, object] = {}

@@ -49,7 +49,7 @@ class AuthReadyData(BaseModel):
 
 
 async def probe_db() -> AuthDepStatus:
-    """探 DB：auth 专属引擎（auth_session.get_auth_engine）SELECT 1 校验连通。
+    """探 DB：auth 专属引擎（auth.db.session.get_auth_engine）SELECT 1 校验连通。
 
     get_auth_engine 惰性建引擎、不会返 None（建引擎不建连接）；连接失败 → error。
     """

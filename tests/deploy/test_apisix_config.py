@@ -21,8 +21,14 @@ _COMPOSE = _ROOT / "docker-compose.yml"
 
 _COMMUNITY = "lkm-ahz.ltd"
 _OFFICIAL = "lkm-ahz.icu"
-_DOMAINS = [_COMMUNITY, _OFFICIAL]
-_ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
+# bot 面板独立子域名（无 www 变体，见下 _ALL_HOSTS 的拼法）
+_BOT = "bot.lkm-ahz.ltd"
+_DOMAINS = [_COMMUNITY, _OFFICIAL, _BOT]
+# bot 子域**不补 www**：render.sh 的 __BOT_HOSTS__ 走独立展开（面板没有 www 变体），
+# 补出来只会多一个不解析、也不该进证书 SNI 的 www.bot.*。
+_ALL_HOSTS = [
+    h for d in (_COMMUNITY, _OFFICIAL) for h in (d, f"www.{d}")
+] + [_BOT]
 # 模板里允许出现的占位（展开由 render.sh 负责）。
 # 同时覆盖 apisix.yaml（路由模板）与 config.yaml（APISIX 自身配置模板）两个文件。
 _PLACEHOLDERS = {
@@ -30,9 +36,12 @@ _PLACEHOLDERS = {
     "__COMMUNITY_DOMAIN__",
     "__COMMUNITY_HOSTS__",
     "__OFFICIAL_HOSTS__",
+    "__BOT_HOSTS__",
     "__ALL_HOSTS__",
     "__COMMUNITY_ORIGINS__",
     "__MAX_BODY_SIZE__",
+    # bot 面板请求体上限：独立来源（bot 单文件 512MB vs 社群站 100MB），不可复用上面那个
+    "__BOT_MAX_BODY_SIZE__",
     # upstream 服务名后缀：compose 空（Docker 内嵌 DNS 解析短名）/ k8s `.lkm.svc.cluster.local`
     "__UPSTREAM_SUFFIX__",
     # 上游 DNS：compose 127.0.0.11 / k8s CoreDNS ClusterIP
@@ -202,7 +211,7 @@ def test_upstream_suffix_expands_per_runtime() -> None:
 
 
 def test_dual_domain_hosts_covered() -> None:
-    """渲染产物里两个域名（含 www）都被路由覆盖。"""
+    """渲染产物里全部域名都被路由覆盖：社群/官网（含 www）+ bot 子域。"""
     routes = _rendered_routes()
     hosted = {h for r in routes.values() for h in (r.get("hosts") or [])}
     assert set(_ALL_HOSTS) <= hosted
@@ -240,6 +249,10 @@ def test_render_expands_domains_and_body_limit() -> None:
         f"www.{_COMMUNITY}",
     ]
     assert routes["official-site"]["hosts"] == [_OFFICIAL, f"www.{_OFFICIAL}"]
+    # bot 子域：无 www 变体，故是单元素 hosts
+    assert routes["bot-dashboard"]["hosts"] == [_BOT]
+    # ACME challenge / http→https 的 hosts 必须是**三域并集**——漏掉 bot 的表现是
+    # 「http://bot.* 不跳转」且 bot 域名的 ACME 挑战没有上游（证书签不下来）
     assert routes["acme-challenge"]["hosts"] == _ALL_HOSTS
     cors = routes["api-prefix"]["plugins"]["cors"]
     assert cors["allow_origins"] == f"https://{_COMMUNITY},https://www.{_COMMUNITY}"
@@ -421,7 +434,7 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
     subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
     rendered = yaml.safe_load(out.read_text())
-    assert len(rendered["ssls"]) == 2
+    assert len(rendered["ssls"]) == 3  # 社群 / 官网 / bot 三域
     for entry in rendered["ssls"]:
         assert "BEGIN CERTIFICATE" in entry["cert"]
         assert "BEGIN PRIVATE KEY" in entry["key"]

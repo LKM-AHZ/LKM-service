@@ -1,7 +1,7 @@
 """Prefect flow：ClickHouse 分析导出（M5 7.2.6 路 A）。
 
 周期把业务库 ``event_failures`` + auth 库 ``audit_logs`` 增量导出到 ClickHouse。复用
-owner 侧入口（``app/db/event_failure_export.py``、``app/modules/auth/audit_export.py``），
+owner 侧入口（``app/db/event_failure_export.py``、``auth/audit_export.py``），
 不复制业务 SQL；与 ``app/flows/user_dim.py`` 同构：纯体层 → Prefect task → 注入式纯编排。
 
 两路独立：各自开各自 realm 的会话与 client，一路失败由 task 重试/标记，不影响另一路。

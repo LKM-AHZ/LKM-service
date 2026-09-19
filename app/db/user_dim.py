@@ -10,7 +10,7 @@ B0 另起一条**离线**报表支路：把 user/profile 的登录锚字段反�
 auth），供运营/报表这类批式、可容忍滞后、绝不容忍 PII 横向散布的读者，把「join
 users+profiles + 解析账号状态」从报表 SQL 里抽出来提前物化一次。
 
-为什么放 ``app/db/``（非 ``app/modules/auth/``）：与 ``event_failure`` / ``event_processed`` /
+为什么放 ``app/db/``（非 auth 包内）：与 ``event_failure`` / ``event_processed`` /
 ``outbox`` 这些**非业务模块 models.py** 的共享基础设施/审计表同范式 —— 本表是 read-only
 反范式副本（离线物化），非 auth 业务模块的可执行逻辑，定义于 db 层让
 ``model_registry.ensure_all_models`` 记录的是 **db→db 内部边**（镜像它 import

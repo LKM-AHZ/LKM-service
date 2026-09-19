@@ -1,7 +1,7 @@
 """AUTH 读面 HTTP client（M3 B1.2）：把单用户快照 miss 回填跨进程送到 AUTH 读端点。
 
 背景：A1/A6 已把身份读面收敛进 ``auth.snapshot`` 单态内存缝 + ``user:snap`` 缓存；当
-AUTH 被部署成**独立进程**（B1.1 ``main_auth`` + compose ``auth``）后，在线读路径（本
+AUTH 被部署成**独立进程**（B1.1 ``auth.main`` + compose ``auth``）后，在线读路径（本
 monolith 进程缓存 miss）应跨 HTTP 打到 AUTH 进程自己的读端点，而非就地触业务 DB ——
 这是 B1.2 在此 build 的「内部读缝 HTTP 化」client。
 

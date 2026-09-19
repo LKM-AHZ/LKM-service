@@ -10,7 +10,7 @@
 ``(source_db, target_db)``：源读一律走 ``source_db``（auth），目标写一律走 ``target_db``
 （业务）。绝不在单会话里跨库 join（拆库前融合态下曾可行，拆库后必 UndefinedTable）。
 
-为什么放在 ``app/modules/auth/``（数据源 owner 侧）而非 ``app/db/`` 或 ``app/core/``：
+为什么放在 auth 包内（数据源 owner 侧）而非 ``app/db/`` 或 ``app/core/``：
 - 本 ETL 必须读 ``User``/``Profile``（源属 auth）。放 ``app/db`` 会被 import-linter 契约二
   （db 层不反向依赖业务模块）拦下；放 ``app/core`` 触发契约一（core 不依赖业务模块）。
   放 auth 自身（auth 读自己的源 + 写 db 层离线副本）恰好都合法：modules→db、auth→auth
