@@ -42,6 +42,43 @@ END;
 $$ LANGUAGE plpgsql VOLATILE;
 """
 
+# 建表**后置**：TimescaleDB 装配（批 2，路线图 §8 #40）——outbox 两表转 hypertable、
+# 冷表列式压缩、outbox_events 保留策略兜底。`outbox_events` 刻意**不压缩**：它有热更新
+# （relay 反复 UPDATE status/attempt_count/locked_at），压缩 chunk 默认不可 DML，会把
+# 滞留行变成永久投不出（详见 app/db/init_db.py 同名注释）。
+#
+# 整段用 DO 块做**能力探测**：扩展不存在（普通 PG 镜像 / CI 临时 PG）时只告警，两表保持
+# 普通表——主键里多一列 created_at 无副作用，投递语义完全不变。必须经 EXECUTE/PL 运行时
+# 解析：直接写 `create_hypertable(...)` 时扩展缺失会让**整个基线在解析期**失败，连普通
+# 表都建不出来。内层 BEGIN...EXCEPTION 是隐式 savepoint，失败不会污染外层迁移事务。
+TIMESCALE_DDL = """
+DO $$
+BEGIN
+  BEGIN
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'timescaledb 不可用，outbox 两表保持普通表：%', SQLERRM;
+  END;
+
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+    PERFORM create_hypertable('outbox_events', 'created_at',
+        chunk_time_interval => INTERVAL '7 days',
+        if_not_exists => TRUE, migrate_data => TRUE);
+    PERFORM create_hypertable('outbox_archived', 'created_at',
+        chunk_time_interval => INTERVAL '7 days',
+        if_not_exists => TRUE, migrate_data => TRUE);
+    ALTER TABLE outbox_archived SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'routing_key',
+        timescaledb.compress_orderby = 'created_at DESC');
+    PERFORM add_compression_policy('outbox_archived', INTERVAL '7 days',
+        if_not_exists => TRUE);
+    PERFORM add_retention_policy('outbox_events', INTERVAL '30 days',
+        if_not_exists => TRUE);
+  END IF;
+END $$;
+"""
+
 
 def upgrade() -> None:
     """Upgrade schema."""
@@ -300,7 +337,8 @@ def upgrade() -> None:
     sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.Column('archived_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.PrimaryKeyConstraint('id')
+    # 复合主键含分区列 created_at：本表是 hypertable（见 TIMESCALE_DDL 与 app/db/outbox_archive.py）
+    sa.PrimaryKeyConstraint('created_at', 'id')
     )
     op.create_index(op.f('ix_outbox_archived_event_id'), 'outbox_archived', ['event_id'], unique=False)
     op.create_index('ix_outbox_archived_published_at', 'outbox_archived', ['published_at'], unique=False)
@@ -316,8 +354,9 @@ def upgrade() -> None:
     sa.Column('locked_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.Column('locked_by', sa.String(length=64), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('event_id')
+    # hypertable 的每个唯一索引都必须含分区列：主键并入 created_at，event_id 的唯一约束同理
+    sa.PrimaryKeyConstraint('created_at', 'id'),
+    sa.UniqueConstraint('event_id', 'created_at')
     )
     op.create_index(op.f('ix_outbox_events_status'), 'outbox_events', ['status'], unique=False)
     op.create_index('ix_outbox_scan', 'outbox_events', ['status', 'next_retry_at'], unique=False)
@@ -891,6 +930,8 @@ def upgrade() -> None:
     op.create_index('ix_interaction_view_user_viewed', 'interaction_view_logs', ['user_id', 'viewed_at'], unique=False)
     op.create_index('ix_interaction_view_viewed', 'interaction_view_logs', ['viewed_at'], unique=False)
     # ### end Alembic commands ###
+    # 全部表建完后置：TimescaleDB 装配（hypertable 要求表已存在；失败仅告警不中断）
+    op.execute(TIMESCALE_DDL)
 
 
 def downgrade() -> None:

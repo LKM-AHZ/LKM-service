@@ -24,8 +24,6 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.model_registry import ensure_all_models
 
-_REV_FILE_NAME = "f1a2e3d4c5b6a7f8_add_user_dim.py"
-
 
 def _load_migration_module(path: Path):
     """用文件物理路径把单个 alembic 迁移 .py 载成一个模块（不必进 import 包）。"""
@@ -129,13 +127,18 @@ def test_user_dim_migration_chained_to_single_head():
         module = _load_migration_module(f)
         mods[module.revision] = {"module": module, "down_revision": module.down_revision}
 
-    # (b1) user_dim 迁移文件在 versions 目录，且其 revision 不与链上其它文件撞号（每个迁移 revision 全局唯一）
-    its_path = versions_dir / _REV_FILE_NAME
-    assert its_path.exists(), "user_dim 迁移文件应存在"
-    rev_module = _load_migration_module(its_path)
-    other_revs = {rev for rev, m in mods.items() if m["module"].__file__ != str(its_path)}
-    assert rev_module.revision not in other_revs, (
-        f"user_dim migration revision {rev_module.revision} 与既有 revision 撞号"
+    # (b1) user_dim 的建表在迁移链里有落点。**迁移链已压平**（2026-09-18，见路线图 §8 #39）：
+    # 18 条历史迁移 → 1 条 UUID baseline（`72a6bdf65538`），原独立迁移文件
+    # `f1a2e3d4c5b6a7f8_add_user_dim.py` 已并入其中。故此处不再要求「单独文件存在」，
+    # 改为在链上源码里断言该表的 create_table 存在（少一条迁移也不等于表丢了）。
+    assert len(mods) == len(set(mods)), "每个 revision 必须全局唯一"
+    chain_src = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in sorted(versions_dir.glob("*.py"))
+        if not p.name.startswith(("_", "."))
+    )
+    assert "op.create_table('user_dim'" in chain_src, (
+        "user_dim 建表应落在迁移链中（压平后由 UUID baseline 承载）"
     )
 
     # (b2) 全链线性且单头（不硬编码 user_dim 即头——其后可能新增合法迁移）：
@@ -150,7 +153,6 @@ def test_user_dim_migration_chained_to_single_head():
     head_revs = all_revs - child_of
     assert len(head_revs) == 1, f"迁移链应单头，实得 {sorted(head_revs)}"
     head = head_revs.pop()
-    assert rev_module.revision in all_revs  # user_dim 是链中一环(可达)
 
     roots = {r for r, m in mods.items() if m["down_revision"] is None}
     assert len(roots) == 1, f"应恰一个根 revision(down=None)，实得 {sorted(roots)}"

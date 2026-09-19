@@ -359,3 +359,87 @@ async def test_additive_schema_sync_skips_not_null_without_default() -> None:
             await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
     finally:
         await engine.dispose()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 批 2：TimescaleDB 装配（hypertable）
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_outbox_unique_indexes_include_partition_column() -> None:
+    """hypertable 硬约束的回归锚（批 2）。
+
+    ``create_hypertable`` 要求表上**每个唯一索引都包含分区列**（这里是 ``created_at``）：
+    主键与 ``outbox_events.event_id`` 的唯一约束都必须带上它。一旦有人把 PK 改回单列
+    ``id``，装配会静默降级成普通表（扩展可用也转不了），分区/压缩就此悄悄失效——
+    这个断言让它在单测阶段就红。
+    """
+    import sqlalchemy as sa
+
+    from app.db.outbox import OutboxMessage
+    from app.db.outbox_archive import OutboxArchived
+
+    for model in (OutboxMessage, OutboxArchived):
+        table = model.__table__
+        unique_keys = [tuple(c.name for c in table.primary_key.columns)]
+        unique_keys += [
+            tuple(sorted(c.name for c in con.columns))
+            for con in table.constraints
+            if isinstance(con, sa.UniqueConstraint)
+        ]
+        assert unique_keys, f"{table.name} 无唯一索引"
+        for cols in unique_keys:
+            assert "created_at" in cols, f"{table.name} 的唯一索引缺分区列：{cols}"
+
+
+async def test_timescale_assembly_is_optional_and_non_fatal() -> None:
+    """TimescaleDB 装配是**可选增强**：扩展不可用时只告警并整体跳过，不抛异常。
+
+    覆盖真实环境差异——CI/本机的 ``postgres:16-alpine`` 与手工安装的主机 PG 都没有
+    ``timescaledb``：此时 ``_create_all`` 必须照常建表并启动，两表退化为普通表
+    （主键多一列 ``created_at`` 无副作用）。有 ``timescaledb`` 的库上则走真实装配路径。
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.base import Base
+    from app.db.init_db import _ensure_hypertables, _ensure_timescaledb
+    from app.db.model_registry import ensure_all_models
+
+    ensure_all_models()
+    schema = "s_timescale"
+    engine = create_async_engine(settings.database_url, poolclass=StaticPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET search_path TO "{schema}"'))
+            await conn.run_sync(Base.metadata.create_all)
+
+            available = await _ensure_timescaledb(conn)
+            assert isinstance(available, bool)
+            # 无论扩展是否可用，装配都不得抛错：不可用时返回空列表（逐条降级跳过）
+            changed = await _ensure_hypertables(conn)
+            assert isinstance(changed, list)
+            if not available:
+                assert changed == []
+
+            await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        await engine.dispose()
+
+
+def test_scan_window_aligns_with_retention_policy() -> None:
+    """relay 扫描窗口与 Timescale 保留策略必须同阈值（30 天）。
+
+    两者口径耦合：``relay_poll`` 只扫 ``created_at >= now-outbox_scan_window_s`` 的行，
+    窗口外的行由 Timescale 保留策略 DROP。窗口**大于**保留期 → 白扫即将被删的分区；
+    窗口**小于**保留期 → 窗口内被漏掉的行不会立刻被删，等于静默少投事件。故二者必须
+    对齐，改一个必须改另一个（此断言即那条耦合的可执行文档）。
+    """
+    from app.core.config import settings
+    from app.db.init_db import _RETENTION_POLICIES
+
+    assert _RETENTION_POLICIES == (("outbox_events", "30 days"),)
+    assert settings.outbox_scan_window_s == 30 * 86400

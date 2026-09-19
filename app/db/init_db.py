@@ -195,13 +195,137 @@ async def _ensure_shared_objects(conn: Any) -> None:
     await conn.execute(sa.text(UUID7_FUNCTION_SQL))
 
 
+# ---- TimescaleDB 装配（批 2，路线图 §8 #40）----
+#
+# `outbox_events` / `outbox_archived` 转为 **hypertable**：按 ``created_at`` 自动时间分区
+# （chunk 裁剪让 relay 的领取查询只扫近期 chunk）、冷历史列式压缩、保留策略兜底。
+#
+# 与 ``outbox_archived`` 冷表归档的**分工**（两者语义重叠，必须分明）：
+#   - hypertable 管**分区与压缩**——chunk 时间裁剪、列式压缩、超期 chunk 的 DROP；
+#   - ``outbox_relay.archive_published()`` 管**可查历史**——已投递行按应用侧保留期
+#     （``outbox_archive_retention_s``，默认 7 天）迁进 ``outbox_archived`` 再删。
+# 正常路径下 outbox_events 的超期行由应用侧搬走，因此 Timescale 的保留策略只是
+# **兜底**（应用侧停摆/异常滞留时防表无限膨胀），阈值刻意远大于归档保留期。
+#
+# 装配是**可选增强**：非 Timescale 镜像（含测试用的 postgres:16-alpine）或未预加载
+# ``timescaledb`` 的实例上扩展建不起来，此时告警并整体跳过——表退化为普通表，
+# 主键里多一列 ``created_at`` 无副作用，链路的 DML 语义完全不变。
+#
+# **outbox_events 刻意不启用压缩**：本表有热更新（relay 反复 UPDATE
+# ``status``/``attempt_count``/``locked_at``/``published_at``），而压缩 chunk 默认不可
+# DML——一旦有滞留行被压进只读 chunk，relay 将永久投不出它。本表活跃窗口 ≤ 归档保留
+# 期（7 天）、体量极小，压缩收益可忽略；压缩的收益集中在只增不更的 ``outbox_archived``。
+_TIMESCALE_CHUNK_INTERVAL = "7 days"
+
+# (表名, 分区列, chunk 间隔)
+_HYPERTABLE_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("outbox_events", "created_at", _TIMESCALE_CHUNK_INTERVAL),
+    ("outbox_archived", "created_at", _TIMESCALE_CHUNK_INTERVAL),
+)
+
+# 启用列式压缩的表：(表名, compress_segmentby, compress_orderby)
+_COMPRESSION_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("outbox_archived", "routing_key", "created_at DESC"),
+)
+
+# 压缩策略：(表名, 阈值)——超期 chunk 转列式压缩
+_COMPRESSION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_archived", "7 days"),)
+
+# 保留策略：(表名, 阈值)——超期 chunk 直接 DROP（仅 outbox_events，兜底；
+# outbox_archived 是「可查历史」，刻意不设，其增长由归档链路约束）
+_RETENTION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_events", "30 days"),)
+
+
+async def _ensure_timescaledb(conn: Any) -> bool:
+    """建 ``timescaledb`` 扩展（幂等）；返回扩展是否可用。
+
+    不可用（普通 PG 镜像、未预加载 ``timescaledb``）时告警并返回 False，调用方据此
+    跳过 hypertable 装配而不影响启动。用 savepoint 包裹：PG 事务内任一语句报错后
+    后续语句一律 ``InFailedSQLTransaction``，不隔离会把整个初始化带崩。
+    """
+    import sqlalchemy as sa
+
+    sp = await conn.begin_nested()
+    try:
+        await conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS timescaledb"))
+        await sp.commit()
+        return True
+    except sa.exc.DBAPIError as exc:
+        await sp.rollback()
+        # 多进程并发首启（compose 下 backend+auth+9 worker 同时拉起）可能撞 DuplicateObject：
+        # 扩展其实已由别的进程建好，复查一次扩展目录，避免把它误判成「引擎不可用」而
+        # 整个进程跳过 hypertable 装配。
+        exists = await conn.scalar(
+            sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
+        )
+        if exists:
+            return True
+        logger.warning(
+            "timescaledb 扩展不可用（非 Timescale 镜像或未预加载），跳过 hypertable 装配：%s",
+            exc,
+        )
+        return False
+
+
+async def _ensure_hypertables(conn: Any) -> list[str]:
+    """把 outbox 两表转 hypertable 并装配压缩/保留策略（幂等；须先 :func:`_ensure_timescaledb`）。
+
+    逐条 DDL 独立 savepoint：Timescale 的策略函数不支持 ``IF NOT EXISTS`` 的地方
+    （如 ``ALTER TABLE ... SET (timescaledb.compress)``）重复执行会报错，视为「已装配」
+    跳过即可，不能让单条失败污染整批。返回实际生效的装配项，供启动日志与测试断言。
+    """
+    import sqlalchemy as sa
+
+    changed: list[str] = []
+
+    async def _run(sql: str, label: str) -> None:
+        sp = await conn.begin_nested()
+        try:
+            await conn.execute(sa.text(sql))
+            await sp.commit()
+        except sa.exc.DBAPIError as exc:
+            await sp.rollback()
+            logger.warning("TimescaleDB %s 失败（按已装配跳过）：%s", label, exc)
+            return
+        changed.append(label)
+
+    for table, column, interval in _HYPERTABLE_SPECS:
+        await _run(
+            f"SELECT create_hypertable('{table}', '{column}', "
+            f"chunk_time_interval => INTERVAL '{interval}', "
+            f"if_not_exists => TRUE, migrate_data => TRUE)",
+            f"hypertable:{table}",
+        )
+    for table, segmentby, orderby in _COMPRESSION_SPECS:
+        await _run(
+            f"ALTER TABLE {table} SET (timescaledb.compress, "
+            f"timescaledb.compress_segmentby = '{segmentby}', "
+            f"timescaledb.compress_orderby = '{orderby}')",
+            f"compress:{table}",
+        )
+    for table, threshold in _COMPRESSION_POLICIES:
+        await _run(
+            f"SELECT add_compression_policy('{table}', INTERVAL '{threshold}', "
+            f"if_not_exists => TRUE)",
+            f"compression_policy:{table}",
+        )
+    for table, threshold in _RETENTION_POLICIES:
+        await _run(
+            f"SELECT add_retention_policy('{table}', INTERVAL '{threshold}', "
+            f"if_not_exists => TRUE)",
+            f"retention_policy:{table}",
+        )
+    return changed
+
+
 async def _create_all() -> None:
     """create_all 降级通道：按 Base.metadata 建缺失的表，并补已存在表缺失的列/索引。
 
     仅在 ``settings.use_alembic=False`` 时启用。多 worker 安全：create_all 对已存在的
     表是 no-op、补列/索引均幂等，无需 Redis 迁移锁。注意必须 import 所有模型模块，
     metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
-    各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`。
+    各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`；
+    建表后另做 TimescaleDB 装配（hypertable + 压缩/保留策略），见 :func:`_ensure_hypertables`。
     """
     from app.db.base import Base
     from app.db.model_registry import ensure_all_models
@@ -215,6 +339,9 @@ async def _create_all() -> None:
         await _ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
+        # 建表之后：hypertable 转换只对已存在的表有意义；扩展不可用时静默跳过（见上）。
+        if await _ensure_timescaledb(conn):
+            await _ensure_hypertables(conn)
 
 
 async def _seed_base_data() -> None:

@@ -48,22 +48,41 @@ SessionFactory = Callable[..., Awaitable[AsyncSession]]
 _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:64]
 
 
+def _scan_window_start(now: datetime) -> datetime | None:
+    """扫描窗口的时间下界（批 2，TimescaleDB hypertable 的 chunk 裁剪）。
+
+    ``outbox_scan_window_s <= 0`` 时返回 None（不限窗）。它只用于让规划器跳过
+    ``created_at`` 过旧的分区，**不改变「哪些事件可投」的语义**——窗口外的行会被
+    Timescale 保留策略 DROP（两者阈值刻意对齐，见 ``init_db._RETENTION_POLICIES``）；
+    普通 PG（无 hypertable）上开启它也无副作用，只是少扫陈年滞留行。
+    """
+    if settings.outbox_scan_window_s <= 0:
+        return None
+    return now - timedelta(seconds=settings.outbox_scan_window_s)
+
+
 def _claimable(now: datetime) -> tuple[Any, ...]:
     """可领取窗口的 WHERE 条件：到期待投 **且** 未被别的进程有效认领（M6.3）。
 
     锁列（`locked_at/locked_by`）此前只建不用；现在领取即写、投递后清，并叠加陈旧阈值：
     `locked_at` 比 TTL 更早的行视为「持有者已崩溃」，可被重新领取——否则持锁进程崩溃会让
     该行永久卡死。未到期（`locked_at` 新鲜）的行留给持有者，别的副本不抢。
+
+    另叠加 ``created_at`` 时间窗（批 2，见 :func:`_scan_window_start`）。
     """
     stale_before = now - timedelta(seconds=settings.outbox_lock_ttl_s)
-    return (
+    conds: list[Any] = [
         OutboxMessage.status == OUTBOX_PENDING,
         OutboxMessage.next_retry_at <= now,
         or_(
             OutboxMessage.locked_at.is_(None),
             OutboxMessage.locked_at < stale_before,
         ),
-    )
+    ]
+    window_start = _scan_window_start(now)
+    if window_start is not None:
+        conds.append(OutboxMessage.created_at >= window_start)
+    return tuple(conds)
 
 
 def _clear_lock(msg: OutboxMessage) -> None:
@@ -226,16 +245,22 @@ async def archive_published(
     factory = session_factory or new_session
     db = await factory()
     try:
-        cutoff = datetime.now(UTC) - timedelta(seconds=retention)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=retention)
+        conds: list[Any] = [
+            OutboxMessage.status == OUTBOX_PUBLISHED,
+            OutboxMessage.published_at.is_not(None),
+            OutboxMessage.published_at < cutoff,
+        ]
+        # 同 relay_poll：限定 created_at 窗口让 hypertable 做 chunk 裁剪（批 2）。
+        window_start = _scan_window_start(now)
+        if window_start is not None:
+            conds.append(OutboxMessage.created_at >= window_start)
         rows = list(
             (
                 await db.execute(
                     select(OutboxMessage)
-                    .where(
-                        OutboxMessage.status == OUTBOX_PUBLISHED,
-                        OutboxMessage.published_at.is_not(None),
-                        OutboxMessage.published_at < cutoff,
-                    )
+                    .where(*conds)
                     .order_by(OutboxMessage.id.asc())
                     .limit(limit)
                     .with_for_update(skip_locked=True)

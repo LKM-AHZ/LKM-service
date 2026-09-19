@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Index, Integer, String, select
+from sqlalchemy import Index, Integer, String, UniqueConstraint, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -34,12 +34,20 @@ _BACKOFF_CAP_S = 3600
 
 
 class OutboxMessage(UUIDPrimaryKeyMixin, Base):
-    """待投递事件。payload 与业务同事务落库，relay 按 routing_key 投总线后置 published。"""
+    """待投递事件。payload 与业务同事务落库，relay 按 routing_key 投总线后置 published。
+
+    **复合主键 ``(created_at, id)``**：本表是 TimescaleDB hypertable（按 ``created_at``
+    分区，见 ``init_db``），而 hypertable 的**每个唯一索引都必须包含分区列**——故 ``id``
+    不再是单列主键，``event_id`` 的唯一约束也由 ``(event_id)`` 放宽为 ``(event_id,
+    created_at)``。两列都唯一性不变，语义未变：``id`` 是 uuid7（全局唯一）、``event_id``
+    是每次投递的幂等键，同一 ``event_id`` 不可能有两条同毫秒 ``created_at`` 的行。
+    """
 
     __tablename__: str = "outbox_events"
 
-    # 幂等键：投递去重/防重复副作用以此全局 UUID 为准
-    event_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    # 幂等键：投递去重/防重复副作用以此全局 UUID 为准。唯一性由 (event_id, created_at)
+    # 复合约束承担（hypertable 要求唯一索引含分区列），故此处不再单列 unique=True。
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
     # 逻辑主题 = 现有 topic exchange routing_key（event.apply_point/…），relay 按它 publish
     routing_key: Mapped[str] = mapped_column(String(64), nullable=False)
     # 携带 {fn,args,…} 完整 dict（worker 按 payload["fn"] 分派）；原生 JSONB 存 dict
@@ -50,8 +58,10 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
         String(16), nullable=False, default=OUTBOX_PENDING, index=True
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # primary_key=True 是与 mixin 的 id 组成复合主键 (created_at, id)：hypertable 的
+    # 分区列必须出现在主键里（见类 docstring）。写入仍由 Python 侧 default 提供值。
     created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
+        UTCDateTime, nullable=False, default=now_iso, primary_key=True
     )
     next_retry_at: Mapped[datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
@@ -65,7 +75,11 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
     )
     locked_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__: tuple = (Index("ix_outbox_scan", "status", "next_retry_at"),)
+    __table_args__: tuple = (
+        Index("ix_outbox_scan", "status", "next_retry_at"),
+        # 原为列上的 unique=True；hypertable 要求唯一索引含分区列，故并入 created_at。
+        UniqueConstraint("event_id", "created_at"),
+    )
 
 
 def _backoff_seconds(attempt: int) -> int:

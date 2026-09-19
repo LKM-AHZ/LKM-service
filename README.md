@@ -159,8 +159,8 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 数据库与迁移
 
-- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 增量迁移（现有 12 个版本，含 outbox、event_processed/event_failure、user_dim 等）。
-- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase，18 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `a0b1c2d3e4f5`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
+- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（**1 条 UUID baseline**，全库主键为 uuid7）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
+- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase，18 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `a0b1c2d3e4f5`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 ## 运行
 

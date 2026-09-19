@@ -79,6 +79,23 @@ async def should_respect_persisted_watermark(db: AsyncSession) -> None:
     assert client.inserts[0][1][0][0] == str(ids[2])
 
 
+async def should_treat_blank_ch_watermark_as_no_watermark(db: AsyncSession) -> None:
+    """CH 空表的水位是**空串**而非 NULL——必须按「无水位」走全量。
+
+    CH 的 ``max()`` 在空集上返回该类型的零值：``String`` 列即空串（整数列时代是 0，
+    恰好与「无水位」等价，故只判 None 的旧实现也没事）。``id`` 改 String 后若把空串
+    当水位，PG 侧会生成 ``id > ''`` 直接抛 uuid 解析错——真机上表现为「CH 空表首次
+    导出必然失败」。
+    """
+    await _seed_failures(db, 2)
+    client = FakeClickHouseClient(watermarks={FAILURES_TABLE: ""})
+
+    total = await export_event_failures(db, client, window=10)
+
+    assert total == 2  # 空串水位 → 视为首次全量
+    assert client.inserted_rows() == 2
+
+
 async def should_raise_on_ch_failure(db: AsyncSession) -> None:
     await _seed_failures(db, 2)
     client = FakeClickHouseClient(fail_insert=True)

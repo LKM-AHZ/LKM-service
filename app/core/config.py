@@ -179,6 +179,12 @@ class Settings(BaseSettings):
     outbox_archive_batch: int = 500
     # 归档动作的触发间隔（秒）：relay 主循环按此节流执行归档，不另起循环。
     outbox_archive_interval_s: float = 3600.0
+    # 领取/归档查询的时间窗下界（秒，批 2）：outbox_events 是 TimescaleDB hypertable
+    # （按 created_at 分区），把扫描限定在 created_at >= now-window 可让规划器做 chunk
+    # 裁剪、只扫近期分区，避免随表增大而全分区扫描。基值与 Timescale 保留策略阈值对齐
+    # （30 天）——窗口外的行会被保留策略 DROP，故不改变可达事件的投递语义；设 <=0
+    # 关闭窗口（普通 PG 上无 chunk 收益，且极陈旧滞留行此时可被投递）。
+    outbox_scan_window_s: float = 2592000.0
 
     # ---- interaction 域（M6.6）----
     # 浏览记录保留期（天）：cron 每天删除超期行。view_logs 是高频写表，须有明确上界
