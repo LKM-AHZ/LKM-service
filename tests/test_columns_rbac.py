@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
-from app.modules.auth.models import User
+from auth.models import User
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 

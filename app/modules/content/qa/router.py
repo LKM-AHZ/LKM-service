@@ -12,7 +12,6 @@ from app.core.common import (
 )
 from app.core.err import BizError, respond
 from app.db.session import get_read_session, get_session
-from app.modules.auth.deps import CurrentUser, RequireLevel, get_current_user
 from app.modules.content.qa.errors import QaErr
 from app.modules.content.qa.schemas import (
     AnswerCreate,
@@ -29,6 +28,7 @@ from app.modules.content.qa.service import (
     get_question,
     list_questions,
 )
+from auth.deps import CurrentUser, RequireLevel, get_current_user
 
 
 def _status() -> ModuleStatus:

@@ -2,6 +2,9 @@
 
 新增业务域 = 在这里的 ``MODULES`` 加一行 + 建模块目录；REST/GraphQL/错误码/任务
 聚合均由本表驱动，框架文件（api/router、api/graphql、main）零改动。
+表的范围是 ``app/modules/`` 下的**业务域**；auth 已独立成顶层包（``auth/``），
+不在此表内——其 REST 面由 ``api/router.py`` 显式挂载，错误码经 ``auth.register_errors()``
+注册，模型/任务经 ``auth.register_models()`` / ``auth.register_tasks()`` 注册。
 
 跨模块 import 走各模块 ``__init__.py`` 的公共 API；本表用 ``import_module`` 延迟
 加载（字符串导入），不产生 ``main`` 命名空间对 ``app`` 包名的绑定冲突（见 §7）。
@@ -16,7 +19,6 @@ from typing import Any
 MODULES: list[str] = [
     "admin",
     "articles",
-    "auth",
     "blog",
     "content",
     "exam",
@@ -37,7 +39,6 @@ MODULES: list[str] = [
 # 注：各模块错误码通过 ``register()`` 副作用注册，导入即生效。
 _ERROR_MODULES: list[str] = [
     "articles",
-    "auth",
     "blog",
     "content",  # ContentErr（统一内容核心）
     "content.boards",  # BoardErr
@@ -79,8 +80,13 @@ def load_errors() -> None:
 def load_all() -> None:
     """应用/worker 装配入口：加载全部模块并触发注册副作用。
 
-    聚合：错误码（load_errors）。模型与任务的预注册由各自基础设施枢纽
+    聚合：错误码（load_errors）+ auth 错误码（经其公开钩子，auth 已独立成顶层包、
+    不在 MODULES 内）。模型与任务的预注册由各自基础设施枢纽
     （db.model_registry / core.task_registry）承担，此处聚焦业务侧副作用，
     避免重复触发；如需随应用启动一并注册，调用方按需组合。
     """
     load_errors()
+
+    from auth import register_errors
+
+    register_errors()

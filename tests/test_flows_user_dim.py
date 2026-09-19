@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
-from app.db.auth_base import auth_metadata
 from app.db.base import Base
 from app.db.model_registry import ensure_all_models
 from app.db.user_dim import UserDim
@@ -27,6 +26,7 @@ from app.flows.user_dim import (
     orchestrate_user_dim,
     user_dim_reconcile_flow,
 )
+from auth.db.base import auth_metadata
 from tests.test_user_dim_sync import _counting
 from tests.test_user_dim_wiring_event import (
     _dim,

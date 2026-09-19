@@ -1,6 +1,6 @@
 """公网安全面中间件（M6.1）：TrustedHost + CORS(仅非生产) + 安全响应头。
 
-单体（``app.main``）与 auth 独立进程（``app.main_auth``）共用 :func:`install_security_middleware`
+单体（``app.main``）与 auth 独立进程（``auth.main``）共用 :func:`install_security_middleware`
 一处装配，避免两套漂移——两进程都在 APISIX 之后直接承载 ``/api/*`` 与认证面，安全头语义
 必须一致。
 

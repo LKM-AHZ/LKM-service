@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.modules.auth import tasks as send
+from auth import tasks as send
 
 
 class _Fake:
@@ -18,7 +18,7 @@ class _Fake:
 
 
 async def test_send_code_delegates_to_channel(monkeypatch: Any) -> None:
-    from app.modules.auth import channels as ch
+    from auth import channels as ch
 
     fake = _Fake()
     channel = ch.ContactChannel(
@@ -36,7 +36,7 @@ async def test_send_code_delegates_to_channel(monkeypatch: Any) -> None:
 
 
 async def test_send_magic_link_delegates(monkeypatch: Any) -> None:
-    from app.modules.auth import deps
+    from auth import deps
 
     fake = _Fake()
     monkeypatch.setattr(deps, "get_email_provider", lambda: fake)

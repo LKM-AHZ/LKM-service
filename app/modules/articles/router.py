@@ -32,10 +32,10 @@ from app.modules.articles.service import (
     update_article_ex,
     update_category_ex,
 )
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from app.modules.rbac.service import check_owner
+from auth.deps import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 

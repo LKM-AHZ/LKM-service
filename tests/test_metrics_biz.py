@@ -36,8 +36,8 @@ async def _discussion_created(
     裸 board_id / author_id 而 schema 无真实 board/user 会被 FK 拦截。
     这里先落真实 board + 作者，取其 uuid 主键作父。
     """
-    from app.modules.auth.models import User
     from app.modules.content.models import Board
+    from auth.models import User
 
     board = Board(slug="m", title="指标板", description="")
     db.add(board)

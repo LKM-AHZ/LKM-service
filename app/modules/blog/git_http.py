@@ -12,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import get_read_session, new_session
-from app.modules.auth.models import User
-from app.modules.auth.security import verifypwd
 from app.modules.blog import backfill, git_svc
 from app.modules.blog.models import BlogSeries
+from auth.entities import User
+from auth.seams import verifypwd
 
 logger = logging.getLogger(__name__)
 

@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core import messaging
+from app.core.tracing import setup_tracing
 from app.db.session import new_session
 from app.modules.admin.models import DlqMessage
 
@@ -88,6 +89,8 @@ async def _on_dlq(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
 
 async def consume_dlq() -> None:
     """DLQ 消费者主循环（compose worker-dlq 入口）。"""
+    # 非 ASGI 进程：初始化 provider 才能导出消费 span（默认关时 no-op）
+    setup_tracing(service_suffix="-dlq")
     await messaging.run_subscription(messaging.SUB_DLQ.name, _on_dlq)
 
 

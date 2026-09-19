@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.modules.auth.models import OAuthState, UserOAuth
+from auth.models import OAuthState, UserOAuth
 
 
 @pytest.fixture
@@ -18,32 +18,32 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 
 class TestGithubAuthUrl:
     async def should_contain_github_authorize_url(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import get_github_auth_url
+        from auth.service_oauth import get_github_auth_url
 
         url = await get_github_auth_url(db)
         assert "github.com/login/oauth/authorize" in url
 
     async def should_contain_client_id(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import get_github_auth_url
+        from auth.service_oauth import get_github_auth_url
 
         url = await get_github_auth_url(db)
         assert f"client_id={settings.github_client_id}" in url
 
     async def should_contain_user_email_scope(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import get_github_auth_url
+        from auth.service_oauth import get_github_auth_url
 
         url = await get_github_auth_url(db)
         assert "scope=user" in url
         assert "email" in url
 
     async def should_contain_redirect_uri(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import get_github_auth_url
+        from auth.service_oauth import get_github_auth_url
 
         url = await get_github_auth_url(db)
         assert "redirect_uri=" in url
 
     async def should_generate_server_state_token(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import get_github_auth_url
+        from auth.service_oauth import get_github_auth_url
 
         url = await get_github_auth_url(db)
         # state is now server-generated; must be non-empty
@@ -58,7 +58,7 @@ class TestGithubAuthUrl:
 
 class TestOAuthState:
     async def should_store_and_consume_state(self, db: AsyncSession):
-        from app.modules.auth.service_oauth import (
+        from auth.service_oauth import (
             consume_oauth_state,
             generate_oauth_state,
         )
@@ -80,7 +80,7 @@ class TestOAuthState:
 
     async def should_reject_already_consumed_state(self, db: AsyncSession):
         from app.core.err import BizError
-        from app.modules.auth.service_oauth import (
+        from auth.service_oauth import (
             consume_oauth_state,
             generate_oauth_state,
         )
@@ -93,7 +93,7 @@ class TestOAuthState:
 
     async def should_reject_wrong_purpose(self, db: AsyncSession):
         from app.core.err import BizError
-        from app.modules.auth.service_oauth import (
+        from auth.service_oauth import (
             consume_oauth_state,
             generate_oauth_state,
         )
@@ -110,7 +110,7 @@ class TestOauthRouterCallback:
         import json
         from unittest.mock import AsyncMock, patch
 
-        from app.modules.auth import router_oauth
+        from auth import router_oauth
 
         payload: dict[str, Any] = {
             "access_token": "acc123",
@@ -137,7 +137,7 @@ class TestOauthRouterCallback:
         import json
         from unittest.mock import AsyncMock, patch
 
-        from app.modules.auth import router_oauth
+        from auth import router_oauth
 
         payload: dict[str, Any] = {
             "access_token": None,
@@ -165,7 +165,7 @@ class TestOauthRouterCallback:
         import json
         from unittest.mock import AsyncMock, patch
 
-        from app.modules.auth import router_oauth
+        from auth import router_oauth
 
         with patch.object(
             router_oauth.service_oauth,
@@ -181,8 +181,8 @@ class TestOauthRouterCallback:
         from unittest.mock import patch
 
         from app.core.err import BizError
-        from app.modules.auth import router_oauth
-        from app.modules.auth.errors import AuthErr
+        from auth import router_oauth
+        from auth.errors import AuthErr
 
         async def _boom(db: AsyncSession, code: str, state: str) -> None:
             raise BizError(AuthErr.OAUTH_EMAIL_TAKEN)
@@ -203,12 +203,12 @@ class TestOAuthEmailAutoBind:
         from unittest.mock import AsyncMock, patch
 
         from app.core.err import BizError
-        from app.modules.auth.errors import AuthErr
-        from app.modules.auth.models import User
-        from app.modules.auth.providers.github import GithubOAuth
-        from app.modules.auth.providers.oauth import OAuthUserInfo
-        from app.modules.auth.security import hashpwd
-        from app.modules.auth.service_oauth import (
+        from auth.errors import AuthErr
+        from auth.models import User
+        from auth.providers.github import GithubOAuth
+        from auth.providers.oauth import OAuthUserInfo
+        from auth.security import hashpwd
+        from auth.service_oauth import (
             generate_oauth_state,
             handle_github_callback,
         )

@@ -13,10 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401
+import auth.models  # noqa: F401
 from app.core.err import BizError
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import PasskeyCredential
+from auth.errors import AuthErr
+from auth.models import PasskeyCredential
 
 
 @pytest.fixture
@@ -75,14 +75,14 @@ def _der_to_raw(der_sig: bytes) -> bytes:
 
 
 def _service():
-    from app.modules.auth import service_passkey
+    from auth import service_passkey
 
     return service_passkey
 
 
 async def _reg_local(db, username="alice", password="secret123456"):
     """用 ORM 直接造一个 local 用户（本文件不走 async 注册服务）。"""
-    from app.modules.auth.models import User
+    from auth.models import User
 
     user = User(username=username, hashed_password=password, account_level="local")
     db.add(user)
@@ -94,7 +94,7 @@ async def _reg_normal(
     db, username="bob", email="bob@test.com", password="secret123456"
 ):
     """用 ORM 直接造一个带邮箱的 normal 用户。"""
-    from app.modules.auth.models import User
+    from auth.models import User
 
     user = User(
         username=username,
@@ -450,7 +450,7 @@ class TestCompletePasskeyLogin:
 
     async def should_reject_local_user_passkey_login(self, db):
         """A local user with a passkey should be rejected at login (completed manually)."""
-        from app.modules.auth.models import User
+        from auth.models import User
 
         await _reg_local(db, username="localuser")
         user = (

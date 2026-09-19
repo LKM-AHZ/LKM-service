@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.secrets import reveal
-from app.modules.auth.security import (
+from auth.security import (
     create_access_token,
     create_temp_token,
     decode_access_token,

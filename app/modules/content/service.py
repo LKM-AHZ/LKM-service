@@ -17,7 +17,6 @@ from app.core.err import BizError
 from app.core.metrics import post_created_total
 from app.db.base import now_iso
 from app.db.repository import DbSession
-from app.modules.auth.snapshot import get_user_snapshot, get_user_snapshot_batch
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.boards.schemas import (
     BanRequest,
@@ -86,6 +85,7 @@ from app.modules.content.schemas import (
 )
 from app.modules.points.rules import enqueue_points_event
 from app.modules.points.service import reward, spend
+from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 READING_WPM = 300  # 每 300 字约 1 分钟阅读时间
 

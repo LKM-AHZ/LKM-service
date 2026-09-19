@@ -19,11 +19,6 @@ from app.core.config import settings
 from app.core.err import respond
 from app.core.wire import msgspec_ok
 from app.db.session import get_read_session, get_session
-from app.modules.auth.deps import (
-    CurrentUser,
-    get_current_user,
-    get_optional_user,
-)
 from app.modules.feed import service as feed_service
 from app.modules.feed.schemas import (
     FeedResponse,
@@ -34,6 +29,11 @@ from app.modules.feed.schemas import (
 )
 from app.modules.feed.service import get_timeline
 from app.modules.feed.wire import to_wire
+from auth.deps import (
+    CurrentUser,
+    get_current_user,
+    get_optional_user,
+)
 
 user_follow_router = APIRouter(prefix="/users", tags=["follow"])
 board_follow_router = APIRouter(prefix="/content/boards", tags=["follow"])

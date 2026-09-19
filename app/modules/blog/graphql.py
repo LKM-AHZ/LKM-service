@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
 from app.core.err import BizError
-from app.modules.auth.schemas import ProfileInfo
 from app.modules.blog.errors import BlogErr
 from app.modules.blog.schemas import (
     BlogCommentInfo,
@@ -20,6 +19,7 @@ from app.modules.blog.service import (
     list_comments,
     list_series,
 )
+from auth.schemas import ProfileInfo
 
 
 @strawberry.type

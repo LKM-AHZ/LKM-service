@@ -27,17 +27,17 @@ from app.core.common import (
     paginate_pages,
 )
 from app.core.err import respond
-from app.db.auth_session import get_auth_session as _get_auth_session_raw
 from app.db.session import get_read_session
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.snapshot import (
+from app.modules.content.models import ContentItem, ContentType
+from app.modules.files.models import LibraryFile
+from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
+from auth.seams import get_auth_session as _get_auth_session_raw
+from auth.snapshot import (
     count_active_users,
     list_user_snapshots,
     user_count_by_day,
 )
-from app.modules.content.models import ContentItem, ContentType
-from app.modules.files.models import LibraryFile
-from app.modules.rbac.permissions import Permission
 
 from .deps import require_admin
 from .permissions import require_permission
@@ -50,7 +50,7 @@ async def get_admin_auth_read_session() -> AsyncIterator[AsyncSession]:
     """admin 数据面读 auth authoritative 用的 **auth 库只读会话**（yield → FastAPI 于请求末负责关）。
 
     拆库后 user 真值只在 auth 库。数据面 reader 需同时问 biz(role/聚合) 与 auth(users 列表/
-    数/趋势)，故给 reader 端点再加一个 auth 会话；本函数把 ``app.db.auth_session.get_auth_session``
+    数/趋势)，故给 reader 端点再加一个 auth 会话；本函数把 ``auth.seams.get_auth_session``
     包成 **yield-generator dependency** —— 生产时 new 一个真实 auth 会话并在此收尾 close；测试/多
     进程拆分前同源码单进程两会话分连两库也合法。消费方只可做**只读**（读 auth.snapshot 数字/
     列表缝），绝不做写。授权(RBAC RolePermission)仍在 biz，不在本会话判。

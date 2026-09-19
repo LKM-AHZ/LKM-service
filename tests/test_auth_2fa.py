@@ -18,10 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import TOTP, RecoveryCode, User
-from app.modules.auth.security import (
+from auth.deps import CurrentUser
+from auth.errors import AuthErr
+from auth.models import TOTP, RecoveryCode, User
+from auth.security import (
     create_access_token,
     create_temp_token,
     decode_access_token,
@@ -47,9 +47,9 @@ async def fused_front_client(fused_db_session: AsyncSession) -> Any:
     同 schema），供需要业务权限表的前台用例使用。"""
     from httpx import ASGITransport, AsyncClient
 
-    from app.db.auth_session import get_auth_session
     from app.db.session import get_read_session, get_session
     from app.main import app
+    from auth.db.session import get_auth_session
 
     async def _override():
         yield fused_db_session
@@ -73,7 +73,7 @@ async def fused_front_client(fused_db_session: AsyncSession) -> Any:
 
 
 def _svc():
-    from app.modules.auth import service_2fa
+    from auth import service_2fa
 
     return service_2fa
 
@@ -92,7 +92,7 @@ async def _create_user(
     email: str | None = "test@example.com",
 ) -> User:
     """Create a minimal user (with profile) and return it."""
-    from app.modules.auth.models import Profile
+    from auth.models import Profile
 
     user = User(
         username=username,
@@ -394,7 +394,7 @@ class TestGet2FAStatus:
 
     async def should_return_false_when_not_enabled(self, auth_db: AsyncSession):
         user = await _create_user(auth_db, username="statusoff")
-        from app.modules.auth.router_2fa import get_2fa_status
+        from auth.router_2fa import get_2fa_status
 
         data = await self._unwrap(
             await get_2fa_status(
@@ -406,7 +406,7 @@ class TestGet2FAStatus:
     async def should_return_true_when_enabled(self, auth_db: AsyncSession):
         user = await _create_user(auth_db, username="statuson")
         await _enable_totp_for_user(auth_db, user.id)
-        from app.modules.auth.router_2fa import get_2fa_status
+        from auth.router_2fa import get_2fa_status
 
         data = await self._unwrap(
             await get_2fa_status(
@@ -424,9 +424,9 @@ class TestGet2FAStatus:
 
 class TestIssueAdminSetupTokens:
     async def should_read_role_from_profile(self, db: AsyncSession):
-        from app.modules.auth.models import Profile
-        from app.modules.auth.security import decode_access_token
-        from app.modules.auth.service_auth import issue_session_tokens
+        from auth.models import Profile
+        from auth.security import decode_access_token
+        from auth.service_auth import issue_session_tokens
 
         user = await _create_user(db, username="role_admin", account_level="admin")
         profile = await _get(db, Profile, Profile.user_id == user.id)
@@ -437,8 +437,8 @@ class TestIssueAdminSetupTokens:
         assert decode_access_token(access_token)["role"] == "admin"
 
     async def should_not_hardcode_admin_role(self, db: AsyncSession):
-        from app.modules.auth.security import decode_access_token
-        from app.modules.auth.service_auth import issue_session_tokens
+        from auth.security import decode_access_token
+        from auth.service_auth import issue_session_tokens
 
         # _create_user 的 profile.role 固定为 "member"，即使 account_level=admin
         user = await _create_user(db, username="role_member", account_level="admin")
@@ -568,7 +568,7 @@ class TestRecoveryCodeHashing:
     """恢复码存储升级：新码用带 pepper 的 HMAC（非裸 SHA-256），校验兼容存量裸哈希。"""
 
     async def should_store_new_codes_with_hmac(self, db: AsyncSession):
-        from app.modules.auth.security import hash_recovery_code
+        from auth.security import hash_recovery_code
 
         user = await _create_user(db, username="hash_rc_user")
         # 完整 setup 流程：begin 创建未启用 TOTP → complete 启用并生成恢复码（HMAC 落库）

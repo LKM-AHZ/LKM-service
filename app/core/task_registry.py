@@ -8,7 +8,8 @@
 ``core.messaging.SUBSCRIPTIONS``；本模块只负责"哪个订阅消费哪些 fn"，不重复存 topic/routing，
 避免两处声明漂移。
 
-本模块不 import 任何业务模块（跨模块导入仅允许在模块的 ``tasks.py`` 声明侧）。
+本模块不 import 任何业务模块（跨模块导入仅允许在模块的 ``tasks.py`` 声明侧）；
+auth 已独立成顶层包，其任务经 ``auth.register_tasks()`` 公开钩子注册，同样不直触内部。
 """
 
 from __future__ import annotations
@@ -65,7 +66,12 @@ def import_task_modules() -> None:
     代码，故「是否跑过」只能由本标志承载（见 ``_tasks_imported`` 说明）。
     """
     global _tasks_imported
-    import app.modules.auth.tasks
+
+    # auth 已独立成顶层包：经其公开注册钩子触发（内部 import auth.tasks），
+    # 本模块不直接触达 auth 内部模块。
+    from auth import register_tasks
+
+    register_tasks()
     import app.modules.blog.tasks
     import app.modules.content.tasks
     import app.modules.feed.tasks

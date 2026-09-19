@@ -8,12 +8,6 @@ from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
 from app.db.repository import DbSession
-from app.modules.auth.schemas import ProfileInfo
-from app.modules.auth.snapshot import (
-    get_user_snapshot,
-    get_user_snapshot_batch,
-    profile_info_from_snap,
-)
 from app.modules.blog import git_svc
 from app.modules.blog.errors import BlogErr
 from app.modules.blog.models import (
@@ -39,6 +33,12 @@ from app.modules.blog.schemas import (
     BlogStarStatus,
 )
 from app.modules.content.service import publish_blog_item
+from auth.schemas import ProfileInfo
+from auth.snapshot import (
+    get_user_snapshot,
+    get_user_snapshot_batch,
+    profile_info_from_snap,
+)
 
 # ---- private converters ----
 

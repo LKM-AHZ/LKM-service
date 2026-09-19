@@ -1,7 +1,7 @@
 """WebSocket 实时端点：用户建立连接，订阅自己的若干推送通道。
 
 浏览器 ``WebSocket`` 无法携带自定义请求头，鉴权改用握手 query 参数 ``token``
-（短时效 access token）。校验复用 ``_resolve_current_user`` 的完整语义
+（短时效 access token）。校验复用 ``auth.seams.resolve_current_user`` 的完整语义
 （用户存在/锁定/token_version/改密），会话自建自关（同 worker 模式）。
 
 订阅通道由 query 参数 ``channels`` 指定（逗号分隔，缺省 ``upload``——保持 M6.7 之前
@@ -19,9 +19,9 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.db.session import new_session
-from app.modules.auth.deps import _resolve_current_user
 from app.ws.broker import CHANNEL_UPLOAD, CHANNELS
 from app.ws.manager import manager
+from auth.seams import resolve_current_user
 
 router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -40,7 +40,7 @@ async def _authorize(token: str) -> uuid.UUID | None:
         return None
     db = await new_session()
     try:
-        cur = await _resolve_current_user(token, db)
+        cur = await resolve_current_user(token, db)
     except Exception:
         return None
     finally:

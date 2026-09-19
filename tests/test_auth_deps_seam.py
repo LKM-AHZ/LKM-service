@@ -16,15 +16,15 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.user_http as user_http
+import auth.user_http as user_http
 from app.core.config import settings
 from app.core.err import BizError
 from app.modules.admin import deps as admin_deps
 from app.modules.admin.deps import create_admin_access_token
-from app.modules.auth import deps as auth_deps
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import create_access_token, hashpwd
+from auth import deps as auth_deps
+from auth.errors import AuthErr
+from auth.models import Profile, User
+from auth.security import create_access_token, hashpwd
 from tests.conftest import DB
 
 

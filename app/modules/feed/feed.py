@@ -23,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.articles.models import Article
-from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.content.models import (
     ColumnPost,
     ColumnPostStatus,
@@ -33,6 +32,7 @@ from app.modules.content.models import (
 )
 from app.modules.feed.schemas import FeedItem
 from app.modules.projects.models import Project
+from auth.snapshot import get_user_snapshot_batch
 
 _PREVIEW_LEN = 150
 

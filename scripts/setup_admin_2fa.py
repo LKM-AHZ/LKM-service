@@ -11,14 +11,13 @@ import sys
 from sqlalchemy import select
 
 from app.db.session import dispose_engine, get_async_engine, new_session
-from app.modules.auth import service_2fa
-from app.modules.auth.models import User
-from app.modules.auth.security import _totp_code, _totp_now
+from auth.entities import User
+from auth.seams import setup_2fa_begin, setup_2fa_complete, totp_code, totp_now
 
 
 def current_code(secret: str) -> str:
     key = base64.b32decode(secret, casefold=True)
-    return _totp_code(key, _totp_now())
+    return totp_code(key, totp_now())
 
 
 async def main() -> None:
@@ -34,10 +33,10 @@ async def main() -> None:
         if user is None:
             print("[skip] 用户不存在")
             return
-        begin = await service_2fa.setup_2fa_begin(db, user.id)
+        begin = await setup_2fa_begin(db, user.id)
         secret = begin["secret"]
         code = current_code(secret)
-        res = await service_2fa.setup_2fa_complete(db, user.id, code)
+        res = await setup_2fa_complete(db, user.id, code)
         await db.commit()
         print(f"SECRET={secret}")
         print(f"CURRENT_CODE={code}")

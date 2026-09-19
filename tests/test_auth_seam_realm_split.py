@@ -17,9 +17,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth import deps as auth_deps
-from app.modules.auth.models import User
-from app.modules.auth.snapshot import get_user_snapshot_batch
+from auth import deps as auth_deps
+from auth.models import User
+from auth.snapshot import get_user_snapshot_batch
 from tests.conftest import DB, auth_user_uid
 
 
@@ -45,7 +45,7 @@ async def test_authz_seam_resolves_current_user_from_auth_realm(
     关键：业务 db 本就没有 users；若 seam 偷偷回落业务 db 必定 UndefinedTable。这里能通过
     即证明鉴权真值在 auth realm 取到、且没碰业务 users。
     """
-    from app.modules.auth.security import create_access_token
+    from auth.security import create_access_token
 
     assert await _assert_business_select_user_missing(db)  # 前置：业务 realm 无 users
 

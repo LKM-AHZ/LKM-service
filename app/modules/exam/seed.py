@@ -11,9 +11,11 @@ from typing import NotRequired, TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401  注册 auth 表，避免 User mapper 引用的 RefreshToken 无法定位（同 files seed 范式）
 from app.db.session import new_session
 from app.modules.exam.models import Exam, ExamQuestion
+from auth import register_models
+
+register_models()  # 注册 auth ORM 映射类（幂等）
 
 
 class _QuestionSpec(TypedDict):

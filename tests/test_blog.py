@@ -12,9 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
-from app.modules.auth.schemas import ProfileUpdate
-from app.modules.auth.security import create_access_token, hashpwd
-from app.modules.auth.service import update_profile
 from app.modules.blog.errors import BlogErr
 from app.modules.blog.models import BlogSeriesStatus
 from app.modules.blog.schemas import (
@@ -36,6 +33,9 @@ from app.modules.blog.service import (
     update_series,
     write_series_file,
 )
+from auth.schemas import ProfileUpdate
+from auth.security import create_access_token, hashpwd
+from auth.service import update_profile
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def blog_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
 async def _user(
     db: AsyncSession, username: str = "alice", email: str = "alice@example.com"
 ) -> uuid.UUID:
-    from app.modules.auth.models import Profile, User
+    from auth.models import Profile, User
 
     user = User(
         username=username,
@@ -317,7 +317,7 @@ class TestBlogStars:
 async def _user_nick(
     db: AsyncSession, username: str, nickname: str | None
 ) -> uuid.UUID:
-    from app.modules.auth.models import Profile, User
+    from auth.models import Profile, User
 
     user = User(
         username=username,

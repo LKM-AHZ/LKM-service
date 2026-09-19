@@ -11,10 +11,8 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401
 from app.db.base import now_iso
 from app.db.session import new_session
-from app.modules.auth.models import Profile, User
 from app.modules.content.column_models import ColumnPostStatus, ColumnStatus
 from app.modules.content.models import (
     Board,
@@ -22,6 +20,10 @@ from app.modules.content.models import (
     ColumnApplication,
     ColumnPost,
 )
+from auth import register_models
+from auth.entities import Profile, User
+
+register_models()  # 注册 auth ORM 映射类（幂等）
 
 # 种子专栏归属的演示作者用户名（避免依赖具体本地用户）
 _SEED_AUTHOR_USERNAME = "column_seed_author"

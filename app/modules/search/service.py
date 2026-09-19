@@ -26,10 +26,10 @@ import uuid
 from app.core.common import PageData, paginate_pages
 from app.core.err import BizError
 from app.db.repository import DbSession
-from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.search.errors import SearchErr
 from app.modules.search.repository import SearchRepository
 from app.modules.search.schemas import SearchHit
+from auth.snapshot import get_user_snapshot_batch
 
 
 async def _author_map(db: DbSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:

@@ -7,11 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
 from app.modules.admin.models import RolePermission
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.models import User
 from app.modules.content.models import Board, ContentItem
 from app.modules.rbac.permissions import DEFAULT_GRANTS, Permission
 from app.modules.rbac.service import check_owner
+from auth.deps import CurrentUser
+from auth.models import User
 from tests.conftest import DB
 
 

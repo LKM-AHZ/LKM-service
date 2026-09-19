@@ -26,7 +26,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
-from app.modules.auth.models import Profile, User
 from app.modules.exam.errors import ExamErr
 from app.modules.exam.models import Exam, ExamCertificate, ExamQuestion
 from app.modules.exam.schemas import ExamCreate, QuestionCreate, SubmitAnswersRequest
@@ -36,6 +35,7 @@ from app.modules.exam.service import (
     start_attempt,
     submit_attempt,
 )
+from auth.models import Profile, User
 from tests.conftest import AuthUser, auth_user_uid
 
 # 不存在的考试 id（uuid 形态），用于路由未命中路径。

@@ -15,7 +15,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.models import Profile, User
 from app.modules.projects.errors import ProjectErr
 from app.modules.projects.models import Project, ProjectApplication, ProjectMember
 from app.modules.projects.schemas import (
@@ -28,6 +27,7 @@ from app.modules.projects.service import (
     review_application,
     submit_application,
 )
+from auth.models import Profile, User
 from tests.conftest import AuthUser, auth_user_uid
 
 # 不存在的用户 / 项目 id（uuid7 形态），用于校验失败与未命中路径。

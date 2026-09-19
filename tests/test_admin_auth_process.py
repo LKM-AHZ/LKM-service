@@ -1,6 +1,6 @@
 """AUTH 独立进程后台 admin 会话写面（S5-A2 Step0 additive）HTTP 测试。
 
-验证主送经 ``auth_app_client``（直接起 ``app.main_auth.app``，override ``get_auth_session``
+验证主送经 ``auth_app_client``（直接起 ``auth.main.app``，override ``get_auth_session``
 → 本测 ``auth_db`` auth 独立库 schema）打 auth 进程自身的 4 个写面端点：
 
 - login 成功落 cookie（admin_session/admin_refresh）
@@ -24,8 +24,8 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import TOTP, Profile, RefreshToken, User
-from app.modules.auth.security import encrypt_secret, generate_totp_secret, hashpwd
+from auth.models import TOTP, Profile, RefreshToken, User
+from auth.security import encrypt_secret, generate_totp_secret, hashpwd
 
 
 async def _create_admin(

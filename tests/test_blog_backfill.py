@@ -42,7 +42,7 @@ async def _owner_user(
 
     与 tests/test_blog.py 的 ``_user`` 同范（仅此文件没走 create_series 服务不需要 role）。
     """
-    from app.modules.auth.models import Profile, User
+    from auth.models import Profile, User
 
     user = User(
         username=username,

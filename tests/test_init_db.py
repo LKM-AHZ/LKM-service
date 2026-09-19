@@ -8,6 +8,7 @@ import pytest
 import app.core.redis as redis_mod
 from app.core.config import settings
 from app.db import init_db as init_db_mod
+from auth.db import init as auth_init_mod
 
 
 @pytest.fixture(autouse=True)
@@ -187,9 +188,9 @@ async def test_init_auth_db_create_all_channel(monkeypatch) -> None:
     def _fake_upgrade() -> None:
         calls.append("upgrade")
 
-    monkeypatch.setattr(init_db_mod, "_create_auth_all", _fake_create)
-    monkeypatch.setattr(init_db_mod, "_run_auth_upgrade", _fake_upgrade)
-    await init_db_mod.init_auth_db()
+    monkeypatch.setattr(auth_init_mod, "_create_auth_all", _fake_create)
+    monkeypatch.setattr(auth_init_mod, "_run_auth_upgrade", _fake_upgrade)
+    await auth_init_mod.init_auth_db()
     assert calls == ["create_all"]
 
 
@@ -205,12 +206,12 @@ async def test_init_auth_db_alembic_channel_uses_auth_lock(monkeypatch) -> None:
     def _fake_upgrade() -> None:
         calls.append("upgrade")
 
-    monkeypatch.setattr(init_db_mod, "_create_auth_all", _fake_create)
-    monkeypatch.setattr(init_db_mod, "_run_auth_upgrade", _fake_upgrade)
-    await init_db_mod.init_auth_db()
+    monkeypatch.setattr(auth_init_mod, "_create_auth_all", _fake_create)
+    monkeypatch.setattr(auth_init_mod, "_run_auth_upgrade", _fake_upgrade)
+    await auth_init_mod.init_auth_db()
     assert calls == ["upgrade"]
     # 锁已释放；且业务链 key 未被本通道占用/误删
-    assert await fake.get(init_db_mod._AUTH_MIGRATION_LOCK_KEY) is None
+    assert await fake.get(auth_init_mod._AUTH_MIGRATION_LOCK_KEY) is None
 
 
 async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
@@ -219,8 +220,8 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
 
-    import app.db.auth_session as auth_session_mod
-    from app.db.auth_base import auth_metadata
+    import auth.db.session as auth_session_mod
+    from auth.db.base import auth_metadata
 
     schema = "s_auth_init"
     engine = create_async_engine(settings.auth_database_url, poolclass=StaticPool)
@@ -232,7 +233,7 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
     # _create_auth_all 内部 import get_auth_engine → patch 模块属性即生效
     monkeypatch.setattr(auth_session_mod, "get_auth_engine", lambda: engine)
     try:
-        await init_db_mod._create_auth_all()
+        await auth_init_mod._create_auth_all()
         async with engine.connect() as conn:
             n = (
                 await conn.execute(
@@ -254,9 +255,9 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
 
 async def test_auth_metadata_disjoint_from_business_base() -> None:
     """拆库不变量：auth 表（users/profiles…）只挂 AuthBase，不进业务 Base.metadata。"""
-    from app.db.auth_base import auth_metadata
     from app.db.base import Base
     from app.db.model_registry import ensure_all_models
+    from auth.db.base import auth_metadata
 
     ensure_all_models()
     assert set(auth_metadata.tables).isdisjoint(Base.metadata.tables)

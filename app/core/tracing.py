@@ -68,8 +68,17 @@ def _service_name(service_suffix: str) -> str:
     return settings.otel_service_name or f"{settings.app_name}{service_suffix}"
 
 
-def setup_tracing(app: Any, *, service_suffix: str = "") -> None:
-    """按配置初始化 OTel；未启用或失败则静默跳过（幂等、fail-open）。"""
+def setup_tracing(app: Any = None, *, service_suffix: str = "") -> None:
+    """按配置初始化 OTel；未启用或失败则静默跳过（幂等、fail-open）。
+
+    *app* 为 FastAPI 实例时额外挂 FastAPI 埋点；worker/scheduler 等**非 ASGI 进程**
+    传 ``None``——它们只需 provider + httpx，消费/调度 span 经 :func:`tracer` 产出。
+
+    **调用时机**：ASGI 进程必须在**装配期**（返回 app 前）调用。FastAPI 的中间件栈在
+    首个 ASGI 请求（含 lifespan）时由 Starlette 定型，在 lifespan 内再 ``add_middleware``
+    不会进入栈——表现为 HTTP server span **完全采集不到**，而 SQLAlchemy/httpx 埋点因
+    不依赖中间件栈照常生效（易误判为「埋点已工作」）。
+    """
     global _tracer_provider
     if _tracer_provider is not None:
         return
@@ -99,9 +108,10 @@ def setup_tracing(app: Any, *, service_suffix: str = "") -> None:
         )
         provider.add_span_processor(BatchSpanProcessor(_exporter_factory_or_default()))
 
-        FastAPIInstrumentor.instrument_app(
-            app, tracer_provider=provider, excluded_urls=_EXCLUDED_URLS
-        )
+        if app is not None:
+            FastAPIInstrumentor.instrument_app(
+                app, tracer_provider=provider, excluded_urls=_EXCLUDED_URLS
+            )
         HTTPXClientInstrumentor().instrument(tracer_provider=provider)
         _tracer_provider = provider
         logger.info("OpenTelemetry 已初始化 service=%s", _service_name(service_suffix))

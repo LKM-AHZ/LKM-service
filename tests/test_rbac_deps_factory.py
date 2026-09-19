@@ -10,9 +10,9 @@ import pytest
 
 from app.core.err import BizError, CommonErr
 from app.modules.admin.models import RolePermission
-from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
 from tests.conftest import DB
 
 

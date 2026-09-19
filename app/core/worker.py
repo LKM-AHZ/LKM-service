@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from app.core import messaging, task_registry
+from app.core.tracing import setup_tracing
 from app.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
 from app.db.session import new_session
 
@@ -94,6 +95,10 @@ async def _consume(subscription_name: str) -> None:
 
     成功 → ack；handler 异常/超时 → core.messaging 负确认（重投超限后进死信）。
     """
+    # worker 进程不是 ASGI app：初始化 provider + httpx，让消费 span（含从消息属性
+    # extract 出的上游 trace 上下文）能真正导出；不配 LKM_OTEL_ENABLED 时是 no-op。
+    setup_tracing(service_suffix="-worker")
+
     handlers = task_registry.handlers_for(subscription_name)
 
     async def _on_payload(

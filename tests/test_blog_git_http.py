@@ -14,8 +14,6 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import User
-from app.modules.auth.security import hashpwd
 from app.modules.blog import backfill
 from app.modules.blog.git_http import (
     _decode_basic_auth,
@@ -25,6 +23,8 @@ from app.modules.blog.git_http import (
     maybe_backfill_after_push,
 )
 from app.modules.blog.models import BlogContent, BlogSeries
+from auth.models import User
+from auth.security import hashpwd
 
 
 @pytest.fixture

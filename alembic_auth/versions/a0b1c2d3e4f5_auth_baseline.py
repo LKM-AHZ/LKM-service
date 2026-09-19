@@ -18,8 +18,8 @@ auth 表结构变更仍照常 ``alembic -c alembic.auth.ini revision --autogener
 from collections.abc import Sequence
 
 from alembic import op
-from app.db.auth_base import auth_metadata
-from app.db.model_registry import ensure_all_models
+from auth.db.base import auth_metadata
+from auth.register import register_models
 
 # revision identifiers, used by Alembic.
 revision: str = "a0b1c2d3e4f5"
@@ -31,11 +31,11 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     """Upgrade schema：建出 auth 库全部缺失表（幂等）。"""
     # env.py 的 target metadata 仅 import 空 auth_metadata，须先注册 auth models 才有表。
-    ensure_all_models()
+    register_models()
     auth_metadata.create_all(bind=op.get_bind())
 
 
 def downgrade() -> None:
     """Downgrade schema：清空 auth 库本链所辖表。"""
-    ensure_all_models()
+    register_models()
     auth_metadata.drop_all(bind=op.get_bind())

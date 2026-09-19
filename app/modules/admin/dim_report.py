@@ -20,7 +20,7 @@
 落位选择：放 ``app/modules/admin/``（业务模块），import 的是 ``app.db.user_dim``（基础设施
 db 层，非业务模块）——modules→db 方向，是既有 admin routers 也有的同方向边（如
 ``app.db.session``），**零新增 import-linter 违约边**（契约二拦的是 db→modules 反向；
-契约三/四只拦 business→business / business→app.modules.auth，``app.db.user_dim`` 均不在
+契约三/四只拦 business→business / business→auth 内部，``app.db.user_dim`` 均不在
 其 forbidden 集内）。宽表语义归属 auth＝单一数据源 owner（写侧在 auth/user_dim_sync），此处
 只是 read-only 离线的**读方**，不构成任何写/管理参与方。
 

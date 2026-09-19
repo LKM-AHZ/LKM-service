@@ -24,7 +24,7 @@ cp .env.example .env
 ## 当前能力
 
 - 认证与账号：本地/普通/邮箱/手机号注册，密码/验证码/魔法链接登录，JWT access+refresh 与登出吊销，账号等级/锁定/失败计数/限流，2FA（TOTP + 恢复码），OAuth（GitHub），Passkey（WebAuthn），账号恢复（自助 + 管理员），邮箱/手机号绑定，Onboarding 引导。
-- 认证独立服务（M3/S5 拆库）：`users/profiles` 物理迁出业务库，AUTH 独立 ASGI 进程（`app/main_auth.py`）独立部署；业务域仅经 `auth.snapshot` 读缝 + `user:snap` 缓存读身份，边界由 import-linter 强制。
+- 认证独立服务（M3/S5 拆库 + 源码层拆包）：`users/profiles` 物理迁出业务库，AUTH 独立 ASGI 进程（`auth/main.py`，顶层包 `auth/` 与 `app/` 同级）独立部署；业务域仅经 auth 公开面（`auth.snapshot` 读缝、`auth.deps`/`auth.schemas`/`auth.seams`/`auth.entities`）+ `user:snap` 缓存读身份，边界由 import-linter 跨包契约强制。
 - 内容域（content 聚合根）：社区帖子/评论/点赞（同事务维护冗余计数）、分科板块（负责人/禁言/准入）、专栏（申请/审核/文章）、问答、官方文章；只读 GraphQL 聚合。
 - 信息流域（feed）：关注用户/板块 + 时间线（分页 + `X-Total`）。
 - 其他业务域：博客（Git 托管/星标/评论/Git HTTP）、文件库（上传/审核/下载）、积分/成就/排行榜（事件规则引擎）、考试认证、项目广场、StarHope AI 学习助手。
@@ -39,12 +39,10 @@ cp .env.example .env
 ```text
 .
 ├── main.py                    # 兼容入口：uvicorn main:app
-├── app/
+├── app/                       # 业务域包(auth 已独立为下方顶层包)
 │   ├── main.py                # create_app()：单体(业务域 + 前台 auth 面), lifespan/异常处理/启动安全检查
-│   ├── main_auth.py           # AUTH 独立 ASGI 进程入口(auth-only, compose 服务 auth)
-│   ├── health_auth.py         # AUTH 进程专属 liveness/readiness
 │   ├── api/
-│   │   ├── router.py          # 由 registry.MODULES 驱动挂载全部模块 REST 路由
+│   │   ├── router.py          # registry.MODULES 驱动业务 REST；auth 公开面 ROUTERS 显式挂载
 │   │   └── graphql.py         # GraphQL 装配(只读聚合)
 │   ├── ws/                    # WebSocket(broker/manager/router), Redis 订阅推送
 │   ├── core/                  # 确定性共享层(不得依赖 modules)
@@ -56,13 +54,11 @@ cp .env.example .env
 │   │   └── redis.py / redis_limiter.py / throttle.py       # Redis 客户端与共享限流
 │   ├── db/                    # 基础设施层(不得反向依赖 modules)
 │   │   ├── base.py / session.py / repo.py / model_registry.py
-│   │   ├── auth_base.py / auth_session.py  # auth 独立库 metadata / 会话
+│   │   ├── migration_lock.py / shared_objects.py  # 迁移锁 / 库级共享对象(业务库与 auth 库共用)
 │   │   ├── models.py / outbox.py / event_processed.py / event_failure.py / user_dim.py
-│   │   └── init_db.py         # 开发环境自动建表
+│   │   └── init_db.py         # 业务库建表(开发环境自动建表)
 │   └── modules/
-│       ├── registry.py        # 模块注册表(路由/模型/任务统一出口)
-│       ├── auth/              # 认证自有域:登录/2FA/OAuth/Passkey/恢复/authz/onboarding
-│       │                      #   + snapshot 读缝、user_http seam、events 失效、user_dim_sync ETL
+│       ├── registry.py        # 模块注册表(路由/模型/任务统一出口，仅业务域)
 │       ├── content/           # 内容聚合根:models/router/service/graphql + boards/columns/qa 子包
 │       ├── feed/              # 信息流域:关注 + 时间线 + GraphQL
 │       ├── admin/             # 后台(users/content/reports/auth/dlq + moderation + dim_report)
@@ -71,6 +67,13 @@ cp .env.example .env
 │       ├── points/            # 积分/成就/排行榜(事件规则引擎)
 │       ├── projects/ exam/ articles/ starhope/
 │       └── rbac/ storage/ health/   # 权限点/对象存储抽象/健康检查
+├── auth/                      # 认证顶层包(与 app 同级)：登录/2FA/OAuth/Passkey/恢复/authz/onboarding
+│   ├── main.py                # AUTH 独立 ASGI 进程入口(auth-only, compose 服务 auth)
+│   ├── health.py              # AUTH 进程专属 liveness/readiness
+│   ├── db/                    # auth 库基建：base(AuthBase metadata)/session(引擎与会话)/init(建库)
+│   ├── register.py            # register_models / register_tasks / register_errors 注册钩子
+│   ├── snapshot.py deps.py schemas.py entities.py seams.py  # 对 app 的公开面(其余均为内部)
+│   └── router*/service*/models/tasks/user_dim_sync/channels/…  # auth 自有实现
 ├── alembic/                   # 业务库 Alembic 环境与迁移(LKM_USE_ALEMBIC=true 时启用)
 ├── alembic_auth/              # auth 独立库 Alembic 环境与迁移
 ├── tests/
@@ -182,7 +185,7 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 ## 数据库与迁移
 
 - 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（**1 条 UUID baseline**，全库主键为 uuid7）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
-- AUTH 独立库：表定义在 `app/db/auth_base.py`（AuthBase，18 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `a0b1c2d3e4f5`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
+- AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，18 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `a0b1c2d3e4f5`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 ## 运行
 
@@ -194,7 +197,7 @@ uv run uvicorn main:app --reload --port 8000
 独立 AUTH 进程：
 
 ```bash
-uv run uvicorn app.main_auth:app --reload --port 8001
+uv run uvicorn auth.main:app --reload --port 8001
 ```
 
 仅运行 `main:app` 适合常规本地开发。验证拆分部署、跨 AUTH 读缝或生产配置时，必须同时启动

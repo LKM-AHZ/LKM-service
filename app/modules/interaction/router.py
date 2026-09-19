@@ -17,7 +17,6 @@ from app.core.common import (
 )
 from app.core.err import respond
 from app.db.session import get_read_session, get_session
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.interaction.schemas import (
     FavoriteItem,
     FavoriteState,
@@ -33,6 +32,7 @@ from app.modules.interaction.service import (
 )
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/interaction", tags=["interaction"])
 

@@ -10,9 +10,9 @@ from typing import Any
 from app.core.cache import cache_get, cache_set, make_key
 from app.core.err import BizError, CommonErr
 from app.db.repository import DbSession
-from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.repository import ResourceRepository, RolePermissionRepository
+from auth.deps import CurrentUser
 
 # 权限映射缓存 TTL（秒）：改动极低频，短 TTL 弱一致可接受（spec D7）
 _PERM_TTL = 60

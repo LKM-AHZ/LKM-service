@@ -1,8 +1,8 @@
 """Prefect flow：user_dim 报表宽表增量对账 / 显式回填（M5 7.2.5）。
 
 蓝图《后端规划.md》§调度定案：APScheduler 只做简单 cron 触发入口（``cron.*`` 经总线），
-DAG / 失败重试 / 回填由 Prefect flow 承接。本模块不复制 ETL SQL，全部复用
-``app.modules.auth.user_dim_sync`` 的既有入口，保持其**命令数恒定 / 跨 realm 双会话 /
+DAG / 失败重试 / 回填由 Prefect flow 承接。本模块不复制 ETL SQL，全部经
+``auth.seams`` 复用 auth 的既有 ETL 入口，保持其**命令数恒定 / 跨 realm 双会话 /
 幂等**不变量。
 
 mode：
@@ -49,14 +49,15 @@ def _flow_span(traceparent: str) -> Any:
 async def _in_session(
     fn: Callable[[Any, Any], Awaitable[int]],
 ) -> int:
-    """经 ``user_dim_sync._session_factory`` 开跨 realm 双会话执行并提交目标会话。
+    """经 ``auth.seams.open_session_pair`` 开跨 realm 双会话执行并提交目标会话。
 
     与 ``refresh_user_dim_event`` 同一范式：源会话只读、目标会话 commit/rollback/close，
-    不复制任何 SQL。测试可 monkeypatch ``_session_factory`` 走融合 schema。
+    不复制任何 SQL。测试仍可 monkeypatch ``auth.user_dim_sync._session_factory`` 走融合
+    schema——seam 包装是惰性取属性的，patch 照常生效。
     """
-    from app.modules.auth import user_dim_sync as uds
+    from auth.seams import open_session_pair
 
-    source_db, target_db = await uds._session_factory()
+    source_db, target_db = await open_session_pair()
     try:
         n = await fn(source_db, target_db)
         await target_db.commit()
@@ -71,14 +72,14 @@ async def _in_session(
 
 async def _reconcile_once() -> int:
     """一拍周期对账：复用 periodic 入口（自开会话 + Redis 锁 + commit），幂等。"""
-    from app.modules.auth.user_dim_sync import reconcile_user_dim_periodic
+    from auth.seams import reconcile_user_dim_periodic
 
     return await reconcile_user_dim_periodic()
 
 
 async def _incremental(*, window: int) -> int:
     """单拍增量对账：一条 auth 轻扫 + 一条业务轻扫 + 差集批量 upsert（命令数恒 4/2）。"""
-    from app.modules.auth.user_dim_sync import reconcile_user_dim_incremental
+    from auth.seams import reconcile_user_dim_incremental
 
     return await _in_session(
         lambda src, tgt: reconcile_user_dim_incremental(src, tgt, window=window)
@@ -87,7 +88,7 @@ async def _incremental(*, window: int) -> int:
 
 async def _sync_ids(*, user_ids: list[int]) -> int:
     """显式 id 批量回填：复用 sync_dim_for_ids（命令数恒 2），空列表 no-op。"""
-    from app.modules.auth.user_dim_sync import sync_dim_for_ids
+    from auth.seams import sync_dim_for_ids
 
     return await _in_session(lambda src, tgt: sync_dim_for_ids(src, tgt, user_ids))
 

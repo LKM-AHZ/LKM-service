@@ -26,12 +26,12 @@ def test_admin_uses_settings_for_cookie_and_token_days() -> None:
     """admin cookie/refresh 不再用本地魔法数字，而引用 settings。
 
     S5-A2 后会话写面（login/refresh/2fa）迁入 AUTH 进程 —— admin cookie/token 时长由
-    ``app.modules.auth.admin_router``（auth 面）消费 settings；monolith 的
+    ``auth.admin_router``（auth 面）消费 settings；monolith 的
     ``admin.auth_router`` 现仅 /me。故源守卫指向 auth 侧拥主模块保“无魔法数字”意图。
     """
     import inspect
 
-    import app.modules.auth.admin_router as ar
+    import auth.admin_router as ar
 
     src = inspect.getsource(ar)
     assert "settings.admin_access_cookie_minutes" in src

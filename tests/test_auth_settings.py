@@ -14,11 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import User
-from app.modules.auth.router_settings import BindEmailVerify, BindPhoneVerify
-from app.modules.auth.schemas import UnbindRequest
+from auth.deps import CurrentUser
+from auth.errors import AuthErr
+from auth.models import User
+from auth.router_settings import BindEmailVerify, BindPhoneVerify
+from auth.schemas import UnbindRequest
 
 
 def _FakeCurrentUser(
@@ -46,7 +46,7 @@ def _unwrap(response: Any) -> dict[str, Any]:
 async def _reg_local(
     auth_db: AsyncSession, username: str = "alice", password: str = "secret123456"
 ) -> dict[str, Any]:
-    from app.modules.auth.schemas import UserRegLocal
+    from auth.schemas import UserRegLocal
 
     svc = _service()
     return await svc.register_local(
@@ -55,7 +55,7 @@ async def _reg_local(
 
 
 async def _get_user(auth_db: AsyncSession, user_id: int) -> User:
-    from app.modules.auth.models import User
+    from auth.models import User
 
     # 测试均为“先建后查”，必然命中，返回类型直接按 User 处理
     return cast(
@@ -65,7 +65,7 @@ async def _get_user(auth_db: AsyncSession, user_id: int) -> User:
 
 
 def _service():
-    from app.modules.auth import service_auth
+    from auth import service_auth
 
     return service_auth
 
@@ -86,12 +86,12 @@ class TestBindEmail:
         assert (await _get_user(auth_db, user_id)).account_level == "local"
 
         # Act: request email binding（验证码直接取自 create_email_verification 返回值）
-        from app.modules.auth.service_verify import create_email_verification
+        from auth.service_verify import create_email_verification
 
         code, _ = await create_email_verification(auth_db, "alice@example.com", "bind")
 
         # Now use the router function directly
-        from app.modules.auth.router_settings import bind_email_verify
+        from auth.router_settings import bind_email_verify
 
         result = await bind_email_verify(
             body=BindEmailVerify(email="alice@example.com", code=code),
@@ -114,7 +114,7 @@ class TestBindEmail:
         reg1 = await _reg_local(auth_db, username="alice")
         reg2 = await _reg_local(auth_db, username="bob")
 
-        from app.modules.auth.service_verify import create_email_verification
+        from auth.service_verify import create_email_verification
 
         # Bind email to alice directly
         user1 = await _get_user(auth_db, reg1["user_id"])
@@ -124,7 +124,7 @@ class TestBindEmail:
         # Try to bind the same email to bob
         code, _ = await create_email_verification(auth_db, "same@example.com", "bind")
 
-        from app.modules.auth.router_settings import bind_email_verify
+        from auth.router_settings import bind_email_verify
 
         with pytest.raises(BizError) as exc:
             await bind_email_verify(
@@ -138,11 +138,11 @@ class TestBindEmail:
         """Should fail with wrong verification code."""
         reg = await _reg_local(auth_db, username="alice")
 
-        from app.modules.auth.service_verify import create_email_verification
+        from auth.service_verify import create_email_verification
 
         await create_email_verification(auth_db, "alice@example.com", "bind")
 
-        from app.modules.auth.router_settings import bind_email_verify
+        from auth.router_settings import bind_email_verify
 
         with pytest.raises(BizError) as exc:
             await bind_email_verify(
@@ -162,11 +162,11 @@ class TestBindPhone:
         user_id = reg["user_id"]
         assert (await _get_user(auth_db, user_id)).account_level == "local"
 
-        from app.modules.auth.service_verify import create_phone_verification
+        from auth.service_verify import create_phone_verification
 
         code, _ = await create_phone_verification(auth_db, "13800001111", "bind")
 
-        from app.modules.auth.router_settings import bind_phone_verify
+        from auth.router_settings import bind_phone_verify
 
         result = await bind_phone_verify(
             body=BindPhoneVerify(phone="13800001111", code=code),
@@ -191,11 +191,11 @@ class TestBindPhone:
         user1.phone = "13800001111"
         await auth_db.flush()
 
-        from app.modules.auth.service_verify import create_phone_verification
+        from auth.service_verify import create_phone_verification
 
         code, _ = await create_phone_verification(auth_db, "13800001111", "bind")
 
-        from app.modules.auth.router_settings import bind_phone_verify
+        from auth.router_settings import bind_phone_verify
 
         with pytest.raises(BizError) as exc:
             await bind_phone_verify(
@@ -209,11 +209,11 @@ class TestBindPhone:
         """Should fail with wrong verification code."""
         reg = await _reg_local(auth_db, username="alice")
 
-        from app.modules.auth.service_verify import create_phone_verification
+        from auth.service_verify import create_phone_verification
 
         await create_phone_verification(auth_db, "13800001111", "bind")
 
-        from app.modules.auth.router_settings import bind_phone_verify
+        from auth.router_settings import bind_phone_verify
 
         with pytest.raises(BizError) as exc:
             await bind_phone_verify(
@@ -235,11 +235,11 @@ class TestBindEmailUpgrade:
         assert user.account_level == "local"
         assert user.email is None
 
-        from app.modules.auth.service_verify import create_email_verification
+        from auth.service_verify import create_email_verification
 
         code, _ = await create_email_verification(auth_db, "upgrade@example.com", "bind")
 
-        from app.modules.auth.router_settings import bind_email_verify
+        from auth.router_settings import bind_email_verify
 
         await bind_email_verify(
             body=BindEmailVerify(email="upgrade@example.com", code=code),
@@ -253,7 +253,7 @@ class TestBindEmailUpgrade:
 
     async def should_not_downgrade_normal_user(self, auth_db: AsyncSession):
         """Binding email to an already-normal user: should stay normal."""
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         # Create an already-normal user
         user = User(
@@ -269,11 +269,11 @@ class TestBindEmailUpgrade:
         user_id = user.id
 
         # Bind a different email (the user already has one, but we're binding another)
-        from app.modules.auth.service_verify import create_email_verification
+        from auth.service_verify import create_email_verification
 
         code, _ = await create_email_verification(auth_db, "another@example.com", "bind")
 
-        from app.modules.auth.router_settings import bind_email_verify
+        from auth.router_settings import bind_email_verify
 
         await bind_email_verify(
             body=BindEmailVerify(email="another@example.com", code=code),
@@ -293,7 +293,7 @@ class TestGetSettings:
         return json.loads(response.body.decode())
 
     async def should_return_binding_state(self, auth_db: AsyncSession):
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         user = User(
             username="bindstate",
@@ -307,12 +307,12 @@ class TestGetSettings:
         auth_db.add(Profile(user_id=user.id, role="member"))
         await auth_db.flush()
 
-        from app.modules.auth.models import TOTP
+        from auth.models import TOTP
 
         auth_db.add(TOTP(user_id=user.id, secret="s", enabled=True))
         await auth_db.flush()
 
-        from app.modules.auth.router_settings import get_settings
+        from auth.router_settings import get_settings
 
         data = self._unwrap(
             await get_settings(
@@ -331,7 +331,7 @@ class TestUnbind:
     async def _reg_with_bindings(
         self, auth_db: AsyncSession, email: str = "a@b.com", phone: str = "13800001111"
     ) -> User:
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         user = User(
             username="unbind",
@@ -347,10 +347,10 @@ class TestUnbind:
         return user
 
     async def should_unbind_email_without_2fa(self, auth_db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         user = await self._reg_with_bindings(auth_db)
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         data = _unwrap(
             await unbind(
@@ -366,7 +366,7 @@ class TestUnbind:
 
     async def should_reject_unbind_when_only_one_way_left(self, auth_db: AsyncSession):
         # 只有 phone，没有 email/github → 解绑 email 会触发“保留一种”守卫（虽然 email 本来就空，走 phone 侧测试更贴）
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         user = User(
             username="onlyphone",
@@ -383,7 +383,7 @@ class TestUnbind:
         await auth_db.flush()
 
         from app.core.err import BizError
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         # 先解绑 phone，使仅剩 email
         _unwrap(
@@ -406,13 +406,13 @@ class TestUnbind:
 
     async def should_require_totp_when_2fa_enabled(self, auth_db: AsyncSession):
         user = await self._reg_with_bindings(auth_db)
-        from app.modules.auth.models import TOTP
+        from auth.models import TOTP
 
         auth_db.add(TOTP(user_id=user.id, secret="s", enabled=True))
         await auth_db.flush()
 
         from app.core.err import BizError
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         with pytest.raises(BizError) as exc:
             await unbind(
@@ -425,7 +425,7 @@ class TestUnbind:
 
     async def should_unbind_github(self, auth_db: AsyncSession):
         user = await self._reg_with_bindings(auth_db)
-        from app.modules.auth.models import UserOAuth
+        from auth.models import UserOAuth
 
         auth_db.add(
             UserOAuth(
@@ -436,7 +436,7 @@ class TestUnbind:
             )
         )
         await auth_db.flush()
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         data = _unwrap(
             await unbind(
@@ -454,12 +454,12 @@ class TestUnbind:
 
     async def should_require_2fa_for_github_unbind(self, auth_db: AsyncSession):
         """解绑 GitHub 已开启 2FA 时，同样要求二次验证（TOTP 或恢复码）。"""
-        from app.modules.auth.models import TOTP
+        from auth.models import TOTP
 
         user = await self._reg_with_bindings(auth_db)
         auth_db.add(TOTP(user_id=user.id, secret="s", enabled=True))
         await auth_db.flush()
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         with pytest.raises(BizError) as exc:
             await unbind(
@@ -474,8 +474,8 @@ class TestUnbind:
         """解绑 GitHub 已开启 2FA 时，可用合法恢复码兜底完成。"""
         import hashlib
 
-        from app.modules.auth.models import TOTP, RecoveryCode, UserOAuth
-        from app.modules.auth.router_settings import unbind
+        from auth.models import TOTP, RecoveryCode, UserOAuth
+        from auth.router_settings import unbind
 
         user = await self._reg_with_bindings(auth_db)
         auth_db.add(TOTP(user_id=user.id, secret="s", enabled=True))
@@ -512,7 +512,7 @@ class TestUnbind:
     async def should_reject_invalid_type(self, auth_db: AsyncSession):
         user = await self._reg_with_bindings(auth_db)
         from app.core.err import BizError
-        from app.modules.auth.router_settings import unbind
+        from auth.router_settings import unbind
 
         with pytest.raises(BizError) as exc:
             await unbind(

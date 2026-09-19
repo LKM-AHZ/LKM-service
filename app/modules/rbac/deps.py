@@ -19,9 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
 from app.db.session import get_session
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import role_has_permission
+from auth.deps import CurrentUser, get_current_user
 
 
 def RequirePermission(permission: Permission) -> Any:

@@ -10,7 +10,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-# 让 alembic 能找到 app 包（从仓库根 sys.path 挂载）
+# 让 alembic 能找到 app / auth 包（从仓库根 sys.path 挂载）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import engine_from_config, pool
@@ -26,7 +26,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # 目标 metadata = auth 独立库（AuthBase）
-from app.db.auth_base import auth_metadata
+from auth.db.base import auth_metadata
 
 target_metadata = auth_metadata
 

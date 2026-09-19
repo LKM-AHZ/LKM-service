@@ -41,12 +41,12 @@ from app.modules.articles.schemas import (
     CategoryCreate,
     CategoryOut,
 )
-from app.modules.auth.schemas import ProfileInfo
-from app.modules.auth.snapshot import (
+from app.modules.points.rules import enqueue_points_event
+from auth.schemas import ProfileInfo
+from auth.snapshot import (
     get_user_snapshot_batch,
     profile_info_from_snap,
 )
-from app.modules.points.rules import enqueue_points_event
 
 # 默认阅读速度：中文约 300 字/分钟
 READING_SPEED_CPS = 300

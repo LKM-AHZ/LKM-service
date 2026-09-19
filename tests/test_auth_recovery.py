@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import MagicLink, Profile, RefreshToken, User
+from auth.errors import AuthErr
+from auth.models import MagicLink, Profile, RefreshToken, User
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 async def _mk_local(
     db: AsyncSession, username: str = "alice", password: str = "secret123456"
 ) -> User:
-    from app.modules.auth.security import hashpwd
+    from auth.security import hashpwd
 
     user = User(
         username=username,
@@ -47,7 +47,7 @@ async def _mk_normal(
     email: str = "bob@example.com",
     phone: str = "13800001111",
 ) -> User:
-    from app.modules.auth.security import hashpwd
+    from auth.security import hashpwd
 
     user = User(
         username=username,
@@ -70,7 +70,7 @@ async def _mk_admin(
     email: str = "admin@example.com",
     phone: str = "13800002222",
 ) -> User:
-    from app.modules.auth.security import hashpwd
+    from auth.security import hashpwd
 
     user = User(
         username=username,
@@ -87,7 +87,7 @@ async def _mk_admin(
 
 
 def _svc():
-    from app.modules.auth import service_recovery
+    from auth import service_recovery
 
     return service_recovery
 
@@ -95,7 +95,7 @@ def _svc():
 async def should_default_new_recovery_state_and_counters(db: AsyncSession):
     import datetime as dt
 
-    from app.modules.auth.models import RecoveryTransaction
+    from auth.models import RecoveryTransaction
 
     user = await _mk_admin(db)
     txn = RecoveryTransaction(
@@ -120,7 +120,7 @@ async def should_default_new_recovery_state_and_counters(db: AsyncSession):
 async def _create_phone_code(
     db: AsyncSession, phone: str, purpose: str = "reset"
 ) -> tuple[str, int]:
-    from app.modules.auth.service_verify import create_phone_verification
+    from auth.service_verify import create_phone_verification
 
     return await create_phone_verification(db, phone, purpose)
 
@@ -128,7 +128,7 @@ async def _create_phone_code(
 async def _create_email_code(
     db: AsyncSession, email: str, purpose: str = "reset"
 ) -> tuple[str, int]:
-    from app.modules.auth.service_verify import create_email_verification
+    from auth.service_verify import create_email_verification
 
     return await create_email_verification(db, email, purpose)
 
@@ -198,7 +198,7 @@ class TestCheckRecoveryMethods:
     async def should_show_recoverable_for_normal_with_totp_enabled(
         self, db: AsyncSession
     ):
-        from app.modules.auth.models import TOTP
+        from auth.models import TOTP
 
         user = await _mk_normal(db, username="secure", email="secure@example.com")
         totp = TOTP(user_id=user.id, secret="MZXW6YTBOJQXI33F", enabled=True)
@@ -236,7 +236,7 @@ class TestRecoverByContactPhone:
         assert user.hashed_password != orig_hash
 
         # New password works
-        from app.modules.auth.security import verifypwd
+        from auth.security import verifypwd
 
         assert await verifypwd("newpwd456", user.hashed_password)
 
@@ -327,7 +327,7 @@ class TestRecoverByContactEmail:
         await db.refresh(user)
         assert user.hashed_password != orig_hash
 
-        from app.modules.auth.security import verifypwd
+        from auth.security import verifypwd
 
         assert await verifypwd("newpwd456", user.hashed_password)
 
@@ -416,7 +416,7 @@ class TestRecoverByMagicLink:
         await db.refresh(user)
         assert user.hashed_password != orig_hash
 
-        from app.modules.auth.security import verifypwd
+        from auth.security import verifypwd
 
         assert await verifypwd("newpwd456", user.hashed_password)
 
@@ -529,7 +529,7 @@ class TestRecoverByMagicLink:
 class TestFindUserByContact:
     async def should_raise_user_not_found_when_no_match(self, db: AsyncSession):
         with pytest.raises(BizError) as exc:
-            from app.modules.auth.service_recovery import find_user_by_contact
+            from auth.service_recovery import find_user_by_contact
 
             await find_user_by_contact(db, "email", "noone@example.com")
         assert exc.value.errcode == AuthErr.USER_NOT_FOUND
@@ -548,7 +548,7 @@ class TestFindUserByContact:
         await db.flush()
 
         with pytest.raises(BizError) as exc:
-            from app.modules.auth.service_recovery import find_user_by_contact
+            from auth.service_recovery import find_user_by_contact
 
             await find_user_by_contact(db, "email", "alice@example.com")
         assert exc.value.errcode == AuthErr.RECOVERY_NOT_SUPPORTED

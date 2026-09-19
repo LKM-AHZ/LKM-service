@@ -19,8 +19,6 @@ from app.core.redis import get_redis
 from app.core.secrets import reveal
 from app.db.repo import get_or_raise
 from app.db.repository import DbSession
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FILES_TABLE_PLAN, FileStatus, LibraryFile
 from app.modules.files.repository import LibraryFileRepository
@@ -34,6 +32,8 @@ from app.modules.points.rules import enqueue_points_event
 from app.modules.storage.base import StorageBackend
 from app.modules.storage.errors import StorageErr
 from app.modules.storage.factory import get_storage
+from auth.deps import CurrentUser
+from auth.snapshot import get_user_snapshot_batch
 
 
 class _Readable(Protocol):

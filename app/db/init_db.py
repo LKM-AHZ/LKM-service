@@ -4,24 +4,24 @@
 首次建库时并发 upgrade 会有竞态（重复建表/版本锁冲突），故用 Redis 分布式锁串行化；
 Redis 不可用（未配置/宕机，fail-open）则不设锁直接跑（dev 单 worker 本无并发）。
 
-另有 :func:`init_auth_db`：**auth 独立库**的 schema 初始化（M3.B 真拆库后 auth 表挂
-``AuthBase``/``auth_metadata``，与业务库 ``Base.metadata`` 分属两个 PG 库）。按
-「进程=库边界」原则由 auth 进程（``app.main_auth``）自持，单体的 ``init_db`` 不触达 auth 库。
-两把迁移锁按库分 key，避免业务/auth 迁移互相阻塞。
+**auth 独立库**的 schema 初始化（``init_auth_db``）按「进程=库边界」由 auth 进程自持，
+已归 ``auth.db.init``；本模块只负责业务库，不触达 auth 库。
+两条迁移链的锁按库分 key，通用实现在 ``app.db.migration_lock``。
 """
 
 import asyncio
 import logging
-from contextlib import suppress
 from typing import Any
+
+from app.db.migration_lock import (
+    acquire_migration_lock,
+    release_migration_lock,
+)
+from app.db.shared_objects import ensure_shared_objects
 
 logger = logging.getLogger("lkm.init_db")
 
 _MIGRATION_LOCK_KEY = "lkm:migration:lock"
-_AUTH_MIGRATION_LOCK_KEY = "lkm:migration:auth:lock"
-_MIGRATION_LOCK_TTL = 120  # 秒：迁移超时上限后锁自动过期
-_MIGRATION_LOCK_WAIT = 8  # 秒：拿不到锁时最多等待的时长
-_MIGRATION_LOCK_POLL = 0.3  # 轮询间隔
 
 
 def _run_upgrade() -> None:
@@ -42,47 +42,6 @@ def _run_upgrade() -> None:
     repo_root = Path(__file__).resolve().parent.parent.parent
     cfg = Config(str(repo_root / "alembic.ini"))
     command.upgrade(cfg, "head")
-
-
-async def _acquire_migration_lock(key: str = _MIGRATION_LOCK_KEY) -> bool:
-    """用 Redis SET NX 抢迁移锁；未配置/失败返回 False（fail-open 不设锁）。"""
-    from app.core import redis as redis_client
-
-    client = await redis_client.get_redis()
-    if client is None:
-        return False
-    try:
-        ok = bool(await client.set(key, "1", nx=True, ex=_MIGRATION_LOCK_TTL))
-        if ok:
-            return True
-        # 拿不到 → 有别的 worker 在迁移：轮询等待其释放
-        waited = 0.0
-        while waited < _MIGRATION_LOCK_WAIT:
-            await asyncio.sleep(_MIGRATION_LOCK_POLL)
-            waited += _MIGRATION_LOCK_POLL
-            # 对方已释放并成功重新抢占（lock 已过期）→ 自己来迁
-            gone = bool(await client.get(key)) is False
-            if gone and bool(
-                await client.set(key, "1", nx=True, ex=_MIGRATION_LOCK_TTL)
-            ):
-                return True
-        return False  # 等待超时：照常跑（幂等 no-op）
-    except Exception:
-        return False  # Redis 异常 → fail-open
-
-
-async def _release_migration_lock(
-    held: bool, key: str = _MIGRATION_LOCK_KEY
-) -> None:
-    if not held:
-        return
-    from app.core import redis as redis_client
-
-    client = await redis_client.get_redis()
-    if client is None:
-        return
-    with suppress(Exception):
-        await client.delete(key)
 
 
 def _sync_additive_schema(conn: Any) -> list[str]:
@@ -158,41 +117,6 @@ def _sync_additive_schema(conn: Any) -> list[str]:
                 continue
             changed.append(f"index {index.name}")
     return changed
-
-
-UUID7_FUNCTION_SQL = """
-CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
-DECLARE
-  us bigint;
-  b  bytea;
-BEGIN
-  us := (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
-  b  := uuid_send(gen_random_uuid());
-  b  := overlay(b PLACING substring(int8send(us >> 12) FROM 3) FROM 1 FOR 6);
-  b  := set_byte(b, 6, (112 + ((us >> 8) & 15))::int);
-  b  := set_byte(b, 7, (us & 255)::int);
-  b  := set_byte(b, 8, (get_byte(b, 8) & 63) + 128);
-  RETURN encode(b, 'hex')::uuid;
-END;
-$$ LANGUAGE plpgsql VOLATILE;
-"""
-
-
-async def _ensure_shared_objects(conn: Any) -> None:
-    """建表前必须就绪的库级共享对象（幂等）。
-
-    1. ``pg_trgm`` 扩展：M6.9 trgm 索引的 opclass 依赖它，索引 DDL 显式写
-       ``public.gin_trgm_ops``，故扩展须在 public（schema-per-test 的 search_path 不含 public）。
-    2. ``public.uuid_generate_v7()``：UUID 主键列的 ``server_default`` 目标（RFC 9562 uuid7，
-       时间有序）。**必须在 ``create_all`` 之前建**——PG 建表即解析 DEFAULT 表达式，
-       函数不存在会直接报错。建在 public，故模型侧 ``server_default`` 显式限定 schema。
-
-    ``gen_random_uuid()`` 自 PG13 起是 core 内置，无需 pgcrypto 扩展。
-    """
-    import sqlalchemy as sa
-
-    await conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"))
-    await conn.execute(sa.text(UUID7_FUNCTION_SQL))
 
 
 # ---- TimescaleDB 装配（批 2，路线图 §8 #40）----
@@ -336,7 +260,7 @@ async def _create_all() -> None:
     if engine is None:
         return
     async with engine.begin() as conn:
-        await _ensure_shared_objects(conn)
+        await ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
         # 建表之后：hypertable 转换只对已存在的表有意义；扩展不可用时静默跳过（见上）。
@@ -383,72 +307,11 @@ async def init_db() -> None:
         await _create_all()
         await _seed_base_data()
         return
-    held = await _acquire_migration_lock(_MIGRATION_LOCK_KEY)
+    held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)
     try:
         await asyncio.to_thread(_run_upgrade)
         await _seed_base_data()
     finally:
-        await _release_migration_lock(held, _MIGRATION_LOCK_KEY)
+        await release_migration_lock(held, _MIGRATION_LOCK_KEY)
 
 
-def _run_auth_upgrade() -> None:
-    """在独立线程里同步执行 auth 独立库的 Alembic upgrade head。
-
-    与 :func:`_run_upgrade` 同因（env.py 在线迁移自带 ``asyncio.run``，须躲开
-    lifespan 已运行的事件循环）：驱动 ``alembic.auth.ini`` → ``alembic_auth/``，
-    其 env.py 的 URL 取自 ``settings.auth_database_url``（async→sync 方言）。
-    """
-    from pathlib import Path
-
-    from alembic.config import Config
-
-    from alembic import command
-
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    cfg = Config(str(repo_root / "alembic.auth.ini"))
-    command.upgrade(cfg, "head")
-
-
-async def _create_auth_all() -> None:
-    """auth 独立库 create_all 降级通道（``settings.use_alembic=False``）。
-
-    只建 ``auth_metadata``（AuthBase）缺失的表，幂等；先 ``ensure_all_models()`` 把
-    auth 各 models.py 注册进 metadata。连的是 auth 专属引擎（``auth_session``），
-    **不碰业务库**。
-    """
-    from app.db.auth_base import auth_metadata
-    from app.db.auth_session import get_auth_engine
-    from app.db.model_registry import ensure_all_models
-
-    ensure_all_models()
-    engine = get_auth_engine()
-    async with engine.begin() as conn:
-        # auth 库是**独立 database**，其 public schema 与业务库互不相通，
-        # uuid7 函数须各自建一份（表的 id 列 server_default 指向 public.uuid_generate_v7()）。
-        await _ensure_shared_objects(conn)
-        await conn.run_sync(auth_metadata.create_all)
-
-
-async def init_auth_db() -> None:
-    """把 **auth 独立库** schema 初始化到最新（auth 进程启动时调用）。
-
-    与单体 :func:`init_db` 平行但分库：业务库 schema 由 backend 进程负责，auth 库由
-    auth 进程自持（「进程=库边界」）。通道同 :func:`init_db`：
-
-    - ``settings.use_alembic=False``（默认/生产 compose）→ ``auth_metadata.create_all``；
-    - ``True``（历史库/显式迁移）→ 驱动 ``alembic_auth/`` 第二迁移链（锁 key 与业务链分离）。
-
-    由 auth 进程调用而非单体：单体不实例化 auth 引擎（见 ``auth_session`` 装配规则）。
-    """
-    from app.core.config import settings
-
-    if not settings.use_alembic:
-        await _create_auth_all()
-        logger.info("auth schema initialized via create_all (AuthBase)")
-        return
-    held = await _acquire_migration_lock(_AUTH_MIGRATION_LOCK_KEY)
-    try:
-        await asyncio.to_thread(_run_auth_upgrade)
-        logger.info("auth schema upgraded via alembic_auth")
-    finally:
-        await _release_migration_lock(held, _AUTH_MIGRATION_LOCK_KEY)

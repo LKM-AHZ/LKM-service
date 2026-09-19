@@ -46,10 +46,10 @@ from sqlalchemy.pool import NullPool, StaticPool
 from app.core import local_cache as _local_cache
 from app.core import singleflight as _singleflight
 from app.core.config import settings
-from app.db.auth_base import auth_metadata
 from app.db.base import Base, now_iso
 from app.db.session import get_read_session, get_session
 from app.main import app
+from auth.db.base import auth_metadata
 
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
@@ -242,8 +242,8 @@ async def fused_db_session() -> AsyncGenerator[AsyncSession]:
         poolclass=StaticPool,
         connect_args={"server_settings": {"search_path": f"f{schema}"}},
     )
-    from app.db.auth_base import auth_metadata
     from app.db.base import Base
+    from auth.db.base import auth_metadata
 
     try:
         async with engine.begin() as conn:
@@ -318,7 +318,7 @@ async def auth_front_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient
     相对既有 ``client``（get_session→业务 db, 服务业务域端点）语义**不变**：本 fixture 专用于
     "前台认证语义" 端点（业务域各自仍走 ``client``），两者 override 键互不污染。
     """
-    from app.db.auth_session import get_auth_session
+    from auth.db.session import get_auth_session
 
     async def override_get_auth() -> AsyncGenerator[AsyncSession]:
         yield auth_db
@@ -336,17 +336,17 @@ async def auth_front_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient
 async def auth_app_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
     """AUTH 独立进程 admin 会话写面相的 HTTP 客户端（S5-A2 Step0）。
 
-    直接起 :data:`app.main_auth.app`（module singleton ``create_auth_app``，**不触发
+    直接起 :data:`auth.main.app`（module singleton ``create_auth_app``，**不触发
     lifespan**——ASGITransport 默认不跑），并把该 AUTH 进程里唯一 auth-库通道
-    ``app.db.auth_session.get_auth_session`` override 到本测传入的 ``auth_db`` 会话，
+    ``auth.db.session.get_auth_session`` override 到本测传入的 ``auth_db`` 会话，
     使请求打到 AUTH 进程而 DB 落在 auth 独立库（该测试专属 schema）。
 
     注意 main_auth 的 ``app`` 与单体的 ``app.main.app`` 是不同实例，各自 dependency_overrides
     互不污染；测毕只撤销本 fixtest 注入的键。auth 写面端点在 auth_router/respond 都走
     ``resp_json``/BizError frame，读取与单体 client 一致（body.code / body.data）。
     """
-    from app.db.auth_session import get_auth_session
-    from app.main_auth import app as auth_app
+    from auth.db.session import get_auth_session
+    from auth.main import app as auth_app
 
     async def override_get_auth_session() -> AsyncGenerator[AsyncSession]:
         yield auth_db
@@ -406,8 +406,8 @@ async def auth_user_uid(
     供把该用户作为 "current 登录身份"发起业务 HTTP（须 seam 支持跨库裁决，或业务 local
     seam 直读）。
     """
-    from app.modules.auth.models import Profile, User
-    from app.modules.auth.security import create_access_token, hashpwd
+    from auth.models import Profile, User
+    from auth.security import create_access_token, hashpwd
 
     user = User(
         username=username,
@@ -484,7 +484,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     - grant_via_seam：升权写替身 → carrier 上 service_authz 原语。
     """
     from app.core.config import settings as _cfg
-    from app.modules.auth import user_http as uh
+    from auth import user_http as uh
 
     monkeypatch.setattr(_cfg, "auth_http_url", "http://auth-realm-test")
     monkeypatch.setattr(_cfg, "auth_http_token", "internal-test-secret")
@@ -493,7 +493,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     async def _authz(*, user_id: uuid.UUID, **_: object) -> dict[str, object]:
         from sqlalchemy import select
 
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         state: dict[str, object] = {
             "ok": False,
@@ -524,8 +524,8 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     async def _fetch(user_id: uuid.UUID) -> Any:
         from sqlalchemy import select
 
-        from app.modules.auth.models import Profile, User
-        from app.modules.auth.snapshot import UserSnapshot, _snap_to_dict
+        from auth.models import Profile, User
+        from auth.snapshot import UserSnapshot, _snap_to_dict
 
         u = (
             await carrier.execute(select(User).where(User.id == user_id))
@@ -553,7 +553,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         return _snap_to_dict(snap), version
 
     async def _grant(*, kind: str, user_id: uuid.UUID, **kw: object) -> int:
-        from app.modules.auth import service_authz
+        from auth import service_authz
 
         if kind == "incubation":
             return await service_authz.grant_incubation(carrier, user_id)
@@ -613,8 +613,8 @@ async def auth_seam_fused(
 @pytest.fixture(autouse=True)
 async def _reset_global_engines() -> AsyncGenerator[None]:
     yield
-    from app.db.auth_session import dispose_auth_engine
     from app.db.session import dispose_engine
+    from auth.db.session import dispose_auth_engine
 
     await dispose_engine()
     await dispose_auth_engine()

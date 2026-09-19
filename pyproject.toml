@@ -50,7 +50,7 @@ filterwarnings = [
 ]
 
 [tool.basedpyright]
-include = ["app"]
+include = ["app", "auth"]
 typeCheckingMode = "standard"
 reportOverlappingOverload = false
 reportUnknownArgumentType = true
@@ -100,7 +100,7 @@ extend-immutable-calls = [
     "fastapi.Depends", "fastapi.Security",
     "fastapi.Query", "fastapi.Path", "fastapi.Header",
     "fastapi.Cookie", "fastapi.Body", "fastapi.Form", "fastapi.File",
-    "app.modules.auth.deps.RequireLevel",
+    "auth.deps.RequireLevel",
     "app.modules.rbac.deps.RequirePermission",
     "app.core.common.PaginateDep",
 ]
@@ -121,7 +121,8 @@ python-version = "3.13"
 # 下发是"指令式理想边界"，对架构固有的注册/消费路径用 ignore_imports 精确豁免
 # （注册枢纽、worker 消费业务、调度的降级分支、共享 repo 辅助等），其余强制。
 [tool.importlinter]
-root_package = "app"
+# auth 已独立成顶层包（auth/ 与 app/ 同级），两个顶层的包同受契约约束。
+root_packages = ["app", "auth"]
 
 [[tool.importlinter.contracts]]
 name = "边界: core 不依赖业务模块"
@@ -133,9 +134,6 @@ forbidden_modules = ["app.modules"]
 allow_indirect_imports = "true"
 # 既定的跨切/注册耦合（见 P4-T3 审计），逐一精确允许，防止任意 core→modules：
 ignore_imports = [
-    "app.core.jobs -> app.modules.auth.channels",   # 发送降级同步分支
-    "app.core.jobs -> app.modules.auth.deps",       # 发送降级同步分支
-    "app.core.task_registry -> app.modules.auth.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.blog.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.content.tasks",  # 任务注册枢纽（M6.10 计数落库/对账）
     "app.core.task_registry -> app.modules.feed.tasks",  # 任务注册枢纽（M6.11 时间线 fanout）
@@ -155,9 +153,9 @@ forbidden_modules = ["app.modules"]
 # 模型注册枢纽 + 共享 repo/seed 辅助：
 ignore_imports = [
     "app.db.init_db -> app.modules.rbac.seed",  # schema 就绪后种 RBAC 默认权限
+    "app.db.model_registry -> auth",  # 经 auth 公开钩子注册 auth 模型（其内部再达 storage 基础设施）
     "app.db.model_registry -> app.modules.admin.models",  # 模型预注册枢纽
     "app.db.model_registry -> app.modules.articles.models",
-    "app.db.model_registry -> app.modules.auth.models",
     "app.db.model_registry -> app.modules.blog.models",
     "app.db.model_registry -> app.modules.content.models",
     "app.db.model_registry -> app.modules.exam.models",
@@ -212,66 +210,65 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "边界: 业务域不得 import auth(只经 auth.snapshot 读缝)"
+name = "边界: app 仅经 auth 公开面引用 auth"
 type = "forbidden"
-source_modules = ["app.modules.admin","app.modules.articles","app.modules.blog","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
-forbidden_modules = ["app.modules.auth"]
+# 公开面（白名单，不在 forbidden 内即天然放行）：
+#   auth / auth.deps / auth.schemas / auth.snapshot / auth.seams / auth.entities
+# 其余 auth 子模块均为内部实现，app 侧不得直接 import；新增 auth 内部模块须补列于此。
+source_modules = ["app"]
+forbidden_modules = [
+    "auth.admin_router",
+    "auth.admin_session",
+    "auth.audit_export",
+    "auth.channels",
+    "auth.db",
+    "auth.errors",
+    "auth.events",
+    "auth.health",
+    "auth.jwt_keys",
+    "auth.limits",
+    "auth.main",
+    "auth.models",
+    "auth.providers",
+    "auth.register",
+    "auth.repository",
+    "auth.router",
+    "auth.router_2fa",
+    "auth.router_authz",
+    "auth.router_jwks",
+    "auth.router_oauth",
+    "auth.router_onboarding",
+    "auth.router_passkey",
+    "auth.router_read",
+    "auth.router_recovery",
+    "auth.router_settings",
+    "auth.security",
+    "auth.service",
+    "auth.service_2fa",
+    "auth.service_auth",
+    "auth.service_authz",
+    "auth.service_oauth",
+    "auth.service_onboarding",
+    "auth.service_passkey",
+    "auth.service_recovery",
+    "auth.service_verify",
+    "auth.tasks",
+    "auth.user_dim_sync",
+    "auth.user_http",
+]
+allow_indirect_imports = "true"
+
+[[tool.importlinter.contracts]]
+name = "边界: auth 不反向依赖 app 业务面"
+type = "forbidden"
+source_modules = ["auth"]
+forbidden_modules = ["app.modules", "app.api", "app.ws", "app.flows", "app.main"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.admin.users_router -> app.modules.auth.snapshot",
-    "app.modules.content.service -> app.modules.auth.snapshot",
-    "app.modules.exam.service -> app.modules.auth.snapshot",
-    "app.modules.feed.feed -> app.modules.auth.snapshot",
-    "app.modules.feed.service -> app.modules.auth.snapshot",
-    "app.modules.files.service -> app.modules.auth.snapshot",
-    "app.modules.projects.service -> app.modules.auth.snapshot",
-    "app.modules.blog.service -> app.modules.auth.snapshot",
-    "app.modules.articles.service -> app.modules.auth.snapshot",
-    "app.modules.points.service -> app.modules.auth.snapshot",
-    "app.modules.content.boards.router -> app.modules.auth.deps",
-    "app.modules.content.columns.router -> app.modules.auth.deps",
-    "app.modules.content.qa.router -> app.modules.auth.deps",
-    "app.modules.articles.router -> app.modules.auth.deps",
-    "app.modules.articles.schemas -> app.modules.auth.schemas",
-    "app.modules.articles.service -> app.modules.auth.schemas",
-    "app.modules.blog.graphql -> app.modules.auth.schemas",
-    "app.modules.blog.router -> app.modules.auth.deps",
-    "app.modules.blog.schemas -> app.modules.auth.schemas",
-    "app.modules.blog.service -> app.modules.auth.schemas",
-    "app.modules.content.router -> app.modules.auth.deps",
-    "app.modules.exam.router -> app.modules.auth.deps",
-    "app.modules.files.router -> app.modules.auth.deps",
-    "app.modules.files.service -> app.modules.auth.deps",
-    "app.modules.feed.router -> app.modules.auth.deps",
-    "app.modules.points.router -> app.modules.auth.deps",
-    "app.modules.projects.router -> app.modules.auth.deps",
-    "app.modules.starhope.router -> app.modules.auth.deps",
-    "app.modules.admin.content_router -> app.modules.auth.deps",
-    "app.modules.admin.auth_router -> app.modules.auth.deps",
-    "app.modules.admin.analytics_router -> app.modules.auth.deps",
-    "app.modules.admin.reports_router -> app.modules.auth.deps",
-    "app.modules.admin.users_router -> app.modules.auth.deps",
-    "app.modules.admin.moderation.admin_router -> app.modules.auth.deps",
-    "app.modules.admin.permissions -> app.modules.auth.deps",
-    "app.modules.admin.schemas -> app.modules.auth.schemas",
-    "app.modules.admin.deps -> app.modules.auth.deps",
-    "app.modules.admin.deps -> app.modules.auth.admin_session",
-    "app.modules.blog.git_http -> app.modules.auth.security",
-    "app.modules.admin.content_router -> app.modules.auth.service_auth",
-    "app.modules.articles.seed -> app.modules.auth.models",
-    "app.modules.content.boards.seed -> app.modules.auth.models",
-    "app.modules.content.columns.seed -> app.modules.auth.models",
-    "app.modules.exam.seed -> app.modules.auth.models",
-    "app.modules.files.seed -> app.modules.auth.models",
-    "app.modules.points.seed -> app.modules.auth.models",
-    "app.modules.admin.seed -> app.modules.auth.models",
-    "app.modules.blog.git_http -> app.modules.auth.models",
-    "app.modules.admin.seed -> app.modules.auth.models",
-    "app.modules.exam.service -> app.modules.auth.service_authz",
-    "app.modules.projects.service -> app.modules.auth.service_authz",
-    "app.modules.interaction.router -> app.modules.auth.deps",
-    "app.modules.notification.router -> app.modules.auth.deps",
-    "app.modules.notification.tasks -> app.modules.auth.snapshot",  # 触发者展示名
-    "app.modules.search.service -> app.modules.auth.snapshot",  # 命中项作者展示名
+    # 共享存储抽象（与业务域共用的基础设施，非业务逻辑）
+    "auth.service -> app.modules.storage.base",
+    "auth.service -> app.modules.storage.errors",
+    "auth.service -> app.modules.storage.factory",
+    # 离线报表导出复用 analytics flow 的既有入口（惰性调用）
+    "auth.tasks -> app.flows.analytics_body",
 ]
-

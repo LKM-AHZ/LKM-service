@@ -22,8 +22,8 @@ from app.modules.admin.moderation.schemas import (
     RuleUpdate,
 )
 from app.modules.admin.permissions import require_permission
-from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
 
 router = APIRouter(prefix="/admin/moderation", tags=["admin-moderation"])
 

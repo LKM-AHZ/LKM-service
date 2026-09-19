@@ -247,13 +247,13 @@ def test_monolith_and_auth_apps_install_security_middleware() -> None:
     TrustedHost + SecurityHeaders 恒定，CORS 仅非生产。
     """
     import app.main
-    import app.main_auth
+    import auth.main
 
     required = {
         middleware.TrustedHostMiddleware,
         middleware.SecurityHeadersMiddleware,
     }
-    for application in (app.main.app, app.main_auth.app):
+    for application in (app.main.app, auth.main.app):
         installed = {cls for cls, _args, _kw in application.user_middleware}
         assert required <= installed
         assert (middleware.CORSMiddleware in installed) is (

@@ -14,8 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.user_dim import UserDim
-from app.modules.auth.models import Profile, User
-from app.modules.auth.user_dim_sync import (
+from auth.models import Profile, User
+from auth.user_dim_sync import (
     reconcile_user_dim_incremental,
     refresh_user_dim,
     sync_dim_for_ids,

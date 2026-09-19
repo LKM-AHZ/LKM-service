@@ -1,7 +1,7 @@
 """离线报表宽表 ``user_dim``（M3.B0.1「物理建模」腿，纯增量定义）。
 
 .. note:: **OFFLINE-ONLY — 永不得作为在线读源。** 在线读路径一律走 ``user:snap`` 缓存 /
-   ``app.modules.auth.snapshot`` 实时缝（一致性由 user:snap/API 保证），**严禁**任何在线端点
+   ``auth.snapshot`` 实时缝（一致性由 user:snap/API 保证），**严禁**任何在线端点
    把本表当数据源。唯一写者是 auth 源侧的 ETL（B0.2，单独任务）；运营/报表/admin 报表读
    （B0.3，单独任务）才读它。数据语义归属 auth＝单一数据源owner。
 
@@ -16,8 +16,9 @@ users+profiles + 解析账号状态」从报表 SQL 里抽出来提前物化一�
 ``model_registry.ensure_all_models`` 记录的是 **db→db 内部边**（镜像它 import
 ``app.db.event_failure`` 把非 modules 的表拉进 metadata 的落位），从而**零新增跨层
 import-linter 边**、保住契约二「db 层不反向依赖业务模块」冷跑 4 kept 0 broken。若置于
-auth 会让 ``app.db.model_registry → app.modules.auth.*`` 成为新违约边（真实信号），故按仓库
-db/ 基座的这些已确立落位收敛。字段语义仍严格对齐 auth 源（User/Profile），见下映射注释。
+auth 包会让业务库宽表定义反向依赖 auth 包内的写侧实现，故按仓库
+db/ 基座的这些已确立落位收敛（auth 拆包后本表仍留在业务库侧）。字段语义仍严格对齐 auth 源
+（User/Profile），见下映射注释。
 
 约束（verbatim）：
 - 这是**全新的表**；绝不动 ``users`` / ``profiles`` / 任何在线缝；无 drop/alter。
@@ -25,7 +26,7 @@ db/ 基座的这些已确立落位收敛。字段语义仍严格对齐 auth 源�
   Alembic 链保持单头线性（revision ``f1a2e3d4c5b6a7f8``，down = ``a3f5b6c7d8e9afae``）。
 - Mapped typed（对齐仓库 SQLAlchemy 2.0 风格）；时间列统一 ``UTCDateTime``。
 - nickname/role 来自 profiles（nullable，join 左缺失时为空），其余来自 users。
-- ``is_banned`` 与在线缝 ``app.modules.auth.snapshot._to_snap`` 语义一致：
+- ``is_banned`` 与在线缝 ``auth.snapshot._to_snap`` 语义一致：
   ``banned = bool(User.is_locked)``；名在此与 users ``is_locked`` 一样传源镜像，供报表分别对账、
   后续 B0.3 读者按此语义对齐不再歧义。
 - ``sync_ts`` 为每次 ETL（B0.2）回填的写入时间戳，默认 now（报表可判新鲜度）。

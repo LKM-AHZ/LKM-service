@@ -16,7 +16,6 @@ from app.core.common import (
 from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_read_session, get_session
 from app.modules.admin.deps import require_admin_2fa
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.files.schemas import (
     DownloadUrlInfo,
@@ -42,6 +41,7 @@ from app.modules.files.service import (
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import check_owner, role_has_permission
+from auth.deps import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/files", tags=["files"])
 

@@ -29,14 +29,14 @@ from sqlalchemy import event, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-import app.modules.auth.models  # noqa: F401  确保 User/Profile 模型元数据可见
+import auth.models  # noqa: F401  确保 User/Profile 模型元数据可见
 from app.core.config import settings
-from app.db.auth_base import auth_metadata
 from app.db.base import Base
 from app.db.model_registry import ensure_all_models
 from app.db.user_dim import UserDim
-from app.modules.auth.models import Profile, User
-from app.modules.auth.user_dim_sync import (
+from auth.db.base import auth_metadata
+from auth.models import Profile, User
+from auth.user_dim_sync import (
     reconcile_user_dim_incremental,
     refresh_user_dim,
     sync_dim_for_ids,

@@ -22,7 +22,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ruff check app tests scripts
+      - run: uv run ruff check app auth tests scripts
       - run: uv run lint-imports
       - run: uv run python scripts/check_raw_sql.py
 

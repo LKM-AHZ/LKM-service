@@ -66,17 +66,17 @@ async def send_code(channel_key: str, contact: str, code: str) -> None:
         "send_code", channel_key, contact, code, routing_key=RKEY_SEND_CODE
     ):
         return
-    from app.modules.auth.channels import CHANNELS
+    from auth.seams import get_channel
 
     await _degraded_send(
-        lambda: CHANNELS[channel_key].send_code(contact, code), kind="code"
+        lambda: get_channel(channel_key).send_code(contact, code), kind="code"
     )
 
 
 async def send_magic_link(email: str, link: str) -> None:
     if await _enqueue("send_magic_link", email, link, routing_key=RKEY_SEND_MAGIC):
         return
-    from app.modules.auth.deps import get_email_provider
+    from auth.deps import get_email_provider
 
     await _degraded_send(
         lambda: get_email_provider().send_magic_link(email, link), kind="magic_link"

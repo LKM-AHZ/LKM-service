@@ -18,11 +18,11 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import User
-from app.modules.auth.security import create_access_token
 from app.ws import broker as ws_broker
 from app.ws import router as ws_router
 from app.ws.manager import ConnectionManager
+from auth.models import User
+from auth.security import create_access_token
 
 # 稳定的 uuid7 形态用户 id（第 3 段以 7 开头、第 4 段以 8 开头）。
 _UID1 = uuid.UUID("00000000-0000-7000-8000-000000000001")

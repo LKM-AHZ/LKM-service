@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 from app.core import redis as redis_core
 from app.core.err import BizError
 from app.core.redis_limiter import RedisRateLimiter
-from app.modules.auth.errors import AuthErr
+from auth.errors import AuthErr
 
 pytestmark = pytest.mark.integration
 
@@ -114,7 +114,7 @@ class TestRedisRateLimiterIntegration:
         self, real_redis: Redis
     ) -> None:
         """check_code_rate_limit 超限时应抛 VERIFICATION_CODE_RATE_LIMIT。"""
-        from app.modules.auth.service_verify import check_code_rate_limit as ccrl
+        from auth.service_verify import check_code_rate_limit as ccrl
 
         for _ in range(5):
             await ccrl(_key("code-limited"), max_count=5, window=3600)

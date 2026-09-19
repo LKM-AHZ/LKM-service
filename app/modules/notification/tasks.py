@@ -29,7 +29,6 @@ from app.core.config import settings
 from app.core.messaging import SUB_NOTIFICATION
 from app.core.task_registry import register_task
 from app.db.session import new_session
-from app.modules.auth.snapshot import get_user_snapshot
 from app.modules.content.models import ContentComment, ContentItem
 from app.modules.notification.service import (
     NotificationType,
@@ -37,6 +36,7 @@ from app.modules.notification.service import (
     is_type_enabled,
 )
 from app.ws.broker import publish_notification
+from auth.snapshot import get_user_snapshot
 
 logger = logging.getLogger(__name__)
 

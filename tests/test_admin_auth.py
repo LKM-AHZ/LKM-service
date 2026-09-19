@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
-from app.modules.auth.models import User
+from auth.models import User
 from tests.conftest import DB, Client, auth_user_uid
 
 # 拆库后业务 realm 无 users：本文件一律经 auth realm 造 User + 从 auth_db ORM row mint
@@ -120,7 +120,7 @@ class TestAdminMe:
         直接替换 authz seam 判定为「该 admin 已失效」，验证 monolith 不本地回落、按不可用拒。
         """
         from app.core.config import settings as _cfg
-        from app.modules.auth import user_http as uh
+        from auth import user_http as uh
 
         admin = await _mk_admin(auth_db, "seam_rev_root")
         _set_admin_cookie(client, admin)

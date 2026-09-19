@@ -252,7 +252,7 @@ class TestNotifyTask:
             )
 
             # register 的 LibraryFile.uploader_id 必须指向真实 user；用固定 uuid 建对应行。
-            from app.modules.auth.models import User
+            from auth.models import User
 
             db.add(User(id=_UPLOADER_ID, username="pwup", hashed_password="x"))
             await db.flush()

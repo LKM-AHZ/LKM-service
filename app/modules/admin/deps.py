@@ -7,7 +7,7 @@ authz seam）裁决 account_level == "admin" 的存活会话。
 token_version 提升 / 改密撤销 / role / account_level）现只由 **auth 域** 持有。因此本模块
 不再本地 ``select(User)``：``get_current_admin`` / danger(``get_current_admin_2fa``) 只经
 ``auth`` internal authz seam(HTTP) 或 **fail-closed 拒**。后台 cookie 的签发/校验基元
-（create/decode/aud/常量）唯一事实源在 ``app.modules.auth.admin_session``，此处单向
+（create/decode/aud/常量）唯一事实源在 auth 包，此处经 ``auth.seams`` 单向
 import 复用（方向 admin→auth，owner-leaf 合规）。
 
 - seam 未启用（auth_http_url&&token 未配齐）→ 一律 FORBIDDEN 拒，后台绝不保守放行。
@@ -24,7 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
 from app.db.session import get_session
-from app.modules.auth.admin_session import (
+from auth.deps import (  # 复用其字段契约 + authz seam 开关
+    CurrentUser,
+    seam_enabled,
+)
+from auth.seams import (
     _ADMIN_AUD,
     ACCESS_TOKEN_MINUTES,
     COOKIE_NAME,  # 后台 access cookie 常量单一事实源
@@ -33,10 +37,6 @@ from app.modules.auth.admin_session import (
     REFRESH_NAME,
     create_admin_access_token,  # 签发基元单一事实源（测试/同域复用）
     decode_admin_access,  # 解签/校验 audience+type（纯函数，无 DB 写）
-)
-from app.modules.auth.deps import (  # 复用其字段契约 + authz seam 开关
-    CurrentUser,
-    seam_enabled,
 )
 
 # —— 后台 cookie 签发/校验纯基元与常量：单一事实源 auth.admin_session，此处原样 re-export，
@@ -104,14 +104,14 @@ async def get_current_admin(
 async def _resolve_admin_via_seam(
     user_id: uuid.UUID, expect_token_version: int, iat_ts: object
 ) -> CurrentUser:
-    """后台 seam 判定：复用 auth.deps 的 seam 解析（require_admin=True），并把失败统一为 FORBIDDEN。
+    """后台 seam 判定：复用 auth 的 seam 解析（require_admin=True），并把失败统一为 FORBIDDEN。
 
     seam 拿不到权威裁决（auth 不可用/超时）→ fail-closed 一律 FORBIDDEN（后台绝不保守放行）。
     """
-    from app.modules.auth.deps import _resolve_via_seam
+    from auth.seams import resolve_via_seam
 
     try:
-        return await _resolve_via_seam(
+        return await resolve_via_seam(
             user_id, expect_token_version, iat_ts, require_admin=True
         )
     except BizError:

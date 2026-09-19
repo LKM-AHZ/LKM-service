@@ -26,9 +26,9 @@ import app.core.redis as redis_mod
 import app.core.user_cache as uc
 from app.core.cache import make_key
 from app.core.config import settings
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
-from app.modules.auth.snapshot import get_user_snapshot
+from auth.models import Profile, User
+from auth.security import hashpwd
+from auth.snapshot import get_user_snapshot
 from tests.conftest import DB
 
 
@@ -157,8 +157,8 @@ class TestSeamCacheThroughDiffZero:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
 
-        from app.modules.auth.models import User as U
-        from app.modules.auth.snapshot import _to_snap
+        from auth.models import User as U
+        from auth.snapshot import _to_snap
 
         _enable_fake_redis(monkeypatch)
         uid, _ = await _mk_user(db, "coco", nickname="CoCo 酱", account_level="admin")
@@ -237,7 +237,7 @@ class TestAntiStaleAfterInvalidate:
         from sqlalchemy import select as sselect
         from sqlalchemy.orm import selectinload
 
-        from app.modules.auth.models import User as U
+        from auth.models import User as U
 
         _enable_fake_redis(monkeypatch)
         uid, _ = await _mk_user(db, "charlie", nickname="老", updated_at=datetime(2020, 1, 1, tzinfo=UTC))

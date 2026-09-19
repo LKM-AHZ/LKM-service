@@ -27,13 +27,15 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_ROOT = REPO_ROOT / "app"
+# auth 已独立成顶层包，与 app 一样是生产代码，同受裸 SQL 门禁约束。
+SCAN_ROOTS = [REPO_ROOT / "app", REPO_ROOT / "auth"]
 
 #: 整体放行的文件 -> 放行原因。新增条目须确认是 ORM 无法表达的场景。
 ALLOWLIST: dict[str, str] = {
     "app/db/init_db.py": "建表/索引/扩展装配与 TimescaleDB 策略，DDL 无法 ORM 化",
+    "app/db/shared_objects.py": "库级共享对象（pg_trgm / uuid_generate_v7）DDL，无法 ORM 化",
     "app/db/base.py": "uuid_generate_v7() 作为列 server_default",
-    "app/health_auth.py": "auth 库探活 SELECT 1",
+    "auth/health.py": "auth 库探活 SELECT 1",
     "app/modules/health/router.py": "业务库探活 SELECT 1",
     "app/core/clickhouse.py": "ClickHouse 专用 client，无 ORM",
     "app/modules/admin/analytics_router.py": "ClickHouse 查询，无 ORM",
@@ -126,20 +128,23 @@ def _scan(tree: ast.AST) -> list[tuple[int, str]]:
 
 def main() -> int:
     errors: list[str] = []
-    for path in sorted(SCAN_ROOT.rglob("*.py")):
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except SyntaxError as exc:
-            errors.append(f"{rel}: 语法错误，无法扫描：{exc}")
-            continue
-        hits = _scan(tree)
-        if not hits:
-            continue
-        if rel in ALLOWLIST:
-            print(f"[放行] {rel}: {len(hits)} 处（{ALLOWLIST[rel]}）")
-            continue
-        errors.extend(f"{rel}:{line}: {why}" for line, why in hits)
+    for scan_root in SCAN_ROOTS:
+        for path in sorted(scan_root.rglob("*.py")):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            try:
+                tree = ast.parse(
+                    path.read_text(encoding="utf-8"), filename=str(path)
+                )
+            except SyntaxError as exc:
+                errors.append(f"{rel}: 语法错误，无法扫描：{exc}")
+                continue
+            hits = _scan(tree)
+            if not hits:
+                continue
+            if rel in ALLOWLIST:
+                print(f"[放行] {rel}: {len(hits)} 处（{ALLOWLIST[rel]}）")
+                continue
+            errors.extend(f"{rel}:{line}: {why}" for line, why in hits)
 
     if errors:
         print("裸 SQL 门禁未通过——业务查询请改用 ORM/AsyncRepository：", file=sys.stderr)

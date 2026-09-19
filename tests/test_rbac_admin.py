@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
-from app.modules.auth.models import Profile, User
+from auth.models import Profile, User
 from tests.conftest import DB, Client
 
 # 不存在的后台内容条目 id（uuid7 形态），用于越过 2FA 后落到 service 未命中路径。

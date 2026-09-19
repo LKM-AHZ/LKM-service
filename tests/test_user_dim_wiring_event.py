@@ -27,13 +27,13 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
-from app.db.auth_base import auth_metadata
 from app.db.base import Base
 from app.db.model_registry import ensure_all_models
 from app.db.user_dim import UserDim
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
-from app.modules.auth.tasks import invalidate_user_snap, reconcile_user_dim
+from auth.db.base import auth_metadata
+from auth.models import Profile, User
+from auth.security import hashpwd
+from auth.tasks import invalidate_user_snap, reconcile_user_dim
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def _use_seam(monkeypatch: pytest.MonkeyPatch, maker: Any) -> None:
         s = maker()
         return s, s
 
-    monkeypatch.setattr("app.modules.auth.user_dim_sync._session_factory", _factory)
+    monkeypatch.setattr("auth.user_dim_sync._session_factory", _factory)
 
 
 async def _mk_user(
@@ -157,7 +157,7 @@ async def test_periodic_reconcile_materializes_unfamed(
 
     # cron 消费口(auth.tasks.reconcile_user_dim)自开会话落 dim：wrapper 副作用型返回 None，
     # 但底层 periodic 本拍补行=2(未物化源 user 数)。
-    from app.modules.auth.user_dim_sync import reconcile_user_dim_periodic
+    from auth.user_dim_sync import reconcile_user_dim_periodic
 
     assert (await reconcile_user_dim()) is None
     assert (

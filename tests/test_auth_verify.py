@@ -9,9 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import EmailVerification, PhoneVerification
-from app.modules.auth.service_verify import (
+from auth.errors import AuthErr
+from auth.models import EmailVerification, PhoneVerification
+from auth.service_verify import (
     check_code_rate_limit,
     consume_email_code,
     consume_phone_code,
@@ -157,13 +157,13 @@ class TestConsumeEmailCode:
         assert exc.value.errcode == AuthErr.VERIFICATION_CODE_INVALID
 
     async def should_not_consume_expired_code(self, db: AsyncSession):
-        with patch("app.modules.auth.service_verify.now_iso") as mock_now:
+        with patch("auth.service_verify.now_iso") as mock_now:
             mock_now.return_value = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
             code, _ = await create_email_verification(
                 db, "alice@example.com", "register"
             )
 
-        with patch("app.modules.auth.service_verify.now_iso") as mock_now:
+        with patch("auth.service_verify.now_iso") as mock_now:
             mock_now.return_value = dt.datetime(2026, 1, 2, tzinfo=dt.UTC)
             with pytest.raises(BizError) as exc:
                 await consume_email_code(db, "alice@example.com", code, "register")
@@ -206,11 +206,11 @@ class TestConsumePhoneCode:
         assert exc.value.errcode == AuthErr.VERIFICATION_CODE_INVALID
 
     async def should_not_consume_expired_code(self, db: AsyncSession):
-        with patch("app.modules.auth.service_verify.now_iso") as mock_now:
+        with patch("auth.service_verify.now_iso") as mock_now:
             mock_now.return_value = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
             code, _ = await create_phone_verification(db, "13800138000", "login")
 
-        with patch("app.modules.auth.service_verify.now_iso") as mock_now:
+        with patch("auth.service_verify.now_iso") as mock_now:
             mock_now.return_value = dt.datetime(2026, 1, 2, tzinfo=dt.UTC)
             with pytest.raises(BizError) as exc:
                 await consume_phone_code(db, "13800138000", code, "login")

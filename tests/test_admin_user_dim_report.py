@@ -27,13 +27,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.admin.dim_report as dim_report
-import app.modules.auth.models  # noqa: F401  确保 User/Profile 元数据可见（AuthBase 建表）
+import auth.models  # noqa: F401  确保 User/Profile 元数据可见（AuthBase 建表）
 from app.db.model_registry import ensure_all_models
 from app.db.user_dim import UserDim
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
-from app.modules.auth.models import User
 from app.modules.rbac.permissions import Permission
+from auth.models import User
 from tests.conftest import auth_user_uid  # type: ignore[attr-defined]
 
 

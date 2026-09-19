@@ -13,10 +13,12 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401
 from app.db.session import new_session
-from app.modules.auth.models import Profile, User
 from app.modules.files.models import FileStatus, LibraryFile
+from auth import register_models
+from auth.entities import Profile, User
+
+register_models()  # 注册 auth ORM 映射类（幂等）
 
 # 种子文件归属的演示上传者用户名（避免依赖具体本地用户）
 _SEED_UPLOADER_USERNAME = "file_library_seed_uploader"

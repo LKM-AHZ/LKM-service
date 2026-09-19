@@ -9,15 +9,15 @@ from collections.abc import AsyncGenerator
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import app.health_auth as health_auth
-import app.main_auth  # 顶层 `app = create_auth_app()` 即验证入口可装配
-from app.health_auth import AuthDepStatus
+import auth.health as health_auth
+import auth.main  # 顶层 `app = create_auth_app()` 即验证入口可装配
+from auth.health import AuthDepStatus
 
 
 @pytest.fixture
 async def auth_client() -> AsyncGenerator[AsyncClient]:
     """httpx 客户端直挂 auth-only ASGI 应用；不触发 app.lifespan，零外部副作用。"""
-    transport = ASGITransport(app=app.main_auth.app)
+    transport = ASGITransport(app=auth.main.app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
@@ -32,7 +32,7 @@ async def test_auth_entry_imports_and_app_assembles() -> None:
     assert {"/liveness", "/readiness"} <= paths
     # auth 域每个 router 都被聚合进了本进程装配清单（B1.1 健康 + B1.2 内部读缝 + M3.B S2
     # 内部授权写缝 + S5-A2 admin 会话写面(login/refresh/logout/2fa)迁入 → 10）
-    assert len(app.main_auth._AUTH_ROUTERS) == 10
+    assert len(auth.main._AUTH_ROUTERS) == 10
 
 
 async def test_liveness_returns_ok_without_external_deps(auth_client) -> None:
@@ -85,7 +85,8 @@ async def test_readiness_ok_when_both_up(auth_client, monkeypatch) -> None:
 
 async def test_probe_db_uses_auth_engine(monkeypatch) -> None:
     """probe_db 探的是 auth 独立库引擎（get_auth_engine），绝不是业务引擎。"""
-    from app.db import auth_session, session
+    from app.db import session
+    from auth.db import session as auth_session
 
     assert health_auth.get_auth_engine is auth_session.get_auth_engine
     assert health_auth.get_auth_engine is not session.get_async_engine

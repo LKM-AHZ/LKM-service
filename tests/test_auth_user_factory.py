@@ -10,7 +10,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import Profile, User
+from auth.models import Profile, User
 from tests.conftest import AuthUser, auth_user_uid
 
 

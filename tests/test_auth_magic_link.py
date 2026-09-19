@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import TOTP, MagicLink, User
-from app.modules.auth.providers.console import ConsoleEmailProvider
+from auth.errors import AuthErr
+from auth.models import TOTP, MagicLink, User
+from auth.providers.console import ConsoleEmailProvider
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 
 
 def _service():
-    from app.modules.auth import service_auth
+    from auth import service_auth
 
     return service_auth
 
@@ -35,8 +35,8 @@ async def _create_user(
     account_level: str = "normal",
 ) -> User:
     """Create a user with the given parameters and return it."""
-    from app.modules.auth.models import Profile
-    from app.modules.auth.security import hashpwd
+    from auth.models import Profile
+    from auth.security import hashpwd
 
     user = User(
         username=username,

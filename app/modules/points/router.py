@@ -12,7 +12,6 @@ from app.core.common import (
 )
 from app.core.err import respond
 from app.db.session import get_read_session, get_session
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.points.schemas import (
     AchievementOut,
     BalanceOut,
@@ -30,6 +29,7 @@ from app.modules.points.service import (
     list_ledger,
     list_tasks,
 )
+from auth.deps import CurrentUser, get_current_user
 
 
 def _status() -> ModuleStatus:

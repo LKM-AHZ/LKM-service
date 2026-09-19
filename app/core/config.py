@@ -417,7 +417,7 @@ class Settings(BaseSettings):
 
         刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 校验器：该器按进程执行，
         而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀（见路线图 §8 #16 同款
-        取舍）。本方法只由 ``app.main.create_app`` / ``app.main_auth.create_auth_app``
+        取舍）。本方法只由 ``app.main.create_app`` / ``auth.main.create_auth_app``
         调用——即真正对外承载请求的进程，缺失即启动失败，不靠"配了才生效"的静默降级。
 
         ``LKM_CORS_ORIGINS`` **不在**必填项内：生产不挂应用层 CORS，该值在生产不生效，

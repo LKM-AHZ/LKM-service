@@ -7,10 +7,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401  注册剩余 ORM 映射类（同 alembic/env.py）
 from app.db.base import now_iso
 from app.db.session import new_session
 from app.modules.articles.models import Article, ArticleCategory
+from auth import register_models
+
+register_models()  # 注册 auth ORM 映射类（幂等）
 
 # 文章分类种子：slug 幂等；engineering 是 blog produce 默认分类，必须存在
 _CATEGORIES: list[dict[str, int | str]] = [

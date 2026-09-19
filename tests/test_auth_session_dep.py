@@ -1,4 +1,4 @@
-"""``app.db.auth_session`` 请求级会话依赖的契约测试（防回潮）。
+"""``auth.db.session`` 请求级会话依赖的契约测试（防回潮）。
 
 2026-09-18 真机定位的缺陷：``get_auth_session`` 曾是**普通协程依赖**（``return session``），
 没有任何人提交该会话——而 auth 域的 service 层普遍只 ``flush`` 并假定「外层会话会提交」
@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db import auth_session as mod
+from auth.db import session as mod
 
 
 class _FakeSession:

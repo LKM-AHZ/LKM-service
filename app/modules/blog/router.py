@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common import ApiResp
 from app.core.err import respond
 from app.db.session import get_session
-from app.modules.auth.deps import CurrentUser, get_current_user
 from app.modules.blog.schemas import (
     BlogCommentCreate,
     BlogCommentInfo,
@@ -29,6 +28,7 @@ from app.modules.blog.service import (
 )
 from app.modules.content.schemas import ContentItemInfo
 from app.modules.content.service import get_item
+from auth.deps import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/blog", tags=["blog"])
 

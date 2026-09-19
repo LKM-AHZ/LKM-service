@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
-from app.modules.auth.security import create_access_token
 from app.modules.points.errors import PointsErr
 from app.modules.points.models import (
     Achievement,
@@ -37,6 +36,7 @@ from app.modules.points.service import (
     list_exchange_items,
     list_tasks,
 )
+from auth.security import create_access_token
 from tests.conftest import auth_user_uid
 
 

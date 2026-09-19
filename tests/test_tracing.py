@@ -85,6 +85,40 @@ async def test_span_exported_and_log_correlated(
     assert tracing.is_enabled() is False
 
 
+def test_create_app_mounts_otel_in_assembly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """防回潮：FastAPI 埋点必须在**装配期**挂载，不能放 lifespan。
+
+    2026-09-19 真机验证暴露：``setup_tracing`` 曾在 lifespan 内调用，而 Starlette
+    处理 lifespan 请求时中间件栈已定型，``instrument_app`` 加的中间件进不了栈 →
+    HTTP server span **完全采不到**；而 SQLAlchemy/httpx 埋点不依赖中间件栈、照常
+    产出 span，极易被误判为「埋点已工作」。本用例走**真实 create_app 装配路径**
+    （上面的用例用临时 FastAPI app，正是因此漏掉了该缺陷）。
+    """
+    from app import main as main_mod
+
+    calls: list[object] = []
+    real_setup = tracing.setup_tracing
+
+    def _spy(app: object = None, **kwargs: object) -> None:
+        calls.append(app)
+        real_setup(app, **kwargs)
+
+    monkeypatch.setattr(main_mod, "setup_tracing", _spy)
+    monkeypatch.setattr(settings, "otel_enabled", True)
+    monkeypatch.setattr(settings, "otel_sample_ratio", 1.0)
+    monkeypatch.setattr(tracing, "_exporter_factory", lambda: InMemorySpanExporter())
+    tracing.shutdown_tracing()
+
+    main_mod.create_app()
+
+    # 断言的**不是**「有没有挂上」，而是「在什么时候挂」：instrument_app 替换的是
+    # app.build_middleware_stack，而该栈在首个 ASGI 请求（含 lifespan）时定型——
+    # 只要这次调用发生在 create_app 返回之前（装配期），替换就先于定型。
+    assert len(calls) == 1 and calls[0] is not None, (
+        f"create_app 必须在装配期带 app 调 setup_tracing（放 lifespan 内不生效）：{calls}"
+    )
+
+
 def test_unreachable_exporter_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
     """collector 不可达：setup 不抛、shutdown 限时 flush 快速返回（fail-open）。"""
     monkeypatch.setattr(settings, "otel_enabled", True)

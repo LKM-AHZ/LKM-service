@@ -14,9 +14,9 @@ from dataclasses import FrozenInstanceError
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
-from app.modules.auth.snapshot import (
+from auth.models import Profile, User
+from auth.security import hashpwd
+from auth.snapshot import (
     UserSnapshot,
     get_user_snapshot,
     get_user_snapshot_batch,

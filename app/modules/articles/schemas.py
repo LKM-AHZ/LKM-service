@@ -4,7 +4,7 @@ from typing import ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.auth.schemas import ProfileInfo
+from auth.schemas import ProfileInfo
 
 
 class ArticleListItem(BaseModel):

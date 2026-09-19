@@ -16,14 +16,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.models import RolePermission
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
-from app.modules.auth.snapshot import (
+from app.modules.rbac.permissions import Permission
+from auth.models import Profile, User
+from auth.security import hashpwd
+from auth.snapshot import (
     UserManagementItem,
     UserSnapshot,
     list_user_snapshots,
 )
-from app.modules.rbac.permissions import Permission
 
 PERM = Permission.admin_users_manage
 
@@ -101,7 +101,7 @@ async def _login_admin(
         COOKIE_PATH,
         create_admin_access_token,
     )
-    from app.modules.auth.models import User
+    from auth.models import User
 
     u = (
         await db.execute(select(User).where(User.username == username))

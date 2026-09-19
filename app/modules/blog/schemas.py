@@ -4,8 +4,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.auth.schemas import ProfileInfo
 from app.modules.blog.models import BlogSeriesStatus
+from auth.schemas import ProfileInfo
 
 # ---- request schemas ----
 

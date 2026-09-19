@@ -8,9 +8,11 @@ import asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401  # type: ignore[reportUnusedImport]  注册全部 ORM 映射类（避免关系名无法解析）
 from app.db.session import new_session
 from app.modules.admin.models import Report
+from auth import register_models
+
+register_models()  # 注册 auth ORM 映射类（幂等）
 
 SEED_REPORTS: list[dict[str, str]] = [
     {

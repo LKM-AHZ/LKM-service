@@ -23,10 +23,10 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.auth_session import dispose_auth_engine, new_auth_session
 from app.db.base import now_iso
-from app.modules.auth.models import TOTP, Profile, RecoveryCode, RefreshToken, User
-from app.modules.auth.security import hashpwd
+from auth.db.session import dispose_auth_engine, new_auth_session
+from auth.entities import TOTP, Profile, RecoveryCode, RefreshToken, User
+from auth.seams import hashpwd
 
 
 async def _find(db: AsyncSession, username: str) -> User | None:

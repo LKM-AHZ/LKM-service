@@ -17,8 +17,8 @@ from app.core.common import (
 from app.core.err import respond
 from app.db.session import get_read_session
 from app.modules.admin.models import Report
-from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
 
 from .deps import require_admin
 from .permissions import require_permission

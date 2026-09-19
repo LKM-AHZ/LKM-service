@@ -7,7 +7,6 @@ import uuid
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repository import DbSession
-from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.exam.errors import ExamErr
 from app.modules.exam.models import (
     Exam,
@@ -32,6 +31,7 @@ from app.modules.exam.schemas import (
     SubmitResult,
 )
 from app.modules.points.rules import enqueue_points_event
+from auth.snapshot import get_user_snapshot_batch
 
 
 def _question_for_attempt(q: ExamQuestion) -> QuestionForAttempt:
@@ -268,13 +268,13 @@ async def _apply_unlock(db: DbSession, exam: Exam, user_id: uuid.UUID) -> None:
     （author 独立库后 auth 是 users/profiles 唯一写者）。同库蓝绿阶段与 exam 事务在同一 DB
     会话内执行，语义与旧实现一一对等（只升不降、有改才 bump）并发出 user.updated。
     """
-    from app.modules.auth import service_authz
+    from auth.seams import grant_exam_unlock_from_business
 
     if not exam.unlock_level and not exam.unlock_role:
         return
     # M3.B S5 C：拆库后业务 DB 无 users/profiles——升权经 auth seam 落 auth realm
     # （seam 开→auth 内部写端点；关→回落实本 grant 蓝绿/单库，语义零漂移）。
-    await service_authz.grant_exam_unlock_from_business(
+    await grant_exam_unlock_from_business(
         db,
         user_id,
         unlock_level=exam.unlock_level,

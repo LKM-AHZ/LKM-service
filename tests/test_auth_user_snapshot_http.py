@@ -24,12 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.core.redis as redis_mod
 import app.core.user_cache as uc
-import app.modules.auth.snapshot as snap_mod
-import app.modules.auth.user_http as user_http
+import auth.snapshot as snap_mod
+import auth.user_http as user_http
 from app.core.config import settings
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
-from app.modules.auth.snapshot import (
+from auth.models import Profile, User
+from auth.security import hashpwd
+from auth.snapshot import (
     UserSnapshot,
     get_user_snapshot,
     get_user_snapshot_batch,
@@ -230,8 +230,8 @@ class TestInternalEndpointAuth:
     @pytest.fixture(autouse=True)
     async def _bind_internal_auth_session(self, db: DB):
         """内部读端点 S5 拆库后走 get_auth_session（auth 库），覆盖到本测 auth schema。"""
-        from app.db.auth_session import get_auth_session
         from app.main import app as _app
+        from auth.db.session import get_auth_session
 
         async def _override() -> AsyncIterator[AsyncSession]:
             yield db
@@ -409,8 +409,8 @@ class TestBatchByIds:
 class TestBatchEndpoint:
     @pytest.fixture(autouse=True)
     async def _bind_internal_auth_session(self, db: DB):
-        from app.db.auth_session import get_auth_session
         from app.main import app as _app
+        from auth.db.session import get_auth_session
 
         async def _override() -> AsyncIterator[AsyncSession]:
             yield db

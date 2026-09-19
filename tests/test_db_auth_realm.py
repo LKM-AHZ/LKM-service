@@ -8,8 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.auth_base import AuthBase, auth_metadata
 from app.db.base import Base
+from auth.db.base import AuthBase, auth_metadata
 
 
 def test_auth_database_url_is_postgres_and_distinct() -> None:

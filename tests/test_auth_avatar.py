@@ -20,8 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import CommonErr
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.security import create_access_token, hashpwd
+from auth.errors import AuthErr
+from auth.security import create_access_token, hashpwd
 
 _KEY_RE = re.compile(r"^avatars/[0-9a-f-]{36}/v\d+\.webp$")
 
@@ -44,7 +44,7 @@ async def _user(
     username: str = "avatar",
     email: str = "avatar@example.com",
 ) -> uuid.UUID:
-    from app.modules.auth.models import Profile, User
+    from auth.models import Profile, User
 
     user = User(
         username=username,
@@ -60,7 +60,7 @@ async def _user(
 
 
 async def _avatar_key(auth_db: AsyncSession, user_id: uuid.UUID) -> str | None:
-    from app.modules.auth.models import Profile
+    from auth.models import Profile
 
     profile = (
         (await auth_db.execute(select(Profile).where(Profile.user_id == user_id)))
@@ -147,7 +147,7 @@ class TestAvatarUpload:
         monkeypatch: pytest.MonkeyPatch,
         avatar_store: pathlib.Path,
     ):
-        import app.modules.auth.service as svc
+        import auth.service as svc
 
         user_id, token = await _authed(auth_db)
         await auth_front_client.post(

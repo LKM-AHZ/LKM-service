@@ -14,13 +14,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import CommonErr
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.router_onboarding import (
+from auth.deps import CurrentUser
+from auth.router_onboarding import (
     get_onboarding,
     put_onboarding_step,
     skip_onboarding,
 )
-from app.modules.auth.schemas import OnboardingStepRequest
+from auth.schemas import OnboardingStepRequest
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def _unwrap(response: Any) -> dict[str, Any]:
 
 
 async def _make_user(db: AsyncSession, username: str = "onboarder") -> CurrentUser:
-    from app.modules.auth.models import Profile, User
+    from auth.models import Profile, User
 
     user = User(
         username=username,

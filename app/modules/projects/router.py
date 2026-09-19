@@ -9,7 +9,6 @@ from app.core.common import ApiResp, ModuleStatus
 from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_session
 from app.modules.admin.deps import require_admin_2fa
-from app.modules.auth.deps import CurrentUser
 from app.modules.projects.schemas import (
     ProjectApplicationCreate,
     ProjectApplicationOut,
@@ -25,6 +24,7 @@ from app.modules.projects.service import (
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import role_has_permission
+from auth.deps import CurrentUser
 
 
 def _status() -> ModuleStatus:

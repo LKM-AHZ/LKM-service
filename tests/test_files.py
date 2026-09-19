@@ -25,7 +25,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.auth.models  # noqa: F401  副作用导入（auth 表挂 AuthBase 需收集）
+import auth.models  # noqa: F401  副作用导入（auth 表挂 AuthBase 需收集）
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
 from app.modules.files.errors import FileErr
@@ -1093,8 +1093,8 @@ class TestFilesPhase2BUploadInit:
 
             monkeypatch.setattr(svc, "get_redis", _fake_redis)
             uploader = await _au(auth_db)
-            from app.modules.auth.deps import CurrentUser
             from app.modules.files.schemas import FileCreate
+            from auth.deps import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
             init = await upload_init(
@@ -1132,7 +1132,7 @@ class TestFilesPhase2BUploadInit:
                 "app.modules.files.service._get_storage", lambda: stor
             )
             uploader = await _au(auth_db)
-            from app.modules.auth.deps import CurrentUser
+            from auth.deps import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
 
@@ -1170,8 +1170,8 @@ class TestFilesPhase2BUploadInit:
 
             monkeypatch.setattr(svc, "get_redis", _fake_redis)
             uploader = await _au(auth_db)
-            from app.modules.auth.deps import CurrentUser
             from app.modules.files.schemas import FileCreate
+            from auth.deps import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
             init = await upload_init(

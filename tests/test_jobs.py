@@ -48,7 +48,7 @@ async def test_send_code_falls_back_when_publish_false(monkeypatch: Any) -> None
     async def fake_pub(rk: str, payload: dict) -> bool:
         return False  # 未配置/失败 → fail-open 返回 False
 
-    from app.modules.auth import channels as ch
+    from auth import channels as ch
 
     monkeypatch.setattr(messaging, "publish", fake_pub)
     monkeypatch.setattr(ch, "CHANNELS", {"email": _Fake()})
@@ -67,7 +67,7 @@ async def test_send_code_falls_back_when_publish_raises(monkeypatch: Any) -> Non
     async def broken_pub(rk: str, payload: dict) -> bool:
         raise RuntimeError("connect fail")
 
-    from app.modules.auth import channels as ch
+    from auth import channels as ch
 
     monkeypatch.setattr(messaging, "publish", broken_pub)
     monkeypatch.setattr(ch, "CHANNELS", {"email": _Fake()})
@@ -85,7 +85,7 @@ async def test_send_magic_link_falls_back(monkeypatch: Any) -> None:
     async def fake_pub(rk: str, payload: dict) -> bool:
         return False
 
-    from app.modules.auth import deps
+    from auth import deps
 
     monkeypatch.setattr(messaging, "publish", fake_pub)
     monkeypatch.setattr(deps, "get_email_provider", lambda: _Fake())

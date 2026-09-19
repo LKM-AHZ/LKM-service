@@ -38,9 +38,9 @@ from app.db.session import (
     get_read_session as get_graphql_session,  # GraphQL 仅 Query(纯读)，避免空提交
 )
 from app.modules import registry
-from app.modules.auth.deps import CurrentUser, get_optional_user
-from app.modules.auth.service_passkey import cleanup_expired_challenges
 from app.ws.manager import manager
+from auth.deps import CurrentUser, get_optional_user
+from auth.seams import cleanup_expired_challenges
 
 
 @dataclass
@@ -63,9 +63,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 可观测基座：结构化日志 + Sentry APM（均幂等；DSN 空则不加载）
     logger.setup_logging()
     init_sentry()
-    # 链路追踪（M5 7.2.2）：默认关；开启时埋 FastAPI/httpx，SQLAlchemy 待引擎建好再挂
-    setup_tracing(_app)
-
+    # 链路追踪（M5 7.2.2）在 create_app 装配期挂载——不能放 lifespan：Starlette 处理
+    # lifespan 请求时中间件栈已定型，此处再 instrument 不会生效，HTTP server span 采不到
+    # （SQLAlchemy/httpx 埋点不依赖中间件栈，会照常工作而掩盖问题）。SQLAlchemy 埋点须等
+    # 引擎建好，故仍留在此处。
     await init_db()
     instrument_sqlalchemy(get_async_engine())
 
@@ -145,6 +146,10 @@ def create_app() -> FastAPI:
     # 使访问日志与其下全部业务路由、以及 TrustedHost/CORS 的拒答响应都带上安全头。
     # 生产缺 LKM_ALLOWED_HOSTS/LKM_CORS_ORIGINS 时在此 fail-fast（不静默降级）。
     install_security_middleware(application)
+
+    # 链路追踪（M5 7.2.2）：**装配期**挂载，须在返回 app 前——见 lifespan 顶部说明。
+    # 放在安全中间件之后 → OTel 成为最外层中间件，span 覆盖整个请求处理链。
+    setup_tracing(application)
 
     application.include_router(api_router, prefix=settings.api_prefix)
     application.add_exception_handler(BizError, _on_err)

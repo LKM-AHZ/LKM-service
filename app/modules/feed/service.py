@@ -37,7 +37,6 @@ from app.core.config import settings
 from app.core.err import BizError
 from app.db.repository import DbSession
 from app.modules.admin.moderation.engine import evaluate, load_active_rules
-from app.modules.auth.snapshot import get_user_snapshot, get_user_snapshot_batch
 from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.errors import FollowErr
@@ -48,6 +47,7 @@ from app.modules.feed.repository import (
     UserFollowRepository,
 )
 from app.modules.feed.schemas import FeedItem, FeedResponse
+from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 
 def _following_key(user_id: uuid.UUID) -> str:

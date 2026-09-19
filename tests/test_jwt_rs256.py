@@ -21,12 +21,12 @@ from pydantic import SecretStr
 
 from app.core.config import settings
 from app.core.secrets import reveal
-from app.modules.auth import jwt_keys
-from app.modules.auth.admin_session import (
+from auth import jwt_keys
+from auth.admin_session import (
     create_admin_access_token,
     decode_admin_access,
 )
-from app.modules.auth.security import (
+from auth.security import (
     create_access_token,
     create_temp_token,
     decode_access_token,

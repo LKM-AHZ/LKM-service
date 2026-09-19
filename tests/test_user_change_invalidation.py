@@ -35,14 +35,14 @@ import app.core.user_cache as uc
 from app.core.config import settings
 from app.db.base import Base
 from app.db.outbox import OutboxMessage
-from app.modules.auth import events as auth_events
-from app.modules.auth.models import Profile, User
-from app.modules.auth.schemas import ProfileUpdate
-from app.modules.auth.security import hashpwd
-from app.modules.auth.service import update_profile
-from app.modules.auth.service_auth import upgrade_to_normal
-from app.modules.auth.service_recovery import _reset_password as reset_password_svc
-from app.modules.auth.tasks import invalidate_user_snap
+from auth import events as auth_events
+from auth.models import Profile, User
+from auth.schemas import ProfileUpdate
+from auth.security import hashpwd
+from auth.service import update_profile
+from auth.service_auth import upgrade_to_normal
+from auth.service_recovery import _reset_password as reset_password_svc
+from auth.tasks import invalidate_user_snap
 from tests.conftest import DB
 
 
@@ -53,8 +53,8 @@ from tests.conftest import DB
 async def _fused_realm():
     from sqlalchemy import text
 
-    from app.db.auth_base import auth_metadata
     from app.db.model_registry import ensure_all_models
+    from auth.db.base import auth_metadata
 
     ensure_all_models()
     url = settings.database_url
@@ -99,7 +99,7 @@ async def _dim_sync_throwaway(monkeypatch, _fused_realm) -> None:
         return s, s
 
     monkeypatch.setattr(
-        "app.modules.auth.user_dim_sync._session_factory", _factory
+        "auth.user_dim_sync._session_factory", _factory
     )
 
 
@@ -241,7 +241,7 @@ class TestMutationSitesEmitOutboxEvents:
         uid = await _mk_user(db, "lock_user")
         # 沿用 files.notify 测法：把新的 own-session 指向测试 db，事件行落同一库便于断言。
         monkeypatch.setattr(
-            "app.modules.auth.events.new_session", _session_for(db)
+            "auth.events.new_session", _session_for(db)
         )
         await auth_events.notify_user_banned_committed(uid)
         await db.commit()
@@ -288,7 +288,7 @@ class TestProfileEditFreshnessThroughSeam:
     async def test_next_snapshot_returns_new_nickname(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.modules.auth.snapshot import get_user_snapshot
+        from auth.snapshot import get_user_snapshot
 
         _enable_fake_redis(monkeypatch)
         uid = await _mk_user(db, "freshness", nickname="旧名")
@@ -333,9 +333,9 @@ class TestLoginUnlockInvalidatesSnap:
     async def test_successful_unlock_emits_event_and_next_read_banned_false(
         self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.modules.auth.schemas import UserLoginPassword
-        from app.modules.auth.service_auth import login_password
-        from app.modules.auth.snapshot import get_user_snapshot
+        from auth.schemas import UserLoginPassword
+        from auth.service_auth import login_password
+        from auth.snapshot import get_user_snapshot
 
         _enable_fake_redis(monkeypatch)
         _enable_bus(monkeypatch)

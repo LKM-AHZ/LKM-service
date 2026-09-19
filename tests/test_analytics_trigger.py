@@ -13,7 +13,7 @@ import pytest
 
 from app.core.config import settings
 from app.flows import analytics_body
-from app.modules.auth import tasks as auth_tasks
+from auth import tasks as auth_tasks
 
 
 @pytest.fixture

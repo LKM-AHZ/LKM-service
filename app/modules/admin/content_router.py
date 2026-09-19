@@ -18,8 +18,6 @@ from app.db.session import get_session
 from app.modules.articles.service import (
     delete_article_comment as delete_article_comment_svc,
 )
-from app.modules.auth.deps import CurrentUser
-from app.modules.auth.service_auth import log_audit
 from app.modules.blog.service import (
     delete_comment as delete_blog_comment_svc,
 )
@@ -32,6 +30,8 @@ from app.modules.content.service import (
 )
 from app.modules.content.service import list_items as list_content_items_svc
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
+from auth.seams import log_audit
 
 from .deps import require_admin, require_admin_2fa
 from .permissions import require_permission

@@ -6,7 +6,6 @@ import uuid
 from app.core.err import BizError
 from app.db.base import now_iso
 from app.db.repository import DbSession
-from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.projects.errors import ProjectErr
 from app.modules.projects.models import Project, ProjectApplication, ProjectMember
 from app.modules.projects.repository import (
@@ -21,6 +20,7 @@ from app.modules.projects.schemas import (
     ProjectOut,
     ReviewProjectApplicationRequest,
 )
+from auth.snapshot import get_user_snapshot_batch
 
 
 def _app_to_schema(a: ProjectApplication) -> ProjectApplicationOut:
@@ -165,13 +165,13 @@ async def _apply_incubation(db: DbSession, applicant_id: uuid.UUID) -> None:
 
     M3.B S5 C：拆库后本项目 DB 会话（业务 realm）已无 users/profiles——auth 是身份词表唯一
     owner（含写）。故不再把业务 ``db`` 直塞 auth 的 grant 例程；改经 seam 调度
-    ``service_authz.grant_incubation_from_business(db, …)``：seam 开时（生产拆库 + 测试
+    ``auth.seams.grant_incubation_from_business(db, …)``：seam 开时（生产拆库 + 测试
     auth_seam_realm）由 auth 内部写端点把升权落地 auth realm；seam 关时回落本地同库会话执行
     （蓝绿/单库，语义与旧实现一一对等并发出 user.updated）。
     """
-    from app.modules.auth import service_authz
+    from auth.seams import grant_incubation_from_business
 
-    await service_authz.grant_incubation_from_business(db, applicant_id)
+    await grant_incubation_from_business(db, applicant_id)
 
 
 async def list_projects(db: DbSession) -> list[ProjectOut]:

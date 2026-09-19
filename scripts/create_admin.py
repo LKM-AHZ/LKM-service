@@ -12,8 +12,8 @@ import sys
 from sqlalchemy import select
 
 from app.db.session import dispose_engine, get_async_engine, new_session
-from app.modules.auth.models import Profile, User
-from app.modules.auth.security import hashpwd
+from auth.entities import Profile, User
+from auth.seams import hashpwd
 
 
 async def main() -> None:
@@ -59,7 +59,7 @@ async def main() -> None:
         )
 
         # 验证登录链路：哈希可校验
-        from app.modules.auth.security import verifypwd
+        from auth.seams import verifypwd
 
         assert await verifypwd(raw_password, user.hashed_password), "密码校验异常"
         print("[ok] 密码哈希校验通过")

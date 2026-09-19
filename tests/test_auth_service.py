@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError
 from app.db.base import expires_at
-from app.modules.auth.errors import AuthErr
-from app.modules.auth.models import RefreshToken, User
+from auth.errors import AuthErr
+from auth.models import RefreshToken, User
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 async def _reg_local(
     db: AsyncSession, username: str = "alice", password: str = "secret123456"
 ) -> dict[str, Any]:
-    from app.modules.auth.schemas import UserRegLocal
+    from auth.schemas import UserRegLocal
 
     return await _service().register_local(
         db, UserRegLocal(username=username, password=password)
@@ -44,8 +44,8 @@ async def _reg_normal(
     走 ``register_local`` + 手动补充 contact，避免依赖已过时的一次性
     ``register_normal_with_password`` 注册 API。
     """
-    from app.modules.auth.models import User
-    from app.modules.auth.schemas import UserRegLocal
+    from auth.models import User
+    from auth.schemas import UserRegLocal
 
     result = await _service().register_local(
         db, UserRegLocal(username=username, password=password)
@@ -62,7 +62,7 @@ async def _reg_normal(
 
 
 async def _login(db: AsyncSession, account: str, password: str) -> dict[str, Any]:
-    from app.modules.auth.schemas import UserLoginPassword
+    from auth.schemas import UserLoginPassword
 
     return await _service().login_password(
         db, UserLoginPassword(account=account, password=password)
@@ -70,7 +70,7 @@ async def _login(db: AsyncSession, account: str, password: str) -> dict[str, Any
 
 
 def _service():
-    from app.modules.auth import service_auth
+    from auth import service_auth
 
     return service_auth
 
@@ -87,7 +87,7 @@ async def _get[T](db: AsyncSession, model: type[T], *where: Any) -> T:
 
 class TestRegisterLocal:
     async def should_create_local_user_and_profile(self, db: AsyncSession):
-        from app.modules.auth.models import Profile, User
+        from auth.models import Profile, User
 
         result = await _reg_local(db, username="alice", password="secret123456")
         assert result["access_token"]
@@ -128,7 +128,7 @@ class TestLoginPassword:
         assert result["account_level"] == "local"
 
     async def should_login_by_email(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         reg = await _reg_local(db, username="alice", password="secret123456")
         # give the user an email manually
@@ -140,7 +140,7 @@ class TestLoginPassword:
         assert result["user_id"] == reg["user_id"]
 
     async def should_login_by_phone(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         reg = await _reg_local(db, username="alice", password="secret123456")
         user = await _get(db, User, User.id == reg["user_id"])
@@ -164,7 +164,7 @@ class TestLoginPassword:
         assert exc.value.errcode == AuthErr.INVALID_CREDENTIALS
 
     async def should_lock_after_5_failed_attempts(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         await _reg_local(db, username="alice", password="secret123456")
         for _ in range(5):
@@ -185,7 +185,7 @@ class TestLoginPassword:
         assert exc.value.errcode == AuthErr.INVALID_CREDENTIALS
 
     async def should_reset_failed_counter_on_success(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         reg = await _reg_local(db, username="alice", password="secret123456")
         # 2 failures
@@ -205,7 +205,7 @@ class TestLoginPassword:
 
     async def should_return_setup_token_for_admin_without_totp(self, db: AsyncSession):
         """Admin-level user without TOTP should get a setup_required response."""
-        from app.modules.auth.models import User
+        from auth.models import User
 
         user = User(
             username="admin",
@@ -215,7 +215,7 @@ class TestLoginPassword:
         )
         db.add(user)
         await db.flush()
-        from app.modules.auth.security import hashpwd
+        from auth.security import hashpwd
 
         user.hashed_password = await hashpwd("admin123")
         await db.flush()
@@ -227,7 +227,7 @@ class TestLoginPassword:
 
     async def should_login_with_totp_without_forced_2fa(self, db: AsyncSession):
         """登录不再强制 2FA：已启用 TOTP 的普通用户直接得完整会话令牌（危险操作时才 step-up）。"""
-        from app.modules.auth.models import TOTP, User
+        from auth.models import TOTP, User
 
         user = User(
             username="secure",
@@ -237,7 +237,7 @@ class TestLoginPassword:
         )
         db.add(user)
         await db.flush()
-        from app.modules.auth.security import hashpwd
+        from auth.security import hashpwd
 
         user.hashed_password = await hashpwd("secret123456")
 
@@ -260,7 +260,7 @@ class TestLoginPassword:
 
 class TestRegisterByVerify:
     async def should_create_user_by_email_verify(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         svc = _service()
         result = await svc.register_by_verify(db, "email", "new@example.com")
@@ -275,7 +275,7 @@ class TestRegisterByVerify:
         assert user.hashed_password == ""
 
     async def should_create_user_by_phone_verify(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         svc = _service()
         result = await svc.register_by_verify(db, "phone", "13900001111")
@@ -294,7 +294,7 @@ class TestRegisterByVerify:
 
 class TestUpgrade:
     async def should_upgrade_local_to_normal(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         await _reg_local(db, username="alice")
         user = await _get(db, User, User.username == "alice")
@@ -308,7 +308,7 @@ class TestUpgrade:
         assert user.account_level == "normal"
 
     async def should_not_downgrade_already_normal(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         user = User(
             username="normal_guy",
@@ -326,7 +326,7 @@ class TestUpgrade:
         assert user.account_level == "normal"
 
     async def admin_should_stay_admin(self, db: AsyncSession):
-        from app.modules.auth.models import User
+        from auth.models import User
 
         user = User(
             username="boss",
@@ -382,8 +382,8 @@ class TestRefresh:
 
     async def should_inherit_stepup_mfa_trust_on_refresh(self, db: AsyncSession):
         """前台 step-up 2FA 信任（mfa_at 原点）应随刷新轮换继承，1h 窗口不被 15min access 轮换重置。"""
-        from app.modules.auth.security import decode_access_token
-        from app.modules.auth.service_auth import issue_session_tokens
+        from auth.security import decode_access_token
+        from auth.service_auth import issue_session_tokens
 
         await _reg_local(db, username="alice", password="secret123456")
         user = (
@@ -491,7 +491,7 @@ class TestRevokeAll:
 
 class TestAuditLog:
     async def should_create_audit_log(self, db: AsyncSession):
-        from app.modules.auth.models import AuditLog
+        from auth.models import AuditLog
 
         alice = await _reg_local(db, username="alice")
         svc = _service()
@@ -525,8 +525,8 @@ class TestAuditLog:
 
 class TestRefreshKindIsolation:
     async def should_reject_admin_kind_refresh_in_web_refresh(self, db: AsyncSession):
-        from app.modules.auth.models import RefreshToken, User
-        from app.modules.auth.service_auth import (
+        from auth.models import RefreshToken, User
+        from auth.service_auth import (
             hash_refresh_token,
             refresh_access_token,
         )
@@ -556,9 +556,9 @@ class TestEmailCase:
     """邮箱大小写绝对敏感回归测试：存储保留原值，大小写不同是独立账号。"""
 
     async def should_store_and_match_exact_email_case(self, db: AsyncSession):
-        from app.modules.auth.channels import EMAIL_CHANNEL
-        from app.modules.auth.models import User
-        from app.modules.auth.service_auth import _normalize_email
+        from auth.channels import EMAIL_CHANNEL
+        from auth.models import User
+        from auth.service_auth import _normalize_email
 
         # 邮箱存储保留原值大小写
         await _reg_normal(
@@ -583,8 +583,8 @@ class TestEmailCase:
 
     async def should_treat_different_case_as_separate_accounts(self, db: AsyncSession):
         """大小写不同的邮箱是两个独立、互不混淆的账号。"""
-        from app.modules.auth.channels import EMAIL_CHANNEL
-        from app.modules.auth.models import User
+        from auth.channels import EMAIL_CHANNEL
+        from auth.models import User
 
         await _reg_normal(
             db, username="bob", email="Bob@Example.com", phone="13800001111"

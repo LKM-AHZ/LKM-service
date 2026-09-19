@@ -30,8 +30,8 @@ from app.core.common import ApiResp, PageData, paginate_pages
 from app.core.config import settings
 from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_read_session
-from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.permissions import Permission
+from auth.deps import CurrentUser
 
 from .deps import require_admin
 from .permissions import require_permission

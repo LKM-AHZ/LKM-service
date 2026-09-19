@@ -4,11 +4,15 @@ import asyncio
 import logging
 
 from app.core.scheduler import build_scheduler
+from app.core.tracing import setup_tracing
 
 logger = logging.getLogger("lkm.scheduler")
 
 
 async def _main() -> None:
+    # 调度进程不是 ASGI app：初始化 provider，让 cron 触发的 span 能导出（默认关时 no-op）
+    setup_tracing(service_suffix="-scheduler")
+
     sched = build_scheduler()
     sched.start()
     logger.info("scheduler started")

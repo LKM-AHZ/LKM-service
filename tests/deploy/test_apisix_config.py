@@ -587,7 +587,7 @@ def test_gateway_jwt_enabled_with_key_file() -> None:
 
 def test_gateway_consumer_key_matches_app_token_claim() -> None:
     """网关消费者 key 必须等于 app 侧写入 token 的 claim 值（跨仓一致性，改一边即红）。"""
-    from app.modules.auth import jwt_keys
+    from auth import jwt_keys
 
     rendered = _render_with_jwt_key()
     assert (

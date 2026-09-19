@@ -17,8 +17,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.models import User
-from app.modules.auth.security import create_access_token
+from auth.models import User
+from auth.security import create_access_token
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -26,7 +26,7 @@ def _auth(token: str) -> dict[str, str]:
 
 
 async def _create_user(auth_db: AsyncSession, username: str) -> User:
-    from app.modules.auth.models import Profile
+    from auth.models import Profile
 
     user = User(
         username=username,
