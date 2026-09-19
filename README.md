@@ -2,6 +2,25 @@
 
 理科迷社区后端服务，基于 FastAPI、SQLAlchemy、PostgreSQL 与 Apache Pulsar。
 
+> 本文档面向后端开发。完整生产栈由上级目录的 `docker-compose.yml` 或 Kubernetes 清单编排；
+> 跨项目入口见 [`../DOCUMENTATION.md`](../DOCUMENTATION.md)。接口参数和响应模型以运行中的
+> `/openapi.json` 为最终依据。
+
+## 环境要求
+
+- Python `>=3.13`
+- [uv](https://docs.astral.sh/uv/)（依赖和命令入口）
+- PostgreSQL；完整消息、缓存和对象存储功能还需要 Pulsar、Redis 与 S3/MinIO
+
+首次安装：
+
+```bash
+uv sync
+cp .env.example .env
+```
+
+`.env` 只用于本地配置，不得提交真实密码、JWT 密钥或内部服务令牌。
+
 ## 当前能力
 
 - 认证与账号：本地/普通/邮箱/手机号注册，密码/验证码/魔法链接登录，JWT access+refresh 与登出吊销，账号等级/锁定/失败计数/限流，2FA（TOTP + 恢复码），OAuth（GitHub），Passkey（WebAuthn），账号恢复（自助 + 管理员），邮箱/手机号绑定，Onboarding 引导。
@@ -75,6 +94,9 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 > - **原始 OpenAPI JSON**：`http://localhost:8000/openapi.json`
 >
 > `docs/openapi/` 下那份手写 YAML 已过时（止于 2026-08，未含后续新增的 timeline/follow/points 等域），仅作历史参考。
+
+下表中的模块前缀均挂载在 `/api/v1` 下。例如表中的 `/auth` 对外完整路径为
+`/api/v1/auth`；GraphQL 使用独立入口 `/graphql`。
 
 以下为接口分组摘要：
 
@@ -166,15 +188,25 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ```bash
 uv sync
-uvicorn main:app --reload
+uv run uvicorn main:app --reload --port 8000
 ```
+
+独立 AUTH 进程：
+
+```bash
+uv run uvicorn app.main_auth:app --reload --port 8001
+```
+
+仅运行 `main:app` 适合常规本地开发。验证拆分部署、跨 AUTH 读缝或生产配置时，必须同时启动
+AUTH 进程并正确设置 `LKM_AUTH_HTTP_URL`、`LKM_AUTH_HTTP_TOKEN` 和独立数据库配置。
 
 生产 / 完整栈（含 Pulsar、AUTH 独立服务、各 worker）用仓库根目录 `docker-compose.yml` 编排启动。
 
 ## 测试
 
 ```bash
-uv run pytest -v
+uv run pytest                   # 默认排除 integration 标记
+uv run pytest -m integration    # 需要真实 Redis 等外部依赖
 ```
 
 如果安装了项目开发依赖，可以继续运行静态检查（当前门禁：**ty 0 诊断 + ruff 干净**；`basedpyright` 已降级为可选）：
@@ -182,5 +214,17 @@ uv run pytest -v
 ```bash
 uv run ty check       # 硬门禁：类型检查 0 诊断
 uv run ruff check     # 代码风格 / 静态检查
-uv run ruff format    # 代码格式化
+uv run ruff format --check .  # 只检查格式
+uv run ruff format .          # 写入格式化结果
+uv run lint-imports    # 架构依赖边界
+```
+
+建议提交前执行：
+
+```bash
+uv run pytest
+uv run ty check
+uv run ruff check
+uv run ruff format --check .
+uv run lint-imports
 ```

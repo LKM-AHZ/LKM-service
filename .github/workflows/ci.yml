@@ -14,7 +14,7 @@ env:
 
 jobs:
   lint:
-    name: lint（ruff + import-linter 边界门禁）
+    name: lint（ruff + import-linter 边界门禁 + 裸 SQL 门禁）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check app tests scripts
       - run: uv run lint-imports
+      - run: uv run python scripts/check_raw_sql.py
 
   migrations:
     name: migrations（逐 revision 双向离线 SQL）
