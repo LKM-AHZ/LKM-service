@@ -32,10 +32,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.client_ip import client_ip
 from app.core.config import settings
 from app.core.err import BizError, CommonErr, resp_json
-from app.core.secrets import reveal
 from app.db.auth_session import get_auth_session
 from app.db.base import now_iso
 from app.db.repo import consume_once, get_or_raise
+from app.modules.auth import jwt_keys
 from app.modules.auth.admin_session import (
     _ADMIN_AUD,
     COOKIE_NAME,
@@ -76,12 +76,7 @@ def _current_mfa_trust(request: Request) -> tuple[bool, int | None]:
     if not token:
         return False, None
     try:
-        payload = jwt.decode(
-            token,
-            reveal(settings.jwt_secret),
-            algorithms=[settings.jwt_algorithm],
-            audience=_ADMIN_AUD,
-        )
+        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, jwt.DecodeError):
         return False, None
     if payload.get("type") != "admin" or not payload.get("mfa"):
@@ -151,12 +146,7 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
     if not token:
         raise BizError(CommonErr.FORBIDDEN, "Not logged into admin panel")
 
-    payload = jwt.decode(
-        token,
-        reveal(settings.jwt_secret),
-        algorithms=[settings.jwt_algorithm],
-        audience=_ADMIN_AUD,
-    )
+    payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
     sub = payload.get("sub")

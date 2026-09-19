@@ -4,13 +4,9 @@ import datetime
 import json
 import uuid
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
-from app.db.repo import get_or_raise
+from app.db.repository import DbSession
 from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.exam.errors import ExamErr
 from app.modules.exam.models import (
@@ -18,6 +14,12 @@ from app.modules.exam.models import (
     ExamAttempt,
     ExamCertificate,
     ExamQuestion,
+)
+from app.modules.exam.repository import (
+    ExamAttemptRepository,
+    ExamCertificateRepository,
+    ExamQuestionRepository,
+    ExamRepository,
 )
 from app.modules.exam.schemas import (
     AttemptStartResp,
@@ -58,9 +60,9 @@ def _exam_to_schema(exam: Exam, question_count: int | None = None) -> ExamOut:
     )
 
 
-async def create_exam_ex(db: AsyncSession, info: ExamCreate) -> ExamOut:
+async def create_exam_ex(db: DbSession, info: ExamCreate) -> ExamOut:
     """创建考试/竞赛并批量写入题目（管理端）。"""
-    exam = Exam(
+    exam = await ExamRepository(db).create(
         type=info.type,
         title=info.title,
         subject=info.subject,
@@ -73,48 +75,37 @@ async def create_exam_ex(db: AsyncSession, info: ExamCreate) -> ExamOut:
         starts_at=info.starts_at,
         ends_at=info.ends_at,
     )
-    db.add(exam)
-    await db.flush()
-    for idx, qi in enumerate(info.questions):
-        db.add(
-            ExamQuestion(
-                exam_id=exam.id,
-                kind=qi.kind,
-                content=qi.content,
-                options=json.dumps(qi.options, ensure_ascii=False),
-                answer=qi.answer,
-                analysis=qi.analysis,
-                difficulty=qi.difficulty,
-                score=qi.score,
-                sort_order=idx,
-            )
+    questions = [
+        ExamQuestion(
+            exam_id=exam.id,
+            kind=qi.kind,
+            content=qi.content,
+            options=json.dumps(qi.options, ensure_ascii=False),
+            answer=qi.answer,
+            analysis=qi.analysis,
+            difficulty=qi.difficulty,
+            score=qi.score,
+            sort_order=idx,
         )
-    await db.flush()
+        for idx, qi in enumerate(info.questions)
+    ]
+    await ExamQuestionRepository(db).add_all(questions)
     return _exam_to_schema(exam, question_count=len(info.questions))
 
 
 async def list_exams(
-    db: AsyncSession, page: int = 1, limit: int = 20, type_: str | None = None
+    db: DbSession, page: int = 1, limit: int = 20, type_: str | None = None
 ) -> tuple[list[ExamOut], int]:
     """列出公开的考试/竞赛（只读热点，router 接缓存）。"""
-    base = select(Exam).options(selectinload(Exam.questions))
-    if type_:
-        base = base.where(Exam.type == type_)
-    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    stmt = base.order_by(Exam.id.desc()).offset((page - 1) * limit).limit(limit)
-    result = await db.execute(stmt)
-    exams = result.scalars().all()
-    items = [_exam_to_schema(e) for e in exams]
-    return items, total
+    exams, total = await ExamRepository(db).list_page(
+        type_=type_, offset=(page - 1) * limit, limit=limit
+    )
+    return [_exam_to_schema(e) for e in exams], total
 
 
-async def get_exam_ex(db: AsyncSession, exam_id: uuid.UUID) -> ExamOut:
-    exam = await get_or_raise(
-        db,
-        Exam,
-        ExamErr.EXAM_NOT_FOUND,
-        Exam.id == exam_id,
-        options=(selectinload(Exam.questions),),
+async def get_exam_ex(db: DbSession, exam_id: uuid.UUID) -> ExamOut:
+    exam = await ExamRepository(db).get_with_questions_or_raise(
+        exam_id, ExamErr.EXAM_NOT_FOUND
     )
     return _exam_to_schema(exam)
 
@@ -138,38 +129,28 @@ def _score_attempt(
 
 
 async def start_attempt(
-    db: AsyncSession, exam_id: uuid.UUID, user_id: uuid.UUID
+    db: DbSession, exam_id: uuid.UUID, user_id: uuid.UUID
 ) -> AttemptStartResp:
     """开考：校验可考性，锁定试题快照，生成作答会话。"""
-    exam = await get_or_raise(
-        db,
-        Exam,
-        ExamErr.EXAM_NOT_FOUND,
-        Exam.id == exam_id,
-        options=(selectinload(Exam.questions),),
+    exam = await ExamRepository(db).get_with_questions_or_raise(
+        exam_id, ExamErr.EXAM_NOT_FOUND
     )
     if not exam.is_published:
         raise BizError(ExamErr.EXAM_NOT_PUBLISHED)
     _check_window(exam)
     if exam.unlock_level or exam.unlock_role:
-        already = await db.scalar(
-            select(ExamCertificate.id).where(
-                ExamCertificate.exam_id == exam_id,
-                ExamCertificate.user_id == user_id,
-                ExamCertificate.passed.is_(True),
-            )
+        already = await ExamCertificateRepository(db).passed_exists(
+            exam_id=exam_id, user_id=user_id
         )
-        if already is not None:
+        if already:
             raise BizError(ExamErr.EXAM_ALREADY_PASSED)
 
-    attempt = ExamAttempt(
+    attempt = await ExamAttemptRepository(db).create(
         exam_id=exam_id,
         user_id=user_id,
         status="in_progress",
         answers="{}",
     )
-    db.add(attempt)
-    await db.flush()
 
     questions = [
         _question_for_attempt(q)
@@ -212,68 +193,57 @@ def _check_attempt_deadline(attempt: ExamAttempt, exam: Exam) -> None:
 
 
 async def submit_attempt(
-    db: AsyncSession,
+    db: DbSession,
     attempt_id: uuid.UUID,
     user_id: uuid.UUID,
     payload: SubmitAnswersRequest,
 ) -> SubmitResult:
     """交卷：判分、落库、发证书、触发等级升级。"""
-    attempt = await get_or_raise(
-        db,
-        ExamAttempt,
-        ExamErr.ATTEMPT_NOT_FOUND,
-        ExamAttempt.id == attempt_id,
+    attempt = await ExamAttemptRepository(db).get_or_raise(
+        attempt_id, ExamErr.ATTEMPT_NOT_FOUND
     )
     if attempt.user_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
     if attempt.status == "submitted":
         raise BizError(ExamErr.ATTEMPT_ALREADY_SUBMITTED)
 
-    exam = await get_or_raise(
-        db,
-        Exam,
-        ExamErr.EXAM_NOT_FOUND,
-        Exam.id == attempt.exam_id,
-        options=(selectinload(Exam.questions),),
+    exam = await ExamRepository(db).get_with_questions_or_raise(
+        attempt.exam_id, ExamErr.EXAM_NOT_FOUND
     )
     _check_window(exam)
     _check_attempt_deadline(attempt, exam)
     if exam.unlock_level or exam.unlock_role:
-        already = await db.scalar(
-            select(ExamCertificate.id).where(
-                ExamCertificate.exam_id == attempt.exam_id,
-                ExamCertificate.user_id == user_id,
-                ExamCertificate.passed.is_(True),
-            )
+        already = await ExamCertificateRepository(db).passed_exists(
+            exam_id=attempt.exam_id, user_id=user_id
         )
-        if already is not None:
+        if already:
             raise BizError(ExamErr.EXAM_ALREADY_PASSED)
 
     score, _ = _score_attempt(exam, payload.answers)
     passed = score >= exam.pass_score
 
-    attempt.status = "submitted"
-    # 作答键是题目 uuid：JSON 对象的键只能是字符串，直接 dumps 会 TypeError
-    attempt.answers = json.dumps(
-        {str(qid): ans for qid, ans in payload.answers.items()}, ensure_ascii=False
+    await ExamAttemptRepository(db).update(
+        attempt,
+        status="submitted",
+        # 作答键是题目 uuid：JSON 对象的键只能是字符串，直接 dumps 会 TypeError
+        answers=json.dumps(
+            {str(qid): ans for qid, ans in payload.answers.items()}, ensure_ascii=False
+        ),
+        score=score,
+        passed=passed,
+        submitted_at=now_iso(),
+        time_spent_s=int((now_iso() - attempt.started_at).total_seconds()),
     )
-    attempt.score = score
-    attempt.passed = passed
-    attempt.submitted_at = now_iso()
-    attempt.time_spent_s = int((now_iso() - attempt.started_at).total_seconds())
-    await db.flush()
 
     certificate_id: uuid.UUID | None = None
     if passed:
-        cert = ExamCertificate(
+        cert = await ExamCertificateRepository(db).create(
             exam_id=exam.id,
             user_id=user_id,
             score=score,
             passed=True,
             cert_no=uuid.uuid4().hex[:16],
         )
-        db.add(cert)
-        await db.flush()
         certificate_id = cert.id
         await _apply_unlock(db, exam, user_id)
         # 认证通过事件入队（竞赛计分）
@@ -291,7 +261,7 @@ async def submit_attempt(
     )
 
 
-async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: uuid.UUID) -> None:
+async def _apply_unlock(db: DbSession, exam: Exam, user_id: uuid.UUID) -> None:
     """通过认证考试后升级 account_level/profile.role（auth 域权威升权写面）。
 
     M3.B S4：把「单向派升 + token_version 失效」收敛到 auth 的 :func:`grant_exam_unlock`
@@ -312,17 +282,8 @@ async def _apply_unlock(db: AsyncSession, exam: Exam, user_id: uuid.UUID) -> Non
     )
 
 
-async def list_certificates(
-    db: AsyncSession, user_id: uuid.UUID
-) -> list[CertificateOut]:
-    rows = (
-        await db.execute(
-            select(ExamCertificate, Exam.title)
-            .join(Exam, Exam.id == ExamCertificate.exam_id)
-            .where(ExamCertificate.user_id == user_id)
-            .order_by(ExamCertificate.issued_at.desc())
-        )
-    ).all()
+async def list_certificates(db: DbSession, user_id: uuid.UUID) -> list[CertificateOut]:
+    rows = await ExamCertificateRepository(db).list_for_user(user_id)
     out: list[CertificateOut] = []
     for cert, exam_title in rows:
         out.append(
@@ -334,7 +295,7 @@ async def list_certificates(
 
 
 async def leaderboard(
-    db: AsyncSession, exam_id: uuid.UUID, offset: int = 0, limit: int = 50
+    db: DbSession, exam_id: uuid.UUID, offset: int = 0, limit: int = 50
 ) -> tuple[list[LeaderboardEntry], int]:
     """按认证通过成绩排序的榜单（正式竞赛用），分页。
 
@@ -342,24 +303,11 @@ async def leaderboard(
     （同分取最早 issued_at），保证每名用户只出现在榜单一次。
     **分页为全量排序后偏移切片**，保证排名连续；返回 ``(items, total)``。
     """
-    exam = await get_or_raise(db, Exam, ExamErr.EXAM_NOT_FOUND, Exam.id == exam_id)
+    exam = await ExamRepository(db).get_or_raise(exam_id, ExamErr.EXAM_NOT_FOUND)
     if exam.type != "competition":
         # 认证考试默认不开放公开榜单，仅返回空（按 spec：认证成绩个人可见）。
         return [], 0
-    rows = (
-        (
-            await db.execute(
-                select(ExamCertificate)
-                .where(ExamCertificate.exam_id == exam_id)
-                .order_by(
-                    ExamCertificate.score.desc(),
-                    ExamCertificate.issued_at.asc(),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await ExamCertificateRepository(db).list_for_exam(exam_id)
     # 每名用户只保留最高成绩（取最早达标的那张证书），随后按成绩降序。
     best: dict[uuid.UUID, ExamCertificate] = {}
     for cert in rows:

@@ -66,6 +66,16 @@ class Settings(BaseSettings):
         "change-me-to-a-random-secret-thats-at-least-32-bytes-long"
     )
     jwt_algorithm: str = "HS256"
+    # RS256/JWKS（批 5，蓝图 §4.2）：配了 RSA 私钥 PEM 即改用 RS256 签发（``jwt_algorithm``
+    # 仅在未配私钥的 HS256 路径生效）。公钥留空则由私钥推导；验签方（主服务/网关）只需公钥。
+    jwt_private_key: SecretStr | None = None
+    jwt_public_key: SecretStr | None = None
+    # 亦可给 PEM 文件路径（k8s Secret 卷 / compose 只读挂载）；内联值优先于文件。
+    jwt_private_key_file: str = ""
+    jwt_public_key_file: str = ""
+    # 双验签灰度：RS256 生效后是否仍接受 HS256 旧 token。存量 token 清空后置 false 关闭。
+    # 本仓因批 1 重建库、token 全失效，可直接置 false（偏离蓝图灰度时序，登记 §8）。
+    jwt_hs_fallback: bool = True
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
@@ -363,6 +373,17 @@ class Settings(BaseSettings):
         # ClickHouse 分析后端启用即须给 HTTP 基址（否则客户端建连必失败）
         if self.clickhouse_enabled and not self.clickhouse_url:
             insecure.append("clickhouse_url(required while clickhouse_enabled=true)")
+        # RS256/JWKS：关掉 HS 回退却没有任何 RSA 公钥 → RS 与 HS 两条验签路径都不通，
+        # 所有 token 一律被拒。这是**自相矛盾**的配置（与进程 env 集无关），装配期即拦。
+        if not self.jwt_hs_fallback and not (
+            self.jwt_public_key
+            or self.jwt_private_key
+            or self.jwt_public_key_file
+            or self.jwt_private_key_file
+        ):
+            insecure.append(
+                "jwt_hs_fallback=false without jwt_public_key/jwt_private_key"
+            )
 
         if insecure:
             raise ValueError(

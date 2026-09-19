@@ -5,29 +5,30 @@ from contextlib import suppress
 from typing import Protocol
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.err import BizError
 from app.core.secrets import reveal
 from app.db.repo import get_or_raise
+from app.db.repository import DbSession
 from app.modules.auth import events
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.models import Profile, User
+from app.modules.auth.repository import ProfileRepository
 from app.modules.auth.schemas import ProfileInfo, ProfileUpdate
 from app.modules.storage.base import StorageBackend
 from app.modules.storage.errors import StorageErr
 from app.modules.storage.factory import get_storage
 
 
-async def get_profile(db: AsyncSession, user_id: uuid.UUID) -> ProfileInfo:
+async def get_profile(db: DbSession, user_id: uuid.UUID) -> ProfileInfo:
     profile = await get_or_raise(
         db, Profile, AuthErr.USER_NOT_FOUND, Profile.user_id == user_id
     )
     return ProfileInfo.model_validate(profile)
 
 
-async def get_profile_by_username(db: AsyncSession, username: str) -> ProfileInfo:
+async def get_profile_by_username(db: DbSession, username: str) -> ProfileInfo:
     """按唯一 username 查公开基础资料（供他人主页浏览，无需登录）。"""
     user = await get_or_raise(
         db, User, AuthErr.USER_NOT_FOUND, User.username == username
@@ -35,7 +36,9 @@ async def get_profile_by_username(db: AsyncSession, username: str) -> ProfileInf
     return await get_profile(db, user.id)
 
 
-async def update_profile(db: AsyncSession, user_id: uuid.UUID, info: ProfileUpdate) -> None:
+async def update_profile(
+    db: DbSession, user_id: uuid.UUID, info: ProfileUpdate
+) -> None:
     profile = await get_or_raise(
         db, Profile, AuthErr.USER_NOT_FOUND, Profile.user_id == user_id
     )
@@ -43,7 +46,7 @@ async def update_profile(db: AsyncSession, user_id: uuid.UUID, info: ProfileUpda
         profile.nickname = info.nickname
     if info.avatar is not None:
         profile.avatar = info.avatar
-    await db.flush()
+    await ProfileRepository(db).flush()
     # 快照 display_name/avatar 一并依赖 Profile.nickname/avatar（A6）→ 变更须失效 user:snap。
     await events.notify_user_updated(db, user_id)
 
@@ -88,7 +91,7 @@ def _avatar_key(user_id: uuid.UUID) -> str:
     return f"avatars/{user_id}/v{ms}.{_AVATAR_EXT}"
 
 
-async def update_avatar(db: AsyncSession, user_id: uuid.UUID, stream: _Readable) -> str:
+async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) -> str:
     """保存头像：写入版本化 key 并更新 ``Profile.avatar``，尽力删除旧 key。
 
     超过 2MB 由 storage 层抛 ``StorageErr.TOO_LARGE``（临时文件不落残留），此处映射为
@@ -117,13 +120,13 @@ async def update_avatar(db: AsyncSession, user_id: uuid.UUID, stream: _Readable)
             await _get_storage().delete(old_key)
 
     profile.avatar = new_key
-    await db.flush()
+    await ProfileRepository(db).flush()
     # 头像为展示 URL（immutable 指纹 key），Profile.avatar 变更须同步失效 user:snap。
     await events.notify_user_updated(db, user_id)
     return new_key
 
 
-async def serve_avatar(db: AsyncSession, user_id: uuid.UUID) -> StreamingResponse:
+async def serve_avatar(db: DbSession, user_id: uuid.UUID) -> StreamingResponse:
     """流式回读某用户头像字节；无头像/用户不存在 → 404（AuthErr.AVATAR_NOT_FOUND）。
 
     404 在构造响应前急切抛出（端点 await 本函数，此刻尚未发头）；不能放进流式生成器——

@@ -11,8 +11,6 @@ from typing import Any, Literal, NoReturn, Protocol
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.config import settings
@@ -20,10 +18,12 @@ from app.core.err import BizError
 from app.core.redis import get_redis
 from app.core.secrets import reveal
 from app.db.repo import get_or_raise
+from app.db.repository import DbSession
 from app.modules.auth.deps import CurrentUser
 from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FILES_TABLE_PLAN, FileStatus, LibraryFile
+from app.modules.files.repository import LibraryFileRepository
 from app.modules.files.schemas import (
     DownloadUrlInfo,
     FileCreate,
@@ -69,7 +69,7 @@ def _file_to_schema(f: LibraryFile, uploader_name: str) -> FileInfo:
 
 
 async def _uploader_map(
-    db: AsyncSession, user_ids: list[uuid.UUID]
+    db: DbSession, user_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
     if not user_ids:
         return {}
@@ -78,33 +78,21 @@ async def _uploader_map(
 
 
 async def list_files(
-    db: AsyncSession,
+    db: DbSession,
     page: int = 1,
     limit: int = 20,
     category_id: str | None = None,
     status: str | None = None,
     sort: str = "newest",
 ) -> PageData[FileInfo]:
-    base = select(LibraryFile)
-    if category_id:
-        base = base.where(LibraryFile.category_id == category_id)
-    if status:
-        base = base.where(LibraryFile.status == status)
-
-    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    order = (
-        LibraryFile.download_count.desc()
-        if sort == "downloads"
-        else LibraryFile.id.desc()
-    )
-    files = (
-        (
-            await db.execute(
-                base.order_by(order).offset(paginate_offset(page, limit)).limit(limit)
-            )
-        )
-        .scalars()
-        .all()
+    repo = LibraryFileRepository(db)
+    total = await repo.count_page(category_id=category_id, status=status)
+    files = await repo.list_page(
+        category_id=category_id,
+        status=status,
+        sort=sort,
+        offset=paginate_offset(page, limit),
+        limit=limit,
     )
 
     names = await _uploader_map(db, [f.uploader_id for f in files])
@@ -115,7 +103,7 @@ async def list_files(
 
 
 async def get_file(
-    db: AsyncSession, file_id: uuid.UUID, bump_view: bool = False
+    db: DbSession, file_id: uuid.UUID, bump_view: bool = False
 ) -> FileInfo:
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
@@ -123,7 +111,7 @@ async def get_file(
 
     if bump_view:
         f.view_count += 1
-        await db.flush()
+        await LibraryFileRepository(db).flush()
 
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
@@ -281,38 +269,8 @@ def _make_stored_name(original_name: str) -> str:
     return f"{uuid.uuid4().hex}{suffix}"
 
 
-async def _refer_count(db: AsyncSession, sha3_hash: str) -> int:
-    """统计引用该物理文件（同 sha3_hash）的条目数。DB 聚合，持久化且天然一致。"""
-    return (
-        await db.scalar(
-            select(func.count())
-            .select_from(LibraryFile)
-            .where(LibraryFile.sha3_hash == sha3_hash)
-        )
-        or 0
-    )
-
-
-async def _sync_ref_count(db: AsyncSession, sha3_hash: str) -> None:
-    """把全局引用计数写回该哈希对应的所有条目，保证 ref_count 列不漂移。"""
-    if not sha3_hash:
-        return
-    count = await _refer_count(db, sha3_hash)
-    rows = (
-        (
-            await db.execute(
-                select(LibraryFile).where(LibraryFile.sha3_hash == sha3_hash)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for row in rows:
-        row.ref_count = count
-
-
 async def create_file(
-    db: AsyncSession,
+    db: DbSession,
     uploader_id: uuid.UUID,
     info: FileCreate,
     stream: _Readable,
@@ -355,6 +313,7 @@ async def create_file(
         # 复用既有物理文件：storage_path 须与首写时后端实际返回的一致，保证元数据不漂移。
         storage_path = _storage_path_for(content_hash)
 
+    repo = LibraryFileRepository(db)
     try:
         f = LibraryFile(
             uploader_id=uploader_id,
@@ -369,13 +328,12 @@ async def create_file(
             description=info.description,
             tags=json.dumps(info.tags, ensure_ascii=False),
         )
-        db.add(f)
-        await db.flush()
-        await _sync_ref_count(db, content_hash)
-        await db.flush()
+        await repo.add(f)
+        await repo.sync_ref_count(content_hash)
+        await repo.flush()
     except Exception:
         # 入库失败：仅当物理文件在本次是唯一引用（无其他条目）时才回收磁盘。
-        if await _refer_count(db, content_hash) <= 1:
+        if await repo.count_by_hash(content_hash) <= 1:
             with suppress(BizError, OSError):  # 尽力清理，不覆盖原始入库异常
                 await _get_storage().delete(bucket_key)
         raise
@@ -384,17 +342,17 @@ async def create_file(
     return _file_to_schema(f, names.get(f.uploader_id, ""))
 
 
-async def bump_download(db: AsyncSession, file_id: uuid.UUID) -> int:
+async def bump_download(db: DbSession, file_id: uuid.UUID) -> int:
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
     f.download_count += 1
-    await db.flush()
+    await LibraryFileRepository(db).flush()
     return f.download_count
 
 
 async def review_file(
-    db: AsyncSession,
+    db: DbSession,
     file_id: uuid.UUID,
     target_status: FileStatus,
     review_comment: str | None = None,
@@ -406,17 +364,10 @@ async def review_file(
     if target_status not in (FileStatus.APPROVED, FileStatus.REJECTED):
         raise BizError(FileErr.INVALID_STATUS, detail="Invalid review status")
 
+    repo = LibraryFileRepository(db)
     # 行锁读取：两个管理员并发审核同一 PENDING 文件时，串行化「读 PENDING → 改 status」
     # 的读改写，避免都通过 PENDING 检查后 last-write-wins 造成状态/加分不确定。
-    f = (
-        (
-            await db.execute(
-                select(LibraryFile).where(LibraryFile.id == file_id).with_for_update()
-            )
-        )
-        .scalars()
-        .first()
-    )
+    f = await repo.get_locked(file_id)
     if f is None:
         raise BizError(FileErr.NOT_FOUND, detail="File not found")
     if f.status != FileStatus.PENDING:
@@ -427,19 +378,10 @@ async def review_file(
 
     if target_status == FileStatus.REJECTED and f.sha3_hash:
         # 同一物理文件被多个条目引用：一并标记 REJECTED，并删除物理文件。
-        same_hash = (
-            (
-                await db.execute(
-                    select(LibraryFile).where(LibraryFile.sha3_hash == f.sha3_hash)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for other in same_hash:
+        for other in await repo.list_by_hash(f.sha3_hash):
             other.status = FileStatus.REJECTED
             other.review_comment = other.review_comment or review_comment
-        await db.flush()
+        await repo.flush()
         # 删除物理文件（尽力而为：key 已不存在视为成功，保持原来的 missing_ok 语义）。
         bucket_key = _bucket_key_of(f)
         if bucket_key is not None:
@@ -449,7 +391,7 @@ async def review_file(
                 if exc.errcode != StorageErr.NOT_FOUND:
                     _raise_storage_as_file(exc)
     else:
-        await db.flush()
+        await repo.flush()
 
     # 仅审核通过时给归属者加分（f.status 已设为 target_status）
     if f.status == FileStatus.APPROVED:
@@ -460,12 +402,13 @@ async def review_file(
 
 
 async def delete_file(
-    db: AsyncSession,
+    db: DbSession,
     file_id: uuid.UUID,
     actor_id: uuid.UUID,
     is_admin: bool = False,
 ) -> FileInfo:
     """软删除文件：管理员或文件所有者可操作，物理文件引用归零时清理磁盘。"""
+    repo = LibraryFileRepository(db)
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
@@ -474,24 +417,14 @@ async def delete_file(
 
     old_hash = f.sha3_hash
     f.status = FileStatus.DELETED
-    await db.flush()
+    await repo.flush()
 
     if old_hash:
         # 物理删除决策与 create_file 的去重复用互斥（按 content_hash 加锁）：
         # 加锁后重算引用，防止并发创建/删除的 TOCTOU 把仍被引用的 blob 删空。
         async with _hash_lock(old_hash):
-            remaining = (
-                await db.scalar(
-                    select(func.count())
-                    .select_from(LibraryFile)
-                    .where(
-                        LibraryFile.sha3_hash == old_hash,
-                        LibraryFile.status != FileStatus.DELETED,
-                    )
-                )
-                or 0
-            )
-            await _sync_ref_count(db, old_hash)
+            remaining = await repo.count_live_by_hash(old_hash)
+            await repo.sync_ref_count(old_hash)
             # 加锁后仍无引用才物理删除（key 已不存在视为成功）。
             if remaining <= 0:
                 bucket_key = _build_bucket_key(old_hash)
@@ -514,7 +447,7 @@ def _require_approved(f: LibraryFile, *, action: str) -> None:
 
 
 async def download_url(
-    db: AsyncSession, file_id: uuid.UUID, cur: CurrentUser
+    db: DbSession, file_id: uuid.UUID, cur: CurrentUser
 ) -> DownloadUrlInfo:
     """签发下载 URL：本地后端回指 /content 端点，S3 后端返回预签名 URL（60s）。计次 download_count。"""
     f = await get_or_raise(
@@ -525,7 +458,7 @@ async def download_url(
     if key is None:
         raise BizError(FileErr.NOT_FOUND, detail="File has no stored content")
     f.download_count += 1
-    await db.flush()
+    await LibraryFileRepository(db).flush()
     storage = _get_storage()
     if settings.storage_backend == "s3":
         url = storage.presign_download(key, expires=60)
@@ -534,7 +467,7 @@ async def download_url(
 
 
 def _serve(
-    db: AsyncSession, f: LibraryFile, disposition: Literal["inline", "attachment"]
+    db: DbSession, f: LibraryFile, disposition: Literal["inline", "attachment"]
 ) -> StreamingResponse:
     """构造流式响应：逐块读取 storage 字节，不整载内存；存储错误映射为 FileErr。"""
 
@@ -563,7 +496,7 @@ def _serve(
 
 
 async def serve_content(
-    db: AsyncSession,
+    db: DbSession,
     file_id: uuid.UUID,
     disposition: Literal["inline", "attachment"],
 ) -> StreamingResponse:
@@ -574,7 +507,7 @@ async def serve_content(
     _require_approved(f, action="preview" if disposition == "inline" else "download")
     if disposition == "inline":  # 预览计次 view
         f.view_count += 1
-        await db.flush()
+        await LibraryFileRepository(db).flush()
     return _serve(db, f, disposition)
 
 
@@ -590,7 +523,7 @@ def _upload_key(upload_id: str) -> str:
 
 
 async def upload_init(
-    db: AsyncSession, info: FileCreate, cur: CurrentUser
+    db: DbSession, info: FileCreate, cur: CurrentUser
 ) -> UploadInitResp:
     """预签名直传初始化。
 
@@ -650,7 +583,7 @@ async def _hash_from_storage(
 
 
 async def _register_from_upload(
-    db: AsyncSession,
+    db: DbSession,
     meta: dict[str, Any],
     uploader_id: uuid.UUID,
     storage: StorageBackend,
@@ -698,15 +631,15 @@ async def _register_from_upload(
         else json.dumps(meta["tags"], ensure_ascii=False),
         status=FileStatus.PENDING,
     )
+    repo = LibraryFileRepository(db)
     try:
-        db.add(f)
-        await db.flush()
-        await _sync_ref_count(db, content_hash)
-        await db.flush()
+        await repo.add(f)
+        await repo.sync_ref_count(content_hash)
+        await repo.flush()
     except Exception:
-        # 入库失败且本次 row 未插入成功（_refer_count 看不到它）：仅当 hash_key 在本次是
+        # 入库失败且本次 row 未插入成功（count_by_hash 看不到它）：仅当 hash_key 在本次是
         # 唯一引用（<=1）时才回收磁盘，避免误删其他条目共享的物理文件。与 create_file 一致。
-        if await _refer_count(db, content_hash) <= 1:
+        if await repo.count_by_hash(content_hash) <= 1:
             with suppress(BizError, OSError):  # 尽力清理，不覆盖原始入库异常
                 await _get_storage().delete(hash_key)
         raise
@@ -714,9 +647,7 @@ async def _register_from_upload(
     return _file_to_schema(f, names.get(uploader_id, ""))
 
 
-async def confirm_upload(
-    db: AsyncSession, upload_id: str, cur: CurrentUser
-) -> FileInfo:
+async def confirm_upload(db: DbSession, upload_id: str, cur: CurrentUser) -> FileInfo:
     """确认预签名直传：回读对象→SHA3→去重/copy 到内容寻址 key→登记 PENDING。
 
     Redis GETDEL 标记（原子 + 幂等：同 upload_id 仅可确认一次）。标记缺失/已用/Redis

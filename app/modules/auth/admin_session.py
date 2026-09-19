@@ -24,7 +24,7 @@ import jwt
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
-from app.core.secrets import reveal
+from app.modules.auth import jwt_keys
 
 COOKIE_NAME = "admin_session"
 REFRESH_NAME = "admin_refresh"
@@ -58,6 +58,8 @@ def create_admin_access_token(
         "account_level": str(user.account_level),
         "type": "admin",
         "aud": _ADMIN_AUD,
+        # APISIX jwt-auth 靠该 claim 查消费者（见 jwt_keys.GATEWAY_KEY）：
+        "key": jwt_keys.GATEWAY_KEY,
         "token_version": int(user.token_version),
         "mfa": mfa_verified,
         "mfa_at": verified_at if mfa_verified else None,
@@ -66,9 +68,7 @@ def create_admin_access_token(
             (now + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES)).timestamp()
         ),
     }
-    return jwt.encode(
-        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
-    )
+    return jwt_keys.encode(payload)
 
 
 def decode_admin_access(token: str) -> dict[str, Any]:
@@ -78,12 +78,7 @@ def decode_admin_access(token: str) -> dict[str, Any]:
     的 require danger 复用（仅校验现 cookie 不写 auth 表）。
     """
     try:
-        payload = jwt.decode(
-            token,
-            reveal(settings.jwt_secret),
-            algorithms=[settings.jwt_algorithm],
-            audience=_ADMIN_AUD,
-        )
+        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
     except (
         jwt.ExpiredSignatureError,
         jwt.InvalidSignatureError,

@@ -12,8 +12,6 @@ import secrets
 import uuid
 
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -35,8 +33,13 @@ from app.core.config import settings
 from app.core.err import BizError
 from app.db.base import expires_at, now_iso
 from app.db.repo import consume_once, get_or_raise
+from app.db.repository import DbSession
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.models import PasskeyChallenge, PasskeyCredential, User
+from app.modules.auth.repository import (
+    PasskeyChallengeRepository,
+    PasskeyCredentialRepository,
+)
 
 _CHALLENGE_TTL_MINUTES = 5
 
@@ -59,7 +62,7 @@ def _signature_raw_to_der(sig: bytes) -> bytes:
     return sig
 
 
-async def _store_challenge(db: AsyncSession) -> tuple[str, bytes]:
+async def _store_challenge(db: DbSession) -> tuple[str, bytes]:
     """将 WebAuthn 挑战码持久化到数据库（跨 worker 共享，过期自动失效）。
 
     返回 (challenge_id, 原始挑战码 bytes)——bytes 传给库生成 options 并在验证时
@@ -68,40 +71,25 @@ async def _store_challenge(db: AsyncSession) -> tuple[str, bytes]:
     challenge_id = secrets.token_hex(16)
     challenge = os.urandom(32)
     expiry = expires_at(minutes=_CHALLENGE_TTL_MINUTES)
-    db.add(
-        PasskeyChallenge(
-            challenge_id=challenge_id,
-            challenge=_b64(challenge),
-            expires_at=expiry,
-        )
+    await PasskeyChallengeRepository(db).create(
+        challenge_id=challenge_id,
+        challenge=_b64(challenge),
+        expires_at=expiry,
     )
-    await db.flush()
     return challenge_id, challenge
 
 
-async def _consume_challenge(db: AsyncSession, challenge_id: str) -> bytes:
+async def _consume_challenge(db: DbSession, challenge_id: str) -> bytes:
     """原子地消费挑战码（条件 UPDATE 防止重放），返回原始挑战码 bytes。"""
     now = now_iso()
     if not await consume_once(
         db,
         PasskeyChallenge,
         {"consumed": True},
-        PasskeyChallenge.challenge_id == challenge_id,
-        PasskeyChallenge.consumed.is_(False),
-        PasskeyChallenge.expires_at > now,
+        *PasskeyChallengeRepository(db).consume_conditions(challenge_id, now),
     ):
         return b""
-    row = (
-        (
-            await db.execute(
-                select(PasskeyChallenge).where(
-                    PasskeyChallenge.challenge_id == challenge_id
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    row = await PasskeyChallengeRepository(db).get_by_challenge_id(challenge_id)
     return _b64decode(str(row.challenge)) if row else b""
 
 
@@ -123,20 +111,11 @@ async def cleanup_expired_challenges() -> None:
             # S5 拆库后 PasskeyChallenge 在 auth 独立库 → 必须用 auth 会话，不能用业务 new_session。
             db = await new_auth_session()
             try:
-                from sqlalchemy import delete as sa_delete
-                from sqlalchemy import or_
-
                 now = now_iso()
-                result = await db.execute(
-                    sa_delete(PasskeyChallenge).where(
-                        or_(
-                            PasskeyChallenge.consumed.is_(True),
-                            PasskeyChallenge.expires_at <= now,
-                        )
-                    )
-                )
+                deleted = await PasskeyChallengeRepository(
+                    db
+                ).delete_expired_or_consumed(now)
                 await db.commit()
-                deleted = int(result.rowcount) if result.rowcount else 0  # ty: ignore[unresolved-attribute]
                 if deleted:
                     _log.info(
                         "Cleaned up %d expired/consumed passkey challenges", deleted
@@ -184,22 +163,12 @@ def _authentication_credential(credential: dict) -> dict:
     }
 
 
-async def begin_passkey_registration(
-    db: AsyncSession, user_id: uuid.UUID
-) -> dict:
+async def begin_passkey_registration(db: DbSession, user_id: uuid.UUID) -> dict:
     user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
 
     challenge_id, challenge = await _store_challenge(db)
 
-    existing = (
-        (
-            await db.execute(
-                select(PasskeyCredential).where(PasskeyCredential.user_id == user_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    existing = await PasskeyCredentialRepository(db).list_for_user(user_id)
     exclude_credentials = [
         PublicKeyCredentialDescriptor(
             id=_b64decode(c.credential_id),
@@ -236,7 +205,7 @@ async def begin_passkey_registration(
 
 
 async def complete_passkey_registration(
-    db: AsyncSession, user_id: uuid.UUID, credential: dict
+    db: DbSession, user_id: uuid.UUID, credential: dict
 ) -> dict:
     raw_id = credential.get("rawId") or ""
     challenge_id = credential.get("challenge_id")
@@ -266,40 +235,29 @@ async def complete_passkey_registration(
     # credential_id 列语义 = base64url 文本串（异于 raw bytes；登录侧浏览器 rawId 亦为
     # base64url-unpadded 文本）。Duwab 顶层 verify 返回的 credential_id 是原始 bytes，
     # 直接入库/比较会把 PG varchar 列变成 bytea 比较而爆。统一编码。
-    cred_id = _b64(cred_raw) if isinstance(cred_raw, (bytes, bytearray)) else str(cred_raw)
+    cred_id = (
+        _b64(cred_raw) if isinstance(cred_raw, (bytes, bytearray)) else str(cred_raw)
+    )
     public_key_bytes = verified.credential_public_key
 
-    existing = (
-        (
-            await db.execute(
-                select(PasskeyCredential).where(
-                    PasskeyCredential.credential_id == cred_id
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    existing = await PasskeyCredentialRepository(db).find_by_credential_id(cred_id)
     if existing:
         raise BizError(
             AuthErr.PASSKEY_REGISTRATION_FAILED, "Credential already registered"
         )
 
     device_name = credential.get("device_name") or "Unknown device"
-    db.add(
-        PasskeyCredential(
-            user_id=user_id,
-            credential_id=cred_id,
-            public_key=_b64(public_key_bytes),
-            sign_count=verified.sign_count,
-            device_name=device_name,
-        )
+    await PasskeyCredentialRepository(db).create(
+        user_id=user_id,
+        credential_id=cred_id,
+        public_key=_b64(public_key_bytes),
+        sign_count=verified.sign_count,
+        device_name=device_name,
     )
-    await db.flush()
     return {"message": "Passkey registered successfully", "device_name": device_name}
 
 
-async def begin_passkey_login(db: AsyncSession) -> dict:
+async def begin_passkey_login(db: DbSession) -> dict:
     challenge_id, challenge = await _store_challenge(db)
     options = generate_authentication_options(
         rp_id=settings.rp_id,
@@ -313,7 +271,7 @@ async def begin_passkey_login(db: AsyncSession) -> dict:
     }
 
 
-async def complete_passkey_login(db: AsyncSession, credential: dict) -> dict:
+async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
     raw_id = credential.get("rawId") or ""
     challenge_id = credential.get("challenge_id")
 
@@ -348,8 +306,9 @@ async def complete_passkey_login(db: AsyncSession, credential: dict) -> dict:
     except WebAuthnException as exc:
         raise BizError(AuthErr.PASSKEY_VERIFICATION_FAILED, str(exc)) from exc
 
-    passkey.sign_count = verification.new_sign_count
-    await db.flush()
+    await PasskeyCredentialRepository(db).update(
+        passkey, sign_count=verification.new_sign_count
+    )
 
     user = await get_or_raise(
         db, User, AuthErr.USER_NOT_FOUND, User.id == passkey.user_id
@@ -363,16 +322,8 @@ async def complete_passkey_login(db: AsyncSession, credential: dict) -> dict:
     return await finalize_auth_response(db, user)
 
 
-async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
-    creds = (
-        (
-            await db.execute(
-                select(PasskeyCredential).where(PasskeyCredential.user_id == user_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+async def list_credentials(db: DbSession, user_id: uuid.UUID) -> list[dict]:
+    creds = await PasskeyCredentialRepository(db).list_for_user(user_id)
     return [
         {
             "id": c.id,
@@ -385,16 +336,13 @@ async def list_credentials(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
 
 
 async def delete_credential(
-    db: AsyncSession, user_id: uuid.UUID, credential_id: uuid.UUID
+    db: DbSession, user_id: uuid.UUID, credential_id: uuid.UUID
 ) -> dict:
-    cred = await get_or_raise(
-        db,
-        PasskeyCredential,
+    cred = await PasskeyCredentialRepository(db).get_for_user_or_raise(
+        credential_id,
+        user_id,
         AuthErr.PASSKEY_VERIFICATION_FAILED,
-        PasskeyCredential.id == credential_id,
-        PasskeyCredential.user_id == user_id,
         detail="Credential not found",
     )
-    await db.delete(cred)
-    await db.flush()
+    await PasskeyCredentialRepository(db).delete(cred)
     return {"message": "Credential deleted"}

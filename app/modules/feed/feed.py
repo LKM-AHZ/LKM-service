@@ -132,6 +132,8 @@ async def _fetch_discussion(
     conditions: list[Any] = [
         ContentItem.content_type == "discussion",
         ContentItem.status == ContentStatus.PUBLISHED,
+        # 内容软删（批 4）：实时合流兜底路径同样不得返回已删内容
+        ContentItem.deleted_at.is_(None),
     ]
     # follow 模式：关注作者 或 关注版块；hot 模式不限制
     if author_ids is not None and board_ids is not None:
@@ -139,15 +141,15 @@ async def _fetch_discussion(
             ContentItem.author_id.in_(author_ids) | ContentItem.board_id.in_(board_ids)
         )
     order_by = _cursor_order(
-        ContentItem.created_at, ContentItem.id, conditions, before_time, before_id,
-        after_time, after_id,
+        ContentItem.created_at,
+        ContentItem.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(ContentItem)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(ContentItem).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     # author_name 由 service 合流后统一批量填充（见 service.get_timeline 的 _fill_authors），
     # 避免同一作者在多源各查一次；此源只返回 author_id。
@@ -192,15 +194,15 @@ async def _fetch_article(
 ) -> list[FeedItem]:
     conditions: list[Any] = [Article.status == "published"]
     order_by = _cursor_order(
-        Article.created_at, Article.id, conditions, before_time, before_id,
-        after_time, after_id,
+        Article.created_at,
+        Article.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(Article)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(Article).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -242,15 +244,15 @@ async def _fetch_column(
     if author_ids is not None:
         conditions.append(ColumnPost.author_id.in_(author_ids))
     order_by = _cursor_order(
-        ColumnPost.created_at, ColumnPost.id, conditions, before_time, before_id,
-        after_time, after_id,
+        ColumnPost.created_at,
+        ColumnPost.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(ColumnPost)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(ColumnPost).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -292,15 +294,15 @@ async def _fetch_qa(
     if author_ids is not None:
         conditions.append(QAQuestion.author_id.in_(author_ids))
     order_by = _cursor_order(
-        QAQuestion.created_at, QAQuestion.id, conditions, before_time, before_id,
-        after_time, after_id,
+        QAQuestion.created_at,
+        QAQuestion.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(QAQuestion)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(QAQuestion).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -338,15 +340,15 @@ async def _fetch_project(
     if author_ids is not None:
         conditions.append(Project.applicant_id.in_(author_ids))
     order_by = _cursor_order(
-        Project.created_at, Project.id, conditions, before_time, before_id,
-        after_time, after_id,
+        Project.created_at,
+        Project.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(Project)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(Project).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -383,19 +385,20 @@ async def _fetch_blog(
     conditions: list[Any] = [
         ContentItem.content_type == "blog_post",
         ContentItem.status == ContentStatus.PUBLISHED,
+        ContentItem.deleted_at.is_(None),  # 软删（批 4）
     ]
     if author_ids is not None:
         conditions.append(ContentItem.author_id.in_(author_ids))
     order_by = _cursor_order(
-        ContentItem.created_at, ContentItem.id, conditions, before_time, before_id,
-        after_time, after_id,
+        ContentItem.created_at,
+        ContentItem.id,
+        conditions,
+        before_time,
+        before_id,
+        after_time,
+        after_id,
     )
-    stmt = (
-        select(ContentItem)
-        .where(*conditions)
-        .order_by(*order_by)
-        .limit(limit)
-    )
+    stmt = select(ContentItem).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     names = await _author_map(db, {r.author_id for r in rows if r.author_id})
     return [

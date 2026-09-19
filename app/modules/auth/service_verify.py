@@ -7,18 +7,16 @@ import secrets
 import uuid
 from typing import Any, cast
 
-from sqlalchemy import select
-from sqlalchemy import update as sa_update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
 from app.core.err import BizError
 from app.core.redis_limiter import RedisRateLimiter
 from app.core.secrets import reveal
 from app.db.base import now_iso
 from app.db.repo import consume_once, isolated_update
+from app.db.repository import DbSession
 from app.modules.auth.errors import AuthErr
 from app.modules.auth.models import EmailVerification, PhoneVerification
+from app.modules.auth.repository import VerificationRepository
 
 _CODE_EXPIRE_MINUTES = 10
 _MAX_FAILED_ATTEMPTS = 3
@@ -36,7 +34,7 @@ def hash_code(raw: str, purpose: str = "", contact: str = "", nonce: str = "") -
 
 
 async def _create_verification(
-    db: AsyncSession,
+    db: DbSession,
     model: type[Any],
     contact_attr: str,
     contact: str,
@@ -45,55 +43,45 @@ async def _create_verification(
     """创建一条验证码记录并返回 (明文验证码, 记录ID)。"""
     code = generate_code()
     nonce = secrets.token_hex(8)
-    record = model(
+    record = await VerificationRepository(db, model).create(
         **{contact_attr: contact},
         code_hash=hash_code(code, purpose, contact=contact, nonce=nonce),
         nonce=nonce,
         purpose=purpose,
         expires_at=_expires_at(),
     )
-    db.add(record)
-    await db.flush()
     return code, record.id
 
 
 async def _latest_verification(
-    db: AsyncSession,
+    db: DbSession,
     model: type[Any],
     contact_attr: str,
     contact: str,
     purpose: str,
 ) -> Any:
     """取该联系方式未使用的最新一条验证码记录。"""
-    result = await db.execute(
-        select(model)
-        .where(
-            getattr(model, contact_attr) == contact,
-            model.purpose == purpose,
-            model.used.is_(False),
-        )
-        .order_by(model.created_at.desc())
-        .limit(1)
+    return await VerificationRepository(db, model, contact_attr).latest(
+        contact, purpose
     )
-    return result.scalars().first()
 
 
 async def create_email_verification(
-    db: AsyncSession, email: str, purpose: str
+    db: DbSession, email: str, purpose: str
 ) -> tuple[str, uuid.UUID]:
     """创建一个 EmailVerification 记录并返回 (明文验证码, 记录ID)。"""
     return await _create_verification(db, EmailVerification, "email", email, purpose)
 
 
 async def create_phone_verification(
-    db: AsyncSession, phone: str, purpose: str
+    db: DbSession, phone: str, purpose: str
 ) -> tuple[str, uuid.UUID]:
     """创建一个 PhoneVerification 记录并返回 (明文验证码, 记录ID)。"""
     return await _create_verification(db, PhoneVerification, "phone", phone, purpose)
 
 
 async def consume_email_code(
-    db: AsyncSession, email: str, code: str, purpose: str
+    db: DbSession, email: str, code: str, purpose: str
 ) -> bool:
     """验证并消费最新匹配的 EmailVerification。"""
     record = await _latest_verification(db, EmailVerification, "email", email, purpose)
@@ -101,14 +89,14 @@ async def consume_email_code(
 
 
 async def consume_phone_code(
-    db: AsyncSession, phone: str, code: str, purpose: str
+    db: DbSession, phone: str, code: str, purpose: str
 ) -> bool:
     """验证并消费最新匹配的 PhoneVerification。"""
     record = await _latest_verification(db, PhoneVerification, "phone", phone, purpose)
     return await _consume(db, record, code)
 
 
-async def _consume(db: AsyncSession, record: Any, code: str) -> bool:
+async def _consume(db: DbSession, record: Any, code: str) -> bool:
     if record is None:
         raise BizError(AuthErr.VERIFICATION_CODE_INVALID)
 
@@ -130,10 +118,7 @@ async def _consume(db: AsyncSession, record: Any, code: str) -> bool:
     ):
         record_cls = cast(type[Any], type(record))
         await isolated_update(
-            db,
-            sa_update(record_cls)
-            .where(record_cls.id == record.id)
-            .values(failed_attempts=record_cls.failed_attempts + 1),
+            db, VerificationRepository(db, record_cls).failed_stmt(record.id)
         )
         await db.refresh(record)
         raise BizError(AuthErr.VERIFICATION_CODE_INVALID)

@@ -3,14 +3,11 @@ import hashlib
 import uuid
 from typing import Any, cast
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
+from app.db.repository import DbSession
 from app.modules.auth.schemas import ProfileInfo
 from app.modules.auth.snapshot import (
     get_user_snapshot,
@@ -22,9 +19,15 @@ from app.modules.blog.errors import BlogErr
 from app.modules.blog.models import (
     BlogComment,
     BlogContent,
-    BlogRepoQuarantine,
     BlogSeries,
-    BlogStar,
+)
+from app.modules.blog.repository import (
+    BlogCommentRepository,
+    BlogContentRepository,
+    BlogRepoQuarantineRepository,
+    BlogSeriesRepository,
+    BlogStarRepository,
+    BoardRepository,
 )
 from app.modules.blog.schemas import (
     BlogCommentCreate,
@@ -35,7 +38,6 @@ from app.modules.blog.schemas import (
     BlogSeriesUpdate,
     BlogStarStatus,
 )
-from app.modules.content.models import Board
 from app.modules.content.service import publish_blog_item
 
 # ---- private converters ----
@@ -58,60 +60,32 @@ def _comment_to_info(
 # ---- star helpers ----
 
 
-async def _star_count(db: AsyncSession, series_id: uuid.UUID) -> int:
-    return (
-        await db.scalar(
-            select(func.count(BlogStar.user_id)).where(BlogStar.series_id == series_id)
-        )
-        or 0
+async def _star_count(db: DbSession, series_id: uuid.UUID) -> int:
+    return await BlogStarRepository(db).count_for(series_id)
+
+
+async def _is_starred(db: DbSession, series_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+    star = await BlogStarRepository(db).get_one_star(
+        series_id=series_id, user_id=user_id
     )
-
-
-async def _is_starred(
-    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
-    return (
-        await db.execute(
-            select(BlogStar).where(
-                BlogStar.series_id == series_id, BlogStar.user_id == user_id
-            )
-        )
-    ).scalars().first() is not None
+    return star is not None
 
 
 async def _star_counts(
-    db: AsyncSession, series_ids: list[uuid.UUID]
+    db: DbSession, series_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, int]:
     """批量统计多个系列的 star 数量，避免逐条查询的 N+1。"""
-    if not series_ids:
-        return {}
-    rows = (
-        await db.execute(
-            select(BlogStar.series_id, func.count(BlogStar.user_id))
-            .where(BlogStar.series_id.in_(set(series_ids)))
-            .group_by(BlogStar.series_id)
-        )
-    ).all()
-    return {sid: cnt for sid, cnt in rows}
+    return await BlogStarRepository(db).counts_for(series_ids)
 
 
 async def _starred_ids(
-    db: AsyncSession, series_ids: list[uuid.UUID], user_id: uuid.UUID
+    db: DbSession, series_ids: list[uuid.UUID], user_id: uuid.UUID
 ) -> set[uuid.UUID]:
     """批量查当前用户 star 了哪些系列，避免逐条查询的 N+1。"""
-    if not series_ids:
-        return set()
-    rows = (
-        await db.execute(
-            select(BlogStar.series_id).where(
-                BlogStar.series_id.in_(set(series_ids)), BlogStar.user_id == user_id
-            )
-        )
-    ).all()
-    return {sid for (sid,) in rows}
+    return await BlogStarRepository(db).starred_ids(series_ids, user_id)
 
 
-async def _get_profile(db: AsyncSession, user_id: uuid.UUID) -> ProfileInfo | None:
+async def _get_profile(db: DbSession, user_id: uuid.UUID) -> ProfileInfo | None:
     """评论作者 ProfileInfo，经 auth 读缝取（M3.A残项：不再直读 Profile）。"""
     snap = await get_user_snapshot(db, user_id=user_id)
     if snap is None:
@@ -120,7 +94,7 @@ async def _get_profile(db: AsyncSession, user_id: uuid.UUID) -> ProfileInfo | No
 
 
 async def _get_profiles(
-    db: AsyncSession, user_ids: set[uuid.UUID]
+    db: DbSession, user_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, ProfileInfo | None]:
     """批量取评论作者 ProfileInfo（经 auth 批量读缝一次查齐，避免逐条补 profile 的散读）。"""
     snaps = await get_user_snapshot_batch(db, user_ids=list(user_ids))
@@ -181,20 +155,9 @@ def _paths_to_file_tree(paths: list[str]) -> list[dict[str, Any]]:
 
 
 async def _get_content_row(
-    db: AsyncSession, series_id: uuid.UUID, filepath: str
+    db: DbSession, series_id: uuid.UUID, filepath: str
 ) -> BlogContent:
-    row = (
-        (
-            await db.execute(
-                select(BlogContent).where(
-                    BlogContent.series_id == series_id,
-                    BlogContent.path == filepath,
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    row = await BlogContentRepository(db).get_row(series_id, filepath)
     if row is None:
         raise BizError(BlogErr.FILE_NOT_FOUND, f"File not found: {filepath}")
     return row
@@ -204,17 +167,9 @@ async def _get_content_row(
 
 
 async def create_series(
-    db: AsyncSession, user_id: uuid.UUID, info: BlogSeriesCreate
+    db: DbSession, user_id: uuid.UUID, info: BlogSeriesCreate
 ) -> BlogSeriesInfo:
-    existing = (
-        (
-            await db.execute(
-                select(BlogSeries).where(BlogSeries.repo_name == info.repo_name)
-            )
-        )
-        .scalars()
-        .first()
-    )
+    existing = await BlogSeriesRepository(db).get_by_repo_name(info.repo_name)
     if existing:
         raise BizError(CommonErr.INVALID_INPUT, "Repository name already taken")
 
@@ -228,13 +183,12 @@ async def create_series(
         cover_url=info.cover_url,
         repo_name=info.repo_name,
     )
-    db.add(series)
-    await db.flush()
+    await BlogSeriesRepository(db).add(series)
     return _series_to_info(series)
 
 
 async def list_series(
-    db: AsyncSession,
+    db: DbSession,
     current_user_id: uuid.UUID | None = None,
     page: int = 1,
     limit: int | None = None,
@@ -243,11 +197,12 @@ async def list_series(
     系列列表，统一返回 ``PageData``。不传 ``limit`` 时返回全部（page 恒为 1，pages 视总数），
     传了则在 SQL 层分页，避免大数据量时整表拉取。
     """
-    total = await db.scalar(select(func.count()).select_from(BlogSeries)) or 0
-    stmt = select(BlogSeries).order_by(BlogSeries.id.desc())
-    if limit is not None:
-        stmt = stmt.offset(paginate_offset(page, limit)).limit(limit)
-    items = (await db.execute(stmt)).scalars().all()
+    repo = BlogSeriesRepository(db)
+    total = await repo.count()
+    items = await repo.list_page(
+        offset=paginate_offset(page, limit) if limit is not None else None,
+        limit=limit,
+    )
     ids = [s.id for s in items]
     counts = await _star_counts(db, ids)
     starred_ids = (
@@ -269,7 +224,7 @@ async def list_series(
 
 
 async def get_series(
-    db: AsyncSession, series_id: uuid.UUID, current_user_id: uuid.UUID | None = None
+    db: DbSession, series_id: uuid.UUID, current_user_id: uuid.UUID | None = None
 ) -> BlogSeriesDetail:
     series = await get_or_raise(
         db,
@@ -284,17 +239,9 @@ async def get_series(
     )
 
     file_tree: list[dict[str, Any]] | None = None
-    rows = (
-        (
-            await db.execute(
-                select(BlogContent.path).where(BlogContent.series_id == series_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await BlogContentRepository(db).list_paths(series_id)
     if rows:
-        file_tree = _paths_to_file_tree(list(rows))
+        file_tree = _paths_to_file_tree(rows)
 
     return BlogSeriesDetail.model_validate(series).model_copy(
         update={"star_count": sc, "is_starred": starred, "file_tree": file_tree}
@@ -302,7 +249,7 @@ async def get_series(
 
 
 async def update_series(
-    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogSeriesUpdate
+    db: DbSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogSeriesUpdate
 ) -> BlogSeriesInfo:
     series = await get_or_raise(
         db,
@@ -323,12 +270,12 @@ async def update_series(
         series.status = info.status
     series.updated_at = now_iso()
 
-    await db.flush()
+    await BlogSeriesRepository(db).flush()
     return _series_to_info(series)
 
 
 async def delete_series(
-    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, as_admin: bool = False
+    db: DbSession, series_id: uuid.UUID, user_id: uuid.UUID, as_admin: bool = False
 ) -> uuid.UUID:
     series = await get_or_raise(
         db,
@@ -341,54 +288,32 @@ async def delete_series(
 
     await asyncio.to_thread(git_svc.delete_repo, series.repo_name)
     # 正常删除系列时，同步清理可能的隔离台账(幂等:无则忽略)
-    qrow = (
-        (
-            await db.execute(
-                select(BlogRepoQuarantine).where(
-                    BlogRepoQuarantine.repo_name == series.repo_name
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    quarantine_repo = BlogRepoQuarantineRepository(db)
+    qrow = await quarantine_repo.get_by_repo_name(series.repo_name)
     if qrow is not None:
-        await db.delete(qrow)
+        await quarantine_repo.delete(qrow)
     owner_id = series.owner_id
-    await db.delete(series)
-    await db.flush()
+    await BlogSeriesRepository(db).delete(series)
     return owner_id
 
 
 async def toggle_star(
-    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID
+    db: DbSession, series_id: uuid.UUID, user_id: uuid.UUID
 ) -> BlogStarStatus:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
 
-    existing = (
-        (
-            await db.execute(
-                select(BlogStar).where(
-                    BlogStar.series_id == series_id, BlogStar.user_id == user_id
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    repo = BlogStarRepository(db)
+    existing = await repo.get_one_star(series_id=series_id, user_id=user_id)
 
     if existing:
-        await db.delete(existing)
-        await db.flush()
+        await repo.delete(existing)
         return BlogStarStatus(
             starred=False, star_count=await _star_count(db, series_id)
         )
 
-    star = BlogStar(user_id=user_id, series_id=series_id)
-    db.add(star)
-    await db.flush()
+    await repo.create(user_id=user_id, series_id=series_id)
     return BlogStarStatus(starred=True, star_count=await _star_count(db, series_id))
 
 
@@ -396,7 +321,7 @@ async def toggle_star(
 
 
 async def create_comment(
-    db: AsyncSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogCommentCreate
+    db: DbSession, series_id: uuid.UUID, user_id: uuid.UUID, info: BlogCommentCreate
 ) -> BlogCommentInfo:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
@@ -418,44 +343,21 @@ async def create_comment(
         content=info.content,
         parent_id=info.parent_id,
     )
-    db.add(comment)
-    await db.flush()
+    repo = BlogCommentRepository(db)
+    await repo.add(comment)
     # 重新用 selectinload 预载 replies，避免序列化时懒加载触发 MissingGreenlet
-    loaded_comment = (
-        (
-            await db.execute(
-                select(BlogComment)
-                .where(BlogComment.id == comment.id)
-                .options(selectinload(BlogComment.replies))
-            )
-        )
-        .scalars()
-        .first()
-    )
+    loaded_comment = await repo.get_with_replies(comment.id)
     if loaded_comment is None:
         loaded_comment = comment
     return _comment_to_info(loaded_comment, profile=await _get_profile(db, user_id))
 
 
-async def list_comments(
-    db: AsyncSession, series_id: uuid.UUID
-) -> list[BlogCommentInfo]:
+async def list_comments(db: DbSession, series_id: uuid.UUID) -> list[BlogCommentInfo]:
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
 
-    comments = (
-        (
-            await db.execute(
-                select(BlogComment)
-                .where(BlogComment.series_id == series_id)
-                .order_by(BlogComment.created_at.asc())
-                .options(selectinload(BlogComment.replies))
-            )
-        )
-        .scalars()
-        .all()
-    )
+    comments = await BlogCommentRepository(db).list_in_series(series_id)
 
     user_ids = {c.user_id for c in comments}
     profiles = await _get_profiles(db, user_ids)
@@ -478,7 +380,7 @@ async def list_comments(
 
 
 async def delete_comment(
-    db: AsyncSession,
+    db: DbSession,
     series_id: uuid.UUID,
     comment_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -494,8 +396,9 @@ async def delete_comment(
     if not as_admin and comment.user_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
     author_id = comment.user_id
-    await db.delete(comment)
-    await db.flush()
+    # 批 4：改软删（行保留以便恢复）；连带整棵回复树，等价硬删时代的 ORM delete-orphan 级联，
+    # 评论列表/回复树经 Repository 基类自动过滤已软删行。
+    await BlogCommentRepository(db).soft_delete_subtree(comment.id)
     return author_id
 
 
@@ -503,7 +406,7 @@ async def delete_comment(
 
 
 async def get_file_content(
-    db: AsyncSession, series_id: uuid.UUID, filepath: str
+    db: DbSession, series_id: uuid.UUID, filepath: str
 ) -> dict[str, Any]:
     await get_or_raise(
         db,
@@ -517,7 +420,7 @@ async def get_file_content(
 
 
 async def write_series_file(
-    db: AsyncSession,
+    db: DbSession,
     series_id: uuid.UUID,
     user_id: uuid.UUID,
     filepath: str,
@@ -534,18 +437,8 @@ async def write_series_file(
         raise BizError(CommonErr.FORBIDDEN)
 
     filepath = filepath.lstrip("/") or filepath
-    row = (
-        (
-            await db.execute(
-                select(BlogContent).where(
-                    BlogContent.series_id == series_id,
-                    BlogContent.path == filepath,
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    repo = BlogContentRepository(db)
+    row = await repo.get_row(series_id, filepath)
     new_sha = _sha3(content)
     if row is None:
         row = BlogContent(
@@ -555,7 +448,7 @@ async def write_series_file(
             sha3=new_sha,
             version=1,
         )
-        db.add(row)
+        await repo.add(row)
     else:
         # 内容是否变化：仅当 sha3 变化才递增 version，避免无意义的重写
         if row.sha3 != new_sha:
@@ -565,25 +458,19 @@ async def write_series_file(
             row.updated_at = now_iso()
 
     series.updated_at = now_iso()
-    await db.flush()
+    await repo.flush()
 
 
 # ---- publish ----
 
 
-async def _ensure_board(db: AsyncSession, slug: str) -> uuid.UUID:
+async def _ensure_board(db: DbSession, slug: str) -> uuid.UUID:
     """blog 发布时按 slug 解析板块（统一分类轴）；不存在则自动建并返回 board_id。"""
-    existing = await db.scalar(select(Board.id).where(Board.slug == slug))
-    if existing is not None:
-        return existing
-    board = Board(slug=slug, title=slug, description="auto-created for blog publish")
-    db.add(board)
-    await db.flush()
-    return board.id
+    return await BoardRepository(db).ensure_by_slug(slug)
 
 
 async def publish_series_file(
-    db: AsyncSession,
+    db: DbSession,
     series_id: uuid.UUID,
     user_id: uuid.UUID,
     filepath: str,

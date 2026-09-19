@@ -11,13 +11,13 @@ import uuid
 from typing import Any
 from urllib.parse import quote
 
-import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.core.config import settings
 from app.core.secrets import reveal
+from app.modules.auth import jwt_keys
 
 _ph = PasswordHasher()
 # 虚拟哈希，防枚举
@@ -84,23 +84,18 @@ def create_access_token(
         "mfa": mfa_verified,
         "mfa_at": verified_at if mfa_verified else None,
         "aud": _AUD_WEB,
+        # APISIX jwt-auth 靠该 claim 查消费者（见 jwt_keys.GATEWAY_KEY）：
+        "key": jwt_keys.GATEWAY_KEY,
         "iat": now,
         "exp": now + settings.access_token_expire_minutes * 60,
     }
-    return jwt.encode(
-        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
-    )
+    return jwt_keys.encode(payload)
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
     # 单次验签：同时校验 audience(lkm:web) 与类型标记(access)。
     # 之前先读"不验 aud"看类型、再"验 aud"验第二遍，导致每次调用重复验签(HMAC)两次。
-    payload = jwt.decode(
-        token,
-        reveal(settings.jwt_secret),
-        algorithms=[settings.jwt_algorithm],
-        audience=_AUD_WEB,
-    )
+    payload = jwt_keys.decode(token, audience=_AUD_WEB)
     if payload.get("type") != _ACCESS_TYPE:
         raise ValueError("non-access token")
     return payload
@@ -118,24 +113,19 @@ def create_temp_token(
         "type": _TEMP_TYPE,
         "purpose": purpose,
         "aud": _AUD_TEMP,
+        # APISIX jwt-auth 靠该 claim 查消费者（见 jwt_keys.GATEWAY_KEY）：
+        "key": jwt_keys.GATEWAY_KEY,
         "iat": now,
         "exp": now + _TEMP_EXPIRE_SECONDS,
     }
     if txn_id:
         payload["txn_id"] = txn_id
-    return jwt.encode(
-        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
-    )
+    return jwt_keys.encode(payload)
 
 
 def decode_temp_token(token: str) -> dict[str, Any]:
     # 单次验签：同时校验 audience(lkm:temp) 与类型标记(temp)。
-    payload = jwt.decode(
-        token,
-        reveal(settings.jwt_secret),
-        algorithms=[settings.jwt_algorithm],
-        audience=_AUD_TEMP,
-    )
+    payload = jwt_keys.decode(token, audience=_AUD_TEMP)
     if payload.get("type") != _TEMP_TYPE:
         raise ValueError("non-temp token")
     return payload

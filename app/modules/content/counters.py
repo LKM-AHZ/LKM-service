@@ -118,9 +118,7 @@ async def flush_counters(db: AsyncSession) -> int:
     return applied
 
 
-async def reconcile_counts(
-    db: AsyncSession, batch_size: int = 500
-) -> tuple[int, int]:
+async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int, int]:
     """按明细表重算三项计数并修正偏差，返回 ``(scanned, affected)``。
 
     以 ``id`` 键集分窗（每窗一条聚合查询 + 至多 N 条修正 UPDATE），内存与命令数有界。
@@ -139,9 +137,14 @@ async def reconcile_counts(
             .where(ContentLike.content_id == ContentItem.id)
             .scalar_subquery()
             .label("real_like"),
+            # 口径与在线计数一致：**不含已软删评论**。若此处不滤，软删评论会被对账
+            # 反复算回来，与「软删时 comment_count 减一」互相覆盖、永久震荡。
             select(func.count())
             .select_from(ContentComment)
-            .where(ContentComment.content_id == ContentItem.id)
+            .where(
+                ContentComment.content_id == ContentItem.id,
+                ContentComment.deleted_at.is_(None),
+            )
             .scalar_subquery()
             .label("real_comment"),
             select(func.count())

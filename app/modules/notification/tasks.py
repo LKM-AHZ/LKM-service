@@ -69,7 +69,12 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
     prefix, ref = parsed
 
     if event == "like" and prefix == "item":
-        item = await db.scalar(select(ContentItem).where(ContentItem.id == ref))
+        # 软删（批 4）内容不再产生新通知（事件可能晚于删除到达）
+        item = await db.scalar(
+            select(ContentItem).where(
+                ContentItem.id == ref, ContentItem.deleted_at.is_(None)
+            )
+        )
         if item is None or item.author_id is None:
             return []
         return [
@@ -86,12 +91,17 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
 
     if event == "comment" and prefix == "comment":
         comment = await db.scalar(
-            select(ContentComment).where(ContentComment.id == ref)
+            select(ContentComment).where(
+                ContentComment.id == ref, ContentComment.deleted_at.is_(None)
+            )
         )
         if comment is None:
             return []
         item = await db.scalar(
-            select(ContentItem).where(ContentItem.id == comment.content_id)
+            select(ContentItem).where(
+                ContentItem.id == comment.content_id,
+                ContentItem.deleted_at.is_(None),
+            )
         )
         if item is None:
             return []
@@ -112,7 +122,10 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
             )
         if comment.parent_id is not None:
             parent = await db.scalar(
-                select(ContentComment).where(ContentComment.id == comment.parent_id)
+                select(ContentComment).where(
+                    ContentComment.id == comment.parent_id,
+                    ContentComment.deleted_at.is_(None),
+                )
             )
             if parent is not None:
                 targets.append(

@@ -7,21 +7,19 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.cache import cache_get, cache_set, make_key
 from app.core.err import BizError, CommonErr
-from app.modules.admin.models import RolePermission
+from app.db.repository import DbSession
 from app.modules.auth.deps import CurrentUser
 from app.modules.rbac.permissions import Permission, composible_role
+from app.modules.rbac.repository import ResourceRepository, RolePermissionRepository
 
 # 权限映射缓存 TTL（秒）：改动极低频，短 TTL 弱一致可接受（spec D7）
 _PERM_TTL = 60
 
 
 async def role_has_permission(
-    db: AsyncSession,
+    db: DbSession,
     role_name: str,
     permission: Permission,
 ) -> bool:
@@ -30,19 +28,15 @@ async def role_has_permission(
     cached = await cache_get(key)
     if cached is not None:
         return bool(cached)
-    row = await db.scalar(
-        select(RolePermission.id).where(
-            RolePermission.role_name == role_name,
-            RolePermission.permission == permission.value,
-        )
+    result = await RolePermissionRepository(db).has_permission(
+        role_name, permission.value
     )
-    result = row is not None
     await cache_set(key, result, _PERM_TTL)
     return result
 
 
 async def check_owner(
-    db: AsyncSession,
+    db: DbSession,
     cur: CurrentUser,
     obj_id: uuid.UUID,
     model: type[Any],
@@ -59,7 +53,7 @@ async def check_owner(
     if await role_has_permission(db, role, permission):
         return
 
-    obj = await db.get(model, obj_id)
+    obj = await ResourceRepository(db).get_by_model(model, obj_id)
     if obj is None:
         # CommonErr 无 NOT_FOUND（仅 INVALID_INPUT/FORBIDDEN/INTERNAL_ERROR/MFA_REQUIRED）。
         # 对象不存在时不返回 404（避免泄露资源存在性），统一 FORBIDDEN。

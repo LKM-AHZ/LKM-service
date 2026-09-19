@@ -64,12 +64,13 @@ async def _discussion_created(
 async def test_post_created_total_increments_on_publish(
     db: AsyncSession, monkeypatch
 ) -> None:
-    # 聚焦“成功发帖→+1”，绕过真实板块/鉴权：post_allowed 让行、board 用替身。
+    # 聚焦“成功发帖→+1”，绕过鉴权：post_allowed 让行。
+    # （批 3 后 board 存在性走 BoardRepository.get_or_raise，不再有模块级 get_or_raise
+    #   可 patch；_discussion_created 本就落真实 board，无需替身。）
     async def _allow(*_args, **_kwargs) -> None:
         return None
 
     monkeypatch.setattr("app.modules.content.boards.service.check_post_allowed", _allow)
-    monkeypatch.setattr(content_service, "get_or_raise", _allow)
 
     before = _sample_value("post_created_total", {"content_type": "discussion"})
 

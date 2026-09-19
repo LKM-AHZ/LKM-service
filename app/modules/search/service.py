@@ -14,40 +14,25 @@
 （如「学习」）无法用上 trgm 索引，退化为全表扫描（结果仍正确）；≥3 字中文与英文词
 分别命中 trgm / tsvector 索引（EXPLAIN 已验证为 Bitmap Index Scan）。
 
-跨模块只读内容表：与 interaction/feed 同款取法（直接 import content.models +
-auth.snapshot 读缝），已在 pyproject 的 import-linter 契约中精确豁免。
+跨模块只读内容表：与 interaction/feed 同款取法（auth.snapshot 读缝留在本层；
+content.models 的 import 缝随查询表达式下沉到 ``search/repository.py``），已在 pyproject
+的 import-linter 契约中精确豁免。
 """
 
 from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.common import PageData, paginate_pages
 from app.core.err import BizError
+from app.db.repository import DbSession
 from app.modules.auth.snapshot import get_user_snapshot_batch
-from app.modules.content.models import ContentItem, ContentStatus
 from app.modules.search.errors import SearchErr
+from app.modules.search.repository import SearchRepository
 from app.modules.search.schemas import SearchHit
 
-# LIKE 通配符转义：用户输入里的 % / _ / \ 必须按字面处理，否则 ``%`` 会命中全表。
-_LIKE_ESCAPE = "\\"
 
-
-def _like_pattern(term: str) -> str:
-    escaped = (
-        term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
-        .replace("%", f"{_LIKE_ESCAPE}%")
-        .replace("_", f"{_LIKE_ESCAPE}_")
-    )
-    return f"%{escaped}%"
-
-
-async def _author_map(
-    db: AsyncSession, user_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
+async def _author_map(db: DbSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
     ids = {i for i in user_ids if i}
     if not ids:
         return {}
@@ -56,7 +41,7 @@ async def _author_map(
 
 
 async def search_items(
-    db: AsyncSession,
+    db: DbSession,
     q: str,
     page: int = 1,
     limit: int = 20,
@@ -67,31 +52,14 @@ async def search_items(
     if not term:
         raise BizError(SearchErr.EMPTY_QUERY)
 
-    query = func.websearch_to_tsquery("simple", term)
-    fts = ContentItem.search_vector.bool_op("@@")(query)
-    pattern = _like_pattern(term)
-    contains = or_(
-        ContentItem.title.ilike(pattern, escape=_LIKE_ESCAPE),
-        ContentItem.excerpt.ilike(pattern, escape=_LIKE_ESCAPE),
-        ContentItem.content.ilike(pattern, escape=_LIKE_ESCAPE),
+    repo = SearchRepository(db)
+    total = await repo.count_matching(term=term, content_type=content_type)
+    items = await repo.list_matching(
+        term=term,
+        content_type=content_type,
+        offset=(page - 1) * limit,
+        limit=limit,
     )
-    cond = or_(fts, contains)
-
-    base = select(ContentItem).where(
-        ContentItem.status == ContentStatus.PUBLISHED, cond
-    )
-    if content_type:
-        base = base.where(ContentItem.content_type == content_type)
-
-    total = (await db.scalar(select(func.count()).select_from(base.subquery()))) or 0
-
-    rank = func.ts_rank(ContentItem.search_vector, query)
-    stmt = (
-        base.order_by(rank.desc().nulls_last(), ContentItem.id.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-    )
-    items = (await db.execute(stmt)).scalars().all()
 
     names = await _author_map(db, [i.author_id for i in items if i.author_id])
     hits = [

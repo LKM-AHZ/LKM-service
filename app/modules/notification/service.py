@@ -16,18 +16,19 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import delete, func, select
-from sqlalchemy import update as sa_update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError
+from app.db.repository import DbSession
 from app.modules.notification.errors import NotificationErr
 from app.modules.notification.models import (
     Notification,
     NotificationPreference,
     NotificationToken,
+)
+from app.modules.notification.repository import (
+    NotificationPreferenceRepository,
+    NotificationRepository,
+    NotificationTokenRepository,
 )
 from app.modules.notification.schemas import (
     NotificationOut,
@@ -48,7 +49,7 @@ NOTIFICATION_TYPES: tuple[str, ...] = tuple(t.value for t in NotificationType)
 
 
 async def create_notification(
-    db: AsyncSession,
+    db: DbSession,
     *,
     user_id: uuid.UUID,
     type: str,
@@ -62,26 +63,14 @@ async def create_notification(
     不 commit——与调用方事务同生共死（消费者侧由 tasks.py 提交）。
     """
     now = datetime.datetime.now(datetime.UTC)
+    repo = NotificationRepository(db)
     if actor_id is not None and target_id is not None and aggregate_window_s > 0:
-        existing = (
-            (
-                await db.execute(
-                    select(Notification)
-                    .where(
-                        Notification.user_id == user_id,
-                        Notification.type == type,
-                        Notification.actor_id == actor_id,
-                        Notification.target_id == target_id,
-                        Notification.read_at.is_(None),
-                        Notification.created_at
-                        >= now - datetime.timedelta(seconds=aggregate_window_s),
-                    )
-                    .order_by(Notification.id.desc())
-                    .limit(1)
-                )
-            )
-            .scalars()
-            .first()
+        existing = await repo.find_recent_unread(
+            user_id=user_id,
+            type=type,
+            actor_id=actor_id,
+            target_id=target_id,
+            since=now - datetime.timedelta(seconds=aggregate_window_s),
         )
         if existing is not None:
             merged = dict(existing.payload or {})
@@ -89,50 +78,38 @@ async def create_notification(
             # 赋新 dict：JSONB 无变更追踪，原地改不会被 SQLAlchemy 感知
             existing.payload = merged
             existing.created_at = now
-            await db.flush()
+            await repo.flush()
             return existing
 
-    row = Notification(
-        user_id=user_id,
-        type=type,
-        actor_id=actor_id,
-        target_id=target_id,
-        payload=payload or {},
-        created_at=now,
+    return await repo.add(
+        Notification(
+            user_id=user_id,
+            type=type,
+            actor_id=actor_id,
+            target_id=target_id,
+            payload=payload or {},
+            created_at=now,
+        )
     )
-    db.add(row)
-    await db.flush()
-    return row
 
 
 async def list_notifications(
-    db: AsyncSession,
+    db: DbSession,
     user_id: uuid.UUID,
     page: int = 1,
     limit: int = 20,
     unread_only: bool = False,
 ) -> PageData[NotificationOut]:
+    repo = NotificationRepository(db)
     conditions = [Notification.user_id == user_id]
     if unread_only:
         conditions.append(Notification.read_at.is_(None))
-    total = (
-        await db.scalar(
-            select(func.count()).select_from(Notification).where(*conditions)
-        )
-        or 0
-    )
-    rows = (
-        (
-            await db.execute(
-                select(Notification)
-                .where(*conditions)
-                .order_by(Notification.id.desc())
-                .offset(paginate_offset(page, limit))
-                .limit(limit)
-            )
-        )
-        .scalars()
-        .all()
+    total = await repo.count(*conditions)
+    rows = await repo.get_many(
+        *conditions,
+        order_by=Notification.id.desc(),
+        offset=paginate_offset(page, limit),
+        limit=limit,
     )
     return PageData(
         items=[NotificationOut.model_validate(r) for r in rows],
@@ -142,19 +119,14 @@ async def list_notifications(
     )
 
 
-async def unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
-    return int(
-        await db.scalar(
-            select(func.count())
-            .select_from(Notification)
-            .where(Notification.user_id == user_id, Notification.read_at.is_(None))
-        )
-        or 0
+async def unread_count(db: DbSession, user_id: uuid.UUID) -> int:
+    return await NotificationRepository(db).count(
+        Notification.user_id == user_id, Notification.read_at.is_(None)
     )
 
 
 async def mark_read(
-    db: AsyncSession, user_id: uuid.UUID, ids: list[uuid.UUID], all_: bool = False
+    db: DbSession, user_id: uuid.UUID, ids: list[uuid.UUID], all_: bool = False
 ) -> int:
     """标记已读：``all_`` 优先；否则按 ids（只命中自己的未读行）。返回更新行数。"""
     conditions = [Notification.user_id == user_id, Notification.read_at.is_(None)]
@@ -162,26 +134,15 @@ async def mark_read(
         if not ids:
             return 0
         conditions.append(Notification.id.in_(ids))
-    result = await db.execute(
-        sa_update(Notification)
-        .where(*conditions)
-        .values(read_at=datetime.datetime.now(datetime.UTC))
+    return await NotificationRepository(db).update_where(
+        {"read_at": datetime.datetime.now(datetime.UTC)}, *conditions
     )
-    return int(result.rowcount or 0)
 
 
-async def list_preferences(db: AsyncSession, user_id: uuid.UUID) -> list[PreferenceOut]:
+async def list_preferences(db: DbSession, user_id: uuid.UUID) -> list[PreferenceOut]:
     """返回全部已知类型 + 其开关（无行 = 默认开）。"""
-    rows = (
-        (
-            await db.execute(
-                select(NotificationPreference).where(
-                    NotificationPreference.user_id == user_id
-                )
-            )
-        )
-        .scalars()
-        .all()
+    rows = await NotificationPreferenceRepository(db).get_many(
+        NotificationPreference.user_id == user_id
     )
     stored = {r.type: r.enabled for r in rows}
     return [
@@ -190,69 +151,43 @@ async def list_preferences(db: AsyncSession, user_id: uuid.UUID) -> list[Prefere
 
 
 async def set_preferences(
-    db: AsyncSession, user_id: uuid.UUID, items: list[tuple[str, bool]]
+    db: DbSession, user_id: uuid.UUID, items: list[tuple[str, bool]]
 ) -> list[PreferenceOut]:
     """局部更新偏好（白名单校验后 upsert），返回更新后的全量偏好。"""
     now = datetime.datetime.now(datetime.UTC)
+    repo = NotificationPreferenceRepository(db)
     for type_, enabled in items:
         if type_ not in NOTIFICATION_TYPES:
             raise BizError(NotificationErr.INVALID_TYPE, f"未知通知类型: {type_}")
-        stmt = pg_insert(NotificationPreference).values(
-            user_id=user_id, type=type_, enabled=enabled, updated_at=now
-        )
-        await db.execute(
-            stmt.on_conflict_do_update(
-                index_elements=["user_id", "type"],
-                set_={"enabled": enabled, "updated_at": now},
-            )
-        )
+        await repo.upsert(user_id=user_id, type=type_, enabled=enabled, now=now)
     return await list_preferences(db, user_id)
 
 
-async def is_type_enabled(db: AsyncSession, user_id: uuid.UUID, type: str) -> bool:
+async def is_type_enabled(db: DbSession, user_id: uuid.UUID, type: str) -> bool:
     """该用户该类型是否开启实时推送（无行 = 开）。"""
-    enabled = await db.scalar(
-        select(NotificationPreference.enabled).where(
-            NotificationPreference.user_id == user_id,
-            NotificationPreference.type == type,
-        )
+    row = await NotificationPreferenceRepository(db).get_one(
+        NotificationPreference.user_id == user_id,
+        NotificationPreference.type == type,
     )
-    return True if enabled is None else bool(enabled)
+    return True if row is None else bool(row.enabled)
 
 
 async def register_token(
-    db: AsyncSession, user_id: uuid.UUID, token: str, platform: str = "web"
+    db: DbSession, user_id: uuid.UUID, token: str, platform: str = "web"
 ) -> TokenOut:
     """注册推送 token：同 (user_id, token) 幂等（刷新 platform）。"""
     now = datetime.datetime.now(datetime.UTC)
-    stmt = pg_insert(NotificationToken).values(
-        user_id=user_id, token=token, platform=platform, created_at=now
-    )
-    await db.execute(
-        stmt.on_conflict_do_update(
-            constraint="uq_notification_token", set_={"platform": platform}
-        )
-    )
-    row = (
-        (
-            await db.execute(
-                select(NotificationToken).where(
-                    NotificationToken.user_id == user_id,
-                    NotificationToken.token == token,
-                )
-            )
-        )
-        .scalars()
-        .first()
+    repo = NotificationTokenRepository(db)
+    await repo.upsert(user_id=user_id, token=token, platform=platform, now=now)
+    row = await repo.get_one(
+        NotificationToken.user_id == user_id,
+        NotificationToken.token == token,
     )
     return TokenOut.model_validate(row)
 
 
-async def delete_token(db: AsyncSession, user_id: uuid.UUID, token: str) -> int:
+async def delete_token(db: DbSession, user_id: uuid.UUID, token: str) -> int:
     """注销推送 token（只能删自己的）。"""
-    result = await db.execute(
-        delete(NotificationToken).where(
-            NotificationToken.user_id == user_id, NotificationToken.token == token
-        )
+    return await NotificationTokenRepository(db).hard_delete_where(
+        NotificationToken.user_id == user_id, NotificationToken.token == token
     )
-    return int(result.rowcount or 0)

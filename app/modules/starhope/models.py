@@ -6,10 +6,15 @@ import uuid
 from sqlalchemy import Float, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, now_iso  # 注意 db.base 而非 db.models
+from app.db.base import (  # 注意 db.base 而非 db.models
+    Base,
+    SoftDeleteMixin,
+    UTCDateTime,
+    now_iso,
+)
 
 
-class StarHopeQuestion(Base):
+class StarHopeQuestion(SoftDeleteMixin, Base):
     __tablename__: str = "starhope_questions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -30,12 +35,9 @@ class StarHopeQuestion(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
-    )
 
 
-class StarHopeFolder(Base):
+class StarHopeFolder(SoftDeleteMixin, Base):
     __tablename__: str = "starhope_folders"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -51,12 +53,9 @@ class StarHopeFolder(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
-    )
 
 
-class StarHopePracticeSession(Base):
+class StarHopePracticeSession(SoftDeleteMixin, Base):
     __tablename__: str = "starhope_practice_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -83,12 +82,9 @@ class StarHopePracticeSession(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
-    )
 
 
-class StarHopeAiAgent(Base):
+class StarHopeAiAgent(SoftDeleteMixin, Base):
     __tablename__: str = "starhope_ai_agents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -108,7 +104,4 @@ class StarHopeAiAgent(Base):
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
-    )
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
     )

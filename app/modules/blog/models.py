@@ -8,7 +8,13 @@ from typing import Any
 from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
+from app.db.base import (
+    Base,
+    SoftDeleteMixin,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 
 class BlogSeriesStatus(StrEnum):
@@ -66,7 +72,9 @@ BLOG_TABLE_PLAN = {
 class BlogSeries(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "blog_series"
 
-    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -95,7 +103,9 @@ class BlogSeries(UUIDPrimaryKeyMixin, Base):
 class BlogStar(Base):
     __tablename__: str = "blog_stars"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)  # S5: auth user_id
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True
+    )  # S5: auth user_id
     series_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("blog_series.id"), primary_key=True
     )
@@ -106,7 +116,9 @@ class BlogStar(Base):
     series: Mapped[BlogSeries] = relationship(back_populates="stars")
 
 
-class BlogComment(UUIDPrimaryKeyMixin, Base):
+class BlogComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
+    """博客系列评论。软删（批 4）：``deleted_at`` 非空即已删，列表与计数统一过滤。"""
+
     __tablename__: str = "blog_comments"
 
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id

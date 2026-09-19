@@ -43,6 +43,7 @@ from app.modules.auth import (
     admin_router,
     router_2fa,
     router_authz,
+    router_jwks,
     router_oauth,
     router_onboarding,
     router_passkey,
@@ -109,6 +110,8 @@ def create_auth_app() -> FastAPI:
     for _r in _AUTH_ROUTERS:
         application.include_router(_r, prefix=settings.api_prefix)
     application.include_router(health_auth.router)
+    # JWKS（批 5）：规范位置在站点根，故不走 api_prefix
+    application.include_router(router_jwks.router)
 
     return application
 

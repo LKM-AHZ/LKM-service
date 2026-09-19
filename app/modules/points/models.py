@@ -27,7 +27,9 @@ from app.db.base import (  # 注意 db.base 而非 db.models
 class UserBalance(Base):
     __tablename__: str = "user_balances"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)  # S5: auth user_id
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True
+    )  # S5: auth user_id
     balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
@@ -58,7 +60,9 @@ class PointsLedger(UUIDPrimaryKeyMixin, Base):
 
 class UserBehaviorStat(Base):
     __tablename__: str = "user_behavior_stats"
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)  # S5: auth user_id
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True
+    )  # S5: auth user_id
     stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_checkin_date: Mapped[str | None] = mapped_column(
         String(10), nullable=True

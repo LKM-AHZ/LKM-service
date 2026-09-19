@@ -3,11 +3,9 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
+from app.db.repository import DbSession
 from app.modules.starhope.errors import StarHopeErr
 from app.modules.starhope.models import (
     StarHopeAiAgent,
@@ -15,6 +13,7 @@ from app.modules.starhope.models import (
     StarHopePracticeSession,
     StarHopeQuestion,
 )
+from app.modules.starhope.repository import StarHopeRepository
 from app.modules.starhope.schemas import (
     StarHopeAgentIn,
     StarHopeAgentOut,
@@ -75,28 +74,19 @@ def _dump_scalars(data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def pull_entity(
-    db: AsyncSession,
+    db: DbSession,
     entity: str,
     user_id: uuid.UUID,
     since: datetime.datetime | None,
 ) -> StarHopePullData[Any]:
     model, _in, out_schema = _lookup(entity)
-    base = select(model).where(model.user_id == user_id, model.deleted_at.is_(None))
-    if since is not None:
-        base = base.where(model.updated_at > since)
-
-    rows = (await db.execute(base)).scalars().all()
+    repo = StarHopeRepository(db, model)
+    rows = await repo.list_changed(user_id=user_id, since=since)
     items = [out_schema.model_validate(r).model_dump(mode="json") for r in rows]
 
-    tomb_stmt = select(model.id, model.deleted_at).where(
-        model.user_id == user_id,
-        model.deleted_at.is_not(None),
-    )
-    if since is not None:
-        tomb_stmt = tomb_stmt.where(model.deleted_at > since)
     tombstones = [
         StarHopeTombstone(id=rid, deleted_at=deleted_at).model_dump(mode="json")
-        for rid, deleted_at in (await db.execute(tomb_stmt)).all()
+        for rid, deleted_at in await repo.list_tombstones(user_id=user_id, since=since)
     ]
 
     return StarHopePullData[Any](
@@ -105,7 +95,7 @@ async def pull_entity(
 
 
 async def push_entity(
-    db: AsyncSession,
+    db: DbSession,
     entity: str,
     user_id: uuid.UUID,
     upserts: list[dict[str, Any]],
@@ -116,7 +106,6 @@ async def push_entity(
         raise BizError(
             CommonErr.INVALID_INPUT, f"Batch too large (max {_MAX_PUSH_BATCH})"
         )
-    synced = 0
 
     parsed_upserts = [in_schema.model_validate(raw) for raw in upserts]
     for parsed in parsed_upserts:
@@ -124,55 +113,17 @@ async def push_entity(
     for tomb in deletes:
         _validate_entity_id(tomb.id)
 
-    # 批量取回现有记录，避免逐条 select 的 N+1
-    all_ids = {p.id for p in parsed_upserts} | {t.id for t in deletes}
-    existing_map: dict[str, Any] = {}
-    if all_ids:
-        rows = (
-            (
-                await db.execute(
-                    select(model).where(model.id.in_(all_ids), model.user_id == user_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        existing_map = {row.id: row for row in rows}
-
+    staged: list[tuple[str, dict[str, Any], datetime.datetime]] = []
     for parsed in parsed_upserts:
         data = parsed.model_dump()
         data["user_id"] = user_id
-        data = _dump_scalars(data)
+        staged.append((parsed.id, _dump_scalars(data), parsed.updated_at))
 
-        existing = existing_map.get(parsed.id)
-        if existing is None:
-            db.add(model(**data))
-            synced += 1
-        else:
-            incoming_updated = parsed.updated_at
-            # 已软删除：只有 incoming 更新才恢复
-            if (
-                existing.deleted_at is not None
-                and incoming_updated < existing.deleted_at
-            ):
-                continue
-            if incoming_updated >= existing.updated_at:
-                for key, value in data.items():
-                    if key not in ("id", "user_id"):
-                        setattr(existing, key, value)
-                existing.deleted_at = None
-                synced += 1
-
-    for tomb in deletes:
-        existing = existing_map.get(tomb.id)
-        if existing is None:
-            continue
-        if existing.deleted_at is None or tomb.deleted_at > existing.deleted_at:
-            existing.deleted_at = tomb.deleted_at
-            existing.updated_at = now_iso()
-            synced += 1
-
-    await db.flush()
+    synced = await StarHopeRepository(db, model).push(
+        user_id=user_id,
+        upserts=staged,
+        deletes=[(tomb.id, tomb.deleted_at) for tomb in deletes],
+    )
     return StarHopePushResult(synced=synced, server_time=now_iso())
 
 

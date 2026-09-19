@@ -2,10 +2,6 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.dialects import postgresql as pg
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.cache import (
     TTL_ITEM_S,
     TTL_LIST_S,
@@ -15,20 +11,25 @@ from app.core.cache import (
     collection_version,
     make_key,
 )
-from app.core.common import PageData, paginate_pages, tag_names_sequence
+from app.core.common import PageData, paginate_pages
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
+from app.db.repository import DbSession
 from app.modules.articles.errors import ArticleErr
 from app.modules.articles.models import (
     Article,
     ArticleComment,
-    ArticleLike,
-    ArticleTag,
-    Tag,
 )
 from app.modules.articles.models import (
     ArticleCategory as ArticleCategoryORM,
+)
+from app.modules.articles.repository import (
+    ArticleCategoryRepository,
+    ArticleCommentRepository,
+    ArticleLikeRepository,
+    ArticleRepository,
+    ArticleTagRepository,
 )
 from app.modules.articles.schemas import (
     ArticleCategory,
@@ -59,7 +60,7 @@ def estimate_reading_time(content: str) -> int:
     return max(1, round(text_length / READING_SPEED_CPS))
 
 
-async def _invalidate_article_cache(db: AsyncSession, slug: str) -> None:
+async def _invalidate_article_cache(db: DbSession, slug: str) -> None:
     """文章写后使列表/分类/单篇缓存失效，保证写后读一致。
 
     集合列表用版本号失效（免 SCAN）；单篇与分类按具体键删除。
@@ -73,62 +74,18 @@ async def _invalidate_article_cache(db: AsyncSession, slug: str) -> None:
 
 
 async def _sync_article_tags(
-    db: AsyncSession, article_id: uuid.UUID, names: list[str]
+    db: DbSession, article_id: uuid.UUID, names: list[str]
 ) -> None:
     """按 name upsert Tag 并关联 ArticleTag（幂等，批量 O(log N)，保序去重）。
 
-    相比逐 tag 查/插的旧实现：tag 存在性 1 次批量查 + 缺失 tag 一次批量插（on
-    conflict do nothing）+ 一次批量回查，关联查/插各一次，全程固定次数往返且
-    保持输入 name 顺序（避免 set 迭代造成的顺序随机，修复预存的标签顺序 flaky）。
+    实现已下沉至 :meth:`ArticleTagRepository.sync_for_article`（SQLAlchemy 不过
+    service 层）；此处保留原私有函数名与调用契约。
     """
-    # 去空 + 保首现顺序去重（勿用 set：顺序非确定会打乱 tags 返回序）
-    ordered = tag_names_sequence(names)
-    if not ordered:
-        return
-
-    # 1) 批量查已存在 tag（name -> id）
-    rows = (
-        await db.execute(select(Tag.id, Tag.name).where(Tag.name.in_(ordered)))
-    ).all()
-    name_to_id = {name: tag_id for tag_id, name in rows}
-
-    # 2) 缺失的 tag 一批插；再批量回查拿全量 id（用 on_conflict 免唯一冲突）
-    missing = [n for n in ordered if n not in name_to_id]
-    if missing:
-        await db.execute(
-            pg.insert(Tag)
-            .values([{"name": n} for n in missing])
-            .on_conflict_do_nothing(index_elements=["name"])
-        )
-        await db.flush()
-        rows = (
-            await db.execute(select(Tag.id, Tag.name).where(Tag.name.in_(ordered)))
-        ).all()
-        name_to_id = {name: tag_id for tag_id, name in rows}
-
-    # 3) 批量查该文章的既有关联，只补缺失
-    tag_ids = [name_to_id[n] for n in ordered]
-    existing = (
-        (
-            await db.execute(
-                select(ArticleTag.tag_id).where(
-                    ArticleTag.article_id == article_id,
-                    ArticleTag.tag_id.in_(tag_ids),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    existing_set = set(existing)
-    for n in ordered:
-        tag_id = name_to_id[n]
-        if tag_id not in existing_set:
-            db.add(ArticleTag(article_id=article_id, tag_id=tag_id))
+    await ArticleTagRepository(db).sync_for_article(article_id, names)
 
 
 async def create_article(
-    db: AsyncSession,
+    db: DbSession,
     slug: str,
     title: str,
     category: str,
@@ -138,11 +95,8 @@ async def create_article(
     tags: list[str] | None = None,
 ) -> Article:
     # 幂等：同 slug 已存在则更新（重发 = 更新）
-    existing = (
-        (await db.execute(select(Article).where(Article.slug == slug)))
-        .scalars()
-        .first()
-    )
+    repo = ArticleRepository(db)
+    existing = await repo.get_by_slug(slug)
     if existing:
         existing.title = title
         existing.category_id = await _resolve_category_id(db, category)
@@ -151,7 +105,7 @@ async def create_article(
             existing.description = description
         await _sync_article_tags(db, existing.id, tags or [])
         existing.updated_at = now_iso()
-        await db.flush()
+        await repo.flush()
         await _invalidate_article_cache(db, slug)
         return existing
     article = Article(
@@ -162,8 +116,7 @@ async def create_article(
         published=published or now_iso(),
         description=description,
     )
-    db.add(article)
-    await db.flush()
+    await repo.add(article)
     if tags:
         await _sync_article_tags(db, article.id, tags)
     await _invalidate_article_cache(db, slug)
@@ -171,21 +124,14 @@ async def create_article(
 
 
 async def list_articles(
-    db: AsyncSession, page: int = 1, limit: int = 50
+    db: DbSession, page: int = 1, limit: int = 50
 ) -> PageData[ArticleListItem]:
     ver = await collection_version("articles")
 
     async def _load() -> dict[str, Any]:
-        total = (
-            await db.execute(select(func.count()).select_from(Article))
-        ).scalar_one()
-        stmt = (
-            select(Article)
-            .order_by(Article.published.desc())
-            .offset((page - 1) * limit)
-            .limit(limit)
-        )
-        items = (await db.execute(stmt)).scalars().all()
+        repo = ArticleRepository(db)
+        total = await repo.count()
+        items = await repo.list_page(offset=(page - 1) * limit, limit=limit)
         return {
             "items": [ArticleListItem.model_validate(a).model_dump() for a in items],
             "total": total,
@@ -199,7 +145,7 @@ async def list_articles(
     return PageData[ArticleListItem].model_validate(payload)
 
 
-async def get_article(db: AsyncSession, slug: str) -> ArticleDetail:
+async def get_article(db: DbSession, slug: str) -> ArticleDetail:
     async def _load() -> dict[str, Any]:
         article = await get_or_raise(
             db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
@@ -222,18 +168,11 @@ async def get_article(db: AsyncSession, slug: str) -> ArticleDetail:
     return ArticleDetail.model_validate(payload)
 
 
-async def list_categories(db: AsyncSession) -> list[ArticleCategory]:
+async def list_categories(db: DbSession) -> list[ArticleCategory]:
     """分类列表：读 article_categories 表 + 各分类文章数，缓存。返回 schema（slug/name/count）。"""
 
     async def _load() -> list[dict[str, Any]]:
-        rows = (
-            await db.execute(
-                select(ArticleCategoryORM, func.count(Article.id))
-                .outerjoin(Article, Article.category_id == ArticleCategoryORM.id)
-                .group_by(ArticleCategoryORM.id)
-                .order_by(ArticleCategoryORM.sort.asc(), ArticleCategoryORM.id.asc())
-            )
-        ).all()
+        rows = await ArticleCategoryRepository(db).list_with_article_counts()
         return [
             ArticleCategory(
                 slug=cat.slug,
@@ -249,47 +188,12 @@ async def list_categories(db: AsyncSession) -> list[ArticleCategory]:
     return [ArticleCategory.model_validate(p) for p in payload]
 
 
-def _fts_search_stmt(q: str) -> tuple[Any, Any]:
-    """返回 sqlalchemy 查询表达式，供 search_articles 使用。
-
-    PostgreSQL 真 FTS ``to_tsvector('simple') @@ plainto_tsquery('simple')``，再 OR 一
-    遍 ``ILIKE`` 子串通配：中文等连续无空格文本在 ``simple`` 分词下整段视为一个 lexeme、
-    无法匹配“词内子串（如查'机器'命中'机器学习'）”，故 ILIKE 兜底保证“标题/正文子串能
-    被搜到”这一既有语义一致（FTS 命中仍参与排序）。
-    """
-    # PG FTS 的子串兜底：共用同一 ilike 通配
-    pattern = f"%{q}%"
-    contains = or_(
-        Article.title.ilike(pattern),
-        Article.description.ilike(pattern),
-        Article.content.ilike(pattern),
-    )
-    # PostgreSQL 真 FTS：simple 分词（中文分词效果已知受限，属 spec 取舍）。
-    # 说明：vector 是 to_tsvector(...) 函数调用（非 data 列），SQLAlchemy 直接在其上
-    # 拼列式 `.match()` 会把右操作数再次包一层 plainto_tsquery(...) → plainto_tsquery(
-    # plainto_tsquery(...)) 双嵌套非法函数，真 PG 下 UndefinedFunction。此处用
-    # `bool_op("@@")` 显式比较 tsvector @@ tsquery，两侧均已带 regconfig，幂等正确。
-    vector = func.to_tsvector(
-        "simple",
-        func.concat_ws(" ", Article.title, Article.description, Article.content),
-    )
-    query = func.plainto_tsquery("simple", q)
-    fts = vector.bool_op("@@")(query)
-    # FTS 命中且带相关度；仅子串命中者（无 FTS 相关度）也须给出、排序在后。
-    return or_(fts, contains), func.ts_rank(vector, query)
-
-
 async def search_articles(
-    db: AsyncSession, q: str, page: int = 1, limit: int = 50
+    db: DbSession, q: str, page: int = 1, limit: int = 50
 ) -> PageData[ArticleListItem]:
-    cond, rank = _fts_search_stmt(q)
-    count_stmt = select(func.count()).select_from(Article).where(cond)
-    total = (await db.execute(count_stmt)).scalar_one()
-
-    stmt = select(Article).where(cond)
-    # 仅子串命中（无 FTS 相关度）为 NULL → 排到 FTS 命中之后
-    stmt = stmt.order_by(rank.desc().nulls_last()).offset((page - 1) * limit).limit(limit)
-    items = (await db.execute(stmt)).scalars().all()
+    items, total = await ArticleRepository(db).list_for_search(
+        q, offset=(page - 1) * limit, limit=limit
+    )
     return PageData(
         items=[ArticleListItem.model_validate(a) for a in items],
         total=total,
@@ -298,14 +202,8 @@ async def search_articles(
     )
 
 
-async def list_tags(db: AsyncSession) -> list[dict[str, Any]]:
-    rows = (
-        await db.execute(
-            select(Tag.name, func.count(ArticleTag.article_id))
-            .join(ArticleTag, ArticleTag.tag_id == Tag.id)
-            .group_by(Tag.id)
-        )
-    ).all()
+async def list_tags(db: DbSession) -> list[dict[str, Any]]:
+    rows = await ArticleTagRepository(db).list_tag_counts()
     return [{"name": name, "article_count": count} for name, count in rows]
 
 
@@ -318,58 +216,36 @@ async def get_about() -> dict[str, str]:
 
 
 async def _bump_article_count(
-    db: AsyncSession, article_id: uuid.UUID, column: str, delta: int
+    db: DbSession, article_id: uuid.UUID, column: str, delta: int
 ) -> None:
     """原子回填计数列（SET col = col ± N），防并发丢更新。"""
-    await db.execute(
-        update(Article)
-        .where(Article.id == article_id)
-        .values({column: getattr(Article, column) + delta})
-    )
+    await ArticleRepository(db).bump_count(article_id, column, delta)
 
 
 async def toggle_article_like(
-    db: AsyncSession, slug: str, user_id: uuid.UUID
+    db: DbSession, slug: str, user_id: uuid.UUID
 ) -> dict[str, Any]:
     article = await get_or_raise(
         db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
     )
-    existing = (
-        (
-            await db.execute(
-                select(ArticleLike).where(
-                    ArticleLike.article_id == article.id,
-                    ArticleLike.user_id == user_id,
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
+    repo = ArticleLikeRepository(db)
+    existing = await repo.get_one_like(article_id=article.id, user_id=user_id)
     if existing:
-        await db.delete(existing)
-        await db.flush()
+        await repo.delete(existing)
         await _bump_article_count(db, article.id, "likes", -1)
         liked = False
     else:
-        db.add(ArticleLike(article_id=article.id, user_id=user_id))
-        await db.flush()
+        await repo.create(article_id=article.id, user_id=user_id)
         await _bump_article_count(db, article.id, "likes", 1)
         liked = True
         # 仅新增点赞路径入队（取消点赞不重复计分）
         await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
-    like_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(ArticleLike)
-            .where(ArticleLike.article_id == article.id)
-        )
-    ).scalar_one()
+    like_count = await repo.count_for(article.id)
     return {"liked": liked, "like_count": like_count}
 
 
 async def create_article_comment(
-    db: AsyncSession,
+    db: DbSession,
     slug: str,
     user_id: uuid.UUID,
     content: str,
@@ -390,14 +266,13 @@ async def create_article_comment(
     comment = ArticleComment(
         article_id=article.id, user_id=user_id, content=content, parent_id=parent_id
     )
-    db.add(comment)
-    await db.flush()
+    await ArticleCommentRepository(db).add(comment)
     await _bump_article_count(db, article.id, "comments", 1)
     return comment
 
 
 async def _get_author_profiles(
-    db: AsyncSession, user_ids: set[uuid.UUID]
+    db: DbSession, user_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, ProfileInfo | None]:
     """批量取评论作者 ProfileInfo（M3.A残项：经 auth 批量读缝一次查齐，不再直读 Profile）。"""
     if not user_ids:
@@ -406,21 +281,11 @@ async def _get_author_profiles(
     return {uid: profile_info_from_snap(snaps[uid]) for uid in snaps}
 
 
-async def list_article_comments(db: AsyncSession, slug: str) -> list[ArticleCommentOut]:
+async def list_article_comments(db: DbSession, slug: str) -> list[ArticleCommentOut]:
     article = await get_or_raise(
         db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
     )
-    rows = (
-        (
-            await db.execute(
-                select(ArticleComment)
-                .where(ArticleComment.article_id == article.id)
-                .order_by(ArticleComment.created_at.asc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await ArticleCommentRepository(db).list_in_article(article.id)
     user_ids = {c.user_id for c in rows}
     profiles = await _get_author_profiles(db, user_ids)
     return [
@@ -432,7 +297,7 @@ async def list_article_comments(db: AsyncSession, slug: str) -> list[ArticleComm
 
 
 async def delete_article_comment(
-    db: AsyncSession,
+    db: DbSession,
     comment_id: uuid.UUID,
     user_id: uuid.UUID,
     as_admin: bool = False,
@@ -446,8 +311,11 @@ async def delete_article_comment(
     if not as_admin and comment.user_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
     author_id = comment.user_id
-    await db.delete(comment)
-    await _bump_article_count(db, comment.article_id, "comments", -1)
+    # 批 4：改软删（行保留以便恢复）；评论列表经 Repository 基类自动过滤已软删。
+    # 连带整棵回复树（等价硬删时代的 ORM delete-orphan 级联），故 comments 计数按
+    # **实际消失的行数**递减——旧实现恒 -1，与级联删除的行数不一致（既有偏差，顺带修正）。
+    removed = await ArticleCommentRepository(db).soft_delete_subtree(comment.id)
+    await _bump_article_count(db, comment.article_id, "comments", -removed)
     return author_id
 
 
@@ -459,22 +327,19 @@ async def _invalidate_categories_cache() -> None:
     await cache_invalidate(make_key("articles:categories", "ver"))
 
 
-async def create_category_ex(db: AsyncSession, info: CategoryCreate) -> CategoryOut:
+async def create_category_ex(db: DbSession, info: CategoryCreate) -> CategoryOut:
     """新建分类；slug 冲突抛出 409。"""
-    conflict = await db.scalar(
-        select(ArticleCategoryORM.id).where(ArticleCategoryORM.slug == info.slug)
-    )
-    if conflict is not None:
+    repo = ArticleCategoryRepository(db)
+    if await repo.slug_taken(info.slug):
         raise BizError(ArticleErr.SLUG_CONFLICT)
     cat = ArticleCategoryORM(slug=info.slug, title=info.title, sort=info.sort)
-    db.add(cat)
-    await db.flush()
+    await repo.add(cat)
     await _invalidate_categories_cache()
     return CategoryOut.model_validate(cat)
 
 
 async def update_category_ex(
-    db: AsyncSession, category_id: uuid.UUID, patch: CategoryCreate
+    db: DbSession, category_id: uuid.UUID, patch: CategoryCreate
 ) -> CategoryOut:
     """更新分类；slug 冲突（排除自身）抛出 409。"""
     cat = await get_or_raise(
@@ -483,23 +348,18 @@ async def update_category_ex(
         ArticleErr.CATEGORY_NOT_FOUND,
         ArticleCategoryORM.id == category_id,
     )
-    conflict = await db.scalar(
-        select(ArticleCategoryORM.id).where(
-            ArticleCategoryORM.slug == patch.slug,
-            ArticleCategoryORM.id != category_id,
-        )
-    )
-    if conflict is not None:
+    repo = ArticleCategoryRepository(db)
+    if await repo.slug_taken(patch.slug, exclude_id=category_id):
         raise BizError(ArticleErr.SLUG_CONFLICT)
     cat.slug = patch.slug
     cat.title = patch.title
     cat.sort = patch.sort
-    await db.flush()
+    await repo.flush()
     await _invalidate_categories_cache()
     return CategoryOut.model_validate(cat)
 
 
-async def delete_category_ex(db: AsyncSession, category_id: uuid.UUID) -> None:
+async def delete_category_ex(db: DbSession, category_id: uuid.UUID) -> None:
     """删除分类；分类下仍有文章时禁止删除。"""
     cat = await get_or_raise(
         db,
@@ -507,21 +367,16 @@ async def delete_category_ex(db: AsyncSession, category_id: uuid.UUID) -> None:
         ArticleErr.CATEGORY_NOT_FOUND,
         ArticleCategoryORM.id == category_id,
     )
-    used = await db.scalar(
-        select(func.count(Article.id)).where(Article.category_id == category_id)
-    )
+    used = await ArticleRepository(db).count_in_category(category_id)
     if used:
         raise BizError(CommonErr.INVALID_INPUT, "分类下仍有文章，不可删除")
-    await db.delete(cat)
-    await db.flush()
+    await ArticleCategoryRepository(db).delete(cat)
     await _invalidate_categories_cache()
 
 
-async def _resolve_category_id(db: AsyncSession, slug: str) -> uuid.UUID:
+async def _resolve_category_id(db: DbSession, slug: str) -> uuid.UUID:
     """按 slug 解析分类 id（旧 blog/seed 流程传 slug，这里保向兼容）；不存在则 404。"""
-    category_id = await db.scalar(
-        select(ArticleCategoryORM.id).where(ArticleCategoryORM.slug == slug)
-    )
+    category_id = await ArticleCategoryRepository(db).id_by_slug(slug)
     if category_id is None:
         raise BizError(ArticleErr.CATEGORY_NOT_FOUND)
     return category_id
@@ -530,34 +385,29 @@ async def _resolve_category_id(db: AsyncSession, slug: str) -> uuid.UUID:
 # ————— 文章写接口 / 删除 / 审核 —————
 
 
-async def _require_category(db: AsyncSession, category_id: uuid.UUID) -> None:
+async def _require_category(db: DbSession, category_id: uuid.UUID) -> None:
     """校验分类存在，否则抛出 404。"""
-    exists = await db.scalar(
-        select(ArticleCategoryORM.id).where(ArticleCategoryORM.id == category_id)
-    )
-    if exists is None:
+    if not await ArticleCategoryRepository(db).id_exists(category_id):
         raise BizError(ArticleErr.CATEGORY_NOT_FOUND)
 
 
-async def _get_article(db: AsyncSession, slug: str) -> Article:
+async def _get_article(db: DbSession, slug: str) -> Article:
     """按 slug 取文章，不存在则抛出 404。"""
     return await get_or_raise(db, Article, ArticleErr.NOT_FOUND, Article.slug == slug)
 
 
-async def _load_category_title(db: AsyncSession, category_id: uuid.UUID) -> str:
+async def _load_category_title(db: DbSession, category_id: uuid.UUID) -> str:
     """一次查询分类 title，供详情填充 category_title。"""
-    title = await db.scalar(
-        select(ArticleCategoryORM.title).where(ArticleCategoryORM.id == category_id)
-    )
+    title = await ArticleCategoryRepository(db).title_by_id(category_id)
     return str(title) if title is not None else ""
 
 
-async def _article_to_detail(db: AsyncSession, article: Article) -> ArticleDetail:
+async def _article_to_detail(db: DbSession, article: Article) -> ArticleDetail:
     """把 Article ORM 组装为 ArticleDetail，填充 category_title 与阅读时长。"""
     # article.tags 是 lazy="selectin" 的异步关系：调用方常以刚 flush/新创建
     # 的 Article 传入（tags 未预载）。若在此同步访问 article.tags 会在 async
     # 会话中触发懒加载而抛 MissingGreenlet，故先显式 refresh 按需加载该关系。
-    await db.refresh(article, attribute_names=["tags"])
+    await ArticleRepository(db).refresh_tags(article)
     detail = ArticleDetail(
         **{
             k: v
@@ -571,10 +421,10 @@ async def _article_to_detail(db: AsyncSession, article: Article) -> ArticleDetai
     return detail
 
 
-async def create_article_ex(db: AsyncSession, info: ArticleCreate) -> ArticleDetail:
+async def create_article_ex(db: DbSession, info: ArticleCreate) -> ArticleDetail:
     """创建文章：slug 冲突与分类存在性校验；status=published 即填充发布时间。"""
-    conflict = await db.scalar(select(Article.id).where(Article.slug == info.slug))
-    if conflict is not None:
+    repo = ArticleRepository(db)
+    if await repo.slug_taken(info.slug):
         raise BizError(ArticleErr.SLUG_CONFLICT)
     await _require_category(db, info.category_id)
     article = Article(
@@ -590,15 +440,14 @@ async def create_article_ex(db: AsyncSession, info: ArticleCreate) -> ArticleDet
         status=info.status,
         published=now_iso() if info.status == "published" else None,
     )
-    db.add(article)
-    await db.flush()
+    await repo.add(article)
     await _sync_article_tags(db, article.id, info.tags)
     await _invalidate_article_cache(db, info.slug)
     return await _article_to_detail(db, article)
 
 
 async def update_article_ex(
-    db: AsyncSession, slug: str, patch: ArticleUpdate, is_super: bool
+    db: DbSession, slug: str, patch: ArticleUpdate, is_super: bool
 ) -> ArticleDetail:
     """更新文章（仅更新传入字段）。is_super 预留审核/越权语义（当前未用，接口契约保留）。"""
     article = await _get_article(db, slug)
@@ -617,22 +466,22 @@ async def update_article_ex(
         setattr(article, k, v)
     if patch.tags is not None:
         await _sync_article_tags(db, article.id, patch.tags)
-    await db.flush()
+    await ArticleRepository(db).flush()
     await _invalidate_article_cache(db, slug)
     return await _article_to_detail(db, article)
 
 
-async def soft_delete_article(db: AsyncSession, slug: str) -> ArticleDetail:
+async def soft_delete_article(db: DbSession, slug: str) -> ArticleDetail:
     """软删：status 置为 rejected，清空 published。"""
     article = await _get_article(db, slug)
     article.status = "rejected"
     article.published = None
-    await db.flush()
+    await ArticleRepository(db).flush()
     await _invalidate_article_cache(db, slug)
     return await _article_to_detail(db, article)
 
 
-async def hard_delete_article(db: AsyncSession, slug: str) -> None:
+async def hard_delete_article(db: DbSession, slug: str) -> None:
     """硬删：published/pending 状态的文章禁止硬删（避免已展示/待审内容被直接破坏）。"""
     article = await _get_article(db, slug)
     if article.status in ("published", "pending"):
@@ -642,12 +491,11 @@ async def hard_delete_article(db: AsyncSession, slug: str) -> None:
     # cascade/delete-orphan 只对挂进 relationship 集合的对象生效，而本服务以
     # ``db.add(<独立关联对象>)`` 落盘子行，追不到——若不加 DB 级 CASCADE，PG 下
     # DELETE articles 会被 NO ACTION 外键拦截、遗下孤儿。
-    await db.delete(article)
-    await db.flush()
+    await ArticleRepository(db).delete(article)
     await _invalidate_article_cache(db, slug)
 
 
-async def review_article(db: AsyncSession, slug: str, approve: bool) -> ArticleDetail:
+async def review_article(db: DbSession, slug: str, approve: bool) -> ArticleDetail:
     """审核：仅 pending 可审；approve→published（填发布时间），否则 rejected。"""
     article = await _get_article(db, slug)
     if article.status != "pending":
@@ -655,6 +503,6 @@ async def review_article(db: AsyncSession, slug: str, approve: bool) -> ArticleD
     article.status = "published" if approve else "rejected"
     if approve:
         article.published = now_iso()
-    await db.flush()
+    await ArticleRepository(db).flush()
     await _invalidate_article_cache(db, slug)
     return await _article_to_detail(db, article)

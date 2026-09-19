@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import (  # 注意 db.base 而非 db.models
     Base,
+    SoftDeleteMixin,
     UTCDateTime,
     UUIDPrimaryKeyMixin,
     now_iso,
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from app.modules.content.models import Board
 
 
-class UserFollow(UUIDPrimaryKeyMixin, Base):
+class UserFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     """用户关注关系（软删墓碑）：follower 关注 following。
 
     唯一约束针对``(follower_id, following_id)``——软删行保留以便幂等重关注；
@@ -40,17 +41,18 @@ class UserFollow(UUIDPrimaryKeyMixin, Base):
         Index("ix_user_follows_follower_created", "follower_id", "created_at"),
     )
 
-    follower_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
-    following_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
-    )
+    follower_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
+    following_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
 
 
-class BoardFollow(UUIDPrimaryKeyMixin, Base):
+class BoardFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     """用户关注版块关系（软删墓碑）：follower 关注 board_id。"""
 
     __tablename__: str = "board_follows"
@@ -59,12 +61,11 @@ class BoardFollow(UUIDPrimaryKeyMixin, Base):
         Index("ix_board_follows_board", "board_id"),
     )
 
-    follower_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    follower_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     board_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("boards.id"), nullable=False
-    )
-    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

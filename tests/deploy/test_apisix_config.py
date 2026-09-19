@@ -37,6 +37,9 @@ _PLACEHOLDERS = {
     "__UPSTREAM_SUFFIX__",
     # 上游 DNS：compose 127.0.0.11 / k8s CoreDNS ClusterIP
     "__DNS_RESOLVER__",
+    # RS256 网关验签（批 5）：多行段占位，由 render.sh 从公钥文件展开
+    "__JWT_CONSUMERS_SECTION__",
+    "__JWT_ROUTE_SECTION__",
 }
 
 
@@ -168,7 +171,9 @@ def test_upstream_suffix_expands_per_runtime() -> None:
     import tempfile
 
     # ① 默认（compose）：短名保持不变
-    assert _rendered_routes()["api-prefix"]["upstream"]["service_name"] == "backend:8000"
+    assert (
+        _rendered_routes()["api-prefix"]["upstream"]["service_name"] == "backend:8000"
+    )
 
     # ② k8s：补全 FQDN
     tmp = Path(tempfile.mkdtemp(prefix="apisix-render-suffix-"))
@@ -180,7 +185,8 @@ def test_upstream_suffix_expands_per_runtime() -> None:
         cert_root, out_dir, {"APISIX_UPSTREAM_SUFFIX": ".lkm.svc.cluster.local"}
     )
     routes = {
-        r["id"]: r for r in yaml.safe_load((out_dir / "apisix.yaml").read_text())["routes"]
+        r["id"]: r
+        for r in yaml.safe_load((out_dir / "apisix.yaml").read_text())["routes"]
     }
     assert (
         routes["api-prefix"]["upstream"]["service_name"]
@@ -237,7 +243,9 @@ def test_render_expands_domains_and_body_limit() -> None:
     assert routes["acme-challenge"]["hosts"] == _ALL_HOSTS
     cors = routes["api-prefix"]["plugins"]["cors"]
     assert cors["allow_origins"] == f"https://{_COMMUNITY},https://www.{_COMMUNITY}"
-    assert routes["api-prefix"]["plugins"]["client-control"]["max_body_size"] == 104857600
+    assert (
+        routes["api-prefix"]["plugins"]["client-control"]["max_body_size"] == 104857600
+    )
 
 
 def test_exact_admin_me_beats_prefix() -> None:
@@ -493,10 +501,130 @@ def test_apisix_mounts_rendered_config_not_repo_template() -> None:
         "apisix 直接挂了模板文件；应改为挂 apisix_conf 卷里的渲染产物"
     )
     for target in ("config.yaml", "apisix.yaml"):
-        assert any(
-            target in m and "apisix_conf" in m for m in as_str
-        ), f"apisix 未从 apisix_conf 卷挂载渲染后的 {target}"
+        assert any(target in m and "apisix_conf" in m for m in as_str), (
+            f"apisix 未从 apisix_conf 卷挂载渲染后的 {target}"
+        )
     # render sidecar 的健康检查必须同时覆盖两个产物，否则 apisix 可能在没有 config.yaml
     # 的情况下被 depends_on 放行
     hc = str(_services()["apisix-render"]["healthcheck"]["test"])
     assert "/out/config.yaml" in hc and "/out/apisix.yaml" in hc
+
+
+# ─────────────────────── 批 5：RS256 网关验签 ───────────────────────
+#
+# 两条硬规则（都是真机踩出来的，写死为断言防回潮）：
+#   ① APISIX consumer username 必须匹配 ^[a-zA-Z0-9_]+$（带 `-` 会让 consumer 配置校验失败）；
+#   ② jwt-auth 的 RS256 consumer schema 要求 public_key **与** private_key 同时存在，而验签
+#      路径只用 public_key —— 故网关只填公钥（两处同值），网关因此不持有签发能力。
+
+_JWT_CONSUMERS_MARKER = "__JWT_CONSUMERS_SECTION__"
+_JWT_ROUTE_MARKER = "__JWT_ROUTE_SECTION__"
+
+
+def _fake_public_pem() -> str:
+    return (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MIIBfake-public-key-material\n"
+        "-----END PUBLIC KEY-----\n"
+    )
+
+
+def _render_with_jwt_key() -> dict:
+    """带公钥文件渲染一次（网关验签开启路径）。"""
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-jwt-"))
+    cert_root = tmp / "live"
+    _fake_certs(cert_root)
+    out_dir = tmp / "out"
+    out_dir.mkdir(parents=True)
+    key_file = tmp / "jwt-public.pem"
+    key_file.write_text(_fake_public_pem())
+    _run_render(
+        cert_root, out_dir, extra_env={"APISIX_JWT_PUBLIC_KEY_FILE": str(key_file)}
+    )
+    return yaml.safe_load((out_dir / "apisix.yaml").read_text())
+
+
+def test_jwt_sections_are_multiline_placeholders_only() -> None:
+    """模板里只有段占位，不得出现任何密钥材料。"""
+    raw = (_APISIX_DIR / "apisix.yaml").read_text()
+    assert _JWT_CONSUMERS_MARKER in raw and _JWT_ROUTE_MARKER in raw
+    assert "BEGIN PUBLIC KEY" not in raw and "BEGIN PRIVATE KEY" not in raw
+
+
+def test_gateway_jwt_disabled_without_key_file() -> None:
+    """未配置公钥：不出现消费者，admin-me 路由也不挂 jwt-auth（应用层照常验签）。"""
+    rendered = _rendered()
+    assert not rendered.get("consumers")
+    assert "jwt-auth" not in _rendered_routes()["admin-auth-me"]["plugins"]
+
+
+def test_gateway_jwt_enabled_with_key_file() -> None:
+    rendered = _render_with_jwt_key()
+    consumers = rendered["consumers"]
+    assert len(consumers) == 1
+    consumer = consumers[0]
+    # 规则①：username 必须匹配 APISIX 的 ^[a-zA-Z0-9_]+$，否则 consumer 校验失败
+    assert re.fullmatch(r"[a-zA-Z0-9_]+", consumer["username"]), consumer["username"]
+
+    auth_conf = consumer["plugins"]["jwt-auth"]
+    assert auth_conf["algorithm"] == "RS256"
+    assert auth_conf["key"] == "lkm"
+    assert auth_conf["public_key"] == _fake_public_pem()
+    # 规则②：schema 强制 private_key 字段，但验签只用 public_key → 网关只放公钥
+    assert auth_conf["private_key"] == auth_conf["public_key"]
+    assert "PRIVATE KEY" not in auth_conf["private_key"]
+
+    routes = {r["id"]: r for r in rendered["routes"]}
+    jwt_plugin = routes["admin-auth-me"]["plugins"]["jwt-auth"]
+    # 后台会话走 cookie（admin_session），不是 Authorization 头
+    assert jwt_plugin["cookie"] == "admin_session"
+    # **只有**明确需要登录的路由挂验签：/api/* 前缀下大量公开只读接口必须保持匿名
+    only_jwt = [rid for rid, r in routes.items() if "jwt-auth" in r.get("plugins", {})]
+    assert only_jwt == ["admin-auth-me"], only_jwt
+
+
+def test_gateway_consumer_key_matches_app_token_claim() -> None:
+    """网关消费者 key 必须等于 app 侧写入 token 的 claim 值（跨仓一致性，改一边即红）。"""
+    from app.modules.auth import jwt_keys
+
+    rendered = _render_with_jwt_key()
+    assert (
+        rendered["consumers"][0]["plugins"]["jwt-auth"]["key"] == jwt_keys.GATEWAY_KEY
+    )
+
+
+def _compose_services() -> dict[str, dict]:
+    return yaml.safe_load(_COMPOSE.read_text())["services"]
+
+
+def test_compose_mounts_jwt_keys_and_scopes_private_key() -> None:
+    """私钥只下发到签发方 auth；backend / 网关渲染只拿公钥目录。"""
+    services = _compose_services()
+    assert "./deploy/jwt/keys:/etc/lkm/jwt:ro" in services["apisix-render"]["volumes"]
+
+    def _env_of(name: str) -> dict:
+        env = services[name].get("environment", {})
+        # compose 支持 list 形式，本项目统一用 map 形式；这里容错取键名集合
+        return env if isinstance(env, dict) else {k.split("=")[0]: "" for k in env}
+
+    for name in ("apisix-render", "backend"):
+        assert "LKM_JWT_PRIVATE_KEY_FILE" not in _env_of(name), name
+    assert "LKM_JWT_PRIVATE_KEY_FILE" in _env_of("auth")
+    # 三个验签方都要拿到公钥来源：auth 供 JWKS、backend 供本地验签、render 供网关消费者
+    assert "LKM_JWT_PUBLIC_KEY_FILE" in _env_of("auth")
+    assert "LKM_JWT_PUBLIC_KEY_FILE" in _env_of("backend")
+    assert "APISIX_JWT_PUBLIC_KEY_FILE" in _env_of("apisix-render")
+
+
+def test_k8s_private_key_secret_is_auth_only_and_optional() -> None:
+    """k8s：私钥走独立 Secret 且 optional（未生成密钥时 Pod 仍能起）。"""
+    gateway = (
+        _ROOT / "deploy" / "k8s" / "base" / "gateway" / "apisix.yaml"
+    ).read_text()
+    auth = (_ROOT / "deploy" / "k8s" / "base" / "app" / "auth.yaml").read_text()
+    assert "lkm-jwt-signing" in auth
+    assert "optional: true" in auth.split("lkm-jwt-signing", 1)[1][:40]
+    assert "lkm-jwt-signing" not in gateway  # 网关只拿公钥
+    assert "APISIX_JWT_PUBLIC_KEY_FILE" in gateway

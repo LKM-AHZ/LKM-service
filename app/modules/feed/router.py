@@ -148,7 +148,9 @@ async def get_timeline_endpoint(
     关闭时返回 Pydantic ``FeedResponse`` 走既有路径。两条路径 JSON 等价由契约测试守。
     """
     user_id = cur.id if cur is not None else None
-    resp = await get_timeline(db, user_id=user_id, mode=mode, cursor=cursor, limit=limit)
+    resp = await get_timeline(
+        db, user_id=user_id, mode=mode, cursor=cursor, limit=limit
+    )
     if settings.read_msgspec_enabled:
         return msgspec_ok(to_wire(resp))
     return resp

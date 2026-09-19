@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import (  # 注意是 db.base 不是 db.models
     Base,
+    SoftDeleteMixin,
     UTCDateTime,
     UUIDPrimaryKeyMixin,
     now_iso,
@@ -62,7 +63,9 @@ class ColumnApplication(UUIDPrimaryKeyMixin, Base):
 class Column(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "columns"
 
-    owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id 逻辑引用
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id 逻辑引用
     application_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("column_applications.id"), unique=True, nullable=True
     )
@@ -109,7 +112,9 @@ class ColumnPost(UUIDPrimaryKeyMixin, Base):
     column_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("columns.id"), nullable=False
     )
-    author_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id 逻辑引用
+    author_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id 逻辑引用
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     summary: Mapped[str | None] = mapped_column(String(300), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -175,12 +180,15 @@ SEARCH_VECTOR_SQL = (
 )
 
 
-class ContentItem(UUIDPrimaryKeyMixin, Base):
+class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     """统一内容表：五套旧内容表（forum_posts/articles/column_posts/blog 发布产物）收敛。
 
     用 ``content_type`` 判别（discussion/article/column_post/blog_post），``board_id``
     作唯一分类轴，``author_id``（user FK）与 ``publisher``/``department``（官方字符串）
     二选一表达作者身份。``column_id`` 指向连载容器（仅 column_post 用）。
+
+    软删（批 4）：``deleted_at`` 非空即已删，可见性由 Repository 基类统一过滤；
+    ``slug`` 非唯一但唯一性检查含墓碑行（``include_deleted=True``），防删后同 slug 复活歧义。
     """
 
     __tablename__: str = "content_items"
@@ -226,9 +234,7 @@ class ContentItem(UUIDPrimaryKeyMixin, Base):
         Uuid, ForeignKey("boards.id"), nullable=False
     )
     # 作者：user id（S5 拆库后逻辑 user_id，auth 独立库权威）与官方字符串二选一
-    author_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, nullable=True, index=True
-    )
+    author_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     publisher: Mapped[str | None] = mapped_column(String(100), nullable=True)
     department: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # 专栏连载容器（仅 column_post）
@@ -291,8 +297,12 @@ class ContentItem(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class ContentComment(UUIDPrimaryKeyMixin, Base):
-    """统一内容评论（对齐原 forum_comments 的完整模式：floor_number/parent_id/like_count）。"""
+class ContentComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
+    """统一内容评论（对齐原 forum_comments 的完整模式：floor_number/parent_id/like_count）。
+
+    软删（批 4）：楼层号生成取**含已软删**的最大值 +1，否则可见楼层会重号；
+    计数对账（``content/counters.py``）与在线计数同用「未软删」口径。
+    """
 
     __tablename__: str = "content_comments"
     __table_args__: tuple[Any, ...] = (

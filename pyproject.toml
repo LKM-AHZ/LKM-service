@@ -187,10 +187,11 @@ ignore_imports = [
     "app.modules.content.service -> app.modules.points.service",
     "app.modules.exam.service -> app.modules.points.rules",
     "app.modules.files.service -> app.modules.points.rules",
-    "app.modules.content.service -> app.modules.exam.models",
+    "app.modules.content.repository -> app.modules.exam.models",  # 发帖认证判定读考试证书表
+    "app.modules.content.service -> app.modules.feed.fanout",  # 内容软删时清物化 feed 残留(批 4)
     "app.modules.blog.router -> app.modules.content.schemas",
     "app.modules.blog.router -> app.modules.content.service",
-    "app.modules.blog.service -> app.modules.content.models",
+    "app.modules.blog.repository -> app.modules.content.models",
     "app.modules.blog.service -> app.modules.content.service",
     "app.modules.admin.content_router -> app.modules.articles.service",
     "app.modules.admin.content_router -> app.modules.blog.service",
@@ -202,11 +203,11 @@ ignore_imports = [
     "app.modules.feed.feed -> app.modules.content.models",
     "app.modules.feed.feed -> app.modules.projects.models",
     "app.modules.feed.service -> app.modules.admin.moderation.engine",
-    "app.modules.feed.service -> app.modules.content.models",
+    "app.modules.feed.repository -> app.modules.content.models",
     "app.modules.feed.models -> app.modules.content.models",
-    "app.modules.interaction.service -> app.modules.content.models",  # 收藏计数/摘要读内容表
+    "app.modules.interaction.repository -> app.modules.content.models",  # 收藏计数/摘要读内容表
     "app.modules.notification.tasks -> app.modules.content.models",  # 事件解析目标内容/评论作者
-    "app.modules.search.service -> app.modules.content.models",  # 检索只读内容表
+    "app.modules.search.repository -> app.modules.content.models",  # 检索只读内容表
     "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
 ]
 

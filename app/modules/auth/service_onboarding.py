@@ -7,28 +7,20 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.db.repository import DbSession
 from app.modules.auth.models import OnboardingProgress
+from app.modules.auth.repository import OnboardingProgressRepository
 from app.modules.auth.schemas import OnboardingState
 
 
-async def get_or_create_progress(db: AsyncSession, user_id: uuid.UUID) -> OnboardingProgress:
+async def get_or_create_progress(
+    db: DbSession, user_id: uuid.UUID
+) -> OnboardingProgress:
     """返回某用户的引导进度；未开始时新建一条默认记录并返回。"""
-    row = (
-        (
-            await db.execute(
-                select(OnboardingProgress).where(OnboardingProgress.user_id == user_id)
-            )
-        )
-        .scalars()
-        .first()
-    )
+    repo = OnboardingProgressRepository(db)
+    row = await repo.get_by_user(user_id)
     if row is None:
-        row = OnboardingProgress(user_id=user_id)
-        db.add(row)
-        await db.flush()
+        row = await repo.create(user_id=user_id)
     return row
 
 
@@ -40,14 +32,14 @@ def _to_state(row: OnboardingProgress) -> OnboardingState:
     )
 
 
-async def get_onboarding_state(db: AsyncSession, user_id: uuid.UUID) -> OnboardingState:
+async def get_onboarding_state(db: DbSession, user_id: uuid.UUID) -> OnboardingState:
     """读取引导进度：未开始返回默认 step=1，不 404。"""
     row = await get_or_create_progress(db, user_id)
     return _to_state(row)
 
 
 async def set_onboarding_step(
-    db: AsyncSession, user_id: uuid.UUID, step: int, data: dict[str, Any]
+    db: DbSession, user_id: uuid.UUID, step: int, data: dict[str, Any]
 ) -> OnboardingState:
     """提交某一步的分步数据：合并进整体 data、更新当前 step。"""
     row = await get_or_create_progress(db, user_id)
@@ -55,14 +47,14 @@ async def set_onboarding_step(
     merged[str(step)] = data
     row.data = merged
     row.step = step
-    await db.flush()
+    await OnboardingProgressRepository(db).flush()
     return _to_state(row)
 
 
-async def mark_onboarding_skipped(db: AsyncSession, user_id: uuid.UUID) -> OnboardingState:
+async def mark_onboarding_skipped(db: DbSession, user_id: uuid.UUID) -> OnboardingState:
     """整体跳过引导并视为完成。"""
     row = await get_or_create_progress(db, user_id)
     row.completed = True
     row.step = 4
-    await db.flush()
+    await OnboardingProgressRepository(db).flush()
     return _to_state(row)

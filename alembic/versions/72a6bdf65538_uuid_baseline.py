@@ -626,6 +626,7 @@ def upgrade() -> None:
     sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['parent_id'], ['blog_comments.id'], ),
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -800,6 +801,7 @@ def upgrade() -> None:
     sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['article_id'], ['articles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['parent_id'], ['article_comments.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -871,6 +873,7 @@ def upgrade() -> None:
     sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
     sa.ForeignKeyConstraint(['column_id'], ['columns.id'], ),
     sa.ForeignKeyConstraint(['qa_question_id'], ['qa_questions.id'], ),
@@ -897,6 +900,7 @@ def upgrade() -> None:
     sa.Column('like_count', sa.Integer(), nullable=False),
     sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ),
     sa.ForeignKeyConstraint(['parent_id'], ['content_comments.id'], ),
     sa.PrimaryKeyConstraint('id')

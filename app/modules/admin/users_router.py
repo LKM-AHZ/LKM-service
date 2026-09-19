@@ -62,7 +62,6 @@ async def get_admin_auth_read_session() -> AsyncIterator[AsyncSession]:
         await sess.close()
 
 
-
 @router.get("/users", response_model=ApiResp[PageData[AdminUserListItem]])
 @respond
 async def admin_list_users(
@@ -135,7 +134,8 @@ async def admin_stats(
     post_count = await _safe_count(
         db,
         select(func.count(ContentItem.id)).where(
-            ContentItem.content_type == ContentType.DISCUSSION
+            ContentItem.content_type == ContentType.DISCUSSION,
+            ContentItem.deleted_at.is_(None),  # 软删（批 4）不计入帖子数
         ),
     )
     file_count = await _safe_count(db, select(func.count(LibraryFile.id)))
@@ -207,7 +207,8 @@ async def admin_trend(
     # 帖子统计改走统一写源 content_items（content_type == discussion ⇔ 原 forum_posts）biz
     post_d = await _biz_deltas(
         ContentItem.created_at,
-        extra_where=ContentItem.content_type == ContentType.DISCUSSION,
+        extra_where=(ContentItem.content_type == ContentType.DISCUSSION)
+        & (ContentItem.deleted_at.is_(None)),  # 软删（批 4）不计入趋势
     )
 
     items: list[AdminTrendItem] = []

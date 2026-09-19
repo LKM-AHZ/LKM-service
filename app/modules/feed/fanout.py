@@ -286,6 +286,21 @@ async def remove_board_items(
     return int(result.rowcount or 0)
 
 
+async def remove_source_item(db: AsyncSession, source_id: uuid.UUID) -> int:
+    """按源条目 id 清理物化行，返回删除行数。
+
+    内容软删（批 4）后必须调用：物化表存的是**写入时快照**，不会随源行软删自动消失，
+    否则关注者时间线仍能看到已删内容。``content_items`` 软删是它当前的唯一调用方。
+    """
+    result = await db.execute(
+        sa_delete(FeedItemMaterialized).where(
+            FeedItemMaterialized.source_id == source_id
+        )
+    )
+    await db.flush()
+    return int(result.rowcount or 0)
+
+
 async def count_materialized(db: AsyncSession, user_id: uuid.UUID) -> int:
     """某用户物化 feed 的条目数（读路径判「物化是否可用」，以及测试断言用）。"""
     return (

@@ -4,11 +4,6 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.cache import (
     bump_collection_version,
     cache_invalidate,
@@ -18,18 +13,22 @@ from app.core.cache import (
 )
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError
-from app.db.base import now_iso
+from app.db.repository import DbSession
 from app.modules.auth.snapshot import get_user_snapshot_batch
 from app.modules.points.errors import PointsErr
 from app.modules.points.models import (
-    Achievement,
-    ExchangeItem,
     PointsLedger,
-    Task,
-    UserAchievement,
     UserBalance,
-    UserBehaviorStat,
-    UserTaskProgress,
+)
+from app.modules.points.repository import (
+    AchievementRepository,
+    ExchangeItemRepository,
+    PointsLedgerRepository,
+    TaskRepository,
+    UserAchievementRepository,
+    UserBalanceRepository,
+    UserBehaviorStatRepository,
+    UserTaskProgressRepository,
 )
 from app.modules.points.rules import RULE_DELTAS
 from app.modules.points.schemas import (
@@ -41,42 +40,33 @@ from app.modules.points.schemas import (
 )
 
 
-async def ensure_balance(db: AsyncSession, user_id: uuid.UUID) -> UserBalance:
+async def ensure_balance(db: DbSession, user_id: uuid.UUID) -> UserBalance:
     """惰性取/建用户 balance 行。"""
-    row = await db.get(UserBalance, user_id)
+    repo = UserBalanceRepository(db)
+    row = await repo.get(user_id)
     if row is not None:
         return row
-    rb = UserBalance(user_id=user_id, balance=0)
-    db.add(rb)
-    await db.flush()
-    return rb
+    return await repo.create(user_id=user_id, balance=0)
 
 
 async def _apply_delta(
-    db: AsyncSession, user_id: uuid.UUID, delta: int, allow_negative: bool
+    db: DbSession, user_id: uuid.UUID, delta: int, allow_negative: bool
 ) -> int:
     """原子增减 balance 并返回变动后的新余额。
 
     用 ``WHERE balance + delta >= 0`` 约束（允许负时无条件），rowcount==0 表示
     余额不足或用户无记录 → 视为不足。同一事务内该更新对并发安全。
     """
-    stmt = sa_update(UserBalance).where(UserBalance.user_id == user_id)
-    if allow_negative:
-        stmt = stmt.values(balance=UserBalance.balance + delta, updated_at=now_iso())
-    else:
-        stmt = stmt.where(UserBalance.balance + delta >= 0).values(
-            balance=UserBalance.balance + delta, updated_at=now_iso()
-        )
-    result = await db.execute(stmt)
-    if (getattr(result, "rowcount", 0) or 0) == 0:
+    new_balance = await UserBalanceRepository(db).apply_delta(
+        user_id, delta, allow_negative
+    )
+    if new_balance is None:
         raise BizError(PointsErr.INSUFFICIENT_BALANCE, "积分余额不足，或账户未初始化")
-    row = await db.get(UserBalance, user_id)
-    assert row is not None
-    return int(row.balance)
+    return new_balance
 
 
 async def reward(
-    db: AsyncSession,
+    db: DbSession,
     user_id: uuid.UUID,
     delta: int,
     reason: str,
@@ -90,68 +80,40 @@ async def reward(
     幂等：同 (user_id, ref_type, ref_id) 已发过→delta 一致则跳过返回已有流水，
     不一致抛 DUPLICATE_REWARD。返回本次（或既有）流水。
     """
-    existing = await db.scalar(
-        select(PointsLedger.id).where(
-            PointsLedger.user_id == user_id,
-            PointsLedger.ref_type == ref_type,
-            PointsLedger.ref_id == ref_id,
-        )
-    )
+    ledger = PointsLedgerRepository(db)
+    existing = await ledger.get_by_ref(user_id, ref_type, ref_id)
     if existing is not None:
-        entry = (
-            (await db.execute(select(PointsLedger).where(PointsLedger.id == existing)))
-            .scalars()
-            .first()
-        )
-        if entry is not None and entry.delta == delta:
-            return LedgerEntry.model_validate(entry)
+        if existing.delta == delta:
+            return LedgerEntry.model_validate(existing)
         raise BizError(PointsErr.DUPLICATE_REWARD)
 
     await ensure_balance(db, user_id)
     balance_after = await _apply_delta(db, user_id, delta, allow_negative)
-    entry = PointsLedger(
-        user_id=user_id,
-        delta=delta,
-        balance_after=balance_after,
-        reason=reason,
-        ref_type=ref_type,
-        ref_id=ref_id,
+    # 并发撞 (user, ref_type, ref_id) 唯一约束由 ON CONFLICT DO NOTHING 吸收（替原
+    # savepoint 插入：不产生异常、不回滚 savepoint，也不污染调用方其它未提交写）。
+    await ledger.pg_upsert(
+        {
+            "user_id": user_id,
+            "delta": delta,
+            "balance_after": balance_after,
+            "reason": reason,
+            "ref_type": ref_type,
+            "ref_id": ref_id,
+        },
+        constraint="uq_points_ledger_ref",
+        do_nothing=True,
     )
-    db.add(entry)
-    # 用 savepoint 承载插入：并发撞 (user, ref_type, ref_id) 唯一约束时只回滚此
-    # savepoint，而非 db.rollback() 整事务——否则会连带回滚调用方在本事务里的其它
-    # 未提交写（如 do_checkin 的 checkin_streak/last_checkin_date），导致部分丢写。
-    sp = await db.begin_nested()
-    try:
-        await db.flush()
-        await sp.commit()
-    except IntegrityError:
-        await sp.rollback()
-        # 并发 insert 被唯一约束拦截 → 视为已发放（幂等）。重取既有流水返回；
-        # 其 delta 应与本次一致，不一致属异常抛 DUPLICATE_REWARD。
-        row = (
-            (
-                await db.execute(
-                    select(PointsLedger).where(
-                        PointsLedger.user_id == user_id,
-                        PointsLedger.ref_type == ref_type,
-                        PointsLedger.ref_id == ref_id,
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if row is not None and row.delta == delta:
-            return LedgerEntry.model_validate(row)
-        raise BizError(PointsErr.DUPLICATE_REWARD) from None
+    # 回读本次或并发方已落的流水（幂等语义下二者等价）。
+    entry = await ledger.get_by_ref(user_id, ref_type, ref_id)
+    if entry is None or entry.delta != delta:
+        raise BizError(PointsErr.DUPLICATE_REWARD)
     await bump_collection_version("points")
     await cache_invalidate(make_key("points:balance", user_id))
     return LedgerEntry.model_validate(entry)
 
 
 async def spend(
-    db: AsyncSession,
+    db: DbSession,
     user_id: uuid.UUID,
     amount: int,
     reason: str,
@@ -165,7 +127,7 @@ async def spend(
 
 
 async def transfer(
-    db: AsyncSession,
+    db: DbSession,
     from_id: uuid.UUID,
     to_id: uuid.UUID,
     amount: int,
@@ -201,22 +163,18 @@ async def transfer(
         ref_type=ref_type,
         ref_id=ref_id,
     )
-    db.add(out_entry)
-    db.add(in_entry)
-    await db.flush()
+    await PointsLedgerRepository(db).add_all([out_entry, in_entry])
     await bump_collection_version("points")
     await cache_invalidate(make_key("points:balance", from_id))
     await cache_invalidate(make_key("points:balance", to_id))
     return LedgerEntry.model_validate(out_entry), LedgerEntry.model_validate(in_entry)
 
 
-async def get_balance(db: AsyncSession, user_id: uuid.UUID) -> int:
+async def get_balance(db: DbSession, user_id: uuid.UUID) -> int:
     """取用户当前余额（读缓存；缺失按 0）。"""
 
     async def load() -> int:
-        existing = await db.scalar(
-            select(UserBalance.balance).where(UserBalance.user_id == user_id)
-        )
+        existing = await UserBalanceRepository(db).get_value(user_id)
         if existing is None:
             return 0
         return int(existing)
@@ -225,24 +183,17 @@ async def get_balance(db: AsyncSession, user_id: uuid.UUID) -> int:
 
 
 async def list_ledger(
-    db: AsyncSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
+    db: DbSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
 ) -> PageData[LedgerEntry]:
     """分页列出用户的积分流水（新→旧）。"""
-    total = (
-        await db.scalar(
-            select(func.count(PointsLedger.id)).where(PointsLedger.user_id == user_id)
-        )
-        or 0
+    repo = PointsLedgerRepository(db)
+    total = await repo.count(PointsLedger.user_id == user_id)
+    rows = await repo.get_many(
+        PointsLedger.user_id == user_id,
+        order_by=PointsLedger.id.desc(),
+        offset=paginate_offset(page, limit),
+        limit=limit,
     )
-    stmt = (
-        select(PointsLedger)
-        .where(PointsLedger.user_id == user_id)
-        .order_by(PointsLedger.id.desc())
-        .offset(paginate_offset(page, limit))
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    rows = result.scalars().all()
     items = [LedgerEntry.model_validate(r) for r in rows]
     return PageData(
         items=items, total=total, page=page, pages=paginate_pages(total, limit)
@@ -264,29 +215,15 @@ def _title_from_keys(unlocked: set[str]) -> str:
     return "active"
 
 
-async def _titles_for(
-    db: AsyncSession, user_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
+async def _titles_for(db: DbSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
     """一次 IN 查询批量返回多个用户已解锁成就合成的 title，避免榜上 N+1 查询。"""
     if not user_ids:
         return {}
-    rows = (
-        await db.execute(
-            select(Achievement.key, UserAchievement.user_id)
-            .join(UserAchievement, UserAchievement.achievement_id == Achievement.id)
-            .where(
-                UserAchievement.user_id.in_(user_ids),
-                UserAchievement.unlocked.is_(True),
-            )
-        )
-    ).all()
-    unlocked_by_user: dict[uuid.UUID, set[str]] = {}
-    for key, uid in rows:
-        unlocked_by_user.setdefault(uid, set()).add(key)
+    unlocked_by_user = await AchievementRepository(db).unlocked_keys_for(user_ids)
     return {uid: _title_from_keys(keys) for uid, keys in unlocked_by_user.items()}
 
 
-async def _fill_titles(db: AsyncSession, items: list[dict[str, Any]]) -> None:
+async def _fill_titles(db: DbSession, items: list[dict[str, Any]]) -> None:
     """就地给榜单 items 每项补 title（一次批量查询），为空列表时直接跳过。"""
     if not items:
         return
@@ -297,7 +234,7 @@ async def _fill_titles(db: AsyncSession, items: list[dict[str, Any]]) -> None:
 
 
 async def leaderboard(
-    db: AsyncSession,
+    db: DbSession,
     offset: int = 0,
     limit: int = 50,
     period: str = "total",
@@ -319,47 +256,24 @@ async def leaderboard(
         # 排序（分数降序、同分按 raw 昵称升序 nullsfirst、user_id 稳定）在服务端 Python 完成，
         # 保原先 fused SQL join+ORDER 的排列契约。
         if period == "total":
-            raw = (
-                (
-                    await db.execute(
-                        select(UserBalance.user_id, UserBalance.balance).where(
-                            UserBalance.balance > 0
-                        )
-                    )
-                ).all()
-            )
-            rows = [(uid, int(balance), uid, "") for uid, balance in raw]
+            raw = await UserBalanceRepository(db).list_positive()
+            rows = [(uid, balance, uid, "") for uid, balance in raw]
         elif period in ("daily", "weekly"):
             days = 1 if period == "daily" else 7
             since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
-            agg = (
-                await db.execute(
-                    select(
-                        PointsLedger.user_id,
-                        func.sum(PointsLedger.delta).label("total"),
-                    )
-                    .where(
-                        PointsLedger.created_at >= since, PointsLedger.delta > 0
-                    )
-                    .group_by(PointsLedger.user_id)
-                )
-            ).all()
+            agg = await PointsLedgerRepository(db).sum_positive_since(since)
             # display fallback 对周期榜原为 str(uid)，恒等放兜底表沿用
-            rows = [(uid, int(t), uid, str(uid)) for uid, t in agg]
+            rows = [(uid, total, uid, str(uid)) for uid, total in agg]
         else:
             raise BizError(PointsErr.INVALID_PERIOD)
 
-        snaps = await get_user_snapshot_batch(
-            db, user_ids=[r[0] for r in rows]
-        )
+        snaps = await get_user_snapshot_batch(db, user_ids=[r[0] for r in rows])
         # 计算型行：(user_id, score)；display 逻辑分开，sort 助手不落入缓存
         ranked: list[dict[str, Any]] = []
         for uid, score, _stable, fallback in rows:
             snap = snaps.get(uid)
             # display_name 原 total= nickname or username；snap.username 权威代业务 User
-            display = (
-                (snap.nickname or snap.username) if snap is not None else fallback
-            )
+            display = (snap.nickname or snap.username) if snap is not None else fallback
             ranked.append(
                 {
                     "user_id": uid,
@@ -379,7 +293,11 @@ async def leaderboard(
             )
         )
         result = [
-            {"user_id": r["user_id"], "display_name": r["display_name"], "balance": r["score"]}
+            {
+                "user_id": r["user_id"],
+                "display_name": r["display_name"],
+                "balance": r["score"],
+            }
             for r in ranked
         ]
         # 批量补齐 title（UserAchievement 属业务 points 表，留在本进程读），与分数一并落缓存。
@@ -411,9 +329,9 @@ _ACH_TYPE_TO_STAT: dict[str, str] = {
 }
 
 
-async def _read_progress(db: AsyncSession, user_id: uuid.UUID, type_: str) -> int:
+async def _read_progress(db: DbSession, user_id: uuid.UUID, type_: str) -> int:
     """只读计算某成就类型的当前进度（读 UserBehaviorStat.stats，不写库）。"""
-    stat = await db.get(UserBehaviorStat, user_id)
+    stat = await UserBehaviorStatRepository(db).get(user_id)
     key = _ACH_TYPE_TO_STAT.get(type_)
     if stat is None or not key:
         return 0
@@ -421,25 +339,13 @@ async def _read_progress(db: AsyncSession, user_id: uuid.UUID, type_: str) -> in
 
 
 async def list_achievements(
-    db: AsyncSession, *, user_id: uuid.UUID | None = None
+    db: DbSession, *, user_id: uuid.UUID | None = None
 ) -> list[AchievementOut]:
     """成就定义全量 + 当前用户进度（无登录则不显示进度，归默认值）。"""
-    achievements = (
-        (await db.execute(select(Achievement).order_by(Achievement.sort_order)))
-        .scalars()
-        .all()
-    )
+    achievements = await AchievementRepository(db).list_ordered()
     progress_map: dict[uuid.UUID, tuple[int, bool]] = {}
     if user_id is not None:
-        ua_rows = (
-            (
-                await db.execute(
-                    select(UserAchievement).where(UserAchievement.user_id == user_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        ua_rows = await UserAchievementRepository(db).list_for_user(user_id)
         for ua in ua_rows:
             progress_map[ua.achievement_id] = (ua.progress, ua.unlocked)
     out: list[AchievementOut] = []
@@ -473,24 +379,15 @@ async def list_achievements(
 
 
 async def list_tasks(
-    db: AsyncSession, *, user_id: uuid.UUID | None = None
+    db: DbSession, *, user_id: uuid.UUID | None = None
 ) -> list[TaskOut]:
     """任务定义全量 + 当前用户今日进度（无登录则默认值）。"""
-    tasks = (await db.execute(select(Task).order_by(Task.sort_order))).scalars().all()
+    tasks = await TaskRepository(db).list_ordered()
     prog_map: dict[uuid.UUID, tuple[int, bool]] = {}
     if user_id is not None:
         today = datetime.date.today().isoformat()
-        up_rows = (
-            (
-                await db.execute(
-                    select(UserTaskProgress).where(
-                        UserTaskProgress.user_id == user_id,
-                        UserTaskProgress.period_date == today,
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        up_rows = await UserTaskProgressRepository(db).list_for_user_period(
+            user_id, today
         )
         for up in up_rows:
             prog_map[up.task_id] = (up.progress, up.completed)
@@ -514,13 +411,9 @@ async def list_tasks(
     return out
 
 
-async def list_exchange_items(db: AsyncSession) -> list[ExchangeItemOut]:
+async def list_exchange_items(db: DbSession) -> list[ExchangeItemOut]:
     """兑换物品定义全量（公开）。"""
-    items = (
-        (await db.execute(select(ExchangeItem).order_by(ExchangeItem.sort_order)))
-        .scalars()
-        .all()
-    )
+    items = await ExchangeItemRepository(db).list_ordered()
     return [
         ExchangeItemOut(
             id=i.id,
@@ -536,7 +429,7 @@ async def list_exchange_items(db: AsyncSession) -> list[ExchangeItemOut]:
     ]
 
 
-async def do_checkin(db: AsyncSession, user_id: uuid.UUID) -> dict:
+async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
     """每日打卡：幂等（同日已打返回 today_checked=True, earned=0）。
 
     返回 ``{success, earned, checkin_streak, today_checked}``。非幂等路径推进打卡
@@ -544,40 +437,20 @@ async def do_checkin(db: AsyncSession, user_id: uuid.UUID) -> dict:
     """
     today = datetime.date.today().isoformat()
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-    stat = (
-        (
-            await db.execute(
-                select(UserBehaviorStat)
-                .where(UserBehaviorStat.user_id == user_id)
-                .with_for_update()
-            )
-        )
-        .scalars()
-        .first()
-    )
+    stat_repo = UserBehaviorStatRepository(db)
+    stat = await stat_repo.get_locked(user_id)
     if stat is None:
-        stat = UserBehaviorStat(user_id=user_id, stats={})
-        db.add(stat)
-        try:
-            await db.flush()
-        except IntegrityError:
-            # 品牌新用户并发首次打卡：with_for_update 仅守既有行，两个连接都看到
-            # None 后各自 insert → 后提交者撞 user_behavior_stats.user_id 主键被 409。
-            # 此处回滚本次插入，重取既有行（并发方已提交）继续，模型对齐 reward()。
-            await db.rollback()
-            stat = (
-                (
-                    await db.execute(
-                        select(UserBehaviorStat)
-                        .where(UserBehaviorStat.user_id == user_id)
-                        .with_for_update()
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if stat is None:  # 理论上不可达：刚有 IntegrityError 说明行已存在
-                raise
+        # 品牌新用户并发首次打卡：with_for_update 仅守既有行，两个连接都看到 None 后
+        # 各自 insert → 后提交者撞 user_behavior_stats.user_id 主键。此处 ON CONFLICT
+        # DO NOTHING 吸收撞键（替原 flush 撞 IntegrityError → db.rollback() 重取路径，
+        # 不再整事务回滚），随后行锁回读并发方已提交的行继续。
+        await stat_repo.pg_upsert(
+            {"user_id": user_id, "stats": {}},
+            index_elements=["user_id"],
+            do_nothing=True,
+        )
+        stat = await stat_repo.get_locked(user_id)
+        assert stat is not None  # 理论上不可达：刚插入或并发方已提交
     today_checked = stat.last_checkin_date == today
     if today_checked:
         return {

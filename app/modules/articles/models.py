@@ -6,7 +6,13 @@ import uuid
 from sqlalchemy import ForeignKey, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
+from app.db.base import (
+    Base,
+    SoftDeleteMixin,
+    UTCDateTime,
+    UUIDPrimaryKeyMixin,
+    now_iso,
+)
 
 
 class ArticleCategory(UUIDPrimaryKeyMixin, Base):
@@ -71,8 +77,11 @@ class Article(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class ArticleComment(UUIDPrimaryKeyMixin, Base):
-    """文章评论。``parent_id`` 自引用支持一级回复（同 BlogComment 的写法）。"""
+class ArticleComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
+    """文章评论。``parent_id`` 自引用支持一级回复（同 BlogComment 的写法）。
+
+    软删（批 4）：``deleted_at`` 非空即已删，列表与 ``articles.comments`` 计数统一过滤。
+    """
 
     __tablename__: str = "article_comments"
 

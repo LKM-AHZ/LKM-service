@@ -26,9 +26,6 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.cache import (
     TTL_ITEM_S,
     TTL_LIST_S,
@@ -38,17 +35,17 @@ from app.core.cache import (
 )
 from app.core.config import settings
 from app.core.err import BizError
-from app.db.base import now_iso
+from app.db.repository import DbSession
 from app.modules.admin.moderation.engine import evaluate, load_active_rules
 from app.modules.auth.snapshot import get_user_snapshot, get_user_snapshot_batch
-from app.modules.content.models import Board
 from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.errors import FollowErr
-from app.modules.feed.models import (
-    BoardFollow,
-    FeedItemMaterialized,
-    UserFollow,
+from app.modules.feed.repository import (
+    BoardFollowRepository,
+    FeedBoardRepository,
+    FeedItemMaterializedRepository,
+    UserFollowRepository,
 )
 from app.modules.feed.schemas import FeedItem, FeedResponse
 
@@ -67,7 +64,7 @@ async def _invalidate_follow_cache(user_id: uuid.UUID) -> None:
 
 
 async def follow_user(
-    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
+    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
 ) -> None:
     """follower 关注 following（幂等：重复关注静默成功）。"""
     if follower_id == following_id:
@@ -77,18 +74,7 @@ async def follow_user(
     if target_snap is None:
         raise BizError(FollowErr.TARGET_NOT_FOUND, "关注目标用户不存在")
 
-    row = await db.scalar(
-        select(UserFollow).where(
-            UserFollow.follower_id == follower_id,
-            UserFollow.following_id == following_id,
-        )
-    )
-    created = row is None or row.deleted_at is not None
-    if row is None:
-        db.add(UserFollow(follower_id=follower_id, following_id=following_id))
-    elif row.deleted_at is not None:
-        row.deleted_at = None
-    await db.flush()
+    created = await UserFollowRepository(db).follow(follower_id, following_id)
     if created and settings.feed_backfill_limit > 0:
         # M6.11：新关注即回填该作者最近内容，令物化 feed 当场可用（否则要等新内容 fanout）
         await fanout.backfill_author(
@@ -98,45 +84,27 @@ async def follow_user(
 
 
 async def unfollow_user(
-    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
+    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
 ) -> None:
     """follower 取消关注 following（幂等：末关注时静默成功）。"""
     if follower_id == following_id:
         raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能操作自己的关注")
-    row = await db.scalar(
-        select(UserFollow).where(
-            UserFollow.follower_id == follower_id,
-            UserFollow.following_id == following_id,
-        )
-    )
-    if row is not None and row.deleted_at is None:
-        row.deleted_at = now_iso()
-        await db.flush()
+    changed = await UserFollowRepository(db).unfollow(follower_id, following_id)
+    if changed:
         # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）
         await fanout.remove_author_items(db, follower_id, following_id)
         await _invalidate_follow_cache(follower_id)
 
 
 async def follow_board(
-    db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID
+    db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
 ) -> None:
     """follower 关注版块（幂等）。"""
-    target = await db.get(Board, board_id)
+    target = await FeedBoardRepository(db).get(board_id)
     if target is None:
         raise BizError(FollowErr.TARGET_NOT_FOUND, "关注版块不存在")
 
-    row = await db.scalar(
-        select(BoardFollow).where(
-            BoardFollow.follower_id == follower_id,
-            BoardFollow.board_id == board_id,
-        )
-    )
-    created = row is None or row.deleted_at is not None
-    if row is None:
-        db.add(BoardFollow(follower_id=follower_id, board_id=board_id))
-    elif row.deleted_at is not None:
-        row.deleted_at = None
-    await db.flush()
+    created = await BoardFollowRepository(db).follow(follower_id, board_id)
     if created and settings.feed_backfill_limit > 0:
         # M6.11：新关注版块即回填该版块最近讨论帖
         await fanout.backfill_board(
@@ -146,84 +114,44 @@ async def follow_board(
 
 
 async def unfollow_board(
-    db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID
+    db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
 ) -> None:
     """follower 取消关注版块（幂等）。"""
-    row = await db.scalar(
-        select(BoardFollow).where(
-            BoardFollow.follower_id == follower_id,
-            BoardFollow.board_id == board_id,
-        )
-    )
-    if row is not None and row.deleted_at is None:
-        row.deleted_at = now_iso()
-        await db.flush()
+    changed = await BoardFollowRepository(db).unfollow(follower_id, board_id)
+    if changed:
         # M6.11：取关版块即清理其物化条目（保留仍因作者关注而可见的行）
         keep = set(await get_following_ids(db, follower_id))
         await fanout.remove_board_items(db, follower_id, board_id, keep)
         await _invalidate_follow_cache(follower_id)
 
 
-async def get_following_ids(db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+async def get_following_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
     """我关注的所有用户 id（缓存，供时间线过滤）。"""
 
     async def load() -> list[uuid.UUID]:
-        rows = (
-            (
-                await db.execute(
-                    select(UserFollow.following_id).where(
-                        UserFollow.follower_id == user_id,
-                        UserFollow.deleted_at.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return list(rows)
+        return await UserFollowRepository(db).list_following_ids(user_id)
 
     return await cached_read(_following_key(user_id), TTL_ITEM_S, load)
 
 
-async def get_followed_board_ids(
-    db: AsyncSession, user_id: uuid.UUID
-) -> list[uuid.UUID]:
+async def get_followed_board_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
     """我关注的所有版块 id（缓存，供时间线过滤）。"""
 
     async def load() -> list[uuid.UUID]:
-        rows = (
-            (
-                await db.execute(
-                    select(BoardFollow.board_id).where(
-                        BoardFollow.follower_id == user_id,
-                        BoardFollow.deleted_at.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return list(rows)
+        return await BoardFollowRepository(db).list_board_ids(user_id)
 
     return await cached_read(_board_ids_key(user_id), TTL_ITEM_S, load)
 
 
 async def is_following_user(
-    db: AsyncSession, follower_id: uuid.UUID, following_id: uuid.UUID
+    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
 ) -> bool:
     """follower 当前是否关注 following（软删过滤）。"""
-    row = await db.scalar(
-        select(UserFollow.id).where(
-            UserFollow.follower_id == follower_id,
-            UserFollow.following_id == following_id,
-            UserFollow.deleted_at.is_(None),
-        )
-    )
-    return row is not None
+    return await UserFollowRepository(db).is_following(follower_id, following_id)
 
 
 async def list_following_users(
-    db: AsyncSession, user_id: uuid.UUID
+    db: DbSession, user_id: uuid.UUID
 ) -> list[tuple[uuid.UUID, str, str | None]]:
     """我关注的用户列表：(user_id, display_name, avatar)。
 
@@ -245,20 +173,17 @@ async def list_following_users(
 
 
 async def list_followed_boards(
-    db: AsyncSession, user_id: uuid.UUID
+    db: DbSession, user_id: uuid.UUID
 ) -> list[tuple[uuid.UUID, str]]:
     """我关注的版块列表：(board_id, title)。"""
     ids = await get_followed_board_ids(db, user_id)
     if not ids:
         return []
-    rows = (
-        await db.execute(select(Board.id, Board.title).where(Board.id.in_(ids)))
-    ).all()
-    title_by_id = {bid: title for bid, title in rows}
+    title_by_id = await FeedBoardRepository(db).title_map(ids)
     return [(bid, title_by_id.get(bid, "")) for bid in ids]
 
 
-async def _fill_authors(db: AsyncSession, items: list[FeedItem]) -> None:
+async def _fill_authors(db: DbSession, items: list[FeedItem]) -> None:
     """把各源返回的 ``author_id`` 去重后批量查询一次并回填 ``author_name``。
 
     feed 各源不再各自查作者（除 blog 保留 publisher 兜底），避免同一作者在多源被
@@ -325,7 +250,7 @@ async def _compute_scores(
 
 
 async def get_timeline(
-    db: AsyncSession,
+    db: DbSession,
     *,
     user_id: uuid.UUID | None,
     mode: str,
@@ -354,7 +279,7 @@ def _materialized_key(user_id: uuid.UUID, cursor: str | None) -> str:
 
 
 async def _materialized_timeline(
-    db: AsyncSession, *, user_id: uuid.UUID, cursor: str | None, limit: int
+    db: DbSession, *, user_id: uuid.UUID, cursor: str | None, limit: int
 ) -> FeedResponse | None:
     """物化读：feed_items + 大 V 实时补拉。返回 ``None`` 表示应回退实时合流。"""
     before_time, before_id = _decode_cursor(cursor)
@@ -391,50 +316,24 @@ async def _materialized_timeline(
         if len(kept) > limit and page:
             last = page[-1]
             next_cursor = _encode_cursor(last.created_at, last.id)
-        return FeedResponse(items=page, next_cursor=next_cursor).model_dump(
-            mode="json"
-        )
+        return FeedResponse(items=page, next_cursor=next_cursor).model_dump(mode="json")
 
-    cached = await cached_read(
-        _materialized_key(user_id, cursor), TTL_LIST_S, _load
-    )
+    cached = await cached_read(_materialized_key(user_id, cursor), TTL_LIST_S, _load)
     if not cached:
         return None
     return FeedResponse.model_validate(cached)
 
 
 async def _load_materialized_page(
-    db: AsyncSession,
+    db: DbSession,
     user_id: uuid.UUID,
     before_time: datetime.datetime | None,
     before_id: uuid.UUID | None,
     limit: int,
 ) -> list[FeedItem]:
     """从物化表取一页（(created_at, id) 游标下滤，时间倒序）。"""
-    conds: list[Any] = [FeedItemMaterialized.user_id == user_id]
-    if before_time is not None:
-        conds.extend(
-            feed_src._before_conds(
-                FeedItemMaterialized.created_at,
-                FeedItemMaterialized.id,
-                before_time,
-                before_id,
-            )
-        )
-    rows = (
-        (
-            await db.execute(
-                select(FeedItemMaterialized)
-                .where(*conds)
-                .order_by(
-                    FeedItemMaterialized.created_at.desc(),
-                    FeedItemMaterialized.id.desc(),
-                )
-                .limit(limit)
-            )
-        )
-        .scalars()
-        .all()
+    rows = await FeedItemMaterializedRepository(db).list_page(
+        user_id, before_time=before_time, before_id=before_id, limit=limit
     )
     return [
         FeedItem(
@@ -454,7 +353,7 @@ async def _load_materialized_page(
 
 
 async def _realtime_for_authors(
-    db: AsyncSession,
+    db: DbSession,
     author_ids: set[uuid.UUID],
     board_ids: set[uuid.UUID],
     before_time: datetime.datetime | None,
@@ -473,7 +372,7 @@ async def _realtime_for_authors(
 
 
 async def _realtime_timeline(
-    db: AsyncSession,
+    db: DbSession,
     *,
     user_id: uuid.UUID | None,
     mode: str,
