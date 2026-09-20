@@ -20,6 +20,7 @@ def __getattr__(name: str) -> Any:
         if _exported_routers is None:
             from app.modules.admin.analytics_router import router as router_analytics
             from app.modules.admin.auth_router import router
+            from app.modules.admin.bot_router import router as router_bot
             from app.modules.admin.content_router import router as router_content
             from app.modules.admin.dlq_router import router as router_dlq
             from app.modules.admin.moderation.admin_router import (
@@ -36,6 +37,7 @@ def __getattr__(name: str) -> Any:
                 router_dlq,
                 router_moderation,
                 router_analytics,
+                router_bot,
             ]
         return _exported_routers
     if name == "GRAPHQL":

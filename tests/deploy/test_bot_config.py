@@ -8,8 +8,10 @@
      **独立网络**——若落 `lkm`，沙箱里跑的模型生成代码就能直连 postgres/redis/minio；
   3) **上传上限独立**：bot 允许单文件 512MB，复用社群站的 `__MAX_BODY_SIZE__`(100MB)
      会把 bot 上传静默打死；两个数必须来自不同变量；
-  4) **域名**：bot 是独立 host（其自带 API 与社群站同为绝对路径 /api/v1/*，路径前缀方案
-     会与 backend 路由正面冲突），且必须并入 ACME/跳转的 hosts 并集；
+  4) **路径**：bot 面板挂在**社群域的子路径 `/bot/`**（不再有独立子域名）——其自带 API 与
+     社群站同为绝对路径 /api/v1/*，同 host 下原样转发会与 backend 路由正面冲突，故网关用
+     `proxy-rewrite` 剥掉 `/bot` 前缀后再送面板；路由 priority 必须高过 community-catchall，
+     否则面板流量会被 Astro 接走；
   5) **k8s**：bot 是可选组件（`replicas: 0`），data 走 PVC + `strategy: Recreate`
      （RWO 单写者：滚动更新会双挂载并让 SQLite 双写）。
 """
@@ -29,7 +31,12 @@ _COMPOSE = _ROOT / "docker-compose.yml"
 _APISIX_DIR = _ROOT / "deploy" / "apisix"
 _K8S_BASE = _ROOT / "deploy" / "k8s" / "base"
 
-_BOT = "bot.lkm-ahz.ltd"
+_COMMUNITY = "lkm-ahz.ltd"
+_COMMUNITY_HOSTS = [_COMMUNITY, f"www.{_COMMUNITY}"]
+#: 面板子路径前缀（网关路由 uri 与 proxy-rewrite 的匹配对象）。
+_BOT_PREFIX = "/bot"
+#: 旧独立子域名：已下线，只在「不得再出现」类断言里用。
+_RETIRED_BOT_DOMAIN = "bot.lkm-ahz.ltd"
 _COMMUNITY_BODY_LIMIT = 104857600  # LKM_MAX_UPLOAD_BYTES 默认值
 _BOT_BODY_LIMIT = 550000000  # LKM_BOT_MAX_UPLOAD_BYTES 默认值
 
@@ -49,7 +56,7 @@ def _render() -> dict:
 
     tmp = Path(tempfile.mkdtemp(prefix="apisix-bot-"))
     cert_root = tmp / "live"
-    for domain in ("lkm-ahz.ltd", "lkm-ahz.icu", _BOT):
+    for domain in (_COMMUNITY, "lkm-ahz.icu"):
         d = cert_root / domain
         d.mkdir(parents=True)
         (d / "fullchain.pem").write_text(
@@ -168,24 +175,39 @@ def should_pass_ship_data_dir_as_host_absolute_path() -> None:
 # ── 网关：路由、WS、独立上传上限 ──────────────────────────────────────────────
 
 
-def should_route_bot_by_dedicated_host() -> None:
-    """bot 用独立 host——其自带 API 与社群站同为绝对路径 /api/v1/*，同 host 必冲突。"""
-    route = _routes()["bot-dashboard"]
-    assert route["hosts"] == [_BOT]
-    assert f"www.{_BOT}" not in route["hosts"]  # 面板没有 www 变体
+def should_route_bot_by_subpath() -> None:
+    """面板挂在社群域子路径 /bot/*：同 host 下靠剥前缀避开与 backend 的 /api/v1/* 冲突。"""
+    route = _routes()["bot-panel"]
+    assert route["hosts"] == _COMMUNITY_HOSTS
+    assert route["uri"] == f"{_BOT_PREFIX}/*"
     assert route["upstream"]["service_name"].startswith("lkmbot:")
     assert route["upstream"]["pass_host"] == "pass"
+    # priority 必须高过 community-catchall(10)，否则面板流量被 Astro 接走
+    assert route["priority"] > _routes()["community-catchall"]["priority"]
+
+
+def should_rewrite_bot_prefix_off() -> None:
+    """网关剥掉 /bot 前缀：面板进程仍以根路径服务其静态资源与 /api/v1/*（零应用侧改动）。"""
+    routes = _routes()
+    for route_id in ("bot-panel", "bot-auth-login"):
+        rewrite = routes[route_id]["plugins"]["proxy-rewrite"]
+        assert rewrite["regex_uri"] == [f"^{_BOT_PREFIX}/(.*)", "/$1"], route_id
+    # 无尾斜杠的 /bot 由独立精确路由兜住（`/bot/*` 不匹配它）
+    root = routes["bot-panel-root"]
+    assert root["uri"] == _BOT_PREFIX
+    assert root["plugins"]["proxy-rewrite"]["uri"] == "/"
+    assert root["hosts"] == _COMMUNITY_HOSTS
 
 
 def should_enable_websocket_on_bot_route() -> None:
     """面板实时通道（/api/v1/live-chat/ws 等）都落在 catchall，不开 upgrade 会被剥掉。"""
-    assert _routes()["bot-dashboard"]["enable_websocket"] is True
+    assert _routes()["bot-panel"]["enable_websocket"] is True
 
 
 def should_not_reuse_community_body_limit_for_bot() -> None:
     """bot 单文件上限 512MB，复用社群站的 100MB 会把 bot 上传静默打死。"""
     routes = _routes()
-    bot_limit = routes["bot-dashboard"]["plugins"]["client-control"]["max_body_size"]
+    bot_limit = routes["bot-panel"]["plugins"]["client-control"]["max_body_size"]
     assert bot_limit == _BOT_BODY_LIMIT
     assert bot_limit != _COMMUNITY_BODY_LIMIT
     # 社群站各路由仍必须是 100MB（防「改共用变量」把社群站上限一起抬高）
@@ -198,7 +220,8 @@ def should_not_reuse_community_body_limit_for_bot() -> None:
 def should_rate_limit_bot_login_at_gateway() -> None:
     """面板是管理员面：网关层要有粗粒度登录限流（应用层另有令牌桶，分工同社群站）。"""
     route = _routes()["bot-auth-login"]
-    assert route["hosts"] == [_BOT]
+    assert route["hosts"] == _COMMUNITY_HOSTS
+    assert route["uri"] == f"{_BOT_PREFIX}/api/v1/auth/login*"
     assert route["plugins"]["limit-count"]["rejected_code"] == 429
     assert route["upstream"]["service_name"].startswith("lkmbot:")
     # 不挂 cors：同源面板用不到，且 cors 插件在 allow_credential=true 下禁 `*`，
@@ -206,27 +229,36 @@ def should_rate_limit_bot_login_at_gateway() -> None:
     assert "cors" not in route["plugins"]
 
 
-def should_include_bot_in_acme_and_redirect_hosts() -> None:
-    """漏掉 bot 的表现：http://bot.* 不跳转，且 bot 域名的 ACME 挑战没有上游。"""
+def should_retire_bot_subdomain_from_acme_and_redirect_hosts() -> None:
+    """子域已下线：ACME/跳转的 hosts 并集里不该再有 bot 域名（有则说明域名清单没清干净）。"""
     routes = _routes()
-    assert _BOT in routes["acme-challenge"]["hosts"]
-    assert _BOT in routes["http-redirect"]["hosts"]
+    assert _RETIRED_BOT_DOMAIN not in routes["acme-challenge"]["hosts"]
+    assert _RETIRED_BOT_DOMAIN not in routes["http-redirect"]["hosts"]
+    assert _COMMUNITY in routes["acme-challenge"]["hosts"]
 
 
 def should_not_hardcode_bot_domain_in_template() -> None:
-    """模板只放占位（单一来源由 render.sh 展开），bot 域名同理。"""
+    """模板只放占位（单一来源由 render.sh 展开）；bot 域名与 __BOT_HOSTS__ 均已下线。"""
     raw = (_APISIX_DIR / "apisix.yaml").read_text(encoding="utf-8")
-    assert _BOT not in raw
-    assert "__BOT_HOSTS__" in raw and "__BOT_MAX_BODY_SIZE__" in raw
+    assert _RETIRED_BOT_DOMAIN not in raw
+    assert "__BOT_HOSTS__" not in raw
+    # body 上限仍走占位（唯一消费者是 bot 路由，见 render.sh）
+    assert "__BOT_MAX_BODY_SIZE__" in raw
 
 
-def should_expand_bot_domain_per_runtime_env() -> None:
-    """域名经 APISIX_BOT_DOMAINS 展开：compose/k8s 各自下发，模板不认死默认值。"""
-    raw = (_APISIX_DIR / "render.sh").read_text(encoding="utf-8")
-    assert 'BOT="${APISIX_BOT_DOMAINS:-' in raw
-    assert 'BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-' in raw
-    # 证书/SNI 也要跟随（漏了 DOMAINS 的并集，bot 会退回自签占位）
-    assert "$DOMAINS" in raw and " $BOT" in raw
+def should_expand_bot_body_limit_but_not_domain() -> None:
+    """上限经 APISIX_BOT_MAX_BODY_SIZE 展开；域名变量（APISIX_BOT_DOMAINS/BOT）必须已清空。"""
+    render_sh = (_APISIX_DIR / "render.sh").read_text(encoding="utf-8")
+    assert 'BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-' in render_sh
+    assert "APISIX_BOT_DOMAINS" not in render_sh
+    assert re.search(r"^BOT=", render_sh, flags=re.MULTILINE) is None
+    # 证书 SNI 只覆盖社群/官网两域
+    assert "DOMAINS=\"$COMMUNITY $OFFICIAL\"" in render_sh
+
+    compose = _compose_raw()
+    # 注：注释里可以提到这个名字（说明"为何没有"），故断言的是「没有赋值行」
+    assert "APISIX_BOT_DOMAINS:" not in compose
+    assert "APISIX_BOT_MAX_BODY_SIZE:" in compose
 
 
 # ── 交付面：清单与 kustomize 挂载 ─────────────────────────────────────────────
@@ -255,21 +287,86 @@ def should_back_bot_with_pvc_and_tcp_probe() -> None:
     assert container["readinessProbe"]["tcpSocket"]["port"] == "http"
 
 
-def should_publish_bot_cert_in_gateway_projected_volume() -> None:
-    """k8s 证书经 Secret 扁平键名还原成 render.sh 期望的 <域名>/fullchain.pem 结构。"""
+def should_not_publish_bot_cert_in_gateway_projected_volume() -> None:
+    """子域下线后面板走社群域证书：网关证书卷里不该再有 bot 子域的键。"""
     text = (_K8S_BASE / "gateway" / "apisix.yaml").read_text(encoding="utf-8")
-    assert f"{_BOT}_fullchain.pem" in text and f"{_BOT}_privkey.pem" in text
-    assert re.search(rf"path: {re.escape(_BOT)}/fullchain\.pem", text)
+    assert f"{_RETIRED_BOT_DOMAIN}_fullchain.pem" not in text
+    assert f"{_RETIRED_BOT_DOMAIN}_privkey.pem" not in text
 
 
-def should_expose_bot_domain_and_limit_to_k8s_gateway() -> None:
-    """网关 initContainer 与常驻 sidecar 两处都要拿到 bot 域名/上限（少一处就渲染出占位残留）。"""
+def should_expose_bot_limit_but_not_domain_to_k8s_gateway() -> None:
+    """上限仍要下发（少一处就渲染出占位残留）；域名变量已随子域下线清空。"""
     gw = (_K8S_BASE / "gateway" / "apisix.yaml").read_text(encoding="utf-8")
-    assert gw.count("APISIX_BOT_DOMAINS") >= 2
     assert gw.count("APISIX_BOT_MAX_BODY_SIZE") >= 2
+    assert "APISIX_BOT_DOMAINS" not in gw
     cfg = (_K8S_BASE / "gateway" / "config.yaml").read_text(encoding="utf-8")
-    assert f"APISIX_BOT_DOMAINS: {_BOT}" in cfg
     # 上限放网关专属表：放进 lkm-config 会被 envFrom 灌进 backend/auth/worker（无消费方）
     assert 'APISIX_BOT_MAX_BODY_SIZE: "550000000"' in cfg
+    assert "APISIX_BOT_DOMAINS" not in cfg
+    for path in (
+        _K8S_BASE / "gateway" / "config.yaml",
+        _ROOT / "deploy" / "k8s" / "overlays" / "prod" / "gateway-domains.yaml",
+        _ROOT / "deploy" / "k8s" / "gen-tls.sh",
+    ):
+        assert _RETIRED_BOT_DOMAIN not in path.read_text(encoding="utf-8"), path
     app_cfg = (_K8S_BASE / "app-config.yaml").read_text(encoding="utf-8")
     assert "BOT_MAX_UPLOAD" not in app_cfg
+
+
+# ── 面板子路径与 SSO（并入社区后台）──────────────────────────────────────────
+
+
+def should_pin_dashboard_base_path_to_subpath() -> None:
+    """面板必须知道自己挂在 /bot 下：否则同域 cookie 会发给社区站全部路径，302 也会跳错地方。"""
+    env = _services()["lkmbot"]["environment"]
+    assert env["ASTRBOT_DASHBOARD_BASE_PATH"] == _BOT_PREFIX
+    # 前端构建期 base 必须同一值（镜像内构建 dist，资源引用由它决定）
+    assert _services()["lkmbot"]["build"]["args"]["VITE_BASE_PATH"] == f"{_BOT_PREFIX}/"
+    k8s_env = {
+        item["name"]: item.get("value")
+        for item in next(
+            d for d in _k8s_lkmbot() if d["kind"] == "Deployment"
+        )["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert k8s_env["ASTRBOT_DASHBOARD_BASE_PATH"] == _BOT_PREFIX
+
+
+def should_mount_sso_public_key_into_bot() -> None:
+    """SSO 免登要 RS256 公钥（与网关同一份）；缺了只降级为「手动登录一次」，不是越权。"""
+    svc = _services()["lkmbot"]
+    mounts = [str(m) for m in svc["volumes"]]
+    assert any("./deploy/jwt/keys:/etc/lkm/jwt:ro" in m for m in mounts), mounts
+    assert (
+        svc["environment"]["LKM_BOT_SSO_PUBLIC_KEY_FILE"]
+        == "/etc/lkm/jwt/jwt-public.pem"
+    )
+    # 只给公钥目录，绝不给签发私钥
+    assert not any("jwt-private" in m for m in mounts)
+
+    container = next(d for d in _k8s_lkmbot() if d["kind"] == "Deployment")["spec"][
+        "template"
+    ]["spec"]["containers"][0]
+    env = {item["name"]: item.get("value") for item in container["env"]}
+    assert env["LKM_BOT_SSO_PUBLIC_KEY_FILE"] == "/etc/lkm/jwt/LKM_JWT_PUBLIC_KEY"
+    volumes = next(d for d in _k8s_lkmbot() if d["kind"] == "Deployment")["spec"][
+        "template"
+    ]["spec"]["volumes"]
+    jwt_volume = next(v for v in volumes if v["name"] == "jwtpub")
+    # 只投影公钥这一个键（不 envFrom 整张 lkm-secrets）
+    assert jwt_volume["secret"]["items"] == [
+        {"key": "LKM_JWT_PUBLIC_KEY", "path": "LKM_JWT_PUBLIC_KEY"}
+    ]
+    assert jwt_volume["secret"]["optional"] is True
+
+
+def should_ship_bundled_dashboard_dist_in_image() -> None:
+    """dist 由镜像内构建并落到 bundled 位置：面板前端必须带 /bot base，不能靠运行期下载。"""
+    dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
+    assert "pnpm build:subpath" in dockerfile
+    assert "COPY --from=dashboard /dashboard/dist /LKMBot/astrbot/dashboard/dist" in (
+        dockerfile
+    )
+    # 上游默认排除 dashboard/ 目录；构建既然要它，.dockerignore 必须放开源码（只排产物）
+    dockerignore = (_ROOT / "LKM-bot" / ".dockerignore").read_text(encoding="utf-8")
+    assert "dashboard/node_modules" in dockerignore
+    assert re.search(r"^dashboard/$", dockerignore, flags=re.MULTILINE) is None

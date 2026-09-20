@@ -75,6 +75,17 @@ class AdminTrendItem(BaseModel):
     post_delta: int
 
 
+class AdminBotSsoTicket(BaseModel):
+    """bot 面板单点登录票据：后台 SSR 页拿它拼 iframe URL，由 bot 面板一次性消费。
+
+    票据是短期（60s）且一次性的**换取凭据**，只用于换 bot 面板自身会话，不是社区侧授权凭据；
+    故无 include_pii 之类门控，但也绝不落库、不进日志。
+    """
+
+    ticket: str
+    expires_in: int
+
+
 class DimUserRow(BaseModel):
     """离线报表宽表（``user_dim``，M3.B0.3）的只读 accounting 行。
 

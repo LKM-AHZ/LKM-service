@@ -163,8 +163,8 @@ def _next_db(kind: str) -> str:
 
 def _db_url(base_url: str, db_name: str) -> str:
     """把连接串的库名换成 ``db_name``，host/port/账号/口令原样保留。"""
-    return make_url(base_url).set(database=db_name).render_as_string(
-        hide_password=False
+    return (
+        make_url(base_url).set(database=db_name).render_as_string(hide_password=False)
     )
 
 
@@ -292,7 +292,9 @@ async def _cloned_session(
     finally:
         with contextlib.suppress(Exception):
             async with maint.connect() as conn:
-                await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+                await conn.execute(
+                    text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+                )
         await maint.dispose()
 
 
@@ -543,6 +545,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     - fetch_user_http_payload：按 carrier 的 User(+Profile) 产出冻结 dict+sv（等价 AUTH 读端点）。
     - fetch_users_http_batch：单条替身的批量形态（等价 AUTH by-ids 端点，M6.5）。
     - grant_via_seam：升权写替身 → carrier 上 service_authz 原语。
+    - mint_bot_sso_ticket：bot 面板 SSO 铸票替身 → 直接调 auth 域签发原语（等价 AUTH 内部端点）。
     """
     from app.core.config import settings as _cfg
     from auth import user_http as uh
@@ -573,9 +576,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             state["cause"] = "locked"
             return state
         prof = (
-            await carrier.execute(
-                select(Profile).where(Profile.user_id == user_id)
-            )
+            await carrier.execute(select(Profile).where(Profile.user_id == user_id))
         ).scalar_one_or_none()
         state["ok"] = True
         state["account_level"] = u.account_level
@@ -594,9 +595,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         if u is None:
             return None, None
         p = (
-            await carrier.execute(
-                select(Profile).where(Profile.user_id == user_id)
-            )
+            await carrier.execute(select(Profile).where(Profile.user_id == user_id))
         ).scalar_one_or_none()
         snap = UserSnapshot(
             user_id=u.id,
@@ -634,10 +633,20 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             out[uid] = await _fetch(uid)
         return out
 
+    async def _mint_bot_ticket(
+        *, user_id: uuid.UUID, account_level: str = "admin"
+    ) -> dict[str, object]:
+        """bot 面板 SSO 铸票替身：直接走 auth 域签发原语（端点侧按 account_level fail-closed）。"""
+        from auth.bot_sso import mint_ticket
+
+        ticket, expires_in = mint_ticket(sub=str(user_id), account_level=account_level)
+        return {"ticket": ticket, "expires_in": expires_in}
+
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)
     monkeypatch.setattr(uh, "fetch_user_http_payload", _fetch)
     monkeypatch.setattr(uh, "fetch_users_http_batch", _fetch_batch)
     monkeypatch.setattr(uh, "grant_via_seam", _grant)
+    monkeypatch.setattr(uh, "mint_bot_sso_ticket", _mint_bot_ticket)
 
 
 @pytest.fixture

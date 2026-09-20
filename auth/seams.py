@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.err import BizError, CommonErr
 from auth.admin_session import (
     _ADMIN_AUD,
     ACCESS_TOKEN_MINUTES,
@@ -60,6 +61,7 @@ __all__ = [
     "grant_incubation_from_business",
     "hashpwd",
     "log_audit",
+    "mint_bot_sso_ticket",
     "new_auth_session",
     "open_session_pair",
     "reconcile_user_dim_incremental",
@@ -96,3 +98,23 @@ async def open_session_pair() -> Any:
     from auth import user_dim_sync as _uds
 
     return await _uds._session_factory()
+
+
+async def mint_bot_sso_ticket(
+    user_id: Any, account_level: str = "admin"
+) -> dict[str, Any]:
+    """代表一个已裁决的管理员铸一次性 bot 面板 SSO 票据，返回 ``{"ticket","expires_in"}``。
+
+    票据签发原语在 auth 域（私钥唯一持有方），业务进程只能经内部 HTTP 缝取（拆库后 business
+    既无签发私钥也无 auth 真值）。**fail-closed**：缝未配置/不可达/畸形 → 抛
+    ``BizError(UNAVAILABLE)``，绝不返回空票让调用方以为「已免登」。
+
+    惰性取内部实现，保持测试对 ``auth.user_http`` 的 monkeypatch 依然生效。
+    """
+    from auth.user_http import UserHttpUnavailable
+    from auth.user_http import mint_bot_sso_ticket as _mint
+
+    try:
+        return await _mint(user_id=user_id, account_level=account_level)
+    except UserHttpUnavailable as exc:
+        raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from None

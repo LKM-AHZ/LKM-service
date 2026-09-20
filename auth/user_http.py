@@ -297,3 +297,53 @@ async def grant_via_seam(
         raise UserHttpUnavailable(
             f"auth_http grant malformed changed={payload['changed']!r}"
         ) from None
+
+
+# —— bot 面板 SSO 铸票缝（面板并入社区后台）：票据签发原语在 auth 域（私钥只在此）——
+#
+# 社区后台进程（business）不持签发私钥，只能经本 client 把「代表某 admin 铸一张一次性票据」
+# 交给 auth 进程。消费方是 ``app/modules/admin/bot_router`` 的 ``/admin/bot/sso-ticket``，
+# 该端点已被 ``require_admin``（seam-only）裁决过管理员身份，此处再经 auth 独立复核。
+#
+# **fail-closed**：任一端不回 200／畸形 → 抛 ``UserHttpUnavailable``，调用方转 UNAVAILABLE 而
+# 非"静默不发票"（发不出票只是需要手动登录，但必须让运维看见是缝坏了还是配置漏了）。
+
+_BOT_TICKET_FIELDS: tuple[str, ...] = ("ticket", "expires_in")
+
+
+async def mint_bot_sso_ticket(
+    *, user_id: uuid.UUID, account_level: str = "admin"
+) -> dict[str, object]:
+    """经 AUTH internal 端点铸一次性 bot 面板 SSO 票据，返回 ``{"ticket", "expires_in"}``。"""
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/bot-ticket"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    body = {"user_id": str(user_id), "account_level": account_level}
+    try:
+        async with _build_client() as client:
+            resp = await client.post(url, headers=headers, json=body)
+    except httpx.HTTPError as exc:
+        raise UserHttpUnavailable(f"auth_http bot-ticket request failed: {exc}") from None
+
+    if resp.status_code != 200:
+        # 403 理论上不可达（调用方持 seam 裁决过的 admin），若出现说明两进程口径漂移，
+        # 与网络故障同样按"缝不可用"上报，绝不静默降级。
+        raise UserHttpUnavailable(
+            f"auth_http bot-ticket unexpected status {resp.status_code}"
+        )
+
+    payload = _coerce_json(resp)
+    for f in _BOT_TICKET_FIELDS:
+        if f not in payload:
+            raise UserHttpUnavailable(f"auth_http bot-ticket missing field {f}")
+    try:
+        return {
+            "ticket": str(payload["ticket"]),
+            "expires_in": int(payload["expires_in"]),
+        }
+    except (TypeError, ValueError):
+        raise UserHttpUnavailable(
+            f"auth_http bot-ticket malformed payload={payload!r}"
+        ) from None
