@@ -19,7 +19,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from auth.bot_sso import mint_ticket
+from auth.bot_sso import BOT_SSO_ACCOUNT_LEVEL, mint_ticket
 from auth.router_read import _require_internal_token
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
@@ -39,7 +39,7 @@ async def internal_bot_ticket(
 
     非 admin → 403（跨进程边界不信任上游已裁决的断言，此处独立复核）。
     """
-    if body.account_level != "admin":
+    if body.account_level != BOT_SSO_ACCOUNT_LEVEL:
         raise HTTPException(status_code=403, detail="admin required")
     ticket, expires_in = mint_ticket(
         sub=str(body.user_id), account_level=body.account_level

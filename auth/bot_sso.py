@@ -18,34 +18,72 @@ bot 用**公钥**验签后自建面板会话。
 - 不编 ``token_version``/``mfa``：bot 无法查社区 auth 库做版本复核，票据本身已短期且一次性，
   编入反而给出「已复核」的假象。
 
+协议常量（audience/type/issuer/ttl/account_level）是**签发侧唯一副本**，消费侧（LKM-bot 的
+``astrbot/lkm/sso.py``）同名同默认值，两侧用注释互指。跨部署单元无法共享 import，故真正的
+单一来源落在**部署层**：``.env``/``docker-compose.yml`` 的 ``LKM_BOT_SSO_*`` 只写一次默认值，
+经 YAML 锚点同时注入 auth 与 lkmbot 两个服务（两侧读同名变量）。
+
 本模块是 auth 包内部件；app 侧**不得**直接 import，只能经 ``auth.seams.mint_bot_sso_ticket``。
 """
 
 from __future__ import annotations
 
 import datetime
+import os
 import uuid
 
 from auth import jwt_keys
 
-#: bot 面板 SSO 专属 audience（与 lkm:admin / 前台会话隔离）。
-BOT_SSO_AUD = "lkm:bot"
-#: 票据类型，bot 侧显式校验。
-BOT_SSO_TYPE = "bot_sso"
-#: 签发方标识。
-BOT_SSO_ISSUER = "lkm-auth"
+
+def _protocol_value(env_name: str, default: str) -> str:
+    """协议值：同名环境变量可覆盖（未配置/空白 → 代码默认值）。
+
+    模块级求值 = 进程启动时定值（与 settings 同口径）；两侧默认值必须逐字相同，否则票据
+    会被对面拒收。改这里的默认值，必须同步 LKM-bot ``astrbot/lkm/sso.py`` 的同名默认值
+    与 ``.env.example`` 的说明。
+    """
+    return os.environ.get(env_name, "").strip() or default
+
+
+#: bot 面板 SSO 专属 audience（与 lkm:admin / 前台会话隔离）。部署层暴露为
+#: LKM_BOT_SSO_AUDIENCE（见 x-bot-sso-env）：这是票据的**隔离边界**，多面板部署可能要区分。
+BOT_SSO_AUD = _protocol_value("LKM_BOT_SSO_AUDIENCE", "lkm:bot")
+#: 票据类型，bot 侧显式校验。**不暴露**为部署变量：签发/消费两侧是唯一配对，改了没有意义。
+BOT_SSO_TYPE = _protocol_value("LKM_BOT_SSO_TYPE", "bot_sso")
+#: 签发方标识：bot 侧验签时校验 ``iss``（本次补齐的漏洞）。部署层暴露为 LKM_BOT_SSO_ISSUER
+#: ——签发方身份随环境而变的可能性最大（多租户/多套 auth），且必须两侧同值。
+BOT_SSO_ISSUER = _protocol_value("LKM_BOT_SSO_ISSUER", "lkm-auth")
+#: 票据只换**管理员**面板会话，故 account_level 是协议的一部分（bot 侧同样校验）。
+#: **不暴露**为部署变量：它是领域语义（谁能免登），不是可调参数。
+BOT_SSO_ACCOUNT_LEVEL = _protocol_value("LKM_BOT_SSO_ACCOUNT_LEVEL", "admin")
+
+
+def _ttl_seconds(env_name: str, default: int) -> int:
+    """TTL 秒数：环境变量可覆盖，非法值回落到默认（宁可 60s，也不让签发出一个荒谬的有效期）。"""
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 #: 票据有效期（秒）。票据经 iframe URL query 传递，必须短到「来不及被日志/历史二次利用」，
-#: 又要容得下浏览器一次重定向的往返。
-BOT_SSO_TTL_SECONDS = 60
+#: 又要容得下浏览器一次重定向的往返。**不暴露**为部署变量：签发侧单方消费（消费侧由 PyJWT
+#: 按 ``exp`` 自行判定），不存在两侧双写。
+BOT_SSO_TTL_SECONDS = _ttl_seconds("LKM_BOT_SSO_TTL_SECONDS", 60)
 
 
 def mint_ticket(*, sub: str, account_level: str) -> tuple[str, int]:
     """铸一张 bot 面板 SSO 票据，返回 ``(ticket, expires_in_seconds)``。
 
-    ``account_level`` 不是 ``admin`` 时直接抛 ``ValueError``（fail-closed）：本票据唯一用途是
-    给 bot 面板换管理员会话，非管理员不该拿到票；调用方（internal 端点）另有一层 403。
+    ``account_level`` 不是管理员（:data:`BOT_SSO_ACCOUNT_LEVEL`）时直接抛 ``ValueError``
+    （fail-closed）：本票据唯一用途是给 bot 面板换管理员会话，非管理员不该拿到票；调用方
+    （internal 端点）另有一层 403。
     """
-    if str(account_level) != "admin":
+    if str(account_level) != BOT_SSO_ACCOUNT_LEVEL:
         raise ValueError("bot SSO ticket requires account_level=admin")
     subject = str(sub).strip()
     if not subject:
@@ -56,7 +94,7 @@ def mint_ticket(*, sub: str, account_level: str) -> tuple[str, int]:
         "iss": BOT_SSO_ISSUER,
         "aud": BOT_SSO_AUD,
         "sub": subject,
-        "account_level": "admin",
+        "account_level": BOT_SSO_ACCOUNT_LEVEL,
         "type": BOT_SSO_TYPE,
         # 一次性消费标识：bot 侧落 TTL 表，重复出现即拒（防重放）。
         "jti": uuid.uuid4().hex,

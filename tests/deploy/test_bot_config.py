@@ -49,8 +49,7 @@ def _compose_raw() -> str:
     return _COMPOSE.read_text(encoding="utf-8")
 
 
-@lru_cache(maxsize=1)
-def _render() -> dict:
+def _render_once(extra_env: dict | None = None) -> dict:
     """跑一次 render.sh（伪造证书）取**渲染产物**——路由实值只在产物上可见。"""
     import tempfile
 
@@ -67,20 +66,25 @@ def _render() -> dict:
         )
     out_dir = tmp / "out"
     out_dir.mkdir(parents=True)
-    subprocess.run(
-        ["sh", str(_APISIX_DIR / "render.sh")],
-        check=True,
-        env={
-            **os.environ,
-            "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
-            "APISIX_OUT": str(out_dir / "apisix.yaml"),
-            "APISIX_SRC_CONFIG": str(_APISIX_DIR / "config.yaml"),
-            "APISIX_OUT_CONFIG": str(out_dir / "config.yaml"),
-            "APISIX_CERT_ROOT": str(cert_root),
-            "APISIX_RENDER_ONCE": "1",
-        },
-    )
+    env = {
+        **os.environ,
+        "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
+        "APISIX_OUT": str(out_dir / "apisix.yaml"),
+        "APISIX_SRC_CONFIG": str(_APISIX_DIR / "config.yaml"),
+        "APISIX_OUT_CONFIG": str(out_dir / "config.yaml"),
+        "APISIX_CERT_ROOT": str(cert_root),
+        "APISIX_RENDER_ONCE": "1",
+    }
+    if extra_env:
+        env.update(extra_env)
+    subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], check=True, env=env)
     return yaml.safe_load((out_dir / "apisix.yaml").read_text())
+
+
+@lru_cache(maxsize=1)
+def _render() -> dict:
+    """默认口径（compose：无 APISIX_BOT_BASE_PATH 覆盖）渲染一次。"""
+    return _render_once()
 
 
 def _routes() -> dict[str, dict]:
@@ -317,18 +321,51 @@ def should_expose_bot_limit_but_not_domain_to_k8s_gateway() -> None:
 
 
 def should_pin_dashboard_base_path_to_subpath() -> None:
-    """面板必须知道自己挂在 /bot 下：否则同域 cookie 会发给社区站全部路径，302 也会跳错地方。"""
-    env = _services()["lkmbot"]["environment"]
-    assert env["ASTRBOT_DASHBOARD_BASE_PATH"] == _BOT_PREFIX
-    # 前端构建期 base 必须同一值（镜像内构建 dist，资源引用由它决定）
-    assert _services()["lkmbot"]["build"]["args"]["VITE_BASE_PATH"] == f"{_BOT_PREFIX}/"
-    k8s_env = {
-        item["name"]: item.get("value")
-        for item in next(
-            d for d in _k8s_lkmbot() if d["kind"] == "Deployment"
-        )["spec"]["template"]["spec"]["containers"][0]["env"]
+    """面板必须知道自己挂在子路径下：否则同域 cookie 会发给社区站全部路径，302 也会跳错地方。
+
+    该前缀是**单一来源** `LKM_BOT_BASE_PATH`：compose 三处（构建期 VITE / 运行期 dashboard base /
+    网关渲染）与 k8s 两处（网关部署、lkmbot 部署）都从它派生，故这里锁的是「引用同一来源」，
+    而不是任何一处硬编码的 `/bot`。
+    """
+    prefix = f"${{LKM_BOT_BASE_PATH:-{_BOT_PREFIX}}}"
+    svc = _services()["lkmbot"]
+    # 运行期 base：无尾斜杠形态
+    assert svc["environment"]["ASTRBOT_DASHBOARD_BASE_PATH"] == prefix
+    # 前端构建期 base：必须同一值（镜像内构建 dist），且**带尾斜杠**（vite base 语义）
+    assert svc["build"]["args"]["VITE_BASE_PATH"] == f"{prefix}/"
+    # 网关渲染侧同一来源（路由 uri 与剥前缀正则由它展开）
+    assert _services()["apisix-render"]["environment"]["APISIX_BOT_BASE_PATH"] == prefix
+    # 模板里只放占位：前缀不得硬编码进路由
+    raw = (_APISIX_DIR / "apisix.yaml").read_text(encoding="utf-8")
+    assert "__BOT_BASE_PATH__" in raw
+    assert f"uri: {_BOT_PREFIX}/api/v1/auth/login*" not in raw
+    assert f'uri: {_BOT_PREFIX}/*' not in raw
+
+    # k8s：面板读的是 lkm-gateway-config 里**网关路由同一个键**（不是各自硬编码的副本）
+    container = next(d for d in _k8s_lkmbot() if d["kind"] == "Deployment")["spec"][
+        "template"
+    ]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    assert env["ASTRBOT_DASHBOARD_BASE_PATH"]["valueFrom"]["configMapKeyRef"] == {
+        "name": "lkm-gateway-config",
+        "key": "LKM_BOT_BASE_PATH",
     }
-    assert k8s_env["ASTRBOT_DASHBOARD_BASE_PATH"] == _BOT_PREFIX
+    gw_config = (_K8S_BASE / "gateway" / "config.yaml").read_text(encoding="utf-8")
+    assert "LKM_BOT_BASE_PATH:" in gw_config
+
+
+def should_follow_bot_base_path_variable() -> None:
+    """改前缀时 bot 三条路由整体跟随：uri 与剥前缀正则同源，且不波及其余路由。"""
+    routes = {r["id"]: r for r in _render_once({"APISIX_BOT_BASE_PATH": "/bot2"})["routes"]}
+    assert routes["bot-panel"]["uri"] == "/bot2/*"
+    assert routes["bot-panel-root"]["uri"] == "/bot2"
+    assert routes["bot-auth-login"]["uri"] == "/bot2/api/v1/auth/login*"
+    for rid in ("bot-panel", "bot-auth-login"):
+        assert routes[rid]["plugins"]["proxy-rewrite"]["regex_uri"] == [
+            "^/bot2/(.*)",
+            "/$1",
+        ]
+    assert routes["api-prefix"]["uri"] == "/api/*"
 
 
 def should_mount_sso_public_key_into_bot() -> None:
@@ -357,6 +394,63 @@ def should_mount_sso_public_key_into_bot() -> None:
         {"key": "LKM_JWT_PUBLIC_KEY", "path": "LKM_JWT_PUBLIC_KEY"}
     ]
     assert jwt_volume["secret"]["optional"] is True
+
+
+def should_wire_bot_sso_protocol_values_once() -> None:
+    """SSO 协议值单源：compose 锚点写一次、两侧服务同名变量；k8s 一张表、两侧引用同键。
+
+    跨仓无法共享 import，故「同一来源」只能靠部署层实现 + 本断言锁：默认值在锚点里**只出现
+    一次**（服务处的 ``<<`` 合并键不带默认值），且与两侧代码默认值逐字一致——后者从
+    LKM-bot 源码里直接读字面量比对（跨仓且跨 venv，import 不了）。
+    """
+    from auth.bot_sso import (
+        BOT_SSO_ACCOUNT_LEVEL,
+        BOT_SSO_AUD,
+        BOT_SSO_ISSUER,
+        BOT_SSO_TTL_SECONDS,
+        BOT_SSO_TYPE,
+    )
+
+    compose = _compose_raw()
+    # 默认值各只写一次：在 x-bot-sso-env 锚点里
+    assert compose.count("x-bot-sso-env: &bot-sso-env") == 1
+    assert compose.count(f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}") == 1
+    assert compose.count(f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}") == 1
+    # 签发侧 auth 与消费侧 lkmbot 经 YAML 合并键拿到**同一份**（yaml.safe_load 会展开 <<）
+    for name in ("auth", "lkmbot"):
+        env = _services()[name]["environment"]
+        assert env["LKM_BOT_SSO_AUDIENCE"] == f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}", name
+        assert env["LKM_BOT_SSO_ISSUER"] == f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}", name
+    # backend 不消费协议值（只经 seam 转发票据）：不给它灌变量
+    assert "LKM_BOT_SSO_AUDIENCE" not in _services()["backend"]["environment"]
+
+    # k8s：一张 lkm-config-botsso 表 + auth envFrom + lkmbot 两个 keyRef（同一张表）
+    app_cfg = (_K8S_BASE / "app-config.yaml").read_text(encoding="utf-8")
+    assert "name: lkm-config-botsso" in app_cfg
+    assert f"LKM_BOT_SSO_AUDIENCE: {BOT_SSO_AUD}" in app_cfg
+    assert f"LKM_BOT_SSO_ISSUER: {BOT_SSO_ISSUER}" in app_cfg
+    # 不得塞进被 backend/worker envFrom 的公共表（本文件顶部「谁真的用」原则）
+    assert "LKM_BOT_SSO" not in app_cfg.split("---", 1)[0]
+    assert "lkm-config-botsso" in (_K8S_BASE / "app" / "auth.yaml").read_text(
+        encoding="utf-8"
+    )
+    lkmbot_yaml = (_K8S_BASE / "app" / "lkmbot.yaml").read_text(encoding="utf-8")
+    assert lkmbot_yaml.count("name: lkm-config-botsso") == 2
+    assert "configMapKeyRef" in lkmbot_yaml
+
+    # 消费侧（LKM-bot）代码默认值必须与签发侧逐字相同（只读源码比对，不 import）
+    sso_py = (_ROOT / "LKM-bot" / "astrbot" / "lkm" / "sso.py").read_text(encoding="utf-8")
+    for env_name, default in (
+        ("LKM_BOT_SSO_AUDIENCE", BOT_SSO_AUD),
+        ("LKM_BOT_SSO_TYPE", BOT_SSO_TYPE),
+        ("LKM_BOT_SSO_ISSUER", BOT_SSO_ISSUER),
+        ("LKM_BOT_SSO_ACCOUNT_LEVEL", BOT_SSO_ACCOUNT_LEVEL),
+    ):
+        assert f'_protocol_value("{env_name}", "{default}")' in sso_py, env_name
+    # 消费侧确实把 issuer 校验用上了（本次补齐的漏洞：此前只验 aud/type）
+    assert "issuer=BOT_SSO_ISSUER" in sso_py
+    # TTL 仅签发侧消费，不做部署变量
+    assert str(BOT_SSO_TTL_SECONDS) == "60"
 
 
 def should_ship_bundled_dashboard_dist_in_image() -> None:

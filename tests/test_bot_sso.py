@@ -10,6 +10,7 @@
   seam 故障（内部读缝不可用）→ 503，绝不返回空票让前端以为「已免登」。
 """
 
+import importlib
 import uuid
 
 import jwt
@@ -17,31 +18,48 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import auth.bot_sso as bot_sso
 import auth.router_bot_sso  # noqa: F401  # 确保 ROUTERS 已装好 bot-ticket 端点
 from app.core.config import settings
 from app.core.secrets import reveal
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from auth import jwt_keys
-from auth.bot_sso import BOT_SSO_AUD, BOT_SSO_TTL_SECONDS, mint_ticket
+from auth.bot_sso import (
+    BOT_SSO_ACCOUNT_LEVEL,
+    BOT_SSO_AUD,
+    BOT_SSO_ISSUER,
+    BOT_SSO_TTL_SECONDS,
+    BOT_SSO_TYPE,
+    mint_ticket,
+)
 from auth.models import User
 from tests.conftest import DB, Client, auth_user_uid
 
 _INTERNAL_PATH = "/api/v1/auth/internal/bot-ticket"
 _ADMIN_PATH = "/api/v1/admin/bot/sso-ticket"
 
+#: 协议值的环境变量名（与 LKM-bot 消费侧、compose 的 x-bot-sso-env 锚点同名）。
+_SSO_ENV_VARS = (
+    "LKM_BOT_SSO_AUDIENCE",
+    "LKM_BOT_SSO_TYPE",
+    "LKM_BOT_SSO_ISSUER",
+    "LKM_BOT_SSO_ACCOUNT_LEVEL",
+    "LKM_BOT_SSO_TTL_SECONDS",
+)
+
 
 def _internal_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _decode_ticket(ticket: str) -> dict[str, object]:
+def _decode_ticket(ticket: str, *, audience: str = BOT_SSO_AUD) -> dict[str, object]:
     """按签发算法验签（生产 RS256，本地/测试 HS256），校验 aud 后返回 payload。"""
     alg = jwt.get_unverified_header(ticket)["alg"]
     if alg == jwt_keys.RS256:
         key: object = jwt_keys.public_key()
     else:
         key = reveal(settings.jwt_secret)
-    return jwt.decode(ticket, key, algorithms=[alg], audience=BOT_SSO_AUD)  # type: ignore[arg-type]
+    return jwt.decode(ticket, key, algorithms=[alg], audience=audience)  # type: ignore[arg-type]
 
 
 async def _mk_admin(auth_db: AsyncSession, uname: str) -> User:
@@ -65,17 +83,86 @@ def _reset_internal_token():
 
 
 async def test_mint_ticket_claims_and_ttl() -> None:
-    """票据 claims 齐备：aud/type/account_level/jti/sub，且 exp-iat == TTL。"""
+    """票据 claims 齐备：iss/aud/type/account_level/jti/sub，且 exp-iat == TTL。
+
+    claims 取自模块常量（不是字面量）：常量若被误改，这里与消费侧断言会一起红。
+    """
     uid = uuid.uuid4()
-    ticket, expires_in = mint_ticket(sub=str(uid), account_level="admin")
+    ticket, expires_in = mint_ticket(sub=str(uid), account_level=BOT_SSO_ACCOUNT_LEVEL)
     assert expires_in == BOT_SSO_TTL_SECONDS
     payload = _decode_ticket(ticket)
     assert payload["aud"] == BOT_SSO_AUD
-    assert payload["type"] == "bot_sso"
-    assert payload["account_level"] == "admin"
+    assert payload["iss"] == BOT_SSO_ISSUER
+    assert payload["type"] == BOT_SSO_TYPE
+    assert payload["account_level"] == BOT_SSO_ACCOUNT_LEVEL
     assert payload["sub"] == str(uid)
     assert payload["jti"]
     assert int(payload["exp"]) - int(payload["iat"]) == BOT_SSO_TTL_SECONDS
+
+
+# ─────────────────────── 协议常量与环境变量覆盖 ───────────────────────
+
+
+def test_protocol_defaults_are_pinned() -> None:
+    """默认值即两侧（auth 签发 / bot 消费）与部署层（compose 锚点、.env.example）共用的值。
+
+    跨仓/跨部署单元无法共享 import，故默认值只能靠**双方断言**锁死；改这里必须同步
+    LKM-bot ``astrbot/lkm/sso.py`` 与 ``.env.example``（后者另有测试锁部署层）。
+    """
+    assert BOT_SSO_AUD == "lkm:bot"
+    assert BOT_SSO_TYPE == "bot_sso"
+    assert BOT_SSO_ISSUER == "lkm-auth"
+    assert BOT_SSO_ACCOUNT_LEVEL == "admin"
+    assert BOT_SSO_TTL_SECONDS == 60
+
+
+def test_protocol_values_follow_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """五个协议值都可由同名环境变量覆盖，且签发票据随之变化（部署层注入的就是这组名字）。"""
+    overrides = {
+        "LKM_BOT_SSO_AUDIENCE": "lkm:bot-x",
+        "LKM_BOT_SSO_TYPE": "bot_sso_x",
+        "LKM_BOT_SSO_ISSUER": "auth-x",
+        "LKM_BOT_SSO_ACCOUNT_LEVEL": "superadmin",
+        "LKM_BOT_SSO_TTL_SECONDS": "30",
+    }
+    for name, value in overrides.items():
+        monkeypatch.setenv(name, value)
+    reloaded = importlib.reload(bot_sso)
+    try:
+        assert reloaded.BOT_SSO_AUD == "lkm:bot-x"
+        assert reloaded.BOT_SSO_TYPE == "bot_sso_x"
+        assert reloaded.BOT_SSO_ISSUER == "auth-x"
+        assert reloaded.BOT_SSO_ACCOUNT_LEVEL == "superadmin"
+        assert reloaded.BOT_SSO_TTL_SECONDS == 30
+
+        # 覆盖后的校验路径同样成立：非覆盖值被拒、覆盖值签发成功
+        with pytest.raises(ValueError):
+            reloaded.mint_ticket(sub=str(uuid.uuid4()), account_level="admin")
+        ticket, ttl = reloaded.mint_ticket(
+            sub=str(uuid.uuid4()), account_level="superadmin"
+        )
+        assert ttl == 30
+        payload = _decode_ticket(ticket, audience="lkm:bot-x")
+        assert payload["iss"] == "auth-x"
+        assert payload["type"] == "bot_sso_x"
+        assert payload["account_level"] == "superadmin"
+    finally:
+        for name in _SSO_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+        importlib.reload(bot_sso)
+
+
+def test_ttl_env_invalid_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TTL 配了非数字/非正值 → 回落默认 60s（宁可默认，也不签出荒谬有效期）。"""
+    for raw in ("abc", "0", "-5"):
+        monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", raw)
+        try:
+            assert importlib.reload(bot_sso).BOT_SSO_TTL_SECONDS == 60, raw
+        finally:
+            monkeypatch.delenv("LKM_BOT_SSO_TTL_SECONDS", raising=False)
+            importlib.reload(bot_sso)
 
 
 async def test_mint_ticket_rejects_non_admin() -> None:
@@ -163,8 +250,8 @@ async def test_admin_endpoint_issues_ticket_for_admin(
     assert body["data"]["expires_in"] == BOT_SSO_TTL_SECONDS
     payload = _decode_ticket(body["data"]["ticket"])
     assert payload["sub"] == str(admin.id)
-    assert payload["type"] == "bot_sso"
-    assert payload["account_level"] == "admin"
+    assert payload["type"] == BOT_SSO_TYPE
+    assert payload["account_level"] == BOT_SSO_ACCOUNT_LEVEL
 
 
 async def test_admin_endpoint_reports_unavailable_on_seam_failure(

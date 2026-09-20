@@ -36,6 +36,8 @@ _PLACEHOLDERS = {
     "__MAX_BODY_SIZE__",
     # bot 面板请求体上限：独立来源（bot 单文件 512MB vs 社群站 100MB），不可复用上面那个
     "__BOT_MAX_BODY_SIZE__",
+    # bot 面板子路径前缀（默认 /bot）：路由 uri 与剥前缀正则的匹配串，来源 LKM_BOT_BASE_PATH
+    "__BOT_BASE_PATH__",
     # upstream 服务名后缀：compose 空（Docker 内嵌 DNS 解析短名）/ k8s `.lkm.svc.cluster.local`
     "__UPSTREAM_SUFFIX__",
     # 上游 DNS：compose 127.0.0.11 / k8s CoreDNS ClusterIP
