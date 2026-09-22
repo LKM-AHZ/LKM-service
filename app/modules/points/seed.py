@@ -259,7 +259,7 @@ async def seed_achievements(db: AsyncSession) -> int:
         )
         if existing is not None:
             continue
-        db.add(Achievement(**data, reward_points=0))
+        db.add(Achievement(**data))
         count += 1
     return count
 

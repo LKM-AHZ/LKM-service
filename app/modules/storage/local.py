@@ -68,28 +68,36 @@ class LocalStorage:
         self, stream: Any, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile:
         dest = self._resolve(bucket_key)
-        # 落盘前先建好 root：全新部署/本地首跑时 store 目录不存在，NamedTemporaryFile
-        # 会直接 FileNotFoundError，导致每次上传都以 STORE_ERROR 失败
-        await asyncio.to_thread(self.root_dir.mkdir, parents=True, exist_ok=True)
-        temp = await asyncio.to_thread(_new_temp_file, self.root_dir)
+        # 临时文件在 try 之外就可能创建失败，故先置空、回收时判空
+        temp: Path | None = None
         try:
+            # 落盘前先建好 root：全新部署/本地首跑时 store 目录不存在，NamedTemporaryFile
+            # 会直接 FileNotFoundError，导致每次上传都以 STORE_ERROR 失败。
+            # 这一步也必须在 try 内：root 的父路径被普通文件占住时 mkdir 抛的是
+            # NotADirectoryError（OSError 子类），漏到外面会变成 500 而不是业务错误，
+            # 上层也就无法据此回滚已落库的记录。
+            await asyncio.to_thread(self.root_dir.mkdir, parents=True, exist_ok=True)
+            temp = await asyncio.to_thread(_new_temp_file, self.root_dir)
             await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
             size, _hash = await asyncio.to_thread(
                 _stream_to_disk_hash, stream, temp, max_bytes
             )
             await asyncio.to_thread(temp.replace, dest)
         except BizError:
-            await asyncio.to_thread(_safe_unlink, temp)
+            if temp is not None:
+                await asyncio.to_thread(_safe_unlink, temp)
             raise
         except OSError as exc:
-            await asyncio.to_thread(_safe_unlink, temp)
+            if temp is not None:
+                await asyncio.to_thread(_safe_unlink, temp)
             raise BizError(
                 StorageErr.STORE_ERROR, detail=f"Failed to store file: {exc}"
             ) from exc
         except BaseException:
             # 非 BizError/OSError 的异常（stream.read 抛的自定义异常、请求被取消等）
             # 同样要回收临时文件，否则 .tmp 会一直留在 store 根目录
-            await asyncio.to_thread(_safe_unlink, temp)
+            if temp is not None:
+                await asyncio.to_thread(_safe_unlink, temp)
             raise
         return {
             "size": size,

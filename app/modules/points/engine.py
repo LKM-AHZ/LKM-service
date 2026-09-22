@@ -351,7 +351,13 @@ async def _advance_tasks(
         # 打卡特判：requirement_count==1 的 checkin 任务直接置 progress=1（幂等）
         if t.requirement_count == 1 and event == "checkin":
             up.progress = 1
-        if not up.completed and up.progress >= t.requirement_count:
+        # requirement_count<=0 属非法任务定义：不设此守卫时 min(progress+1, 0)=0 会被下方
+        # `0 >= 0` 判为达标，凭空发放一次奖励分
+        if (
+            t.requirement_count > 0
+            and not up.completed
+            and up.progress >= t.requirement_count
+        ):
             up.completed = True
             # 达标额外发分（rewarded 防重复）
             if not up.rewarded:

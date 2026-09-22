@@ -246,6 +246,9 @@ async def toggle_article_like(
             # 仅新增点赞路径入队（取消点赞不重复计分）
             await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
         liked = True
+    # 计数列已变，而详情/列表缓存里内嵌了 likes/comments：不失效会让详情页在 TTL（300s）
+    # 内一直显示旧点赞数（点赞瞬间数字跳回去）。两条路径（点赞/取消）都要失效。
+    await _invalidate_article_cache(db, slug)
     like_count = await repo.count_for(article.id)
     return {"liked": liked, "like_count": like_count}
 
@@ -274,6 +277,8 @@ async def create_article_comment(
     )
     await ArticleCommentRepository(db).add(comment)
     await _bump_article_count(db, article.id, "comments", 1)
+    # 同 toggle_article_like：详情/列表缓存内嵌 comments 计数，写后必须失效
+    await _invalidate_article_cache(db, slug)
     return comment
 
 
@@ -322,6 +327,11 @@ async def delete_article_comment(
     # **实际消失的行数**递减——旧实现恒 -1，与级联删除的行数不一致（既有偏差，顺带修正）。
     removed = await ArticleCommentRepository(db).soft_delete_subtree(comment.id)
     await _bump_article_count(db, comment.article_id, "comments", -removed)
+    # 详情缓存按 slug 建键，而本函数只拿到 comment.article_id，故需回查 slug 才能失效
+    # （article 行理论上必在；硬删后取不到就跳过，缓存自然随 TTL 过期）
+    article = await ArticleRepository(db).get(comment.article_id)
+    if article is not None:
+        await _invalidate_article_cache(db, article.slug)
     return author_id
 
 

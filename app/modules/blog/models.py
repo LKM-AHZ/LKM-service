@@ -47,6 +47,8 @@ BLOG_TABLE_PLAN = {
         "parent_id",
         "created_at",
         "updated_at",
+        # BlogComment 带 SoftDeleteMixin：漏掉 deleted_at 会让这份表结构说明与实际模型不符
+        "deleted_at",
     ],
     "blog_content": [
         "id",

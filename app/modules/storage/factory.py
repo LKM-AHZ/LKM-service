@@ -17,6 +17,9 @@ def get_storage() -> StorageBackend:
     取值先归一（去空白 + 小写），且**未知后端显式报错**：原先「不等于 s3 就当 local」会把
     大小写笔误（S3）、多余空白或随便写的 minio 静默降级为本地文件系统——上传落到了容器本地
     盘而无人察觉（settings.storage_backend 是无白名单校验的裸 str）。
+
+    缓存是刻意的（进程内复用后端与已 reveal 的凭据），代价是运行期改 settings
+    （含测试 monkeypatch）不会生效：需要重建时调用 ``get_storage.cache_clear()``。
     """
     backend = (settings.storage_backend or "").strip().lower()
     if backend == "local":

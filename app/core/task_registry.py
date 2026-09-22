@@ -52,8 +52,13 @@ def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> N
 
 
 def cron_jobs() -> list[dict[str, Any]]:
-    """当前全部已登记的 cron 任务（scheduler 聚合数据源）。"""
-    return list(_CRON_JOBS)
+    """当前全部已登记的 cron 任务（scheduler 聚合数据源）。
+
+    逐条返回**副本**（同 :func:`handlers_for` 的拷贝语义）：调用方若就地对 job 做归一化/
+    加字段（如把 cron 表达式换成 Trigger 后写回 dict），改到的是注册表的单一事实源，
+    后续 build_scheduler 会拿到被污染的声明。
+    """
+    return [dict(job) for job in _CRON_JOBS]
 
 
 def import_task_modules() -> None:

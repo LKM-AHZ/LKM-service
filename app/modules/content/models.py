@@ -107,6 +107,17 @@ class Column(UUIDPrimaryKeyMixin, Base):
 
 
 class ColumnPost(UUIDPrimaryKeyMixin, Base):
+    """专栏原生连载（**尚未收敛进 content_items**）。
+
+    ⚠️ 收敛现状：``ContentType.COLUMN_POST`` 与 ``content_items.column_id`` 已存在，但
+    ``columns`` 域的「原生发帖」仍写本表（``columns/router.py`` POST /{column_id}/posts →
+    ``service.create_column_post``，见 service.py 内注释「本表不经统一 content_items」），
+    而 ``content/service.create_item`` 又能写 ``content_items`` 里 content_type=column_post
+    的行。**同一篇专栏连载可能两表各存一份、id 不同**，读侧（feed 读 ColumnPost vs 时间线
+    读 ContentItem）会看到不一致。以本表为专栏连载的权威存储；content_items 侧那份是投影，
+    收敛（二选一 + 回填/对账）尚未完成，勿假定两者等价。
+    """
+
     __tablename__: str = "column_posts"
 
     column_id: Mapped[uuid.UUID] = mapped_column(

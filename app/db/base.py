@@ -69,10 +69,17 @@ class UUIDPrimaryKeyMixin:
     """UUID 主键混入（时间有序）。
 
     主键为 PG 原生 ``uuid`` 类型，默认值由 ``uuid_generate_v7()`` 生成（RFC 9562
-    uuid7：48 位毫秒时间戳 + 12 位亚毫秒，**跨进程与同毫秒内均单调递增**）——故既有
-    ``order_by(id)`` 的「按时间先后」语义保持不变。
+    uuid7：48 位毫秒时间戳 + 12 位亚毫秒，取自 ``clock_timestamp()`` 微秒值的低位，
+    其余 64 位为 ``gen_random_uuid()`` 的随机位）——故既有 ``order_by(id)`` 仍**近似**
+    「按时间先后」。但这不是严格全序，边界有两处：
 
-    两点必须注意：
+    1. **同一微秒内**生成的多行（多行 INSERT、高负载）只差随机位，先后由 DB 决定；
+    2. **跨主机**依赖各机时钟同步，NTP 回拨/偏移会直接打乱顺序。
+
+    故 ``order_by(id)`` 的排序粒度到微秒级（非「任意时刻都严格递增」）；需要严格全序时
+    用 ``created_at`` 或序列列，不要拿 ``id`` 做亚微秒粒度的 keyset 分页游标。
+
+    建表侧另两点必须注意：
 
     1. 函数由 ``init_db`` 建在 **public** schema（``deploy/initdb/`` 同样兜底），故
        ``server_default`` 必须**显式限定 schema**：测试的 schema-per-test 会把

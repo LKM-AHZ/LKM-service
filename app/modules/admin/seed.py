@@ -25,7 +25,7 @@ SEED_REPORTS: list[dict[str, str]] = [
     },
     {
         "type": "comment",
-        "target_id": "post-88",
+        "target_id": "comment-88",
         "target_title": "帖子下的恶意评论",
         "reporter_name": "七月花",
         "reason": "评论包含人身攻击内容。",

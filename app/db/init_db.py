@@ -289,9 +289,7 @@ async def _seed_base_data() -> None:
         await db.close()
     # n>0 仅首启/新增权限时发生；日志级即可，避免每个 worker 启动都打印噪音
     if n:
-        import logging
-
-        logging.getLogger("lkm.init_db").info("seed_rbac inserted %d rows", n)
+        logger.info("seed_rbac inserted %d rows", n)
 
 
 async def init_db() -> None:

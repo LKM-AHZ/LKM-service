@@ -101,7 +101,10 @@ async def _sub_loop() -> None:
 async def stop() -> None:
     """收尾：取消订阅 task（幂等）。须在 redis 客户端关闭前调用。"""
     global _sub_task
-    task, _sub_task = _sub_task, None
+    # 取 task 与置空必须在 start() 的同一把锁内完成：否则 start() 若插在「读」与「cancel」
+    # 之间新建了 task，stop 取消的是旧 task，新订阅者无人取消（收尾后被留在运行中）
+    async with _start_lock:
+        task, _sub_task = _sub_task, None
     if task is not None and not task.done():
         task.cancel()
         with suppress(asyncio.CancelledError):

@@ -22,9 +22,6 @@ from app.db.session import new_session
 
 logger = logging.getLogger("lkm.worker")
 
-# 单任务执行上限（秒）：与 core.messaging 的线程桥超时一致
-JOB_TIMEOUT_S = messaging.JOB_TIMEOUT_S
-
 # ---- 订阅名常量（部署编排与测试引用；与 core.messaging.SUBSCRIPTIONS 对齐）----
 SEND_SUBSCRIPTION = messaging.SUB_SEND.name
 NOTIFY_SUBSCRIPTION = messaging.SUB_NOTIFY.name

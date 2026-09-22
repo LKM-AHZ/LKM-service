@@ -15,9 +15,13 @@ class AdminLoginReq(BaseModel):
 
 
 class AdminVerify2FARequest(BaseModel):
-    """后台危险操作 step-up：提交的 6 位 TOTP 码。"""
+    """后台危险操作 step-up：提交的 6 位 TOTP 码。
 
-    code: str = Field(..., min_length=6, max_length=6)
+    仅限长度的校验会放过 "abcdef" 这类 6 位非数字串，错误只能在下游校验里以「验证码不对」
+    的含糊形态暴露；用 pattern 把「必须 6 位数字」的契约在边界上写死。
+    """
+
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class AdminUserOut(BaseModel):

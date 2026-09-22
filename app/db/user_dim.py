@@ -23,7 +23,7 @@ db/ 基座的这些已确立落位收敛（auth 拆包后本表仍留在业务�
 约束（verbatim）：
 - 这是**全新的表**；绝不动 ``users`` / ``profiles`` / 任何在线缝；无 drop/alter。
 - 纯增量：``model_registry.ensure_all_models``（dev create_all）经本文件 import 即建出此表；
-  Alembic 链保持单头线性（revision ``f1a2e3d4c5b6a7f8``，down = ``a3f5b6c7d8e9afae``）。
+  Alembic 链保持单头线性（user_dim 建表已并入 UUID baseline revision ``72a6bdf65538``）。
 - Mapped typed（对齐仓库 SQLAlchemy 2.0 风格）；时间列统一 ``UTCDateTime``。
 - nickname/role 来自 profiles（nullable，join 左缺失时为空），其余来自 users。
 - ``is_banned`` 与在线缝 ``auth.snapshot._to_snap`` 语义一致：

@@ -14,8 +14,10 @@
   ``app/modules/<domain>/repository.py`` 的子类里。
 
 与 :mod:`app.db.repo` 的分工：那三个模块级函数（``get_or_raise`` / ``consume_once`` /
-``isolated_update``）**原样保留**，各有独立语义（router 直接用、事务原语、savepoint），
-本基类**不提供同名方法**，避免出现两套签名。
+``isolated_update``）**原样保留**，各有独立语义（router 直接用、事务原语、savepoint）。
+``consume_once`` / ``isolated_update`` 本基类不提供同名方法，避免出现两套签名；``get_or_raise``
+两边都有但签名不同、语义互补——模块级按**任意条件**查（条件须最多命中一行，见其 docstring），
+本基类 :meth:`AsyncRepository.get_or_raise` 按**主键**查并带软删过滤，调用时勿混淆两者。
 """
 
 from __future__ import annotations

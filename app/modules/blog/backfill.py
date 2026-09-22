@@ -54,7 +54,8 @@ async def backfill_series_from_git(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
     # git_svc.* 是同步 subprocess 调用（单条最长 30s），必须 to_thread 放到线程池，
-    # 避免在事件循环里同步阻塞；且三条并发取 git 内容互不依赖，可 gather 并行。
+    # 避免在事件循环里同步阻塞。注意：revparse → diff → read_file 存在先后依赖，
+    # 这里刻意串行；真正可并行的是下面循环内各 path 的 read_file（如需再优化可 gather）。
     new_sha = await asyncio.to_thread(git_svc.revparse_or_none, repo_name)
     if not new_sha:
         return BackfillResult()
@@ -64,6 +65,23 @@ async def backfill_series_from_git(
         git_svc.diff_tree_names, repo_name, old_sha, new_sha
     )
     result = BackfillResult(paths=changed)
+
+    # 一次性把该 series 下涉及的 path 行取回：循环里逐个 select 是 N+1 往返
+    rows_by_path: dict[str, BlogContent] = {
+        r.path: r
+        for r in (
+            (
+                await db.execute(
+                    select(BlogContent).where(
+                        BlogContent.series_id == series_id,
+                        BlogContent.path.in_(changed),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    }
 
     for path in changed:
         try:
@@ -77,18 +95,7 @@ async def backfill_series_from_git(
             continue
         sha = _sha3(content)
 
-        row = (
-            (
-                await db.execute(
-                    select(BlogContent).where(
-                        BlogContent.series_id == series_id,
-                        BlogContent.path == path,
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
+        row = rows_by_path.get(path)
 
         if row is None:
             db.add(

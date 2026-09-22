@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -50,12 +51,18 @@ _DEFAULT_WINDOW = _resolve_default_window()
 
 def _flow_span(traceparent: str) -> Any:
     """把 flow 执行挂到触发方 trace（跨进程续链，fail-open）。"""
-    from app.core.tracing import extract_context, tracer
+    # docstring 承诺 fail-open：埋点问题绝不能阻断导出。tracing 依赖初始化失败、
+    # traceparent 非法导致 span 创建抛错时，降级为无 span 继续跑
+    try:
+        from app.core.tracing import extract_context, tracer
 
-    ctx = extract_context({"traceparent": traceparent}) if traceparent else None
-    return tracer("lkm.flows").start_as_current_span(
-        "prefect.analytics_export", context=ctx
-    )
+        ctx = extract_context({"traceparent": traceparent}) if traceparent else None
+        return tracer("lkm.flows").start_as_current_span(
+            "prefect.analytics_export", context=ctx
+        )
+    except Exception:
+        logger.warning("tracing 初始化失败，降级为无 span（fail-open）", exc_info=True)
+        return contextlib.nullcontext()
 
 
 async def _export_failures(*, window: int) -> int:

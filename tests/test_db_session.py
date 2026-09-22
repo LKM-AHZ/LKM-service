@@ -93,3 +93,47 @@ class TestReadSession:
             pass  # 仅走完整生命周期：进入 + 退出
 
         assert calls == [], "读会话退出不应触发 commit"
+
+
+class TestLazySingletonNoSelfDeadlock:
+    """冷启动下 `_get_async_session_local()` 不得自死锁。
+
+    回归点：它曾在**持有 `_engine_lock` 时**调用 `get_async_engine()` 来绑定引擎，而
+    `_engine_lock` 是 `threading.Lock`（非重入）。当 `_async_engine` 恰为 `None`
+    （冷启动，或 `dispose_engine()` 之后），`get_async_engine` 会再取同一把锁——
+    **同一线程二取非重入锁 = 永久自死锁**：没有异常、没有日志，进程只是不再响应。
+
+    实测原始症状：`tests/test_auth_service.py::TestLoginPassword::should_lock_after_5_failed_attempts`
+    走到「触达锁定阈值 → `auth.events.notify_user_banned_committed` → `new_session()`」这条
+    **首次**建会话的路径时整体挂死（faulthandler 栈停在 `session.py` 的 `with _engine_lock`）。
+
+    用线程 + `join(timeout)` 跑：把「永久挂起」变成一条可读的断言失败，而不是让整个 pytest
+    卡死到超时（当时的表现正是后者，排查成本极高）。
+    """
+
+    def should_build_session_local_on_cold_start(self, monkeypatch) -> None:
+        import threading
+
+        import app.db.session as session_mod
+
+        assert not session_mod._engine_lock.locked(), "前置用例泄漏了 _engine_lock"
+        monkeypatch.setattr(session_mod, "_async_engine", None)
+        monkeypatch.setattr(session_mod, "_AsyncSessionLocal", None)
+
+        box: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                box["ok"] = session_mod._get_async_session_local()
+            except BaseException as exc:
+                box["err"] = exc
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        worker.join(timeout=10)
+
+        assert not worker.is_alive(), (
+            "冷启动建会话自死锁：_get_async_session_local 在持 _engine_lock 时又取了同一把锁"
+        )
+        assert "err" not in box, f"冷启动建会话抛错：{box.get('err')!r}"
+        assert box.get("ok") is not None

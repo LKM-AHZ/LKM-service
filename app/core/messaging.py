@@ -528,9 +528,6 @@ def _receive_loop(
             with suppress(Exception):
                 consumer.close()
             logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
-        if not stop.is_set():
-            # 消费循环非 stop 退出（链路异常）→ 退避后重建消费者
-            time.sleep(_CONSUMER_RETRY_S)
 
 
 async def run_subscription(

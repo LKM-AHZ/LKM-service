@@ -1,9 +1,18 @@
-"""outbox 耗竭失败归档表（M1 gate review 收口，路线图 §4 M1.3）。
+"""outbox 发布失败归档表（M1 gate review 收口，路线图 §4 M1.3）。
 
-relay 对某事件投递反复失败、`attempt_count` 达 `MAX_TRIES` 上限后不再重投：把该行从
-`outbox_events` **摘除**迁此表（`status=failed` 终态不再滞留原表、不再挤占 relay 领取
-窗口/积压 gauge），留一份审计副本供排查与未来人工重放。与消费侧 DMQ(`dlq_messages`)
-故障域隔离：本表只管「relay 发布侧反复失败致投不出」，消费侧失败仍进 Pulsar 死信 topic（system/dlq）。
+relay 有**两条**折叠路径把行从 `outbox_events` **摘除**迁入本表——都是「删原行」而**不是**
+置某个终态（`outbox_events` 不会出现 `status=failed` 的行，本表也没有 status 列）：
+
+1. **瞬时失败耗竭**：投递反复失败致 ``attempt_count`` 达 `MAX_TRIES` 后不再重投，
+   ``reason="relay exhausted: max tries reached"``，此类 ``attempt_count >= MAX_TRIES``。
+2. **确定性永久失败**：投递前经 ``messaging.permanent_failure_reason`` 判定为「重试无意义」
+   （未知 routing_key / payload 不可 JSON 编码）→ **首次尝试即折叠**，不消耗重试额度，
+   故此类行的 ``attempt_count`` 可能为 0。
+
+**查询/过滤不得假定 ``attempt_count >= MAX_TRIES``**（第 2 类不满足此不变量）；要区分两类看
+``reason``。折叠后不再挤占 relay 领取窗口/积压 gauge，留一份审计副本供排查与未来人工重放。
+与消费侧 DMQ(`dlq_messages`) 故障域隔离：本表只管「relay 发布侧投不出」，消费侧失败仍进
+Pulsar 死信 topic（system/dlq）。
 """
 
 from __future__ import annotations
@@ -19,7 +28,10 @@ from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class EventFailure(UUIDPrimaryKeyMixin, Base):
-    """relay 发布耗竭(outbox attempt>=MAX)而迁移的归档事件。event_id 即审计锚点。"""
+    """relay 发布失败（重试耗竭 **或** 确定性永久失败）而迁出的归档事件。
+
+    ``event_id`` 即审计锚点；两条折叠路径及其 attempt_count 取值差异见模块 docstring。
+    """
 
     __tablename__: str = "event_failures"
 

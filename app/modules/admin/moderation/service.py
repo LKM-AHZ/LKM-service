@@ -9,6 +9,8 @@ from app.modules.admin.moderation import engine as mod_engine
 from app.modules.admin.moderation.errors import ModerationErr
 from app.modules.admin.moderation.repository import ModerationRuleRepository
 from app.modules.admin.moderation.schemas import (
+    RULE_ACTIONS,
+    RULE_SCOPES,
     RuleCreate,
     RuleInfo,
     RuleTestHit,
@@ -16,8 +18,10 @@ from app.modules.admin.moderation.schemas import (
     RuleUpdate,
 )
 
-_ACTIONS = {"derank", "hide"}
-_SCOPES = {"content"}
+# 合法取值的事实源在 schemas 的 Literal（RULE_ACTIONS/RULE_SCOPES 由其 get_args 派生）：
+# request schema 已在边界拒绝非法值，service 侧仍复校一次，兜住绕过 schema 的直呼（测试/内部）
+_ACTIONS = RULE_ACTIONS
+_SCOPES = RULE_SCOPES
 
 
 async def list_rules(db: DbSession) -> list[RuleInfo]:
@@ -26,10 +30,12 @@ async def list_rules(db: DbSession) -> list[RuleInfo]:
 
 
 async def create_rule(db: DbSession, info: RuleCreate) -> RuleInfo:
-    action = info.action or "derank"
+    # 不用 `info.action or "derank"`：显式空串会被静默改写成默认值，而 update_rule 对同一
+    # 输入判 INVALID_ACTION——同一语义两处不一致。默认值已由 schema 声明给出。
+    action = info.action
     if action not in _ACTIONS:
         raise BizError(ModerationErr.INVALID_ACTION, f"动作须为 {sorted(_ACTIONS)}")
-    scope = info.scope or "content"
+    scope = info.scope
     if scope not in _SCOPES:
         raise BizError(ModerationErr.INVALID_SCOPE, f"范围须为 {sorted(_SCOPES)}")
     rule = await ModerationRuleRepository(db).create(

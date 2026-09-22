@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -25,6 +26,9 @@ from app.modules.admin.models import ModerationRule
 
 # 短缓存：规则改动后 ≤60s（或 admin bump 后立即）生效
 RULE_TTL_S = TTL_LIST_S
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -145,5 +149,9 @@ def _match_rule(rule: Rule, text: str) -> bool:
         try:
             return re.search(pattern, text, flags=re.IGNORECASE) is not None
         except re.error:
+            # 非法正则只表现为「永不命中」：不留痕的话，配置写错的规则与干净的语料无法区分
+            logger.warning(
+                "moderation regex 非法，规则已跳过 pattern=%r", rule.pattern
+            )
             return False
     return pattern.lower() in text

@@ -112,4 +112,6 @@ class RedisRateLimiter:
         try:
             await redis.delete(key)
         except Exception:
-            return
+            # 删除失败（权限/连接断）与「key 本就不存在」在调用方看来都是成功：不留痕的话，
+            # 「窗口没被清掉」只能表现为后续请求被莫名限流，无从归因
+            logger.warning("redis 限流窗口清除失败 key=%s", key, exc_info=True)

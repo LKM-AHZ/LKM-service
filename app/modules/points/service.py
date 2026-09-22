@@ -12,7 +12,7 @@ from app.core.cache import (
     make_key,
 )
 from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.err import BizError
+from app.core.err import BizError, CommonErr
 from app.db.repository import DbSession
 from app.modules.points.errors import PointsErr
 from app.modules.points.models import (
@@ -137,7 +137,7 @@ async def spend(
 ) -> LedgerEntry:
     """消费积分（余额不足拒）。amount>0。"""
     if amount <= 0:
-        raise BizError(PointsErr.INSUFFICIENT_BALANCE, "消费金额须为正")
+        raise BizError(CommonErr.INVALID_INPUT, "消费金额须为正")
     return await reward(db, user_id, -amount, reason, ref_type, ref_id)
 
 
@@ -158,9 +158,9 @@ async def transfer(
     单事务内完成；任一失败（如 from 余额不足）整体回滚，不产生部分流水。
     """
     if amount <= 0:
-        raise BizError(PointsErr.INSUFFICIENT_BALANCE, "转账金额须为正")
+        raise BizError(CommonErr.INVALID_INPUT, "转账金额须为正")
     if from_id == to_id:
-        raise BizError(PointsErr.INSUFFICIENT_BALANCE, "不能转账给自己")
+        raise BizError(CommonErr.INVALID_INPUT, "不能转账给自己")
     ledger = PointsLedgerRepository(db)
     # 与 reward 同理：幂等预检前先锁双方余额行（否则并发重放会各扣各加一次、流水被唯一约束
     # 撞掉一条 → 两笔余额都错）。按 uuid 排序取锁，避免「A→B 与 B→A」相互等待成死锁。

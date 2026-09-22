@@ -11,9 +11,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-#: 水位查询里表名必须是**裸标识符**：带库限定（db.t）、引号/反引号包裹的变体原先会被
-#: 当成另一个 key，watermark 取不到 → 静默返回「空表」（伪装成首次全量导出）。
-_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: 水位查询里的表名只接受「裸标识符」或「`库.表`」两种形式（生产常量就是库限定形式，
+#: 如 ``CH_TABLE = "lkm.event_failures"``——显式绑定库，免得随连接默认库漂移）。
+#: 引号/反引号包裹、含空白或第三段（``a.b.c``）等变体一律拒绝：它们会被当成另一个 dict key，
+#: watermark 取不到 → **静默**返回「空表」（伪装成首次全量导出），这正是本断言要防的。
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
 
 
 @dataclass

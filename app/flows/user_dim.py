@@ -71,8 +71,11 @@ async def _in_session(
         await target_db.rollback()
         raise
     finally:
-        await source_db.close()
-        await target_db.close()
+        # source 关闭失败不能连累 target：异常从 finally 里逃逸会让目标会话泄漏回连接池
+        try:
+            await source_db.close()
+        finally:
+            await target_db.close()
 
 
 async def _reconcile_once() -> int:
@@ -205,7 +208,9 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=["reconcile", "incremental", "ids"],
-        default="incremental",
+        # 默认 None 以便区分「未显式给 --mode」与「显式 --mode incremental」：
+        # 后者与 --ids/--backfill 冲突时必须报错，而不是被静默覆盖
+        default=None,
     )
     parser.add_argument("--backfill", action="store_true", help="等价 --mode ids")
     parser.add_argument("--ids", default="", help="逗号分隔 user id（回填用）")
@@ -214,7 +219,14 @@ def main() -> None:
     args = parser.parse_args()
 
     ids = _parse_ids(args.ids)
-    mode = "ids" if args.backfill or args.ids else args.mode
+    if (args.backfill or args.ids) and args.mode not in (None, "ids"):
+        parser.error(
+            f"--backfill/--ids 与显式 --mode {args.mode} 冲突（二者都表示回填）"
+        )
+    if args.backfill and not ids:
+        # 空 ids 的回填是静默 no-op：至少留下一条痕迹，别让运维以为跑过了
+        logger.warning("--backfill 未附带 --ids，本次不回填任何用户")
+    mode = "ids" if args.backfill or args.ids else (args.mode or "incremental")
     result = asyncio.run(
         user_dim_reconcile_flow(
             mode=mode,

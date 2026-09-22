@@ -24,3 +24,12 @@ def __getattr__(name: str) -> Any:
             _exported_graphql = [ContentQuery, ColumnsQuery]
         return _exported_graphql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# 惰性导出的公共名：显式声明让 `import *`、`dir()` 与 IDE/静态工具都能发现这两个入口
+# （本包是跨模块 import 的唯一合法入口，名字被发现本身就是契约的一部分）
+__all__: list[str] = ["GRAPHQL", "ROUTERS"]
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

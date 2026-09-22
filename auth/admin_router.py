@@ -47,7 +47,7 @@ from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
 from auth.schemas import Password
-from auth.security import verifypwd
+from auth.security import dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
 from auth.service_auth import generate_refresh_token, hash_refresh_token
 from auth.service_verify import check_code_rate_limit
@@ -84,9 +84,14 @@ def _current_mfa_trust(request: Request) -> tuple[bool, int | None]:
     mfa_at = payload.get("mfa_at")
     if mfa_at is None:
         return False, None
-    trusted_until = datetime.datetime.fromtimestamp(
-        float(mfa_at), tz=datetime.UTC
-    ) + datetime.timedelta(seconds=MFA_TRUST_SECONDS)
+    try:
+        trusted_until = datetime.datetime.fromtimestamp(
+            float(mfa_at), tz=datetime.UTC
+        ) + datetime.timedelta(seconds=MFA_TRUST_SECONDS)
+    except (TypeError, ValueError, OSError, OverflowError):
+        # mfa_at 是 JWT claim：非数值/超范围会让 fromtimestamp 抛错并冒成 500；
+        # 按「未通过 step-up」处理即可（调用方会要求重新验证 MFA）
+        return False, None
     if trusted_until < datetime.datetime.now(datetime.UTC):
         return False, None
     return True, int(mfa_at)
@@ -210,7 +215,12 @@ async def admin_login(
     user = result.scalars().first()
 
     # 统一 403：不区分"用户不存在"密码错，避免枚举账号
-    if not user or not await verifypwd(body.password, user.hashed_password):
+    if not user:
+        # 计时等化：用户不存在时也跑一次虚拟校验，否则响应耗时可用来枚举账号
+        #（与 auth/service_auth.py 的登录路径同款硬化）
+        await dummy_verify()
+        return resp_json(CommonErr.FORBIDDEN, detail="用户名或密码错误")
+    if not await verifypwd(body.password, user.hashed_password):
         return resp_json(CommonErr.FORBIDDEN, detail="用户名或密码错误")
 
     if user.account_level != "admin":

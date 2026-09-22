@@ -8,7 +8,6 @@ broker）才入队；未配置(dev/测试)直返 False，维持 fail-open 语义
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -21,9 +20,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.config import settings
 from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
-logger = logging.getLogger(__name__)
-
-# outbox 状态机：入队即 pending → relay 投成功置 published；达上限摘出置 failed
+# outbox 状态机：入队即 pending → relay 投成功置 published；投不出的行由 relay **直接摘除**
+# 迁入 event_failures（不留 failed 行——`status=failed` 从未被写入，见 event_failure 模块 docstring）
 OUTBOX_PENDING = "pending"
 OUTBOX_PUBLISHED = "published"
 OUTBOX_FAILED = "failed"

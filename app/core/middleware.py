@@ -20,6 +20,12 @@
 装配顺序（``add_middleware`` 后加者在外层）：安全头最后加 → 最外层，连 TrustedHost/CORS 的
 拒答响应也带上安全头。
 
+**「最外层」的边界**：只在**用户中间件栈内**成立。Starlette 的 ``ServerErrorMiddleware`` 位于
+所有用户中间件之外，而 ``add_exception_handler(Exception, _on_err)``（``app.main`` /
+``auth.main``）注册的兜底处理器正是挂在它上面——未捕获异常的 500 响应直接写 transport，
+**不**经本层：既无 nosniff/X-Frame-Options/Referrer-Policy/HSTS，非生产下也无 CORS 头
+（浏览器会把它显示成跨域失败）。要覆盖该路径需自建错误中间件或改注册方式。
+
 **生产 CORS 少了应用层兜底**：新增对外路由若漏配 APISIX 的 ``cors`` 插件，将**完全没有**跨域
 响应头。由 ``tests/deploy/test_apisix_config.py`` 的「每条代理到 backend/auth 的路由都必须带
 cors」断言守住（回归即红）。

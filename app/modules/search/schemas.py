@@ -17,8 +17,10 @@ class SearchHit(BaseModel):
     slug: str | None = None
     author_id: uuid.UUID | None = None
     author_name: str = ""
-    like_count: int = 0
-    comment_count: int = 0
-    view_count: int = 0
+    # 三个计数由 search/service.py 从 content_items 行显式映射（上游列 non-null + default 0），
+    # 声明成必填：将来映射漏字段会立刻报错，而不是静默序列化出一个看似合理的 0
+    like_count: int
+    comment_count: int
+    view_count: int
     published_at: datetime.datetime | None = None
     created_at: datetime.datetime

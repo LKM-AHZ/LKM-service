@@ -13,12 +13,9 @@ class ArticleErr(ErrCode):
 
 register(
     {
-        ArticleErr.NOT_FOUND: (404, "Article not found"),
-        ArticleErr.COMMENT_NOT_FOUND: (404, "Comment not found"),
-        ArticleErr.COMMENT_PARENT_MISMATCH: (
-            400,
-            "Parent comment does not belong to this article",
-        ),
+        ArticleErr.NOT_FOUND: (404, "文章不存在"),
+        ArticleErr.COMMENT_NOT_FOUND: (404, "评论不存在"),
+        ArticleErr.COMMENT_PARENT_MISMATCH: (400, "父评论不属于该文章"),
         ArticleErr.SLUG_CONFLICT: (409, "文章标识已存在"),
         ArticleErr.CATEGORY_NOT_FOUND: (404, "分类不存在"),
         ArticleErr.INVALID_STATUS_TRANSITION: (409, "非法的状态变更"),

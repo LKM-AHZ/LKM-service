@@ -109,6 +109,8 @@ async def ws_events(websocket: WebSocket) -> None:
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
                 except Exception:
+                    # 心跳失败即断连：不留痕的话，「socket 反复关闭」类问题无法定位
+                    logger.debug("ws heartbeat ping failed, closing %s", user_id, exc_info=True)
                     break
     except WebSocketDisconnect:
         pass

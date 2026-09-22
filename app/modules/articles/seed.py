@@ -137,7 +137,9 @@ async def seed_articles(db: AsyncSession) -> int:
         if existing is not None:
             continue
         category_slug = data["category"]
-        assert isinstance(category_slug, str)
+        # 不能用 assert：python -O 会把它整条剥离，校验静默消失
+        if not isinstance(category_slug, str):
+            raise TypeError(f"article category must be a slug string: {category_slug!r}")
         fields = {k: v for k, v in data.items() if k != "category"}
         content = fields.get("content")
         if isinstance(content, _LazyMarkdown):  # 惰性正文：此时才读盘
@@ -161,6 +163,10 @@ async def main() -> None:
         print(f"seeded {category_count} categories")
         count = await seed_articles(db)
         print(f"seeded {count} articles")
+    except Exception:
+        # 显式回滚：失败时让事务状态确定，也让运维看到明确的失败原因（而不是只有关闭时的隐式回滚）
+        await db.rollback()
+        raise
     finally:
         await db.close()
 

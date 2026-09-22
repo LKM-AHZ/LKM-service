@@ -8,7 +8,6 @@ import os
 import uuid
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -118,10 +117,16 @@ class TestTransfer:
         b = await _user(auth_db, "b")
         await reward(db, a, 100, "test", "z", "1")
         await transfer(db, a, b, 40, "pay", "trx", "1")
-        # 重复同 ref → from 侧 transfer_out 行触发 (user, ref_type, ref_id) 唯一约束。
-        # transfer 无 service 级幂等捕获，flush 直接抛 IntegrityError（非 BizError）。
-        with pytest.raises(IntegrityError):
-            await transfer(db, a, b, 40, "pay", "trx", "1")
+        # 重复同 ref（客户端超时重发）→ 幂等回放：service 级预检先锁双方余额行、再回读
+        # 既有对并原样返回。刻意不靠 DB 唯一约束兜底——两笔流水 user_id 不同，
+        # (user_id, ref_type, ref_id) 无法互相去重，唯一约束只会把重放变成 500；
+        # 并发重放时还会各扣各加一次（后一笔被约束撞掉 → 两笔余额都错）。
+        out2, in2 = await transfer(db, a, b, 40, "pay", "trx", "1")
+        assert (out2.ref_type, out2.ref_id) == ("trx", "1")
+        assert (in2.ref_type, in2.ref_id) == ("trx", "1")
+        # 只扣了一次：余额仍是 100-40，没有被再扣 40
+        assert await get_balance(db, a) == 60
+        assert await get_balance(db, b) == 40
 
     async def test_transfer_insufficient(self, db: AsyncSession, auth_db: AsyncSession):
         a = await _user(auth_db, "a")

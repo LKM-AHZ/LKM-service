@@ -1,5 +1,3 @@
-from math import ceil
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +7,7 @@ from app.core.common import (
     PageData,
     PaginateDep,
     PaginateParams,
+    paginate_pages,
 )
 from app.core.err import respond
 from app.db.session import get_read_session, get_session
@@ -92,7 +91,7 @@ async def points_leaderboard(
         db, offset=pag.offset, limit=pag.limit, period=period
     )
     return PageData(
-        items=items, total=total, page=pag.page, pages=ceil(total / pag.limit)
+        items=items, total=total, page=pag.page, pages=paginate_pages(total, pag.limit)
     )
 
 

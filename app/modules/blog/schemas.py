@@ -82,7 +82,7 @@ class BlogCommentInfo(BaseModel):
     created_at: datetime.datetime
     updated_at: datetime.datetime
     profile: ProfileInfo | None = None
-    replies: list["BlogCommentInfo"] = []
+    replies: list["BlogCommentInfo"] = Field(default_factory=list)
 
     @field_validator("replies", mode="before")
     @classmethod

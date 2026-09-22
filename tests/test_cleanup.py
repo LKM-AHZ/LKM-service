@@ -27,13 +27,33 @@ def _marker(key: str, age_seconds: int) -> str:
 
 
 class _FakeRedis:
-    """仅实现清扫需要的异步 redis 接口（get/scan_iter/delete）。标记持久化、无 TTL 语义。"""
+    """仅实现清扫需要的异步 redis 接口（get/getdel/scan_iter/delete/set）。
+
+    标记持久化、无 TTL 语义。
+    """
 
     def __init__(self, store: dict[str, str]) -> None:
         self.store = dict(store)
 
     async def get(self, k: str) -> str | None:
         return self.store.get(k)
+
+    async def getdel(self, k: str) -> str | None:
+        """GETDEL 语义：**先取值再删**，作为原子认领原语。
+
+        清扫用它认领标记（拿到 None 说明已被 notify/confirm 认领或他人清扫，直接跳过）；
+        真实 Redis 需 ≥6.2，本类只按语义实现，不校验版本。
+        """
+        return self.store.pop(k, None)
+
+    async def set(self, k: str, v: str, **kwargs: Any) -> None:
+        """写回用：清扫对**未过期/不可判龄**的标记会 ``set`` 回去。
+
+        必须真实实现：调用点在 ``suppress(Exception)`` 里「尽力写回」，本类若缺这个方法，
+        AttributeError 会被静默吞掉 → 标记被 getdel 拿走后就此消失，而测试看到的只是
+        「本该保留的标记不见了」，排查方向会被完全带偏。
+        """
+        self.store[k] = v
 
     # scan_iter 在 redis.asyncio 是 AsyncIterator；测试面返回匹配 upload:* 的键
     def scan_iter(self, match: str = "*", count: int | None = None) -> Any:

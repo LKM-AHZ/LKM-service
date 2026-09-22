@@ -90,7 +90,9 @@ async def seed_boards(db: AsyncSession) -> int:
             db.add(
                 Board(
                     slug=child_slug,
-                    title=_CHILD_TITLES.get(child_slug, child_slug),
+                    # 不做 slug 兜底：漏配 _CHILD_TITLES 时直接 KeyError 炸在 seed 期，
+                    # 别把英文 slug 当板块标题静默落库（用户可见）
+                    title=_CHILD_TITLES[child_slug],
                     description="",
                     parent_id=parent.id,
                 )

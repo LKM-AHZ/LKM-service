@@ -1,3 +1,4 @@
+import logging
 import threading
 from collections.abc import AsyncIterator
 
@@ -49,19 +50,35 @@ def create_realm_async_engine(
     return create_async_engine(url, **engine_kwargs)
 
 
-def get_async_engine() -> AsyncEngine:
+def _ensure_engine_locked() -> AsyncEngine:
+    """**调用方必须已持有 `_engine_lock`** 时使用；返回惰性单例引擎。
+
+    存在的唯一理由：`_get_async_session_local` 要在持锁状态下绑定引擎，而 `_engine_lock`
+    是 `threading.Lock`（**非重入**）。它若在那里直接调 `get_async_engine()`，而 `_async_engine`
+    恰为 None（冷启动，或 `dispose_engine()` 之后），`get_async_engine` 会再取同一把锁
+    ——**同一个线程二取非重入锁 = 永久自死锁**：进程不再响应、也没有任何异常可捕获。
+
+    实测复现：`tests/test_auth_service.py::TestLoginPassword::should_lock_after_5_failed_attempts`
+    走到「触达锁定阈值 → `notify_user_banned_committed` → `new_session()`」这条**首次**建会话
+    的路径时整体挂死（faulthandler 栈停在 `session.py:58 with _engine_lock`）。
+    """
     global _async_engine
+    if _async_engine is None:
+        _async_engine = create_realm_async_engine(
+            settings.database_url,
+            pool_size=settings.db_pool_size,
+            pool_max_overflow=settings.db_pool_max_overflow,
+            pool_pre_ping=settings.db_pool_pre_ping,
+        )
+    return _async_engine
+
+
+def get_async_engine() -> AsyncEngine:
     if _async_engine is None:
         # 双检锁：sync 依赖可能跑在 FastAPI 的线程池里，「先查后建」非原子会让两个线程各建
         # 一个引擎——败者被覆盖后永不 dispose，其连接池就这么泄漏（dispose_engine 只能清最后一个）
         with _engine_lock:
-            if _async_engine is None:
-                _async_engine = create_realm_async_engine(
-                    settings.database_url,
-                    pool_size=settings.db_pool_size,
-                    pool_max_overflow=settings.db_pool_max_overflow,
-                    pool_pre_ping=settings.db_pool_pre_ping,
-                )
+            _ensure_engine_locked()
     return _async_engine
 
 
@@ -73,7 +90,9 @@ def _get_async_session_local() -> async_sessionmaker[AsyncSession]:
                 _AsyncSessionLocal = async_sessionmaker(
                     autocommit=False,
                     autoflush=False,
-                    bind=get_async_engine(),
+                    # 用 _ensure_engine_locked 而非 get_async_engine：此处已持锁，
+                    # 再取一次会自死锁（见该函数注释）
+                    bind=_ensure_engine_locked(),
                     expire_on_commit=False,
                 )
     return _AsyncSessionLocal
@@ -99,6 +118,9 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         await db.close()
 
 
+logger = logging.getLogger("lkm.db.session")
+
+
 async def get_read_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 依赖：只读会话，供公开只读接口使用，避免每读请求一次空 BEGIN/COMMIT。
 
@@ -108,7 +130,15 @@ async def get_read_session() -> AsyncIterator[AsyncSession]:
     db = _get_async_session_local()()
     try:
         yield db
-        # 正常路径：只读，无提交意图；显式回滚以防解析器意外写入被残留到下一次
+        # 正常路径：只读，无提交意图；显式回滚以防解析器意外写入被残留到下一次。
+        # 但「只读会话被写脏」是数据完整性 bug 的征兆，静默丢弃会让它永久不可见：先告警
+        if db.new or db.dirty or db.deleted:
+            logger.warning(
+                "get_read_session 检测到未提交写入（new=%d dirty=%d deleted=%d），已丢弃",
+                len(db.new),
+                len(db.dirty),
+                len(db.deleted),
+            )
         await db.rollback()
     except Exception:
         await db.rollback()

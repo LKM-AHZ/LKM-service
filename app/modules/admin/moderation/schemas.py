@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import ClassVar
+from typing import ClassVar, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# 规则动作/范围的**唯一事实源**：schema 侧用 Literal 做边界拒绝（非法值 422 不入库），
+# service 侧从同一处 get_args 派生集合（见 moderation/service._ACTIONS），不另写一份字面量。
+RuleAction = Literal["derank", "hide"]
+RuleScope = Literal["content"]
+
+RULE_ACTIONS: frozenset[str] = frozenset(get_args(RuleAction))
+RULE_SCOPES: frozenset[str] = frozenset(get_args(RuleScope))
 
 
 def _assert_compilable(pattern: str, is_regex: bool) -> None:
@@ -23,9 +31,9 @@ def _assert_compilable(pattern: str, is_regex: bool) -> None:
 class RuleCreate(BaseModel):
     pattern: str = Field(min_length=1, max_length=255)
     is_regex: bool = False
-    action: str = "derank"  # derank | hide
+    action: RuleAction = "derank"
     weight: float = Field(default=0.5, ge=0.0, le=1.0)
-    scope: str = "content"
+    scope: RuleScope = "content"
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -37,9 +45,9 @@ class RuleCreate(BaseModel):
 class RuleUpdate(BaseModel):
     pattern: str | None = Field(default=None, min_length=1, max_length=255)
     is_regex: bool | None = None
-    action: str | None = None
+    action: RuleAction | None = None
     weight: float | None = Field(default=None, ge=0.0, le=1.0)
-    scope: str | None = None
+    scope: RuleScope | None = None
     enabled: bool | None = None
 
     @model_validator(mode="after")

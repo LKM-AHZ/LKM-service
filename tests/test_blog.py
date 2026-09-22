@@ -947,6 +947,29 @@ class TestBlogPublish:
     → PUT 写带 frontmatter 的 MDX → POST publish → GET /articles/{slug} 读回。
     """
 
+    @pytest.fixture(autouse=True)
+    def _view_bump_on_test_db(
+        self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """把 content 浏览计数的独立写会话绑到本测 db 的 engine。
+
+        发布后读回走 GraphQL `contentItemBySlug`（公开详情），它会调 `bump_item_view`
+        给 view_count +1；而该函数**自建独立写会话**（GraphQL 只读会话不能写），默认走
+        全局 `new_session()` → 连默认库，而测试是 schema-per-test，那里根本没有
+        `content_items` → `UndefinedTableError: relation "content_items" does not exist`。
+
+        与 `tests/test_content.py` / `tests/test_graphql_migration.py` 同一范式：
+        `content.service._new_write_session` 正是为这个场景留的缝。
+        """
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        import app.modules.content.service as content_service
+
+        async def _new_session() -> AsyncSession:
+            return async_sessionmaker(db.bind, expire_on_commit=False)()
+
+        monkeypatch.setattr(content_service, "_new_write_session", _new_session)
+
     MDX_TEMPLATE = """---
 title: {title}
 category: {category}

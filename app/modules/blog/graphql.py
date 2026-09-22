@@ -126,8 +126,13 @@ def _get_db(info: Info) -> AsyncSession:
     return info.context.db
 
 
-def _comment_author(c: BlogCommentInfo) -> GraphSeriesCommentAuthor | None:
-    # service 已批量填充 c.profile（ProfileInfo），直接复用，避免丢弃既有数据。
+def _comment_author(c: BlogCommentInfo) -> GraphSeriesCommentAuthor:
+    """构造评论作者对象——**恒定非 None**（故返回类型不再标 Optional）。
+
+    service 已批量填充 c.profile（ProfileInfo），直接复用，避免丢弃既有数据。profile 缺失
+    （用户无资料/已注销）时只把 name 置空而仍带上 user_id：作者身份对前端可见（可跳转），
+    比整块 author 置 null 更有用，故不做 None 分支。
+    """
     p: ProfileInfo | None = c.profile
     name = p.nickname if (p and p.nickname) else ""
     return GraphSeriesCommentAuthor(id=c.user_id, name=name or None)

@@ -50,7 +50,11 @@ class ArticleDetail(ArticleListItem):
 
 
 class CategoryCreate(BaseModel):
-    slug: str = Field(..., min_length=1, max_length=50, pattern=r"^[a-z0-9-]+$")
+    # 每段之间必须至少一个字母数字：`^[a-z0-9-]+$` 会放过 "-"、"--"、"-a-"、
+    # "a--b" 这类退化串（前导/尾随/连续连字符），生成的 URL 难看且易与路由分隔语义混
+    slug: str = Field(
+        ..., min_length=1, max_length=50, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    )
     title: str = Field(..., min_length=1, max_length=100)
     sort: int = Field(default=0, ge=0)
 
@@ -66,7 +70,10 @@ class CategoryOut(BaseModel):
 
 class ArticleCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
-    slug: str = Field(..., min_length=1, max_length=200, pattern=r"^[a-z0-9-]+$")
+    # 同 CategoryCreate.slug：拒绝前导/尾随/连续连字符
+    slug: str = Field(
+        ..., min_length=1, max_length=200, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    )
     description: str | None = Field(default=None, max_length=2000)
     cover: str | None = Field(default=None, max_length=2000)
     content: str = Field(..., min_length=1)

@@ -23,7 +23,10 @@ from app.core.err import CommonErr
 from auth.errors import AuthErr
 from auth.security import create_access_token, hashpwd
 
-_KEY_RE = re.compile(r"^avatars/[0-9a-f-]{36}/v\d+\.webp$")
+# 版本化 key：avatars/{uid}/v{ms}-{rand8}.webp。随机段是**有意**的（只靠毫秒的话，
+# 同毫秒两次上传会算出同一个 key、就地覆盖对象，而 immutable + max-age=31536000 的
+# 缓存契约要求「新 URL = 新内容」）——故断言必须允许 `-{8位hex}`，否则会把正确实现判红。
+_KEY_RE = re.compile(r"^avatars/[0-9a-f-]{36}/v\d+-[0-9a-f]{8}\.webp$")
 
 
 @pytest.fixture

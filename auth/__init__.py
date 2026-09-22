@@ -20,7 +20,12 @@ def __getattr__(name: str) -> Any:
     # 业务域展示性身份读取只经 auth.snapshot（见 M3 spec 读缝契约）。
     if name in ("UserSnapshot", "get_user_snapshot", "get_user_snapshot_batch"):
         if _exported_snapshot is None:
-            from auth import snapshot as _exported_snapshot
+            # 显式 import_module：`from auth import snapshot as ...` 依赖「__getattr__ 抛
+            # AttributeError → import 机制回退子模块」这一隐式行为，会把 snapshot.py 内部
+            # 真正的 AttributeError 与「本模块无此属性」混为一谈（hasattr 也会假报 False）
+            import importlib
+
+            _exported_snapshot = importlib.import_module("auth.snapshot")
         return getattr(_exported_snapshot, name)
     if name == "ROUTERS":
         if _exported_routers is None:
@@ -51,6 +56,8 @@ def __getattr__(name: str) -> Any:
             ]
         return _exported_routers
     if name == "GRAPHQL":
+        # auth 域不贡献 GraphQL 类型（与 app/modules/admin/__init__.py 同为显式空占位，
+        # 不是漏接线）；给稳定单例而非每次新建列表，避免消费方对返回值做修改时被静默丢弃
         if _exported_graphql is None:
             _exported_graphql = []
         return _exported_graphql

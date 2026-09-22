@@ -28,7 +28,12 @@ async def get_or_raise[M](
     detail: str | None = None,
     options: tuple[Any, ...] = (),
 ) -> M:
-    """按条件查一行，未命中则抛出 ``BizError(errcode)``。"""
+    """按条件查一行，未命中则抛出 ``BizError(errcode)``。
+
+    **契约：``conditions`` 必须最多命中一行**（不加 ORDER BY，命中多行时返回哪一行由 DB
+    决定）。多行匹配通常意味着调用方条件漏了唯一键（数据重复/写漏），查出来的行不确定，
+    调用方无从察觉——需要确定顺序请用 ``repository.get_one(order_by=...)``。
+    """
     stmt: Select[Any] = select(model).where(*conditions)
     if options:
         stmt = stmt.options(*options)
@@ -88,6 +93,9 @@ async def isolated_update(db: AsyncSession, stmt: Update) -> None:
         await db.flush()
         await sp.commit()
     except IntegrityError:
+        # 静默吞是为可预期的去重冲突（唯一约束撞车），但同一异常也可能是 FK/NOT NULL/CHECK
+        # 等真约束问题——那意味着本次计数/核销静默丢了。留 debug 痕迹以便区分两种情况。
+        logger.debug("isolated_update IntegrityError swallowed (treated as dedup): %s", stmt)
         await _safe_rollback(sp)
     except OperationalError:
         await _safe_rollback(sp)

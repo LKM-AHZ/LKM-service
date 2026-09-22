@@ -4,7 +4,7 @@
 
     @router.post("/content")
     async def create_content(
-        cur: CurrentUser = Depends(RequirePermission(Permission.content_create)),
+        cur: CurrentUser = RequirePermission(Permission.content_create),  # 工厂已返回 Depends，勿再包一层
         ...
     ): ...
 

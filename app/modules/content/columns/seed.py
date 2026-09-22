@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import uuid
 from typing import TypedDict
 
 from sqlalchemy import select
@@ -84,6 +85,8 @@ SEED_COLUMNS: list[_ColumnSeedData] = [
         "follower_count": 1200,
         "like_count": 3200,
         "subscribe_count": 1500,
+        # 展示用占位值：与下方 seed 的 ColumnPost 行数（每栏 3 条）不一致，
+        # 详情页只列真实行。真实统计应由后端聚合，勿以此判断数据是否损坏
         "article_count": 15,
         "tags": ["引力波", "黑洞", "天体物理"],
         "badges": ["机构认证", "签约作者"],
@@ -212,7 +215,7 @@ _SEED_POSTS_TEMPLATES: dict[str, list[dict[str, str]]] = {
 }
 
 
-async def _board_id(db: AsyncSession, slug: str | None) -> int | None:
+async def _board_id(db: AsyncSession, slug: str | None) -> uuid.UUID | None:
     """按 slug 解析 Board 主键；对应板块未 seed 时返回 None（不报错）。"""
     if not slug:
         return None

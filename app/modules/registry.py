@@ -16,7 +16,7 @@ from importlib import import_module
 from typing import Any
 
 # 唯一事实源：业务模块清单（顺序即聚合顺序）。新增模块在此登记。
-MODULES: list[str] = [
+MODULES: tuple[str, ...] = (
     "admin",
     "articles",
     "blog",
@@ -33,7 +33,7 @@ MODULES: list[str] = [
     "starhope",
     # rbac 无 REST/GraphQL 导出，但承载跨模块权限框架，无需在此列表聚合路由；
     # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
-]
+)
 
 # 不做顶层 errors.py 的模块（rbac 无 errors 且不在 MODULES 内，另有三条子包路径单列）。
 _NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "health"})

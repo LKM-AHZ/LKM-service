@@ -126,7 +126,8 @@ class S3Storage:
             )
 
     def _key(self, bucket_key: str) -> str:
-        # bucket_key 已是 files/<...> 逻辑 key，直接拼 prefix；避免双斜杠
+        # bucket_key 是 files 层传下来的**裸逻辑 key**（_build_bucket_key 产出 <hash[:2]>/<hash>，
+        # 不含 prefix）：prefix 正是在这里拼上去的；若误以为它已带 prefix 再拼一次会得到 files/files/...
         if not self.prefix:
             return bucket_key
         return f"{self.prefix}/{bucket_key.lstrip('/')}"

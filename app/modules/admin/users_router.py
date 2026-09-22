@@ -30,7 +30,7 @@ from app.core.common import (
 from app.core.err import respond
 from app.db.session import get_read_session
 from app.modules.content.models import ContentItem, ContentType
-from app.modules.files.models import LibraryFile
+from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.rbac.permissions import Permission
 from auth.deps import CurrentUser
 from auth.seams import new_auth_session as _new_auth_session_raw
@@ -155,7 +155,9 @@ async def admin_stats(
     file_count = await _safe_count(db, select(func.count(LibraryFile.id)))
     file_pending = await _safe_count(
         db,
-        select(func.count(LibraryFile.id)).where(LibraryFile.status == "pending"),
+        select(func.count(LibraryFile.id)).where(
+            LibraryFile.status == FileStatus.PENDING
+        ),
     )
     return AdminStats(
         user_count=user_count,
@@ -197,7 +199,13 @@ async def admin_trend(
             # 右界同理须用 UTC aware datetime：date 参数会被 PG 按会话时区解释而整体
             # 偏移（见 auth.snapshot.user_count_by_day 同款说明）。
             start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
-            stmt = select(day_expr.label("d"), func.count()).where(col >= start_dt)
+            # 与 auth 侧 user_count_by_day 同口径：闭开区间 [start, start+days)，
+            # 少了右界会把未来 created_at（时钟偏移/导入数据）也扫进来并产出区间外的 key
+            end_dt = start_dt + timedelta(days=days)
+            stmt = (
+                select(day_expr.label("d"), func.count())
+                .where(col >= start_dt, col < end_dt)
+            )
             if extra_where is not None:
                 stmt = stmt.where(extra_where)
             rows = (await db.execute(stmt.group_by("d"))).all()

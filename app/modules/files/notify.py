@@ -2,7 +2,8 @@
 
 事件驱动的登记路径：对象 PUT 落桶后 MinIO 触发 bucket-notification，POST 到
 ``/api/v1/notify/object`` → 校验共享令牌（Authorization: Bearer）→ 只对
-``s3:ObjectCreated:Put`` 且 key 以 ``up/``（直传随机 key）开头的事件提取
+``ObjectCreated`` 系列（Put/Copy/Post/CompleteMultipartUpload——分片直传以
+CompleteMultipartUpload 落地，同样需要登记）且 key 以 ``up/``（直传随机 key）开头的事件提取
 ``upload_id`` → 入队到 notify 队列（worker 异步登记）→ 立即 200。
 
 回调内绝不执行登记（DB 读哈希/拷贝在 worker 侧做），只负责快速入队回执，
@@ -67,7 +68,8 @@ def _authorized(authorization: str | None) -> bool:
 def _extract_uploads(payload: Any) -> list[str]:
     """从 MinIO S3 事件记录里提取需登记的 ``up/`` 上传 key。
 
-    仅处理 ``s3:ObjectCreated:Put`` 事件且 key 能规范化为 ``up/<id>``（裸 ``up/…``
+    仅处理 ``ObjectCreated`` 系列事件（含分片直传的 ``CompleteMultipartUpload``）
+    且 key 能规范化为 ``up/<id>``（裸 ``up/…``
     或带 ``<s3_prefix>/up/…`` 前缀均可）；其余（avatar、``<prefix>`` 内容寻址对象等）
     一律忽略。返回规范化后的 ``up/<id>`` key（非 upload_id）。
     """
@@ -133,6 +135,8 @@ async def notify_object(
     try:
         payload: Any = await request.json()
     except (json.JSONDecodeError, ValueError):
+        # 仍回 200（避免 MinIO 重投），但必须留痕：静默丢弃会让配错/签名错误的发送方无从发现
+        logger.warning("notify_object 收到非 JSON 请求体，按无记录处理")
         payload = {}
 
     uploads = _extract_uploads(payload)

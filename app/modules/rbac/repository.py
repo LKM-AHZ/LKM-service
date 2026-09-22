@@ -10,6 +10,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import select
+
 from app.db.repository import AsyncRepository, DbSession
 from app.modules.admin.models import RolePermission
 
@@ -39,4 +41,12 @@ class ResourceRepository:
         self.db = db
 
     async def get_by_model(self, model: type[Any], obj_id: uuid.UUID) -> Any | None:
-        return await self.db.get(model, obj_id)
+        """按 model/id 取对象；**过滤软删**。
+
+        不能用 ``self.db.get()``：它绕过 AsyncRepository._active_conditions 的软删条件，
+        已删除的资源仍会解析成功并通过 check_owner 的属主校验。
+        """
+        stmt = select(model).where(model.id == obj_id)
+        if hasattr(model, "deleted_at"):
+            stmt = stmt.where(model.deleted_at.is_(None))
+        return (await self.db.execute(stmt)).scalars().first()

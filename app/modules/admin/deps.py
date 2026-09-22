@@ -73,8 +73,9 @@ async def get_current_admin(
     也绝不回落本地读 auth users——business 库本就没有 auth 表）。
 
     role/account_level 用 auth 权威值（seam verdict），不再本地判锁定/version/改密撤销。
-    保留 ``db`` 形参仅为兼容既有直呼方/端点签名契约（不做任何 ``select(User)``）；本函数
-    不再依赖 DB 会话。
+    ``db`` / ``request`` 两个形参本函数都不用（cookie 由 ``_read_admin_cookie`` 子依赖解析），
+    保留只为兼容既有直呼方的签名契约（如 tests/test_auth_deps_seam.py 的按位传参断言）；
+    本函数不做任何 ``select(User)``、也不再依赖 DB 会话。
     """
     if not token:
         raise BizError(CommonErr.FORBIDDEN, "Not logged into admin panel")

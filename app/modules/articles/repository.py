@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
@@ -24,6 +24,9 @@ from app.modules.articles.models import (
     ArticleTag,
     Tag,
 )
+
+# bump_count 允许改写的计数列（对应 Article 的四个 Integer 计数列）
+CounterColumn = Literal["views", "likes", "comments", "bookmarks"]
 
 
 def _fts_search_stmt(q: str) -> tuple[Any, Any]:
@@ -95,8 +98,14 @@ class ArticleRepository(AsyncRepository[Article]):
         items = list((await self.db.execute(stmt)).scalars().all())
         return items, total
 
-    async def bump_count(self, article_id: uuid.UUID, column: str, delta: int) -> None:
-        """原子回填计数列（SET col = col ± N），防并发丢更新。"""
+    async def bump_count(
+        self, article_id: uuid.UUID, column: CounterColumn, delta: int
+    ) -> None:
+        """原子回填计数列（SET col = col ± N），防并发丢更新。
+
+        *column* 直接进 ``getattr(Article, column)`` 作 SET 目标列，故收窄为 Literal：
+        传任意字符串等于允许改写 Article 的任意字段，合法取值就是 models 里的四个计数列。
+        """
         await self.update_where(
             {column: getattr(Article, column) + delta}, Article.id == article_id
         )

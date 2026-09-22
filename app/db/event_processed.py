@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 
 from sqlalchemy import String, select
@@ -24,8 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UTCDateTime, now_iso
-
-logger = logging.getLogger(__name__)
 
 # 未显式指定订阅名的调用（兼容旧直发/单订阅路径）落到此 scope，与具名订阅隔离。
 DEFAULT_SCOPE = "default"

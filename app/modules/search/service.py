@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.core.common import PageData, paginate_pages
+from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError
 from app.db.repository import DbSession
 from app.modules.search.errors import SearchErr
@@ -57,7 +57,7 @@ async def search_items(
     items = await repo.list_matching(
         term=term,
         content_type=content_type,
-        offset=(page - 1) * limit,
+        offset=paginate_offset(page, limit),
         limit=limit,
     )
 

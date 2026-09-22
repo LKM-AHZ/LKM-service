@@ -4,11 +4,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import (
-    bump_collection_version,
-    cache_invalidate,
-    make_key,
-)
 from app.core.common import ApiResp, ModuleStatus
 from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_session
@@ -59,6 +54,10 @@ def _status() -> ModuleStatus:
     )
 
 
+# 板块写端点**不做缓存失效**：boards 目前没有读缓存（list_boards/get_board_ex 直读 DB，
+# content_items 才走版本号缓存）。原先此处的 bump_collection_version("boards") 与
+# make_key("boards:item") 删除都是空转（全仓无人读这两个键），只会给人「陈旧板块数据已被
+# 处理」的错觉。将来若给 boards 加读缓存，须同时给下面的禁言/解禁端点补失效。
 router = APIRouter(prefix="/boards", tags=["content", "boards"])
 
 
@@ -75,9 +74,7 @@ async def admin_create_board(
     _cur: CurrentUser = RequirePermission(Permission.boards_manage),
     db: AsyncSession = Depends(get_session),
 ) -> BoardOut:
-    board = await create_board_ex(db, info, owner_id=None)
-    await bump_collection_version("boards")
-    return board
+    return await create_board_ex(db, info, owner_id=None)
 
 
 @router.post("/applications", response_model=ApiResp[BoardApplicationOut])
@@ -105,9 +102,7 @@ async def review_app(
     role = composible_role(_cur.account_level, _cur.role)
     if not await role_has_permission(db, role, Permission.boards_review_application):
         raise BizError(CommonErr.FORBIDDEN)
-    result = await review_application(db, app_id, _cur.id, body)
-    await bump_collection_version("boards")
-    return result
+    return await review_application(db, app_id, _cur.id, body)
 
 
 # 负责人
@@ -123,12 +118,9 @@ async def owner_update_board(
     await check_owner(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
-    result = await update_board_ex(
+    return await update_board_ex(
         db, board_id, cur.id, patch, is_admin=(cur.role == "super_admin")
     )
-    await bump_collection_version("boards")
-    await cache_invalidate(make_key("boards:item", board_id))
-    return result
 
 
 @router.post("/{board_id}/bans", response_model=ApiResp[dict[str, bool]])

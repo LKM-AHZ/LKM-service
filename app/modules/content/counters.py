@@ -94,6 +94,9 @@ async def bump_content_counter(
 
 async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     """即时读数：DB 计数列 + 未落库差值（Redis 不可用时即 DB 值）。"""
+    # 与 bump_content_counter 同口径校验：否则未支持字段名会以裸 KeyError 冒成 500
+    if field not in _COLUMNS:
+        raise ValueError(f"unsupported counter field: {field!r}")
     col = _COLUMNS[field]
     base = await db.scalar(select(col).where(ContentItem.id == item_id))
     if base is None:

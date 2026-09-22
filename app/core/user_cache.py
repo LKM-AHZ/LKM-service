@@ -189,6 +189,9 @@ async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
             )
         return data
     except Exception:
+        # 脏 L2 载荷（非 JSON / 非 dict）与「真 miss」在调用方看来都是 None，且此处已计过
+        # l2 hit——不留日志的话，数据格式回归会表现为「命中率很高但一直回源」，无从排查
+        logger.debug("user_cache payload 解析失败 uid=%s", user_id, exc_info=True)
         return None
 
 
@@ -383,4 +386,6 @@ async def invalidate_user_snap(user_id: uuid.UUID) -> None:
         return
     if _l1_on():
         local_cache.l1_delete(key)
-        await user_cache_events.publish_invalidate(key)
+    # 广播不受本实例 L1 开关约束：它服务的是**其它**实例的 L1——本机 user_snap_l1_enabled
+    # 为 false（滚动发布/配置不一致）不代表对端也关，漏发会让对端继续命中陈旧 L1 直到 TTL 过期
+    await user_cache_events.publish_invalidate(key)

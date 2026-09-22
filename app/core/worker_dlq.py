@@ -12,13 +12,13 @@ re-publish 回原 routing_key。
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from app.core import messaging
 from app.core.tracing import setup_tracing
+from app.db.base import now_iso
 from app.db.session import new_session
 from app.modules.admin.models import DlqMessage
 
@@ -46,7 +46,8 @@ def _make_model(
         attempts=attempts,
         reason=reason[:255],
         status=status,
-        created_at=datetime.now(UTC),
+        # DlqMessage 的约定是 UTCDateTime + now_iso()（见其 docstring「勿用 datetime.now(UTC)」）
+        created_at=now_iso(),
     )
 
 
@@ -81,7 +82,7 @@ async def requeue(db: Any, dlq_id: uuid.UUID) -> bool:
     ok = await messaging.publish(m.routing_key, parsed)
     if ok:
         m.status = "requeued"
-        m.requeued_at = datetime.now(UTC)
+        m.requeued_at = now_iso()
         await db.commit()
     return ok
 

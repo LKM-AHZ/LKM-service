@@ -136,10 +136,24 @@ class TestExamService:
         assert len(qs) == 2
 
     async def test_list_exams(self, db: AsyncSession):
-        await create_exam_ex(db, _exam_create())
+        # list_exams 是公开列表口，只出已发布（ExamRepository.list_page 恒加
+        # is_published 过滤），所以必须先发布才能被列出。
+        await _make_published_exam(db)
         items, total = await list_exams(db)
         assert total == 1
         assert items[0].title == "测试考试"
+
+    async def test_list_exams_excludes_unpublished(self, db: AsyncSession):
+        """未发布（草稿）不得泄进公开列表。
+
+        `create_exam_ex` 建出来的是未发布考试；这是 ExamCreate 的既定语义
+        （schema 里没有 is_published 入参），所以此处断言的是「过滤生效」，
+        而不是「列表恒为空」。
+        """
+        await create_exam_ex(db, _exam_create())
+        items, total = await list_exams(db)
+        assert total == 0
+        assert items == []
 
     async def test_start_attempt_requires_published(
         self, db: AsyncSession, auth_db: AsyncSession

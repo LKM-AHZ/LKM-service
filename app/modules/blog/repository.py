@@ -85,7 +85,12 @@ class BlogCommentRepository(AsyncRepository[BlogComment]):
     model = BlogComment
 
     async def list_in_series(self, series_id: uuid.UUID) -> list[BlogComment]:
-        """某系列的评论（含 replies 预载，防序列化时懒加载 MissingGreenlet）。"""
+        """某系列的评论（含 replies 预载，防序列化时懒加载 MissingGreenlet）。
+
+        前提：本方法一次性取回该 series 的全部评论，第 2 层及更深的 replies 依赖这些
+        对象都作为 selectinload 的 parent 被补载。若将来加「分页 / 按父节点过滤」，
+        深层 replies 会在序列化时触发异步懒加载（MissingGreenlet），届时须改成
+        显式递归预载或按深度分批取。"""
         return await self.get_many(
             BlogComment.series_id == series_id,
             order_by=BlogComment.created_at.asc(),

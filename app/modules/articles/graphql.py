@@ -90,7 +90,8 @@ class GraphArticlePage:
     pages: int
 
 
-def _now_iso(dt: datetime.datetime | None) -> str | None:
+def _iso_or_none(dt: datetime.datetime | None) -> str | None:
+    """把已有时刻格式化成 ISO 串（None 透传）——不取「当前时间」，故不叫 _now_iso。"""
     return dt.isoformat() if dt else None
 
 
@@ -107,7 +108,7 @@ def _base_item_fields(a: ArticleListItem | ArticleDetail) -> dict[str, Any]:
         "cover": a.cover,
         "categoryId": a.category_id,
         "categoryTitle": a.category_title,
-        "published": _now_iso(a.published),
+        "published": _iso_or_none(a.published),
         "views": a.views,
         "likes": a.likes,
         "comments": a.comments,
