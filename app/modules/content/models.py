@@ -207,7 +207,10 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
             "id",
         ),
         Index("ix_content_published", "published_at"),
-        Index("ix_content_slug", "slug"),
+        # 唯一索引：应用层 _require_unique_slug 是 check-then-insert，注释里明确写了
+        # 「DB 侧唯一索引兜底」——此前只有非唯一索引，并发建项/发布可落两条同 slug，
+        # 而 get_by_slug 用 get_one，命中多行会直接抛错。slug 可空，PG 允许多个 NULL。
+        Index("ix_content_slug", "slug", unique=True),
         # M6.9 搜索 P1：tsvector 生成列 GIN（英文/数字词）+ pg_trgm GIN（中文子串
         # ILIKE '%x%'）。trgm opclass 属 pg_trgm 扩展，**显式限定 public**——否则
         # 索引 DDL 依赖连接的 search_path（测试库 schema-per-test 不含 public 时会

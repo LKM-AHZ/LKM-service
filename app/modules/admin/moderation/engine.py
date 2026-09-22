@@ -97,31 +97,11 @@ def _rule_from_dict(d: dict[str, object]) -> Rule:
     )
 
 
-def evaluate(text: str, rules: list[Rule]) -> ModerationResult:
-    """对内容文本评估全部规则，返回降权系数与是否隐藏。"""
-    if not rules or not text:
-        return ModerationResult(penalty=0.0, should_hide=False)
-    penalty = 0.0
-    should_hide = False
-    lower = text.lower()
-    for r in rules:
-        matched = _match_rule(r, lower)
-        if not matched:
-            continue
-        if r.action == "hide":
-            should_hide = True
-        else:
-            penalty = min(1.0, penalty + max(0.0, r.weight))
-    return ModerationResult(penalty=penalty, should_hide=should_hide)
+def _evaluate(text: str, rules: list[Rule]) -> tuple[ModerationResult, list[Rule]]:
+    """两个公开入口的唯一实现：返回 ``(结果, 命中规则)``。
 
-
-def evaluate_with_matches(
-    text: str, rules: list[Rule]
-) -> tuple[ModerationResult, list[Rule]]:
-    """对内容文本评估并返回**命中的规则**（供规则测试端点展示命中明细）。
-
-    与 ``evaluate`` 同语义（hide 即隐藏、derank 累加权重封顶 1.0），额外把
-    命中的规则原样收集返回。
+    语义只此一份——hide 即隐藏、derank 累加权重封顶 1.0。分开写两份会让后续改动
+    （隐藏短路、权重处理、scope 过滤）只落在一处，两条路径静默分叉。
     """
     if not rules or not text:
         return ModerationResult(penalty=0.0, should_hide=False), []
@@ -138,6 +118,22 @@ def evaluate_with_matches(
         else:
             penalty = min(1.0, penalty + max(0.0, r.weight))
     return ModerationResult(penalty=penalty, should_hide=should_hide), matched
+
+
+def evaluate(text: str, rules: list[Rule]) -> ModerationResult:
+    """对内容文本评估全部规则，返回降权系数与是否隐藏。"""
+    return _evaluate(text, rules)[0]
+
+
+def evaluate_with_matches(
+    text: str, rules: list[Rule]
+) -> tuple[ModerationResult, list[Rule]]:
+    """对内容文本评估并返回**命中的规则**（供规则测试端点展示命中明细）。
+
+    与 ``evaluate`` 同语义（hide 即隐藏、derank 累加权重封顶 1.0），额外把
+    命中的规则原样收集返回。
+    """
+    return _evaluate(text, rules)
 
 
 def _match_rule(rule: Rule, text: str) -> bool:

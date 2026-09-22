@@ -8,6 +8,7 @@
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Protocol
@@ -54,8 +55,12 @@ class LocalStorage:
         parts = Path(bucket_key).parts
         if ".." in parts:
             raise BizError(StorageErr.STORE_ERROR, detail="Invalid storage key")
-        dest = (self.root_dir / bucket_key).resolve()
-        if not dest.is_relative_to(self.root_dir.resolve()):
+        root = self.root_dir.resolve()
+        dest = (root / bucket_key).resolve()
+        # 还要挡住「归一化后正好等于 root」的 key（"." / "./" 等）：Path(".").parts 为空、
+        # 不含 ".."，能过前面的检查，落到这里就会被当成文件路径（delete 变 IsADirectoryError、
+        # exists 恒真、save 试图 temp.replace(root)）
+        if dest == root or not dest.is_relative_to(root):
             raise BizError(StorageErr.STORE_ERROR, detail="Invalid storage key")
         return dest
 
@@ -63,6 +68,9 @@ class LocalStorage:
         self, stream: Any, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile:
         dest = self._resolve(bucket_key)
+        # 落盘前先建好 root：全新部署/本地首跑时 store 目录不存在，NamedTemporaryFile
+        # 会直接 FileNotFoundError，导致每次上传都以 STORE_ERROR 失败
+        await asyncio.to_thread(self.root_dir.mkdir, parents=True, exist_ok=True)
         temp = await asyncio.to_thread(_new_temp_file, self.root_dir)
         try:
             await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
@@ -71,13 +79,18 @@ class LocalStorage:
             )
             await asyncio.to_thread(temp.replace, dest)
         except BizError:
-            await asyncio.to_thread(temp.unlink, missing_ok=True)
+            await asyncio.to_thread(_safe_unlink, temp)
             raise
         except OSError as exc:
-            await asyncio.to_thread(temp.unlink, missing_ok=True)
+            await asyncio.to_thread(_safe_unlink, temp)
             raise BizError(
                 StorageErr.STORE_ERROR, detail=f"Failed to store file: {exc}"
             ) from exc
+        except BaseException:
+            # 非 BizError/OSError 的异常（stream.read 抛的自定义异常、请求被取消等）
+            # 同样要回收临时文件，否则 .tmp 会一直留在 store 根目录
+            await asyncio.to_thread(_safe_unlink, temp)
+            raise
         return {
             "size": size,
             "bucket_key": bucket_key,
@@ -85,17 +98,23 @@ class LocalStorage:
         }
 
     async def open(self, bucket_key: str) -> AsyncIterator[bytes]:
+        """按块读出对象内容。
+
+        一次性打开文件描述符后连续读：原实现每块按路径重新 open+seek，mid-stream 若被
+        并发 delete/replace 换掉，会读到另一个 inode 的错位数据、或在已吐出部分内容后
+        抛 NOT_FOUND（响应被截断）。持有 fd 则拿到稳定快照（文件被 unlink 仍可读完）。
+        """
         dest = self._resolve(bucket_key)
-        exists = await asyncio.to_thread(dest.exists)
-        if not exists:
-            raise BizError(StorageErr.NOT_FOUND, detail="Storage key not found")
-        offset = 0
-        while True:
-            chunk = await asyncio.to_thread(_read_chunk, dest, offset, _CHUNK)
-            if not chunk:
-                break
-            offset += len(chunk)
-            yield chunk
+        handle = await asyncio.to_thread(_open_reader, dest)
+        try:
+            while True:
+                chunk = await asyncio.to_thread(handle.read, _CHUNK)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            with suppress(OSError):
+                await asyncio.to_thread(handle.close)
 
     async def copy(self, src: str, dest: str) -> None:
         raise NotImplementedError("Local backend 无 confirm/副本流程")
@@ -113,6 +132,12 @@ class LocalStorage:
 
     def presign_upload(self, bucket_key: str, *, expires: int) -> str:
         raise NotImplementedError("Local backend 无签名 URL")
+
+
+def _safe_unlink(path: Path) -> None:
+    """清理临时文件：失败不抛（否则会覆盖原始异常，掩盖真正的失败原因）。"""
+    with suppress(OSError):
+        path.unlink(missing_ok=True)
 
 
 def _new_temp_file(root_dir: Path) -> Path:
@@ -161,13 +186,18 @@ def _stream_to_disk_hash(
     return total, hasher.hexdigest()
 
 
-def _read_chunk(dest_path: Path, offset: int, size: int) -> bytes:
-    """从 ``offset`` 处读下一个 chunk；EOF 时返回空 bytes（外层据此终止）。"""
+def _open_reader(dest_path: Path) -> Any:
+    """打开待读文件；不存在 → NOT_FOUND，其余 OS 错误 → STORE_ERROR。
+
+    原先把所有 OSError 都归为 NOT_FOUND，权限/目录/磁盘故障都会被报成 404。
+    """
     try:
-        with dest_path.open("rb") as f:
-            f.seek(offset)
-            return f.read(size)
-    except OSError as exc:
+        return dest_path.open("rb")
+    except FileNotFoundError as exc:
         raise BizError(
             StorageErr.NOT_FOUND, detail=f"Storage key not found: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise BizError(
+            StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}"
         ) from exc

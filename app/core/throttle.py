@@ -24,6 +24,16 @@ async def check_password_login_rate_limit(ip_address: str) -> None:
     if not reveal(settings.redis_url):
         return
     limiter = RedisRateLimiter()
+    # 先查 IP 桶再查全局桶：限流器每查一次都会给自己的桶打点，若先查全局，单个 IP 即便
+    # 早被 IP 桶拒绝也仍会持续累加 __global__，20 次/分以外的请求全用来烧全局额度，
+    # 一个来源即可在窗口内把全局桶打满、拒绝所有用户的密码登录。
+    if ip_address and not await limiter.check(
+        f"ip:{ip_address}",
+        settings.login_ip_max_per_min,
+        settings.login_window_seconds,
+        fail_open=False,
+    ):
+        raise BizError(AuthErr.ACCOUNT_LOCKED, "Too many login attempts from this IP")
     if not await limiter.check(
         "__global__",
         settings.login_global_max_per_min,
@@ -33,10 +43,3 @@ async def check_password_login_rate_limit(ip_address: str) -> None:
         raise BizError(
             AuthErr.ACCOUNT_LOCKED, "Too many login attempts, please try again later"
         )
-    if ip_address and not await limiter.check(
-        f"ip:{ip_address}",
-        settings.login_ip_max_per_min,
-        settings.login_window_seconds,
-        fail_open=False,
-    ):
-        raise BizError(AuthErr.ACCOUNT_LOCKED, "Too many login attempts from this IP")

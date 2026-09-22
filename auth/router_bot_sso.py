@@ -9,7 +9,7 @@
 也不透出任何 PII：请求体只有管理员 id 与 account_level，响应体只有票据与有效期。
 
 安全面：调用方必须已经是**经 authz seam 裁决过的 admin**（业务侧 ``require_admin``），本端点再做
-一次 ``account_level == "admin"`` 复核——跨进程边界不信任上游断言（fail-closed）。
+一次 ``account_level == BOT_SSO_ACCOUNT_LEVEL`` 复核——跨进程边界不信任上游断言（fail-closed）。
 """
 
 from __future__ import annotations
@@ -37,10 +37,13 @@ async def internal_bot_ticket(
 ) -> dict[str, object]:
     """铸一张 bot 面板 SSO 票据。返回内部信封 ``{"ticket": str, "expires_in": int}``。
 
-    非 admin → 403（跨进程边界不信任上游已裁决的断言，此处独立复核）。
+    非 :data:`BOT_SSO_ACCOUNT_LEVEL` → 403（跨进程边界不信任上游已裁决的断言，此处独立复核）。
+    403 文案从该常量派生，避免它被部署配置改掉后报错信息仍写着 admin。
     """
     if body.account_level != BOT_SSO_ACCOUNT_LEVEL:
-        raise HTTPException(status_code=403, detail="admin required")
+        raise HTTPException(
+            status_code=403, detail=f"{BOT_SSO_ACCOUNT_LEVEL} required"
+        )
     ticket, expires_in = mint_ticket(
         sub=str(body.user_id), account_level=body.account_level
     )

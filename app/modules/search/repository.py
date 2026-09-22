@@ -41,10 +41,16 @@ class SearchRepository(AsyncRepository[ContentItem]):
         query = func.websearch_to_tsquery("simple", term)
         fts = ContentItem.search_vector.bool_op("@@")(query)
         pattern = _like_pattern(term)
+        # 列集合与 SEARCH_VECTOR_SQL（title/excerpt/content/summary/keywords/tags）对齐：
+        # 中文子串只走这一路，少了 summary/keywords/tags 会出现「tsvector 有词、ILIKE 却
+        # 匹配不到」的整类漏检（中文命中只落在这三列时彻底搜不到）
         contains = or_(
             ContentItem.title.ilike(pattern, escape=_LIKE_ESCAPE),
             ContentItem.excerpt.ilike(pattern, escape=_LIKE_ESCAPE),
             ContentItem.content.ilike(pattern, escape=_LIKE_ESCAPE),
+            ContentItem.summary.ilike(pattern, escape=_LIKE_ESCAPE),
+            ContentItem.keywords.ilike(pattern, escape=_LIKE_ESCAPE),
+            ContentItem.tags.ilike(pattern, escape=_LIKE_ESCAPE),
         )
         conditions: list[object] = [
             ContentItem.status == ContentStatus.PUBLISHED,
@@ -68,7 +74,12 @@ class SearchRepository(AsyncRepository[ContentItem]):
         offset: int = 0,
         limit: int = 20,
     ) -> list[ContentItem]:
-        """命中项按 ``ts_rank`` 倒序（无 rank 的 ILIKE 命中排后），再按 id 倒序。"""
+        """命中项按 ``ts_rank`` 倒序，再按 id 倒序。
+
+        纯 ILIKE 命中（tsvector 不匹配）的 ``ts_rank`` 是 **0.0 而非 NULL**，
+        故排在所有正 rank 之后靠的是 0 < 正分的取值关系、不是 ``nulls_last()``；
+        该修饰符只对「向量为 NULL」起防御作用（DESC 下 PG 默认 NULL 排前）。
+        """
         query, conditions = self._match(term, content_type)
         rank = func.ts_rank(ContentItem.search_vector, query)
         return await self.get_many(

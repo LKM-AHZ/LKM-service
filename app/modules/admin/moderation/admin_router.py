@@ -6,6 +6,8 @@
 管理员（super_admin）可读可写。写后经 service 层 bump 规则缓存版本。
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,7 +55,7 @@ async def admin_create_moderation_rule(
 @router.patch("/rules/{rule_id}", response_model=ApiResp[RuleInfo])
 @respond
 async def admin_update_moderation_rule(
-    rule_id: int,
+    rule_id: uuid.UUID,
     info: RuleUpdate,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
@@ -65,7 +67,7 @@ async def admin_update_moderation_rule(
 @router.delete("/rules/{rule_id}", response_model=ApiResp[dict[str, bool]])
 @respond
 async def admin_delete_moderation_rule(
-    rule_id: int,
+    rule_id: uuid.UUID,
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:

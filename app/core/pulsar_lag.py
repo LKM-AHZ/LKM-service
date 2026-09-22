@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import suppress
 from typing import Any, cast
 
 import httpx
@@ -55,23 +54,38 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
             body = cast(dict[str, Any], resp.json())
             subscriptions = cast(dict[str, Any], body.get("subscriptions") or {})
             for name in names:
-                entry = cast(dict[str, Any], subscriptions.get(name) or {})
-                backlog = int(entry.get("msgBacklog", 0))
-                pulsar_subscription_backlog.labels(subscription=name, topic=topic).set(
-                    backlog
-                )
+                try:
+                    entry = cast(dict[str, Any], subscriptions.get(name) or {})
+                    backlog = int(entry.get("msgBacklog", 0))
+                    pulsar_subscription_backlog.labels(
+                        subscription=name, topic=topic
+                    ).set(backlog)
+                except Exception:
+                    # 单个订阅条目异常（msgBacklog 为 null / 条目不是 dict）不能让同 topic
+                    # 其余订阅停止更新——否则它们会一直停留在上一周期的陈旧 gauge 值
+                    logger.warning(
+                        "lag 单订阅解析失败 topic=%s sub=%s", topic, name, exc_info=True
+                    )
         except Exception:
             # 单个 topic 拉取失败不中断其它 topic，也不影响主流程（保留上次 gauge 值）。
             logger.warning("lag 拉取失败 topic=%s", topic, exc_info=True)
 
 
 async def _run() -> None:
-    async with httpx.AsyncClient(
-        base_url=settings.pulsar_admin_url, timeout=10.0
-    ) as client:
-        while True:
-            await _collect_once(client)
-            await asyncio.sleep(settings.pulsar_lag_interval_s)
+    while True:
+        try:
+            # client 构造放进轮内：它（以及 _collect_once 顶部取 header/发请求）一旦抛错，
+            # 原实现会让 _run 直接结束——task 转为 done 后没人重建上报器，lag 指标静默
+            # 永久停更。轮级兜底 + 下界 sleep 保证「失败也继续按周期重试」。
+            async with httpx.AsyncClient(
+                base_url=settings.pulsar_admin_url, timeout=10.0
+            ) as client:
+                await _collect_once(client)
+        except Exception:
+            logger.exception("lag 上报轮次异常，跳过本轮")
+        # 下界 1s：interval 配成 0/负数时 asyncio.sleep 不等待，会退化成对 Admin REST 的
+        # 紧凑轮询
+        await asyncio.sleep(max(settings.pulsar_lag_interval_s, 1.0))
 
 
 def start_lag_reporter() -> None:
@@ -147,5 +161,11 @@ async def stop_lag_reporter() -> None:
     task, _task = _task, None
     if task is not None:
         task.cancel()
-        with suppress(asyncio.CancelledError):
+        # task 可能已因未捕获异常而结束：此时 cancel 无效，await 会把任务里保存的原始异常
+        # 重新抛出，令 shutdown 阶段平白报错——记录后继续
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("lag 上报任务此前已异常退出", exc_info=True)

@@ -81,6 +81,11 @@ async def seed_boards(db: AsyncSession) -> int:
         for child_slug in spec["children"]:
             exists = await db.scalar(select(Board).where(Board.slug == child_slug))
             if exists is not None:
+                # 已存在但未挂在预期父板块下 → 补挂：否则「重跑 seed 收敛到声明层级」不成立，
+                # 历史数据会一直保留错的父子关系
+                if exists.parent_id != parent.id:
+                    exists.parent_id = parent.id
+                    await db.flush()
                 continue
             db.add(
                 Board(

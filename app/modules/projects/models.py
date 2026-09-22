@@ -3,7 +3,18 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    text,
+)
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import (  # 注意 db.base 而非 db.models
@@ -33,10 +44,14 @@ class Project(UUIDPrimaryKeyMixin, Base):
     goals: Mapped[str | None] = mapped_column(Text, nullable=True)
     requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     team_intro: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recruiting_roles: Mapped[list] = mapped_column(JSON, default=list)  # [str] 招募角色
-    tags: Mapped[list] = mapped_column(JSON, default=list)  # [str]
+    # 三列都用 MutableList 包装：裸 JSON 不跟踪原地修改（append/remove/赋值单元素），
+    # 加载后 `project.tags.append(...)` 不会被判脏，flush 时静默丢弃
+    recruiting_roles: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSON), default=list
+    )  # [str] 招募角色
+    tags: Mapped[list] = mapped_column(MutableList.as_mutable(JSON), default=list)  # [str]
     reports: Mapped[list] = mapped_column(
-        JSON, default=list
+        MutableList.as_mutable(JSON), default=list
     )  # [{title,content,revision,date}] 进展报告
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active"
@@ -48,13 +63,28 @@ class Project(UUIDPrimaryKeyMixin, Base):
         UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
 
+    # order_by：ProjectMember.sort_order 是持久化字段却从未被应用，成员顺序成了 DB 任意序
     members: Mapped[list[ProjectMember]] = relationship(
-        back_populates="project", cascade="all, delete-orphan"
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="ProjectMember.sort_order",
     )
 
 
 class ProjectApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "project_applications"
+    __table_args__ = (
+        # 同申请人同名的 pending 申请唯一（部分唯一索引）：应用层是 check-then-insert，
+        # 并发两次提交都能看到「不存在」而各插一行，绕过防刷；且一旦复核为 approved/
+        # rejected 就允许再次申请同名项目，故用 WHERE status='pending' 的部分索引。
+        Index(
+            "uq_project_applications_pending",
+            "applicant_id",
+            "title",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     applicant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(100), nullable=False)

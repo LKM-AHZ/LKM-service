@@ -4,10 +4,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import bump_collection_version
 from app.core.common import ApiResp, ModuleStatus
 from app.core.err import BizError, CommonErr, respond
-from app.db.session import get_session
+from app.db.session import get_read_session, get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.projects.schemas import (
     ProjectApplicationCreate,
@@ -50,7 +49,7 @@ async def projects_status() -> ModuleStatus:
 @router.get("", response_model=ApiResp[list[ProjectOut]])
 @respond
 async def project_list(
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_read_session),
 ) -> list[ProjectOut]:
     """项目广场列表（只读）：全部展示型项目，pinned 置顶。"""
     return await list_projects(db)
@@ -60,7 +59,7 @@ async def project_list(
 @respond
 async def project_detail(
     project_id: uuid.UUID,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_read_session),
 ) -> ProjectOut:
     """项目广场详情（只读）：单项目含成员与进展报告。"""
     return await get_project_ex(db, project_id)
@@ -91,6 +90,4 @@ async def review_app(
     role = composible_role(_cur.account_level, _cur.role)
     if not await role_has_permission(db, role, Permission.projects_application_review):
         raise BizError(CommonErr.FORBIDDEN)
-    result = await review_application(db, app_id, _cur.id, body)
-    await bump_collection_version("projects")
-    return result
+    return await review_application(db, app_id, _cur.id, body)

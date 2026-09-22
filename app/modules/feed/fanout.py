@@ -52,6 +52,9 @@ async def bigv_authors() -> set[uuid.UUID]:
     try:
         members = await client.smembers(_bigv_key())
     except Exception:
+        # 返回空集 = 读路径关闭大 V 实时补拉（这些作者的内容会「凭空消失」），
+        # 排障时必须能看出是这里降级，不能静默吞掉
+        logger.warning("read bigv authors failed", exc_info=True)
         return set()
     out: set[uuid.UUID] = set()
     for m in members or ():
@@ -62,58 +65,97 @@ async def bigv_authors() -> set[uuid.UUID]:
     return out
 
 
-async def _mark_bigv(author_id: uuid.UUID) -> None:
+async def _mark_bigv(author_id: uuid.UUID) -> bool:
+    """把作者记入大 V 集合；返回是否标记成功（读路径据此决定能否实时补拉）。"""
     client = await redis_client.get_redis()
     if client is None:
-        return
+        return False
     try:
         await client.sadd(_bigv_key(), str(author_id))
     except Exception:
         logger.warning("mark bigv failed for author %s", author_id, exc_info=True)
+        return False
+    return True
 
 
-async def _follower_ids(
+async def _audience(
     db: AsyncSession, author_id: uuid.UUID | None, board_id: uuid.UUID | None
-) -> set[uuid.UUID]:
-    """该条目的受众：关注作者的人 ∪ 关注该内容版块的人（均过滤软删）。"""
-    followers: set[uuid.UUID] = set()
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """``(作者关注者, 版块关注者)`` 两路**分开**返回（均过滤软删）。
+
+    每路最多取 ``cap + 1`` 行：上限判定只关心「是否超过 cap」，取到 cap+1 即已足够
+    下结论，无需把超大作者/版块的全部关注者 id 拉进内存。低于 cap 时该 limit 不生效，
+    集合仍完整。分开返回是为了按维度分别判定封顶——并集判定会把「版块受众超限」的
+    条目连作者关注者也一起跳过，而读路径的实时补拉只认大 V 作者。
+    """
+    limit = settings.feed_fanout_max_followers + 1
+    authors: set[uuid.UUID] = set()
+    boards: set[uuid.UUID] = set()
     if author_id is not None:
         rows = await db.execute(
-            select(UserFollow.follower_id).where(
+            select(UserFollow.follower_id)
+            .where(
                 UserFollow.following_id == author_id,
                 UserFollow.deleted_at.is_(None),
             )
+            .limit(limit)
         )
-        followers |= set(rows.scalars().all())
+        authors |= set(rows.scalars().all())
     if board_id is not None:
         rows = await db.execute(
-            select(BoardFollow.follower_id).where(
+            select(BoardFollow.follower_id)
+            .where(
                 BoardFollow.board_id == board_id,
                 BoardFollow.deleted_at.is_(None),
             )
+            .limit(limit)
         )
-        followers |= set(rows.scalars().all())
-    return followers
+        boards |= set(rows.scalars().all())
+    return authors, boards
 
 
 async def _fanout_item(db: AsyncSession, item: FeedItem) -> int:
-    """把一条内容写入其受众的物化 feed；返回写入的受众数（大 V 跳过时 0）。"""
+    """把一条内容写入其受众的物化 feed；返回写入的受众数（跳过时 0）。
+
+    封顶按**维度**分别判定：作者维超限才跳过作者扩散（标记大 V，由读路径实时补），
+    版块维超限只跳过版块扩散。此前按两路并集判定，导致「小作者 + 大版块」的条目连
+    作者关注者也一起不写，而大 V 实时补拉只覆盖关注作者的人。
+    """
     if item.author_id is None and item.board_id is None:
         return 0
 
-    followers = await _follower_ids(db, item.author_id, item.board_id)
-    if not followers:
-        return 0
-
-    if len(followers) > settings.feed_fanout_max_followers:
-        # 大 V：跳过写扩散，标记后由读路径实时补齐（避免 O(关注者) 写入突刺）
-        if item.author_id is not None:
-            await _mark_bigv(item.author_id)
-        logger.info(
-            "skip fanout for %s#%s: %d followers exceed cap",
+    cap = settings.feed_fanout_max_followers
+    author_followers, board_followers = await _audience(
+        db, item.author_id, item.board_id
+    )
+    if len(author_followers) > cap:
+        # 大 V：标记后由读路径实时补齐（避免 O(关注者) 写入突刺）。标记失败则**不能**跳过
+        # 写扩散——读路径的 bigv_authors() 同样读 Redis，拿不到标记就不会补拉，跳过等于
+        # 永久丢内容（此时回退为照常写，行数已被上面的 limit 钉在 cap+1 量级）。
+        if item.author_id is not None and await _mark_bigv(item.author_id):
+            author_followers = set()
+        else:
+            logger.warning(
+                "bigv 标记失败，回退写扩散以免内容丢失: %s#%s",
+                item.item_type,
+                item.id,
+            )
+    if len(board_followers) > cap:
+        # 版块维超限：读路径暂无版块级补拉通道，只能跳过（已知缺口，登记于路线图 §8）
+        logger.warning(
+            "skip board fanout for %s#%s: %d board followers exceed cap",
             item.item_type,
             item.id,
-            len(followers),
+            len(board_followers),
+        )
+        board_followers = set()
+
+    followers = author_followers | board_followers
+    if not followers:
+        logger.info(
+            "skip fanout for %s#%s: followers exceed cap",
+            item.item_type,
+            item.id,
         )
         return 0
 
@@ -186,7 +228,14 @@ async def fanout_batch(db: AsyncSession, per_source_limit: int = 200) -> int:
 async def backfill_author(
     db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, limit: int
 ) -> int:
-    """把作者最近 ``limit`` 条内容补进该关注者的物化 feed（新关注时调用，幂等）。"""
+    """把作者最近 ``limit`` 条内容补进该关注者的物化 feed（新关注时调用，幂等）。
+
+    大 V 作者直接跳过：其条目本就不写物化、改由读路径实时补拉，而物化读路径把
+    「物化行 + 实时结果」直接拼接、不做 (item_type, id) 去重，回填会让同一条内容
+    在时间线上出现两次。
+    """
+    if author_id in await bigv_authors():
+        return 0
     values: list[dict[str, object]] = []
     for name in feed_src.FOLLOW_SOURCES:
         fetch = feed_src.SOURCES[name]
@@ -248,15 +297,27 @@ async def backfill_board(
 
 
 async def remove_author_items(
-    db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID
+    db: AsyncSession,
+    follower_id: uuid.UUID,
+    author_id: uuid.UUID,
+    keep_boards: set[uuid.UUID],
 ) -> int:
-    """取消关注某作者时清理其条目（否则物化 feed 会残留已取关的内容）。"""
-    result = await db.execute(
-        sa_delete(FeedItemMaterialized).where(
-            FeedItemMaterialized.user_id == follower_id,
-            FeedItemMaterialized.author_id == author_id,
+    """取消关注某作者时清理其条目。
+
+    与 :func:`remove_board_items` 对称：物化行同时记 ``author_id`` 与 ``board_id``，
+    同一内容可能既因作者、也因版块进入 feed。取关作者时若该行所属版块仍在关注列表里
+    必须保留，否则会静默丢掉仍应可见的版块内容。
+    """
+    conds = [
+        FeedItemMaterialized.user_id == follower_id,
+        FeedItemMaterialized.author_id == author_id,
+    ]
+    if keep_boards:
+        conds.append(
+            FeedItemMaterialized.board_id.is_(None)
+            | FeedItemMaterialized.board_id.notin_(keep_boards)
         )
-    )
+    result = await db.execute(sa_delete(FeedItemMaterialized).where(*conds))
     await db.flush()
     return int(result.rowcount or 0)
 

@@ -300,6 +300,27 @@ async def archive_published(
 # （宁可短暂积压也不多副本重复投），与限流器 fail 语义分场景定性一致。
 
 
+# 「Redis 已配置但不可用」的告警去重标记：get_redis() 的 fail-open 让它与「未配置」都
+# 表现为 None，此分支每 interval 走一次，不去重会把日志刷满
+_redis_degraded_warned = False
+
+
+def _warn_redis_degraded_once(enabled: bool) -> None:
+    """Redis 已配置却拿不到客户端时告警一次（恢复后由 _reset 复位）。"""
+    global _redis_degraded_warned
+    if enabled and not _redis_degraded_warned:
+        _redis_degraded_warned = True
+        logger.warning(
+            "Redis 已配置但当前不可用：outbox relay 退化为无租约串行 poll"
+            "（多副本部署下各副本会并发轮询，仅靠 SKIP LOCKED 与消费端幂等兜底）"
+        )
+
+
+def _reset_redis_degraded_warning() -> None:
+    global _redis_degraded_warned
+    _redis_degraded_warned = False
+
+
 def _lease_key() -> str:
     env = settings.env or "dev"
     return f"lkm:{env}:outbox:leader"
@@ -382,12 +403,22 @@ async def run_outbox_loop() -> None:
     # 当前 poll 者做（单 owner 或 leader），与 poll 同循环、不另起任务。
     next_archive_at = datetime.now(UTC)
 
-    async def _poll_tick() -> None:
+    async def _poll_tick() -> bool:
+        """一轮 poll（到点再归档）；返回 ``False`` = 租约已在轮内失效，调用方需重抢。"""
         nonlocal next_archive_at
         try:
             await relay_poll()
         except Exception:
             logger.exception("outbox relay_poll 异常，下轮重试")
+        # 轮内续约：单轮 relay_poll(batch=100) + archive_published(batch=500) 在总线变慢/
+        # 积压大时可能超过 outbox_leader_ttl_s，而租约只在 tick 进入前续过一次——不续期
+        # 就会「本副本仍在投递、租约已到期」，被其它副本抢成双 leader 并发 poll/归档。
+        # token 为 None（Redis 不可用的单 owner 路径）时无租约可续，直接跳过。
+        if token is not None and not await _renew_lease(
+            redis, token, settings.outbox_leader_ttl_s
+        ):
+            logger.warning("轮内租约续期失败，中止本轮后续投递并重抢")
+            return False
         now = datetime.now(UTC)
         if now >= next_archive_at:
             try:
@@ -403,10 +434,16 @@ async def run_outbox_loop() -> None:
             redis = await redis_client.get_redis()
             if redis is None:
                 # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll，等同 M1.1。
+                # 「已配置但暂时不可用」走同一分支：这里刻意继续投递（fail-open 保可用性），
+                # 同时告警一次——若改成直接跳过，Redis 一挂 outbox 投递就整体停摆；而 poll
+                # 走 SKIP LOCKED，多副本并发只会各取不相交的一批行。丢租约的代价仅是多副本
+                # 下并发轮询（部署清单 replicas=1，且消费者按 event_id 幂等）。
                 token = None
+                _warn_redis_degraded_once(redis_client.is_enabled())
                 await _poll_tick()
                 await asyncio.sleep(interval)
                 continue
+            _reset_redis_degraded_warning()
 
             # 已是 leader → 续约；续不上（被接管/失联）回到未持有。
             if token is not None:
@@ -414,7 +451,8 @@ async def run_outbox_loop() -> None:
                     logger.info("租约续约失败/已让出，回到外层重抢")
                     token = None
                 else:
-                    await _poll_tick()
+                    if not await _poll_tick():
+                        token = None  # 轮内续约失败：交出 leader 权，下轮重抢
                     await asyncio.sleep(interval)
                     continue
 
@@ -433,3 +471,6 @@ async def run_outbox_loop() -> None:
             raise
         except Exception:
             logger.exception("outbox relay 外层异常，重新进入领袖 reconcile")
+            # 失败路径也要按周期让出：持续性异常（如 Redis 已配置但不可用时反复抛错）若不
+            # sleep，会立刻重进 try，形成 CPU 空转 + 每条带完整堆栈的日志风暴
+            await asyncio.sleep(interval)

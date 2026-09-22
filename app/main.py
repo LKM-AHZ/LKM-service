@@ -3,7 +3,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import Depends, FastAPI, Request
@@ -52,10 +52,18 @@ class GraphQLContext(BaseContext):
     """
 
     db: AsyncSession
-    user_id: int | None = None
+    user_id: uuid.UUID | None = None
 
 
 request_logger = logging.getLogger("lkm.http")
+
+
+async def _shutdown_step(name: str, step: Callable[[], Awaitable[object]]) -> None:
+    """收尾单步兜底：任一步骤失败只记日志，不让它跳过其余资源的释放。"""
+    try:
+        await step()
+    except Exception:
+        request_logger.exception("shutdown step failed name=%s", name)
 
 
 @asynccontextmanager
@@ -84,24 +92,31 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     yield
 
     cleanup_task.cancel()
-    with suppress(asyncio.CancelledError):
+    try:
         await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # 非取消类异常不得打断收尾：它会使后续资源全部泄漏
+        request_logger.exception("background cleanup task failed during shutdown")
 
+    # 逐步骤兜底（顺序不变）：任一 close 抛错都不能跳过其余释放，否则连接泄漏
     # 收尾 WebSocket 事件的 Redis 订阅 task，避免泄漏连接
-    await manager.close()
-
+    await _shutdown_step("ws_manager", manager.close)
     # 收尾 L1 失效广播订阅 task（须在 close_redis 前，避免关连接竞态）
-    await user_cache_events.stop()
-
+    await _shutdown_step("user_cache_events", user_cache_events.stop)
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
-    await stop_lag_reporter()
-    await messaging.close()
+    await _shutdown_step("pulsar_lag", stop_lag_reporter)
+    await _shutdown_step("messaging", messaging.shutdown)
     # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）
-    await clickhouse.close()
-    await redis_client.close_redis()
-    # 收尾链路追踪（限时 flush），先于引擎释放
-    shutdown_tracing()
-    await dispose_engine()
+    await _shutdown_step("clickhouse", clickhouse.close)
+    await _shutdown_step("redis", redis_client.close_redis)
+    # 收尾链路追踪（限时 flush），先于引擎释放；同步函数，同样兜底
+    try:
+        shutdown_tracing()
+    except Exception:
+        request_logger.exception("shutdown step failed name=tracing")
+    await _shutdown_step("engine", dispose_engine)
 
 
 def create_app() -> FastAPI:
@@ -120,7 +135,17 @@ def create_app() -> FastAPI:
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         """结构化访问日志：注入 request_id，记录 method/route/status/latency。"""
-        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        # 客户端传来的 X-Request-ID 不可直接采信：CR/LF 等控制字符会造成日志伪造/响应头
+        # 注入（h11 会直接拒答），非 ASCII 也会污染日志；不合规就另生成一个
+        candidate_id = request.headers.get("X-Request-ID") or ""
+        request_id = (
+            candidate_id
+            if candidate_id
+            and candidate_id.isascii()
+            and candidate_id.isprintable()
+            and len(candidate_id) <= 128
+            else uuid.uuid4().hex
+        )
         token = logger.set_request_id(request_id)
         start = time.perf_counter()
         try:
@@ -139,6 +164,21 @@ def create_app() -> FastAPI:
                 },
             )
             return response
+        except Exception:
+            # 业务异常会穿过本中间件交给外层 ServerErrorMiddleware 的 Exception handler；
+            # 若只记成功路径，恰恰最需要关联信息的 500 请求没有任何访问日志（重抛不放行）
+            request_logger.exception(
+                "http.request",
+                extra={
+                    "extra_fields": {
+                        "method": request.method,
+                        "route": request.url.path,
+                        "status": 500,
+                        "latency_ms": round((time.perf_counter() - start) * 1000, 3),
+                    }
+                },
+            )
+            raise
         finally:
             logger.reset_request_id(token)
 

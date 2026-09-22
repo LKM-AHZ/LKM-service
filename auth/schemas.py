@@ -48,7 +48,9 @@ class ProfileInfo(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    nickname: str | None = None
+    # 上界与 profiles.nickname 列（String(100)）一致：不设会在 PG 侧抛
+    # StringDataRightTruncation 变 500，而不是作为非法入参被拒。
+    nickname: str | None = Field(None, max_length=100)
     avatar: str | None = None
 
 

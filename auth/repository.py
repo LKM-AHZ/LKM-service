@@ -106,13 +106,23 @@ class UserRepository(AsyncRepository[User]):
     async def find_for_login(
         self, *, username: str, email: str, phone: str
     ) -> User | None:
-        """按用户名 / 邮箱 / 手机号任一命中取用户（登录入口，预载 profile）。"""
+        """按用户名 / 邮箱 / 手机号任一命中取 User（登录入口，预载 profile）。
+
+        空联系方式不计入谓词（同 :meth:`find_for_registration`）：``User.email == None``
+        会编译成 ``email IS NULL``，把「没填邮箱」的任意用户当成命中，登录路径上即身份错配。
+        """
         return await self.get_one(
-            or_(User.username == username, User.email == email, User.phone == phone),
+            or_(
+                User.username == username,
+                (User.email == email) if email else False,
+                (User.phone == phone) if phone else False,
+            ),
             options=(selectinload(User.profile),),
         )
 
     async def find_by_email_or_phone(self, contact: str) -> User | None:
+        if not contact:
+            return None
         return await self.get_one(or_(User.email == contact, User.phone == contact))
 
     async def find_for_registration(

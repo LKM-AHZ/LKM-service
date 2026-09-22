@@ -282,21 +282,39 @@ async def reconcile_user_dim_periodic() -> int:
     from app.core.redis import get_redis as _get_redis
 
     redis = await _get_redis()
+    token: str | None = None
     if redis is not None:
-        got = await redis.set(_RECONCILE_LOCK, "1", ex=3600, nx=True)
+        # 锁值用本次运行的唯一 token（而非常量 "1"），释放时才能确认「还是我们那枚」。
+        token = uuid.uuid4().hex
+        got = await redis.set(_RECONCILE_LOCK, token, ex=3600, nx=True)
         if not got:
             logger.info("user_dim 对账已被其他实例执行, 本次跳过")
             return 0
-    source_db, target_db = await _session_factory()
+    # 会话获取也放进 try：_session_factory() 抛错（auth/业务库短暂不可用/new_auth_session 失败）
+    # 时 finally 仍要跑，否则 Redis 锁会留满 3600s TTL，之后一小时的每次对账都被静默跳过
+    # ——正是这张 crash-safety 网要防的情况。
+    source_db: AsyncSession | None = None
+    target_db: AsyncSession | None = None
     try:
+        source_db, target_db = await _session_factory()
         updated = await reconcile_user_dim_incremental(source_db, target_db)
         await target_db.commit()
         return updated
     except Exception:
-        await target_db.rollback()
+        if target_db is not None:
+            await target_db.rollback()
         raise
     finally:
-        await source_db.close()
-        await target_db.close()
-        if redis is not None:
+        if source_db is not None:
+            await source_db.close()
+        if target_db is not None:
+            await target_db.close()
+        # 比对后再删：运行一旦超过 3600s TTL，锁可能已被别的实例合法持有，无条件 DEL
+        # 会把对方的锁删掉 → 两个 reconciler 并发跑，正是本锁要防的自竞争。
+        # （GET..DEL 之间仍有亚毫秒级窗口，相比 1 小时 TTL 可忽略；要彻底原子需 Lua CAS。）
+        if (
+            redis is not None
+            and token is not None
+            and await redis.get(_RECONCILE_LOCK) == token
+        ):
             await redis.delete(_RECONCILE_LOCK)

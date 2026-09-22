@@ -16,7 +16,12 @@
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+
 from fastapi import Request
+
+logger = logging.getLogger("lkm.client_ip")
 
 # 网关注入的真实客户端 IP 头名。语义为「单值、由边缘覆写」，**不解析**其追加链。
 REAL_IP_HEADER = "X-Real-IP"
@@ -33,7 +38,14 @@ def client_ip(request: Request) -> str:
     """
     forwarded = (request.headers.get(REAL_IP_HEADER) or "").strip()
     if forwarded:
-        return forwarded
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            # 不是 IP 字面量（逗号拼接链 / 注入内容 / 超长串）：不信这个头，回落 peer。
+            # 上面的信任前提是两条部署不变式（网关 set 覆写、后端无对外端口）；一旦被破坏
+            # （dev compose 误发布后端端口、前置代理改成 append），该值即为攻击者可控——
+            # 直接透传会污染按 IP 的限流桶与审计日志。
+            logger.warning("X-Real-IP 非法，忽略并回落 peer：%r", forwarded[:64])
     return request.client.host if request.client else UNKNOWN_IP
 
 

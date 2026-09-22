@@ -1,5 +1,6 @@
 """Github OAuth 实现。"""
 
+import logging
 from typing import Any, cast
 
 import httpx
@@ -10,13 +11,34 @@ from app.core.secrets import reveal
 from auth.errors import AuthErr
 from auth.providers.oauth import OAuthUserInfo, register_provider
 
+logger = logging.getLogger(__name__)
+
 # GitHub API 调用超时：避免慢 Provider / 挂起拖住 OAuth 回调请求
 _HTTP_TIMEOUT = httpx.Timeout(10.0)
 
 
 def _http_error_to_biz(exc: httpx.HTTPError) -> BizError:
-    """把 httpx 的 HTTP/网络/超时异常归一化为 OAUTH_PROVIDER_ERROR，勿泄漏 500。"""
-    return BizError(AuthErr.OAUTH_PROVIDER_ERROR, f"GitHub request failed: {exc}")
+    """把 httpx 的 HTTP/网络/超时异常归一化为 OAUTH_PROVIDER_ERROR，勿泄漏 500。
+
+    异常细节（目标 host / URL / 上游状态码）只进服务端日志：它经 ``BizError.detail``
+    会直接回给客户端，属内部信息外泄。
+    """
+    logger.warning("GitHub OAuth request failed: %s", exc)
+    return BizError(AuthErr.OAUTH_PROVIDER_ERROR, "GitHub request failed")
+
+
+def _parse_json(resp: httpx.Response) -> Any:
+    """解析响应体：非 JSON（代理页/空体）也归一化为 OAUTH_PROVIDER_ERROR。
+
+    ``json.JSONDecodeError`` 是 ``ValueError`` 而**不是** ``httpx.HTTPError``，不被外层
+    except 覆盖，会直接冒出端点变 500——正是本模块要挡掉的失败形态。
+    """
+    try:
+        return resp.json()
+    except ValueError:
+        raise BizError(
+            AuthErr.OAUTH_PROVIDER_ERROR, "Malformed GitHub response body"
+        ) from None
 
 
 class GithubOAuth:
@@ -45,7 +67,12 @@ class GithubOAuth:
                     headers={"Accept": "application/json"},
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                data = _parse_json(resp)
+                if not isinstance(data, dict):
+                    raise BizError(
+                        AuthErr.OAUTH_PROVIDER_ERROR,
+                        "Unexpected GitHub token response shape",
+                    )
                 access_token = data.get("access_token")
                 if not access_token:
                     raise BizError(
@@ -54,7 +81,7 @@ class GithubOAuth:
                     )
                 return access_token
         except httpx.HTTPError as exc:
-            raise _http_error_to_biz(exc) from None
+            raise _http_error_to_biz(exc) from exc
 
     async def fetch_user(self, access_token: str) -> OAuthUserInfo:
         """获取 GitHub 用户资料和主邮箱。"""
@@ -65,8 +92,8 @@ class GithubOAuth:
                     "https://api.github.com/user", headers=headers
                 )
                 user_resp.raise_for_status()
-                user_data = user_resp.json()
-                if "id" not in user_data:
+                user_data = _parse_json(user_resp)
+                if not isinstance(user_data, dict) or "id" not in user_data:
                     raise BizError(
                         AuthErr.OAUTH_PROVIDER_ERROR, "Failed to fetch GitHub user"
                     )
@@ -75,7 +102,7 @@ class GithubOAuth:
                     "https://api.github.com/user/emails", headers=headers
                 )
                 emails_resp.raise_for_status()
-                emails_data = emails_resp.json()
+                emails_data = _parse_json(emails_resp)
                 primary_email: str | None = None
                 if isinstance(emails_data, list):
                     entries = cast(list[Any], emails_data)
@@ -95,7 +122,7 @@ class GithubOAuth:
                     username=user_data.get("login", ""),
                 )
         except httpx.HTTPError as exc:
-            raise _http_error_to_biz(exc) from None
+            raise _http_error_to_biz(exc) from exc
 
 
 register_provider(GithubOAuth())

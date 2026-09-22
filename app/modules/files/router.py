@@ -1,9 +1,9 @@
-import json
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common import (
@@ -12,6 +12,7 @@ from app.core.common import (
     PageData,
     PaginateDep,
     PaginateParams,
+    parse_tags,
 )
 from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_read_session, get_session
@@ -79,24 +80,31 @@ async def get_files(
 @respond
 async def upload_file(
     file: UploadFile = File(...),
-    category_id: str = Form(default=""),
-    description: str = Form(default=""),
+    # 长度约束要落在 Form 上：放进端点内的 FileCreate 里，超限时抛的是 pydantic
+    # ValidationError，而 FastAPI 只把 RequestValidationError 转 422，其余会落到兜底
+    # handler 变 500。这里与 schemas.FileCreate 的上界保持一致。
+    category_id: str = Form(default="", max_length=50),
+    description: str = Form(default="", max_length=500),
     tags: str = Form(default="[]"),
     cur: CurrentUser = RequirePermission(Permission.files_upload),
     db: AsyncSession = Depends(get_session),
 ) -> FileInfo:
-    try:
-        tags_list: list[str] = json.loads(tags) if tags else []
-    except json.JSONDecodeError:
-        tags_list = []
+    # 复用统一入口解析 form 里的 tags（JSON 串/畸形值均归一为 list[str]），
+    # 不再各自 json.loads——前者会把非列表 JSON 变成端点内的 ValidationError
+    tags_list = parse_tags(tags)
 
-    info = FileCreate(
-        original_name=file.filename or "untitled",
-        mime_type=file.content_type or "application/octet-stream",
-        category_id=category_id,
-        description=description,
-        tags=tags_list,
-    )
+    # filename / content_type 来自 multipart 分段头，无法用 Form 约束；这里把超限
+    # （original_name>255 / mime_type>100）转成受控的 INVALID_INPUT(422)，而不是 500。
+    try:
+        info = FileCreate(
+            original_name=file.filename or "untitled",
+            mime_type=file.content_type or "application/octet-stream",
+            category_id=category_id,
+            description=description,
+            tags=tags_list,
+        )
+    except ValidationError as exc:
+        raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
     return await create_file_service(db, cur.id, info, file.file)
 
 
@@ -200,7 +208,11 @@ async def preview_file(
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """预览：仅 APPROVED 可访问，inline 流式返回，计 view_count。"""
-    return await serve_content(db, file_id, "inline")
+    resp = await serve_content(db, file_id, "inline")
+    # 依赖 teardown 要等响应体发完才跑，若不在此提前提交，慢客户端下载期间会一直占着
+    # 池连接（生成器只读 storage，不再需要 DB）；提交同时落定上面的 view_count 计次。
+    await db.commit()
+    return resp
 
 
 @router.get("/{file_id}/download/url", response_model=ApiResp[DownloadUrlInfo])
@@ -221,4 +233,7 @@ async def download_file_content(
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """附件流式下载：仅 APPROVED 可访问。"""
-    return await serve_content(db, file_id, "attachment")
+    resp = await serve_content(db, file_id, "attachment")
+    # 同上：流式期间不再需要 DB，提前结束事务把连接还给连接池（本路径无写入，提交即空事务）
+    await db.commit()
+    return resp

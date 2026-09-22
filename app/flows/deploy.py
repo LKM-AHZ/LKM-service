@@ -44,22 +44,51 @@ DEPLOYMENTS: list[tuple[Any, str, str]] = [
 ]
 
 
-def main() -> None:
-    for flow_obj, name, entrypoint in DEPLOYMENTS:
-        deployment_id = flow_obj.from_source(
-            source=SOURCE, entrypoint=entrypoint
-        ).deploy(
-            name=name,
-            work_pool_name=WORK_POOL,
-            build=False,
-            push=False,
+def _check_entrypoint(flow_obj: Any, entrypoint: str) -> None:
+    """注册前校验 entrypoint 指向的函数就是被注册的那个 flow。
+
+    两者都可被环境变量独立覆盖：把 ``LKM_PREFECT_ENTRYPOINT`` 指到别的函数，
+    deployment 实际执行的 flow 就与日志里 ``flow_obj.name`` 声称的不是同一个，
+    且不会有任何报错——只能等跑起来才发现。比较用 ``flow_obj.fn.__name__``：
+    这些 flow 的 ``@flow(name=...)`` 是展示名（如 user-dim-reconcile），与函数名不同。
+    """
+    _, _, func_name = entrypoint.rpartition(":")
+    fn = getattr(flow_obj, "fn", None)
+    expected = getattr(fn, "__name__", None)
+    if expected is not None and func_name != expected:
+        raise ValueError(
+            f"entrypoint {entrypoint!r} 指向 {func_name!r}，"
+            f"与被注册的 flow 函数 {expected!r} 不一致"
         )
+
+
+def main() -> None:
+    failures: list[str] = []
+    for flow_obj, name, entrypoint in DEPLOYMENTS:
+        try:
+            _check_entrypoint(flow_obj, entrypoint)
+            deployment_id = flow_obj.from_source(
+                source=SOURCE, entrypoint=entrypoint
+            ).deploy(
+                name=name,
+                work_pool_name=WORK_POOL,
+                build=False,
+                push=False,
+            )
+        except Exception as exc:
+            # 逐条隔离：任一 deployment 注册失败不能中止其余（否则后面的 flow 全没注册，
+            # 而 APScheduler 的 cron 触发会指向不存在的 deployment）。失败在末尾汇总抛出。
+            logger.exception("注册 deployment 失败: %s (%s)", name, exc)
+            failures.append(name)
+            continue
         logger.info(
             "已注册 deployment: %s/%s (id=%s)",
             flow_obj.name,
             name,
             deployment_id,
         )
+    if failures:
+        raise RuntimeError(f"以下 deployment 注册失败：{', '.join(failures)}")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,16 @@ class ColumnApplicationReview(BaseModel):
     status: ColumnApplicationStatus
     review_note: str | None = Field(default=None, max_length=300)
 
+    @field_validator("status")
+    @classmethod
+    def _reject_pending(cls, v: ColumnApplicationStatus) -> ColumnApplicationStatus:
+        # 审核结果只能 APPROVED/REJECTED：service 只校验「当前是 PENDING」就无条件写
+        # info.status，收下 PENDING 会让记录保持 PENDING 而 reviewer_id/reviewed_at 已被写上，
+        # 「已复核」幂等守卫随之失效（同一申请可被反复审核）。
+        if v == ColumnApplicationStatus.PENDING:
+            raise ValueError("review status must be APPROVED or REJECTED")
+        return v
+
 
 class ColumnInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

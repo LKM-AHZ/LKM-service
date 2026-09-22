@@ -5,8 +5,9 @@
 任何需要全量模型注册的入口（init_db/create_all、worker 进程、Alembic env）只要
 ``from app.db.model_registry import ensure_all_models`` 即可。
 
-``Base.registry.configure()`` 必须在全部模型注册后仅调用一次；重复调用会抛
-``InvalidRequestError``，故用全局标志幂等。
+``Base.registry.configure()`` 必须在全部模型注册后调用，使 relationship 字符串引用得以解析。
+重复调用是安全的（``mapperlib._configure_registries`` 在无新增 mapper 时直接返回），
+故这里不做守卫——既不再依赖 SQLAlchemy 私有属性，也顺带覆盖「之后又注册了新模型」的情况。
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ def ensure_all_models() -> None:
     import app.modules.projects.models
     import app.modules.starhope.models  # noqa: F401
 
-    if not getattr(_base_module.Base.registry, "_configured", False):
-        _base_module.Base.registry.configure()
+    # 不用 getattr(registry, "_configured", False) 做幂等守卫：那是 SQLAlchemy 无稳定性
+    # 承诺的私有状态（实测本版根本没有该属性，守卫早已退化成「每次都调」）。configure()
+    # 本身在「无新增 mapper」时是 no-op，直接调用最稳，也不依赖内部实现。
+    _base_module.Base.registry.configure()
 
     # S5 拆库：auth 表挂独立 auth 元数据（AuthBase），不混入 Base.metadata（业务库）。
     # 注册经 auth 公开钩子（内部惰性 import auth.models + configure），db 层不直接触达 auth 内部。

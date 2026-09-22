@@ -7,6 +7,8 @@ M2.3 汇集原 follow/graphql（FollowQuery + GraphFollowUser/Board，按登录�
 timeline，REST/前端字段名契约不破）。
 """
 
+import uuid
+
 import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
@@ -56,7 +58,7 @@ def _get_db(info: Info) -> AsyncSession:
     return info.context.db
 
 
-def _get_user_id(info: Info) -> int | None:
+def _get_user_id(info: Info) -> uuid.UUID | None:
     return info.context.user_id
 
 
@@ -96,6 +98,10 @@ class TimelineQuery:
     ) -> GraphFeedResponse:
         db = _get_db(info)
         user_id = _get_user_id(info)
+        # GraphQL 没有 FastAPI Query(ge=1, le=100) 那层约束，limit 是纯客户端可控：不夹紧的话
+        # timeline(limit: 10_000_000) 会让服务端拉/排序任意大集合，limit<=0 更会被 PG 直接
+        # 拒绝 LIMIT -1（500）。与 REST 端点同口径夹到 [1, 100]。
+        limit = max(1, min(limit, 100))
         feed = await get_timeline(
             db, user_id=user_id, mode=mode, cursor=cursor, limit=limit
         )

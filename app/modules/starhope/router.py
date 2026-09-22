@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common import ApiResp
-from app.core.err import respond
+from app.core.err import BizError, CommonErr, respond
 from app.db.session import get_read_session, get_session
 from app.modules.starhope.schemas import (
     StarHopePullData,
@@ -23,7 +23,14 @@ async def pull(
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_read_session),
 ) -> StarHopePullData[dict]:
-    return await pull_entity(db, entity, cur.id, parse_since(since))
+    since_dt = parse_since(since)
+    if since is not None and since_dt is None:
+        # parse_since 把无法解析的游标吞成 None → 时间过滤被丢掉，增量同步静默退化成
+        # 全量拉取（还带上墓碑），客户端笔误却既无 4xx 也无日志。在边界显式拒绝。
+        raise BizError(
+            CommonErr.INVALID_INPUT, "since 必须是 ISO8601 时间字符串"
+        )
+    return await pull_entity(db, entity, cur.id, since_dt)
 
 
 @router.post("/{entity}/sync", response_model=ApiResp[StarHopePushResult])

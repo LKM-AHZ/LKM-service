@@ -51,6 +51,19 @@ class UserBalanceRepository(AsyncRepository[UserBalance]):
         )
         return [(uid, int(balance)) for uid, balance in rows.all()]
 
+    async def lock_for_update(self, user_id: uuid.UUID) -> None:
+        """对用户余额行加行锁（``SELECT ... FOR UPDATE``）。
+
+        用途：把「幂等预检 → 变动余额 → 落流水」整段按 user 串行化（见
+        :func:`app.modules.points.service.reward` 的竞态说明）；不同用户互不阻塞。
+        行不存在时锁不到任何行，故调用方必须先用 ``ensure_balance`` 建行。
+        """
+        await self.db.execute(
+            select(UserBalance.user_id)
+            .where(UserBalance.user_id == user_id)
+            .with_for_update()
+        )
+
     async def apply_delta(
         self, user_id: uuid.UUID, delta: int, allow_negative: bool
     ) -> int | None:

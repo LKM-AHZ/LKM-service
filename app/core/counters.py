@@ -17,11 +17,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from app.core import redis as redis_client
 from app.core.cache import make_key
+
+logger = logging.getLogger(__name__)
 
 # 允许计数化的列名白名单（防止把任意列名拼进键/UPDATE）
 COUNTER_FIELDS: frozenset[str] = frozenset(
@@ -62,24 +65,30 @@ def parse_counter_key(key: str) -> tuple[str, uuid.UUID] | None:
 
 async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
     """把差值记入 Redis。返回 ``True`` 表示已入 Redis（DB 待 flush 收敛）。"""
+    # 键构造（含白名单校验）必须在 try 之外：字段名非法是调用方错误，不能与
+    # 「Redis 不可用」共用同一条 False 出口，否则会被静默导到 DB 回退路径
+    key = counter_key(field, obj_id)
     client = await redis_client.get_redis()
     if client is None:
         return False
     try:
-        await client.incrby(counter_key(field, obj_id), delta)
+        await client.incrby(key, delta)
     except Exception:
+        logger.warning("count incrby 失败，回退 DB 路径 key=%s", key, exc_info=True)
         return False
     return True
 
 
 async def pending_delta(field: str, obj_id: uuid.UUID) -> int:
     """当前未落库差值（Redis 不可用/无键 → 0）。用于返回「DB 值 + 增量」的即时读数。"""
+    key = counter_key(field, obj_id)  # 同 bump_counter：校验失败必须外抛，不吞成 0
     client = await redis_client.get_redis()
     if client is None:
         return 0
     try:
-        raw = await client.get(counter_key(field, obj_id))
+        raw = await client.get(key)
     except Exception:
+        logger.warning("count 读增量失败，按 0 处理 key=%s", key, exc_info=True)
         return 0
     try:
         return int(raw) if raw is not None else 0
@@ -115,6 +124,10 @@ async def drain_counters() -> dict[tuple[str, uuid.UUID], int]:
             if delta:
                 drained[parsed] = drained.get(parsed, 0) + delta
     except Exception:
-        # 扫描中途失败：已取走的差值仍会被调用方落库（返回已收集部分）
+        # 扫描中途失败：已取走的差值仍会被调用方落库（返回已收集部分），
+        # 但必须留痕——例如 Redis < 6.2 没有 GETDEL，会每轮都在这里静默中断
+        logger.warning(
+            "drain_counters 扫描中断，已取走 %d 项仍将落库", len(drained), exc_info=True
+        )
         return drained
     return drained

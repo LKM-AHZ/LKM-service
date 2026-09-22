@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 
 from app.core.err import BizError, ErrCode
@@ -29,11 +30,14 @@ class ProjectApplicationRepository(AsyncRepository[ProjectApplication]):
     async def pending_duplicate_exists(
         self, *, applicant_id: uuid.UUID, title: str
     ) -> bool:
-        """同一申请人同名 pending 申请是否已存在（防重复刷单）。"""
+        """同一申请人同名 pending 申请是否已存在（防重复刷单）。
+
+        比较前统一 strip+小写：否则同一个人用 "LKM"/"LKM "/"lkm" 三种写法就能绕过防刷。
+        """
         return await self.exists(
             ProjectApplication.applicant_id == applicant_id,
             ProjectApplication.status == "pending",
-            ProjectApplication.title == title,
+            func.lower(ProjectApplication.title) == title.strip().lower(),
         )
 
 

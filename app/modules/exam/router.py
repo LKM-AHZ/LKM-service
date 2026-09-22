@@ -84,18 +84,21 @@ async def exam_list(
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
 ) -> PageData[ExamOut]:
-    async def load() -> PageData[ExamOut]:
+    async def load() -> dict[str, Any]:
         items, total = await list_exams(db, page=pag.page, limit=pag.limit, type_=type_)
+        # loader 必须回**可 JSON 序列化**的 dict：cache_set 里的 json.dumps(TypeError) 被静默
+        # 吞掉，返回 Pydantic 模型的话 Redis 永远写不进去，每次请求都是 miss 直查库。命中缓存
+        # 后同样按模型校验回来（与 articles/points 的缓存读写法一致）。
         return PageData(
             items=items,
             total=total,
             page=pag.page,
             pages=(total + pag.limit - 1) // pag.limit,
-        )
+        ).model_dump(mode="json")
 
     ver = await collection_version("exam")
     key = make_key("exam:list", ver, pag.page, pag.limit, type_)
-    return await cached_read(key, 60, load)
+    return PageData[ExamOut].model_validate(await cached_read(key, 60, load))
 
 
 @router.get("/{exam_id}", response_model=ApiResp[ExamOut])
@@ -103,11 +106,11 @@ async def exam_list(
 async def exam_detail(
     exam_id: uuid.UUID, db: AsyncSession = Depends(get_read_session)
 ) -> ExamOut:
-    async def load() -> ExamOut:
-        return await get_exam_ex(db, exam_id)
+    async def load() -> dict[str, Any]:
+        return (await get_exam_ex(db, exam_id)).model_dump(mode="json")
 
     key = make_key("exam:item", exam_id)
-    return await cached_read(key, 300, load)
+    return ExamOut.model_validate(await cached_read(key, 300, load))
 
 
 # ————— 认证/参与：开考、交卷 —————

@@ -142,6 +142,14 @@ async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
 
     L1 命中直接返回（免 L2 往返）；L1 miss 才查 L2，L2 命中后按 L1 TTL 回填本地。L1 条目
     仅作镜像，脏形态（非 dict）即删，不放大既有 ``_from_cache_dict`` 的脏缓存问题。
+
+    **L1 回填不做 epoch 守卫（已知窗口，属设计取舍）**：本协程在 ``await redis.get(key)``
+    期间若发生失效（另一实例 INCR epoch + DEL snap，本进程订阅任务删 L1 时 L1 尚为空），
+    恢复后会把刚读到的旧值写进 L1，而 L1 命中不再看 L2/epoch → 该旧值可被服务至多
+    ``user_snap_l1_ttl_s``（默认 10s）。要收紧需在 GET 之前与恢复之后各读一次 epoch
+    （每次回填多两次 Redis 往返）并丢弃跨失效窗口的读值；鉴于 L1 的定位就是「TTL 有界的
+    只读镜像、不具权威」（见模块 docstring）且默认 TTL 仅 10s，此处保留窗口并在此明示。
+    同一模式亦见 :func:`read_snap_with_version` 与 :func:`read_snaps`。
     """
     redis = await _get_redis()
     if redis is None:

@@ -142,7 +142,9 @@ def should_apply_ttl_and_partitioning() -> None:
     assert "TTL ts + INTERVAL" not in sql
     assert "TTL folded_at + INTERVAL" not in sql
     assert "TTL created_at + INTERVAL" not in sql
-    assert sql.count("DateTime64(3)") >= 6
+    # 时间列显式钉 UTC（vector 写的是无后缀 UTC 串；不钉则按 CH 服务器时区解释，
+    # 一旦给容器加了 TZ 全表偏时区，而分区/TTL/ORDER BY 都建立在这列上）
+    assert sql.count("DateTime64(3, 'UTC')") >= 6
 
 
 # ── vector.toml ──────────────────────────────────────────────────────────────

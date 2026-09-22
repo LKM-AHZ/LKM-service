@@ -11,8 +11,10 @@
 令牌：``settings.files_notify_token``；空串视为未启用 → 一律 401。
 """
 
+import hmac
 import json
 import logging
+from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -58,7 +60,8 @@ def _authorized(authorization: str | None) -> bool:
     if not authorization:
         return False
     scheme, _, value = authorization.partition(" ")
-    return scheme.lower() == "bearer" and value == token
+    # 常量时间比较：`==` 首字节不同即返回，会通过响应耗时侧信道泄露共享令牌
+    return scheme.lower() == "bearer" and hmac.compare_digest(value, token)
 
 
 def _extract_uploads(payload: Any) -> list[str]:
@@ -98,8 +101,11 @@ async def _enqueue_upload(upload_id: str) -> None:
     """
     if not settings.message_bus_enabled:
         return  # dev/无 broker：outbox 门控等价直发被跳过，不落积压不影响回执
-    db = await new_session()
+    db = None
     try:
+        # 建会话也放进 try：引擎未初始化 / 连接池取连接失败时，异常原先会冒穿
+        # _enqueue_upload，让 webhook 回 500（MinIO 据此重投），与「入队异常不影响回执」相悖
+        db = await new_session()
         await enqueue_outbox(
             db, RKEY_NOTIFY, {"fn": "notify_upload", "args": [upload_id]}
         )
@@ -107,7 +113,9 @@ async def _enqueue_upload(upload_id: str) -> None:
     except Exception:
         logger.exception("outbox notify_enqueue 失败 upload_id=%s", upload_id)
     finally:
-        await db.close()
+        if db is not None:
+            with suppress(Exception):
+                await db.close()
 
 
 @router.post("/object")

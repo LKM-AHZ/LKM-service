@@ -26,7 +26,9 @@ class UnreadCountOut(BaseModel):
 class MarkReadIn(BaseModel):
     """标记已读：给 ``ids`` 或 ``all=true``（二者都空则 no-op）。"""
 
-    ids: list[uuid.UUID] = Field(default_factory=list)
+    # 直接进 Notification.id.in_(ids)：无上限时可被塞进巨型 IN（PG 绑定参数上限 65535，
+    # 超出直接报错变 500），也白耗内存与查询时间
+    ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
     all: bool = False
 
 
@@ -54,7 +56,7 @@ class PreferencesIn(BaseModel):
 
 class TokenIn(BaseModel):
     token: str = Field(min_length=1, max_length=255)
-    platform: str = Field(default="web", max_length=20)
+    platform: str = Field(default="web", min_length=1, max_length=20)
 
 
 class TokenOut(BaseModel):

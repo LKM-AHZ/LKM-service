@@ -66,10 +66,12 @@ ERRTABLE: dict[ErrCode, tuple[int, str]] = {}
 
 
 def register(errors: dict[ErrCode, tuple[int, str]]) -> None:
-    for code, info in errors.items():
+    # 先整体校验再落表：逐个插入时遇到重复会在抛错前留下半更新的 ERRTABLE，
+    # 测试/模块重载场景下会让后续断言看到一份不完整的注册表
+    for code in errors:
         if code in ERRTABLE:
             raise ValueError(f"Duplicate error code: {code!r}")
-        ERRTABLE[code] = info
+    ERRTABLE.update(errors)
 
 
 register(
@@ -84,18 +86,39 @@ register(
 )
 
 
+def err_info(errcode: ErrCode) -> tuple[int, str]:
+    """查错误码对应的 ``(status, msg)``；未注册时回退 500 并告警。
+
+    未注册的错误码（新模块的 errors.py 未被 registry 导入，或在注册副作用之前就被 raise）
+    原先会在这里 KeyError。索引点分散在 ``BizError.__init__``、``map_err``、``resp_json``，
+    后两者位于全局异常处理器内——KeyError 会把受控业务错误变成 500 + 难以定位的 traceback。
+    回退到 INTERNAL_ERROR 保证响应仍是合法错误信封，日志明确指出漏注册。
+    """
+    info = ERRTABLE.get(errcode)
+    if info is None:
+        logger.error(
+            "未注册的错误码 %r：检查对应模块 errors.py 是否被 app/modules/registry 导入",
+            errcode,
+        )
+        return ERRTABLE[CommonErr.INTERNAL_ERROR]
+    return info
+
+
 class BizError(Exception):
     errcode: ErrCode
     detail: str
 
     def __init__(self, errcode: ErrCode, detail: str | None = None) -> None:
         self.errcode = errcode
-        self.detail = detail or ERRTABLE[errcode][1]
+        self.detail = detail or err_info(errcode)[1]
+        # 不调 super().__init__ 会让 exc.args 为空、str(exc) 变成空串：
+        # logger.exception / 错误上报器这类按异常文本格式化的地方会丢掉消息与错误码
+        super().__init__(self.detail)
 
 
 def map_err(exc: Exception) -> tuple[int, ErrCode, str]:
     if isinstance(exc, BizError):
-        status, _ = ERRTABLE[exc.errcode]
+        status, _ = err_info(exc.errcode)
         return status, exc.errcode, exc.detail
 
     if isinstance(exc, RequestValidationError):
@@ -119,7 +142,7 @@ def resp_json(
     detail: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    status, msg = ERRTABLE[errcode]
+    status, msg = err_info(errcode)
 
     return JSONResponse(
         status_code=status,
@@ -151,11 +174,16 @@ def _wrap_result(result: Any) -> Response:
     # 预编码响应透传（读热端点用 msgspec 直出，勿再包一层 JSONResponse）
     if isinstance(result, Response):
         return result
-    if (
-        isinstance(result, tuple)
-        and len(cast(Any, result)) >= 2
-        and isinstance(result[0], ErrCode)
-    ):
+    if isinstance(result, tuple) and isinstance(result[0], ErrCode):
+        # 只认 (errcode, payload) 这一种形状：旧实现用 len(...) >= 2，多出来的元素会被
+        # 静默丢弃并按 (errcode, payload) 回应。长度不符按内部错误回应 + 留日志（仍是合法
+        # 错误信封），不猜语义、也不丢数据。
+        if len(cast(Any, result)) != 2:
+            logger.error(
+                "endpoint returned an (errcode, ...) tuple with %d elements, expected 2",
+                len(cast(Any, result)),
+            )
+            return resp_json(CommonErr.INTERNAL_ERROR)
         # isinstance 已收窄 result[0] 为 ErrCode，无需再 cast
         errcode = result[0]
         payload = result[1]

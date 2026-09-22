@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.core.err import BizError, CommonErr
 from app.db.repository import AsyncRepository
 from app.modules.blog.models import (
     BlogComment,
@@ -148,7 +149,18 @@ class BoardRepository(AsyncRepository[Board]):
         existing = await self.get_one(Board.slug == slug)
         if existing is not None:
             return existing.id
-        board = await self.create(
-            slug=slug, title=slug, description="auto-created for blog publish"
+        # 并发发布同一 slug 时两边都查不到、各自 insert，后提交者撞 board.slug 唯一约束
+        # 会让整个发布请求失败。改为原子插入 + 冲突忽略后回读（同 points 的 pg_upsert 写法）。
+        await self.pg_upsert(
+            {
+                "slug": slug,
+                "title": slug,
+                "description": "auto-created for blog publish",
+            },
+            index_elements=["slug"],
+            do_nothing=True,
         )
+        board = await self.get_one(Board.slug == slug)
+        if board is None:  # 仅防御：DO NOTHING + 回查理论上必命中
+            raise BizError(CommonErr.INTERNAL_ERROR, f"board slug={slug} not found")
         return board.id

@@ -42,7 +42,9 @@ class ExamRepository(AsyncRepository[Exam]):
         self, *, type_: str | None, offset: int, limit: int
     ) -> tuple[list[Exam], int]:
         """公开考试分页（题目预载），返回 ``(items, total)``。"""
-        conditions: list[Any] = []
+        # 公开口只出已发布：唯一调用方 list_exams 是「公开考试/竞赛」列表，不加此过滤
+        # 会把草稿/未发布考试泄进公开 feed（start_attempt 亦按 is_published 拒绝作答）。
+        conditions: list[Any] = [Exam.is_published.is_(True)]
         if type_:
             conditions.append(Exam.type == type_)
         total = await self.count(*conditions)

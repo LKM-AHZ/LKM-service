@@ -3,6 +3,7 @@ import uuid
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.orm.collections import InstrumentedList
 
 from app.modules.blog.models import BlogSeriesStatus
 from auth.schemas import ProfileInfo
@@ -85,9 +86,12 @@ class BlogCommentInfo(BaseModel):
 
     @field_validator("replies", mode="before")
     @classmethod
-    def _ignore_orm_replies(cls, v: Any) -> list[Any]:
-        # 树由 service 手动拼装，忽略 ORM 的 replies 关联
-        return []
+    def _ignore_orm_replies(cls, v: Any) -> Any:
+        # 只丢弃 ORM 关系集合（树由 service 手动拼装，避免懒加载与重复展开）；
+        # 其余来源（显式传入的嵌套 dict/模型）照常参与校验，不再一律置空静默丢数据
+        if isinstance(v, InstrumentedList):
+            return []
+        return v
 
 
 BlogCommentInfo.model_rebuild()

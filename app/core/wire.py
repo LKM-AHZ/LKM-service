@@ -40,7 +40,16 @@ class Envelope(msgspec.Struct):
 
 
 def msgspec_ok(data: Any, *, headers: dict[str, str] | None = None) -> Response:
-    """构造成功响应（``code/msg/data``），序列化走 msgspec。"""
+    """构造成功响应（``code/msg/data``），序列化走 msgspec。
+
+    **``data`` 必须已是 msgspec 可编码的值**（本模块/各模块 ``wire.py`` 的 Struct、dict、
+    list、str/int/float/bool/None、datetime/UUID/Decimal 等）。Pydantic 模型实例、任意对象、
+    ``set``、``bytes`` 不在此列：``msgspec.json.encode`` 会抛 TypeError，而 ``err._wrap_result``
+    对已是 Response 的返回值直接透传、不会兜住它 → 读热端点会变成未处理的 500。
+    放宽的办法是给 Encoder 配 ``enc_hook``（回落 ``fastapi.encoders.jsonable_encoder``），
+    但那会在个别类型上偏离 Pydantic ``model_dump(mode="json")`` 的口径，破坏本模块 docstring
+    承诺的「两条序列化路径 JSON 等价」，故这里用明确的类型契约约束调用方。
+    """
     status, msg = ERRTABLE[CommonErr.OK]
     return MsgspecJSONResponse(
         status_code=status,

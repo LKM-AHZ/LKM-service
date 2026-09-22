@@ -14,10 +14,11 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
-from auth.security import verifypwd
+from auth.security import dummy_verify, verifypwd
 from auth.service_authz import (
     authorize_user,
     grant_exam_unlock,
@@ -34,13 +35,18 @@ from auth.service_authz import (
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 
+logger = logging.getLogger(__name__)
+
 
 class _AuthzIn(BaseModel):
     user_id: uuid.UUID
     # 会话描述：monolith 已在其侧自行解码 JWT(用共享 jwt_secret)，把“需 auth 侧复核/裁决”的关键
     # 载荷原样送来复审；不带 email/phone→ 缝不透 PII。
-    expect_token_version: int = 0
-    iat_ts: int | float | None = None  # JWT iat(秒)；None=不检查改密撤销
+    # 两个字段**故意不给默认值**：原先 expect_token_version 默认 0（与绝大多数账号的初始
+    # token_version 相同）、iat_ts 默认 None（跳过改密撤销），调用方漏传就把权威裁决静默降级成
+    # 「存在且未锁定」。改为必填，漏传直接 422。
+    expect_token_version: int
+    iat_ts: int | float | None  # JWT iat(秒)；显式传 None 才跳过改密撤销检查
     require_admin: bool = False  # 后台：要求 account_level == admin
 
 
@@ -89,8 +95,22 @@ async def internal_grant(
     bump token_version 并入队 user.updated —— 消费侧随后拉到的快照为已升权新值、旧令牌已失效。
     """
     if body.kind == "incubation":
+        # incubation 只按 user_id 升权：带了 unlock_* 说明调用方拼错了 payload，
+        # 静默丢弃会让它拿到「成功」的 changed 却什么都没升
+        if body.unlock_level is not None or body.unlock_role is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="unlock_level/unlock_role not allowed for incubation",
+            )
         changed = await grant_incubation(db, body.user_id)
     else:  # kind == "exam_unlock"
+        # 两个目标都没给 → grant_exam_unlock 只会返回 0，与「本来就已经解锁」无法区分；
+        # 业务侧 _apply_unlock 已保证不会这么发，故这里显式拒绝而不是静默 no-op
+        if body.unlock_level is None and body.unlock_role is None:
+            raise HTTPException(
+                status_code=422,
+                detail="exam_unlock requires unlock_level and/or unlock_role",
+            )
         changed = await grant_exam_unlock(
             db,
             body.user_id,
@@ -115,10 +135,19 @@ async def internal_verify_password(
         .scalars()
         .first()
     )
-    ok = bool(user and user.hashed_password)
-    if ok:
-        try:
-            ok = await verifypwd(body.password, str(user.hashed_password))  # type: ignore[union-attr]
-        except Exception:
-            ok = False
+    if not (user and user.hashed_password):
+        # 用户不存在/无密码：跑一次等成本的虚拟哈希，否则本条“微秒返回、存在者数十毫秒”
+        # 的耗时差可被调用方（如 blog git_http）当作用户名枚举 oracle。
+        await dummy_verify()
+        return {"ok": False}
+    ok = True
+    try:
+        ok = await verifypwd(body.password, str(user.hashed_password))
+    except Exception:
+        # 与 service_auth.authenticate_account 同口径：凭证哈希损坏/依赖异常不能与「密码错」
+        # 混为一谈（否则根因丢失，只剩一个笼统的 ok=false）
+        logger.exception(
+            "verifypwd raised exception for user_id=%s (possible corrupted hash)", user.id
+        )
+        ok = False
     return {"ok": ok}

@@ -1,5 +1,7 @@
 """projects(项目) 只读 GraphQL。复用 service;members 已由 selectinload 加载。"""
 
+import uuid
+
 import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
@@ -78,8 +80,15 @@ class ProjectsQuery:
         self, info: Info, projectId: strawberry.ID
     ) -> GraphProject | None:
         db = _get_db(info)
+        # GraphQL 的 ID 落到这里是 str：REST 侧由 FastAPI 的 uuid.UUID 路径类型校验，
+        # 这里没有。畸形值过去会直达驱动抛 DataError/StatementError（表现为未处理的
+        # GraphQL 执行错误），与「查不到 → None」的契约不符，故显式转换并对非法输入返回 None。
         try:
-            p = await get_project_ex(db, projectId)
+            project_uuid = uuid.UUID(str(projectId))
+        except ValueError:
+            return None
+        try:
+            p = await get_project_ex(db, project_uuid)
         except BizError as e:
             if e.errcode != ProjectErr.PROJECT_NOT_FOUND:
                 raise

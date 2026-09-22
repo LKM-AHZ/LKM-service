@@ -17,7 +17,10 @@ from app.core.err import BizError
 from app.modules.storage.base import SavedFile
 from app.modules.storage.errors import StorageErr
 
-_CHUNK = 1024 * 1024  # 分块读写
+_CHUNK = 1024 * 1024  # 下载读取分块
+# multipart 除末块外每块必须 >= 5 MiB（S3/MinIO 硬约束）：沿用 1 MiB 分块上传时，
+# 任何 >1 MiB 的对象都会在 complete_multipart_upload 报 EntityTooSmall
+_PART_SIZE = 5 * 1024 * 1024
 
 
 class _TooLarge(Exception):
@@ -38,7 +41,7 @@ def _save_multipart_sync(
     size = 0
     try:
         while True:
-            chunk = stream.read(_CHUNK)
+            chunk = stream.read(_PART_SIZE)
             if not chunk:
                 break
             size += len(chunk)
@@ -53,7 +56,12 @@ def _save_multipart_sync(
             )
             parts.append({"PartNumber": len(parts) + 1, "ETag": part["ETag"]})
         if not parts:
-            raise _TooLarge()
+            # 0 字节对象：multipart 不允许 0 个 part（会走到这里），但空文件本身合法，
+            # 改用 put_object 落空对象，不能当成「超限」报 413。已创建的 multipart
+            # 须先 abort，否则返回路径绕过了下面的 except，留下孤儿分片。
+            client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+            client.put_object(Bucket=bucket, Key=key, Body=b"")
+            return 0
         client.complete_multipart_upload(
             Bucket=bucket,
             Key=key,
@@ -153,13 +161,24 @@ class S3Storage:
             raise BizError(
                 StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}"
             ) from exc
-        # 逐块读取经 to_thread 调度，避免 StreamingBody 的同步 socket I/O 阻塞事件循环
+        # 逐块读取经 to_thread 调度，避免 StreamingBody 的同步 socket I/O 阻塞事件循环。
+        # body 必须在 finally 关闭：消费方提前 break/抛错时若不关，HTTP 连接与 socket
+        # 会一直挂到 GC；流中途的网络错误也要映射成 STORE_ERROR 而不是裸 botocore 异常。
         body = resp["Body"]
-        while True:
-            chunk = await asyncio.to_thread(body.read, _CHUNK)
-            if not chunk:
-                break
-            yield chunk
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.to_thread(body.read, _CHUNK)
+                except ClientError as exc:
+                    raise BizError(
+                        StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}"
+                    ) from exc
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            with suppress(Exception):
+                await asyncio.to_thread(body.close)
 
     async def copy(self, src: str, dest: str) -> None:
         # confirm 流程把随机 key 的对象复制到内容寻址 key；阻塞网络调用走 to_thread

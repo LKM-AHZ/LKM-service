@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -138,6 +139,11 @@ class UserTaskProgress(UUIDPrimaryKeyMixin, Base):
 
 class ExchangeItem(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "exchange_items"
+    __table_args__ = (
+        # -1 是「无限/虚拟」哨兵，而消费侧只判 `stock < 0`：-5 这类值会被同样当成无限，
+        # 悄悄把限量商品变成不限量。DB 层挡住 < -1 的写入（0 与正数=限量，-1=无限）。
+        CheckConstraint("stock >= -1", name="ck_exchange_stock"),
+    )
     key: Mapped[str] = mapped_column(String(10), unique=True, nullable=False)  # e1..e6
     name_key: Mapped[str] = mapped_column(String(120), nullable=False)
     desc_key: Mapped[str] = mapped_column(String(200), nullable=False)

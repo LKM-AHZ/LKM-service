@@ -48,7 +48,12 @@ def _require_internal_token(
     if not authorization:
         raise HTTPException(status_code=401, detail="missing Authorization")
     scheme, _, value = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(value, token):
+    # 比字节而非 str：Authorization 头由 uvicorn 按 latin-1 解码，攻击者带 >=0x80 的字节
+    # 会让 str 版 compare_digest 抛 TypeError（"non-ASCII characters is not supported"）
+    # → 500 + 栈，反而把这唯一一道门禁变成报错面；字节比较恒安全且语义不变。
+    if scheme.lower() != "bearer" or not secrets.compare_digest(
+        value.encode("utf-8"), token.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="bad internal token")
 
 
@@ -74,6 +79,14 @@ def _parse_ids(ids: str) -> list[uuid.UUID]:
     上限用 ``snapshot.BATCH_IDS_MAX``（与业务侧分块同一常量）——超限直接拒，不静默截断：
     截断会让调用方以为全部取到，属静默错答案。去重避免同 id 重复占额度与重复行。
     """
+    # 先按原始长度粗筛：下面的 BATCH_IDS_MAX 只数「解析成功且去重后」的 id，切分/解析的
+    # 开销原本只受 ASGI 请求行长度限制。本端点文档承诺 fail-closed，故显式给出上界，
+    # 不依赖前置服务器/代理的限额。每个 id 最长 36 字符（UUID 文本）+ 1 个分隔符。
+    if len(ids) > (36 + 1) * snap_mod.BATCH_IDS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many ids: raw length {len(ids)} exceeds limit",
+        )
     raw = [p.strip() for p in ids.split(",")]
     parsed: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
@@ -105,7 +118,9 @@ async def internal_users_by_ids(
 ) -> dict[str, Any]:
     """经内部缝**一次**拉一批用户快照（M6.5，消跨 AUTH 逐 id HTTP 循环）。
 
-    返回 ``{"items": [{"user_id": <int>, "data": <fields|null>, "sv": <int|null>}, ...]}``
+    返回 ``{"items": [{"user_id": <uuid str>, "data": <fields|null>, "sv": <int|null>}, ...]}``
+    ——``user_id`` 是 **uuid 字符串**（FastAPI 序列化 ``uuid.UUID`` 即为 str；消费侧
+    ``auth.user_http`` 也是按 ``uuid.UUID(str(item["user_id"]))`` 解析的）。
     ——每个**入参 id** 都有一条（权威不存在 → ``data=null``），顺序与去重后的入参一致。只读
     冻结字段、零 PII，与单条端点同源（``_fetch_fields_batch_from_db``：一条 SQL 查多行）。
     """

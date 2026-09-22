@@ -16,15 +16,30 @@ from __future__ import annotations
 import datetime as _dt
 import uuid
 
+from sqlalchemy import select
+
 from app.db.base import now_iso
 from app.db.repository import DbSession
 from auth import events, user_http
+from auth.models import User
 from auth.repository import ProfileRepository, UserRepository
 
 # account_level / Profile.role 的“单向提升”单调序。auth 是身份词表 owner，故把 exam/service、
 # projects/service 各自硬编码的 rank 语义集中到这里（Phase 4 由 auth 侧以此裁决是否真升）。
 _LEVEL_RANK = {"local": 0, "normal": 1, "admin": 2}
-_ROLE_RANK = {"member": 0, "columnist": 1, "author": 2}
+# 考试 unlock_role 的取值域只有 columnist/author（见 exam/seed），管理侧与培育侧角色
+# （create_admin/admin_ops 写 "admin"，grant_incubation 写 "incubated_member"）排在内容
+# 角色之上：它们在 DEFAULT_GRANTS 里各有复合角色条目，一旦被 unlock_role 覆盖就会变成
+# 无授权条的组合（如 admin:columnist）→ 该用户静默掉到零权限。
+_ROLE_RANK = {
+    "member": 0,
+    "columnist": 1,
+    "author": 2,
+    "incubated_member": 3,
+    "org_member": 4,
+    "admin": 5,
+    "super_admin": 6,
+}
 
 
 # —— 令牌“存活/权威”判定（拆库后 auth 侧裁决；monolith deps seam 以此为单一事实源）——
@@ -115,6 +130,17 @@ def _rank_of(table: dict[str, int], value: object) -> int:
     return table.get(value, -1) if isinstance(value, str) else -1
 
 
+async def _lock_user_row(db: DbSession, user_id: uuid.UUID) -> None:
+    """升权前先对本用户的 ``users`` 行加行锁，令并发升权串行。
+
+    「读当前 level/role → 判 rank → 分别 UPDATE」是 check-then-act：两次并发升权（两次考试
+    提交，或考试解锁撞 grant_incubation）都会读到旧值、都通过 rank 检查，最后写者赢，存活值
+    可能是较低的那个，破坏「只升不降」；还会多出一次 token_version bump 与重复 user.updated。
+    READ COMMITTED 下 FOR UPDATE 会等对方提交后再返回最新行版本，故后续读取拿到的是新值。
+    """
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update())
+
+
 async def grant_exam_unlock(
     db: DbSession,
     user_id: uuid.UUID,
@@ -137,6 +163,7 @@ async def _apply_upgrades(
     db: DbSession, user_id: uuid.UUID, unlock_level: str | None, unlock_role: str | None
 ) -> int:
     """执行单向升权：有任一真实提升才 bump token + 失效；返回是否改（0/1）。"""
+    await _lock_user_row(db, user_id)
     row = await UserRepository(db).get_level_and_role(user_id)
     if row is None:
         # 用户不存在（异常态，如业务并发删号）→ 与既有 _apply_unlock 相同：无动作不报错。
@@ -151,8 +178,12 @@ async def _apply_upgrades(
     ):
         await UserRepository(db).set_account_level(user_id, str(unlock_level))
         changed = True
-    if unlock_role is not None and _rank_of(_ROLE_RANK, unlock_role) > _rank_of(
-        _ROLE_RANK, cur_role
+    cur_role_rank = _rank_of(_ROLE_RANK, cur_role)
+    # 表外角色（未来新增/脏数据）不参与比较：宁可不动，也不让考试解锁把它覆盖成降级。
+    if (
+        unlock_role is not None
+        and cur_role_rank >= 0
+        and _rank_of(_ROLE_RANK, unlock_role) > cur_role_rank
     ):
         await ProfileRepository(db).set_role(user_id, str(unlock_role))
         changed = True
@@ -173,6 +204,7 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
     - Profile.role 仅当当前为 ``member``/空 时置为 ``incubated_member``；
     - 有任一切实变更才 bump token + 发 user.updated。返回是否改（0/1）。
     """
+    await _lock_user_row(db, user_id)
     row = await UserRepository(db).get_level_and_role(user_id)
     if row is None:
         # 与既有 _apply_incubation 一致：用户不存在 → 无动作不报错。
@@ -184,7 +216,8 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
     if account_level != "admin":
         await UserRepository(db).set_account_level(user_id, "admin")
         changed = True
-    if cur_role in ("member", ""):
+    if cur_role == "member":
+        # cur_role 已在上面把空值归一成 "member"，原来的 ("member", "") 里 "" 分支不可达。
         await ProfileRepository(db).set_role(user_id, "incubated_member")
         changed = True
 

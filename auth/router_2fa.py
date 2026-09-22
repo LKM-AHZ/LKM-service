@@ -1,10 +1,14 @@
 """
-2FA (TOTP) HTTP 端点。
-POST   /auth/2fa/setup/begin     RequireLevel("normal")  开始 TOTP 设置
-POST   /auth/2fa/setup/temp      temp_token 认证         开始 TOTP 设置（管理员强制设置）
-POST   /auth/2fa/setup/complete  RequireLevel("normal")  完成 TOTP 设置
-POST   /auth/2fa/verify          public (temp_token)     登录时验证 2FA
-DELETE /auth/2fa                  RequireLevel("normal")  禁用 2FA
+2FA (TOTP) HTTP 端点（本表即路由契约，改路由时同步改这里）。
+POST   /auth/2fa/setup/begin         RequireLevel("normal")      开始 TOTP 设置
+POST   /auth/2fa/setup/temp          temp_token 认证             开始 TOTP 设置（管理员强制设置）
+POST   /auth/2fa/setup/complete      RequireLevel("normal")      完成 TOTP 设置
+POST   /auth/2fa/setup/complete/temp temp_token(+code) 参数认证   用临时令牌完成设置（管理员强制设置路径）
+POST   /auth/2fa/setup/confirm       RequireLevel("normal")      确认恢复码
+POST   /auth/2fa/verify              public (temp_token)         登录时验证 2FA
+DELETE /auth/2fa                     RequireLevel("normal")      禁用 2FA（需 TOTP 码或恢复码）
+GET    /auth/2fa/status              RequireLevel("normal")      查询 2FA 是否已开启
+POST   /auth/2fa/step-up             已登录用户（get_current_user）危险操作 step-up，换带 2FA 信任的 access token
 """
 
 import hashlib

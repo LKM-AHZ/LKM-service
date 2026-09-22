@@ -64,8 +64,12 @@ async def _sub_loop() -> None:
         if redis is None:
             await asyncio.sleep(1)
             continue
-        pubsub = redis.pubsub()
+        # pubsub() 也放进 try：共享客户端被关闭（收尾时序）/连接池耗尽时它会抛，
+        # 放在 try 外会让异常直接冒穿 _sub_loop 而**永久**终止订阅任务（该 task 无人 await，
+        # 异常被静默丢弃），跨实例 L1 失效从此不再工作。
+        pubsub: Any | None = None
         try:
+            pubsub = redis.pubsub()
             await pubsub.subscribe(_channel())
             while True:
                 msg: dict[str, Any] | None = await pubsub.get_message(
@@ -81,9 +85,17 @@ async def _sub_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            with suppress(Exception):
-                await pubsub.aclose()
+            # 退避重连要可观测：否则订阅长期失败只表现为「实时失效不生效」，无任何日志
+            logger.warning("L1 失效订阅异常，退避重连", exc_info=True)
             await asyncio.sleep(1)
+        finally:
+            # 取消/异常两条路径都要关掉订阅连接：原先只在 except Exception 里关，
+            # CancelledError 分支直接 raise 就漏了——每次 stop()（应用收尾）都会泄漏一条
+            # 池连接并留下服务端悬挂订阅，正是 docstring 承诺要收尾的东西。
+            # 吞掉关闭自身的异常（含二次投递的 CancelledError），别让它顶掉原始退出原因
+            if pubsub is not None:
+                with suppress(Exception, asyncio.CancelledError):
+                    await pubsub.aclose()
 
 
 async def stop() -> None:

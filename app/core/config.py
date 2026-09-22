@@ -1,14 +1,15 @@
 import urllib.parse
 from typing import ClassVar
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.secrets import reveal
 
 # 存在即安全的非生产占位桶：仅当显式认领 dev/local/test 才允许占位密钥。
-# 刻意不包含 ""/None —— LKM_ENV 缺失（含显式设为空串）一律按生产 fail-fast，
-# 避免"忘了设 LKM_ENV=production"时占位密钥悄悄放行。本地开发默认 env="dev" 不受影响。
+# 刻意不包含 ""：显式把 LKM_ENV 设成空串即按生产 fail-fast。
+# 注意「LKM_ENV 未设置」并不 fail-fast —— env 字段默认值是 "dev"，缺失即按 dev 宽松放行，
+# 所以生产部署必须显式设 LKM_ENV=production（漏设的代价是占位密钥被放行）。
 _PERMISSIVE_ENVS: set[str] = {"dev", "local", "test"}
 
 # 开发兜底的 CORS 来源白名单（本地前端：社区站 astro/管理台 vite）。
@@ -29,7 +30,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 运行环境：默认 dev（本地），生产显式设 LKM_ENV=production 等非宽松值
+    # 运行环境：字段默认 "dev"，故 LKM_ENV **未设置**时按 dev 宽松放行；只有显式设成 ""
+    # 或 production 等非宽松值才收紧（fail-fast 校验见 _no_insecure_secrets_outside_dev）。
+    # 生产必须显式设 LKM_ENV=production。
     env: str = "dev"
 
     app_name: str = "LKM-API"
@@ -281,8 +284,10 @@ class Settings(BaseSettings):
 
     # Sentry APM：空串 = 不加载（dev/test 默认关闭，避免拖启动）；配置 DSN 才接入
     sentry_dsn: SecretStr = SecretStr("")
-    # Sentry 性能采样率（0~1）；仅 DSN 非空时才生效
-    sentry_traces_sample_rate: float = 1.0
+    # Sentry 性能采样率（0~1）；仅 DSN 非空时才生效。
+    # 越界值（如误填 50）在装配期就报错：sentry-sdk 对越界采样率只在内部记 error 并使采样
+    # 失效，表现为「初始化成功但 tracing 静默全关」，很难排查
+    sentry_traces_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
     # Prometheus metrics（M0.5.1）：默认开（本地无副作用收集器，成本极低）；
     # 显式 LKM_METRICS_ENABLED=false 可整体关闭（fail-open，不阻塞启动）
@@ -317,6 +322,18 @@ class Settings(BaseSettings):
     s3_secret_key: SecretStr = SecretStr("")
     s3_prefix: str = "files"  # 桶内 key 前缀
 
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def _check_jwt_algorithm(cls, v: str) -> str:
+        """jwt_algorithm 取值收敛到 HS256/RS256（拼错或填 none 者装配期即报错）。
+
+        注意不强制「RS256 必须配私钥」：只验签的进程（不调 encode）可以只持公钥，
+        硬绑会误杀这类部署；签发侧缺私钥时 jwt_keys.encode 已有明确 RuntimeError。
+        """
+        if v not in ("HS256", "RS256"):
+            raise ValueError(f"LKM_JWT_ALGORITHM 仅支持 HS256/RS256，收到 {v!r}")
+        return v
+
     @model_validator(mode="after")
     def _no_insecure_secrets_outside_dev(self) -> "Settings":
         """生产（非宽松环境）必须提供真实密钥，禁止用 change-me 占位或空串启动。
@@ -345,10 +362,26 @@ class Settings(BaseSettings):
             v = reveal(value)
             if _bad(v):
                 insecure.append(name)
-            elif name in ("jwt_secret", "totp_encryption_key") and len(v) < 32:
+            elif (
+                name
+                in (
+                    "jwt_secret",
+                    "totp_encryption_key",
+                    "verification_code_pepper",
+                )
+                and len(v) < 32
+            ):
                 insecure.append(f"{name}(too short)")
         if reveal(self.jwt_secret) == reveal(self.totp_encryption_key):
             insecure.append("jwt_secret==totp_encryption_key")
+        # pepper 同样要求是「独立密钥」（字段注释如此要求）：原先只比 jwt/totp 一对，
+        # 漏掉了 pepper 等于另两把之一的情况。空/占位值上面已标记，这里跳过以免重复上报。
+        pepper = reveal(self.verification_code_pepper)
+        if pepper and pepper in (
+            reveal(self.jwt_secret),
+            reveal(self.totp_encryption_key),
+        ):
+            insecure.append("verification_code_pepper==jwt_secret/totp_encryption_key")
 
         # 注：不在此强制 db_password/redis_url —— 各 worker 进程 env 集不同（如
         # worker-scheduler 不接 DB/Redis），按进程强校验会误杀。仅在「用到了才校验」的
@@ -376,8 +409,8 @@ class Settings(BaseSettings):
         # RS256/JWKS：关掉 HS 回退却没有任何 RSA 公钥 → RS 与 HS 两条验签路径都不通，
         # 所有 token 一律被拒。这是**自相矛盾**的配置（与进程 env 集无关），装配期即拦。
         if not self.jwt_hs_fallback and not (
-            self.jwt_public_key
-            or self.jwt_private_key
+            reveal(self.jwt_public_key).strip()
+            or reveal(self.jwt_private_key).strip()
             or self.jwt_public_key_file
             or self.jwt_private_key_file
         ):
@@ -443,7 +476,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        password = urllib.parse.quote_plus(reveal(self.db_password))
+        # 用 quote（空格→%20）而非 quote_plus：userinfo 段不按表单语义解码 '+',
+        # 含空格的密码用 quote_plus 会变成字面 '＋'，SQLAlchemy 侧 unquote 后密码就错了
+        password = urllib.parse.quote(reveal(self.db_password), safe="")
         return (
             f"postgresql+asyncpg://{self.db_user}:{password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
@@ -452,7 +487,7 @@ class Settings(BaseSettings):
     @property
     def auth_database_url(self) -> str:
         """AUTH 独立库的 PostgreSQL(asyncpg) 连接 URL。"""
-        password = urllib.parse.quote_plus(reveal(self.auth_db_password))
+        password = urllib.parse.quote(reveal(self.auth_db_password), safe="")
         return (
             f"postgresql+asyncpg://{self.auth_db_user}:{password}"
             f"@{self.auth_db_host}:{self.auth_db_port}/{self.auth_db_name}"

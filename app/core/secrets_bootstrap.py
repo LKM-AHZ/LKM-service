@@ -17,9 +17,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any
 
 logger = logging.getLogger("lkm.secrets")
@@ -68,7 +69,10 @@ def _fetch_secrets(
     for item in secrets:
         key = item.get("secretKey")
         if isinstance(key, str):
-            out[key] = str(item.get("secretValue", ""))
+            # get 的默认值只在「键缺失」时生效：值为 null 时 str(None) 会把字面量 "None"
+            # 注入成环境变量值，静默污染配置，故显式判 None
+            raw_value = item.get("secretValue")
+            out[key] = "" if raw_value is None else str(raw_value)
     return out
 
 
@@ -103,7 +107,14 @@ def bootstrap(
             "配置不完整（需 SITE_URL/PROJECT_ID/CLIENT_ID/CLIENT_SECRET）",
         )
 
-    timeout = float(env.get("LKM_INFISICAL_TIMEOUT_S") or "5.0")
+    # 解析必须在守卫内：畸形值（如 "5s"、纯空格）原先会让 ValueError 直接冒出 bootstrap()，
+    # 把 ENTRYPOINT 打崩而不是按契约返回 0/1；负值/NaN 也会被原样传给 client
+    try:
+        timeout = float(env.get("LKM_INFISICAL_TIMEOUT_S") or "5.0")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a positive finite number")
+    except ValueError:
+        return _fail(required, "LKM_INFISICAL_TIMEOUT_S 非法（需正数秒）")
     factory = client_factory or _default_client_factory
     try:
         with factory(timeout) as client:
@@ -119,11 +130,17 @@ def bootstrap(
             continue
         if env.get(key):  # 已显式给值者优先，Infisical 只补缺
             continue
-        # environ 为 os.environ 时直接写；测试传入 dict 亦支持
-        if isinstance(env, dict):
+        # 注入目标必须真的可写：原先「非 dict 就写 os.environ」会让只读映射
+        # （MappingProxyType/ChainMap 等）既不收到注入、也不报错，反而改了进程全局状态
+        # 且调用方看不到结果
+        if env is os.environ:
+            os.environ[key] = value
+        elif isinstance(env, MutableMapping):
             env[key] = value
         else:
-            os.environ[key] = value
+            return _fail(
+                required, f"注入目标不可写（{type(env).__name__}），无法注入 {key}"
+            )
         injected += 1
     logger.info("Infisical 密钥已注入 %d 项（已有环境变量未覆盖）", injected)
     return 0

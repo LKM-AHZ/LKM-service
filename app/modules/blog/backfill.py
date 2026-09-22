@@ -13,6 +13,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.err import BizError
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
 from app.modules.blog import git_svc
@@ -65,7 +66,15 @@ async def backfill_series_from_git(
     result = BackfillResult(paths=changed)
 
     for path in changed:
-        content = await asyncio.to_thread(git_svc.read_file, repo_name, path)
+        try:
+            content = await asyncio.to_thread(git_svc.read_file, repo_name, path)
+        except BizError:
+            # diff-tree 不带 --diff-filter，删除/重命名产生旧路径也会出现在 changed 里，
+            # 而 read_file 走 `git show HEAD:<path>`（HEAD 树中已不存在）必抛 GIT_ERROR。
+            # 不在此吞掉的话，一次含删除的 push 会让整个批次回填失败（调用方 rollback）。
+            # 语义选择：仅跳过，不删对应 BlogContent 行（删除同步属产品决定，见路线图登记）。
+            result.skipped.append(path)
+            continue
         sha = _sha3(content)
 
         row = (

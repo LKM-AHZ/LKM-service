@@ -13,11 +13,12 @@ POST /auth/recover/magic-link/verify  – 通过魔法链接令牌重置
 
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import jobs
+from app.core.client_ip import client_ip
 from app.core.common import ApiResp
 from app.core.config import settings
 from app.core.err import respond
@@ -63,9 +64,10 @@ class RecoverPhoneRequest(BaseModel):
 class RecoverPhoneVerifyRequest(BaseModel):
     phone: str = Field(..., min_length=5, max_length=20)
     code: str = Field(..., min_length=6, max_length=6)
-    # 此处不接受 new_password — recover_user_complete 步骤
-    # 在 2FA 验证通过后才接收密码
-    new_password: str | None = Field(None, min_length=6, deprecated=True)
+    # 非 MFA 账号：本步直接用它完成重置（service_recovery.recover_by_contact 里非空校验）。
+    # MFA 账号：本步只开事务返回 txn_id/temp_token，密码改由 /recover/user/complete 接收。
+    # 故它既不是「此处不接受」也不是 deprecated——前端 useRecoveryFlow 正是按这个契约传的。
+    new_password: str | None = Field(None, min_length=6)
 
 
 class RecoverEmailRequest(BaseModel):
@@ -75,9 +77,8 @@ class RecoverEmailRequest(BaseModel):
 class RecoverEmailVerifyRequest(BaseModel):
     email: RawEmail
     code: str = Field(..., min_length=6, max_length=6)
-    # 此处不接受 new_password — recover_user_complete 步骤
-    # 在 2FA 验证通过后才接收密码
-    new_password: str | None = Field(None, min_length=6, deprecated=True)
+    # 语义同 RecoverPhoneVerifyRequest.new_password（非 MFA 在此直接重置，MFA 走 complete 步）
+    new_password: str | None = Field(None, min_length=6)
 
 
 class RecoverMagicLinkRequest(BaseModel):
@@ -171,10 +172,15 @@ async def recover_magic_link(
 @router.post("/magic-link/verify", response_model=ApiResp[RecoverRequires2FAResponse])
 @respond
 async def recover_magic_link_verify(
-    info: RecoverMagicLinkVerifyRequest, db: AsyncSession = Depends(get_auth_session)
+    info: RecoverMagicLinkVerifyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
+    # 按 IP 分桶，不用单一全局键：全局键下任何一个客户端把 10 次配额烧光，所有用户的
+    # 魔法链接找回都会在同一窗口内被拒（跨租户 DoS）。而令牌是 64 hex（256 bit），
+    # 「聚合限流」对暴力猜解本来就没贡献，堵掉这个 DoS 面是纯赚。
     await check_code_rate_limit(
-        "recover:magic-link:verify:global",
+        f"recover:magic-link:verify:ip:{client_ip(request)}",
         max_count=GLOBAL_VERIFY_MAX_PER_WINDOW,
         window=GLOBAL_VERIFY_WINDOW_SECONDS,
     )
@@ -193,12 +199,29 @@ class RecoverUserCompleteRequest(BaseModel):
     new_password: str = Field(..., min_length=6)
 
 
+async def _limit_recovery_step(action: str, request: Request) -> None:
+    """恢复流程各核验步的按 IP 限流。
+
+    txn_id/temp_token 都是高熵值、猜不动，这里主要是与同模块其它核验步（verify-contact、
+    magic-link verify）保持一致的 defense-in-depth，并给这些低频端点一个成本上界；
+    用 IP 而非 txn_id 作桶：后者由客户端给出，换个 txn_id 就换一个空桶，限不住。
+    """
+    await check_code_rate_limit(
+        f"recover:{action}:ip:{client_ip(request)}",
+        max_count=GLOBAL_VERIFY_MAX_PER_WINDOW,
+        window=GLOBAL_VERIFY_WINDOW_SECONDS,
+    )
+
+
 @router.post("/verify-totp", response_model=ApiResp[AdminRecoverVerifyTOTPResponse])
 @respond
 async def recover_user_verify_totp(
-    info: RecoverUserVerifyTOTPRequest, db: AsyncSession = Depends(get_auth_session)
+    info: RecoverUserVerifyTOTPRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """确认用户恢复事务的 2FA。需要用户在完成 2FA 后从 /auth/2fa/verify 获取的 temp_token。"""
+    await _limit_recovery_step("user-verify-totp", request)
     return await service_recovery.recover_admin_verify_totp(
         db, info.txn_id, info.temp_token
     )
@@ -207,9 +230,12 @@ async def recover_user_verify_totp(
 @router.post("/complete", response_model=ApiResp[MessageResponse])
 @respond
 async def recover_user_complete(
-    info: RecoverUserCompleteRequest, db: AsyncSession = Depends(get_auth_session)
+    info: RecoverUserCompleteRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """使用新密码完成用户恢复。需要已验证的联系方式+2FA。"""
+    await _limit_recovery_step("user-complete", request)
     return await service_recovery.recover_user_complete(
         db, info.txn_id, info.new_password
     )
@@ -270,9 +296,12 @@ async def recover_admin_verify_contact(
 )
 @respond
 async def recover_admin_verify_totp(
-    info: RecoverAdminVerifyTOTPRequest, db: AsyncSession = Depends(get_auth_session)
+    info: RecoverAdminVerifyTOTPRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """第3步：确认 2FA 已完成。需要从 /auth/2fa/verify 获取的 temp_token。"""
+    await _limit_recovery_step("admin-verify-totp", request)
     return await service_recovery.recover_admin_verify_totp(
         db, info.txn_id, info.temp_token
     )
@@ -281,9 +310,12 @@ async def recover_admin_verify_totp(
 @router.post("/admin/complete", response_model=ApiResp[MessageResponse])
 @respond
 async def recover_admin_complete(
-    info: RecoverAdminCompleteRequest, db: AsyncSession = Depends(get_auth_session)
+    info: RecoverAdminCompleteRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """第4步：设置新密码。需要前面所有步骤已完成。"""
+    await _limit_recovery_step("admin-complete", request)
     return await service_recovery.recover_admin_complete(
         db, info.txn_id, info.new_password
     )

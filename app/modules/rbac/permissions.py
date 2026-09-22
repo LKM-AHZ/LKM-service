@@ -134,6 +134,26 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.notification_read),
         Grant(Permission.notification_manage),
     ),
+    # grant_incubation（auth/service_authz.py）会把通过的项目申请人升为
+    # account_level=admin + profile.role=incubated_member，这是 seed 后可达的复合角色。
+    # 该角色语义仍是「普通成员」，故按 normal:member 授予成员域权限（缺失会让升格用户
+    # 直接掉到零权限）；未授予任何 admin 域权限。
+    "admin:incubated_member": (
+        Grant(Permission.comment_create),
+        Grant(Permission.avatar_update),
+        Grant(Permission.content_create),
+        Grant(Permission.content_comment_create),
+        Grant(Permission.content_like),
+        Grant(Permission.boards_create_application),
+        Grant(Permission.columns_application_create),
+        Grant(Permission.files_upload),
+        Grant(Permission.files_download),
+        Grant(Permission.interaction_favorite),
+        Grant(Permission.interaction_history),
+        Grant(Permission.notification_read),
+        Grant(Permission.notification_manage),
+        Grant(Permission.projects_application_create),
+    ),
     "admin:org_member": (
         Grant(Permission.comment_create),
         Grant(Permission.avatar_update),

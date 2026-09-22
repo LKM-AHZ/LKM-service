@@ -5,6 +5,11 @@ on:
     branches: [master, main]
   pull_request:
 
+# 最小权限：本工作流只读代码（不推代码、不建 release、不评论 PR）。
+# 不声明则继承仓库/组织默认 token 权限（历史上可能是读写）。
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -16,9 +21,10 @@ jobs:
   lint:
     name: lint（ruff + import-linter 边界门禁 + 裸 SQL 门禁）
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -29,9 +35,10 @@ jobs:
   migrations:
     name: migrations（逐 revision 双向离线 SQL）
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -40,12 +47,17 @@ jobs:
   test:
     name: test（pytest + 真 PG）
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          # CI 专用的一次性口令：只喂给本工作流临时起的 PG（service container / Testcontainers），
+          # 外部不可达。要换就设仓库变量 CI_POSTGRES_PASSWORD（下面各处读同一个变量，保证服务端
+          # 与客户端口令一致）；这样 YAML 里不再示范「口令字面量写进 workflow」——那种写法最
+          # 容易被照抄到非临时环境。
+          POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
           POSTGRES_DB: lkm
         ports: ["5432:5432"]
         options: >-
@@ -54,49 +66,55 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      LKM_DB_PASSWORD: postgres
-      LKM_AUTH_DB_PASSWORD: postgres
+      LKM_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
+      LKM_AUTH_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
       # 刻意不设 LKM_REDIS_URL：Redis 相关单测走 fakeredis / fail-open 路径
       # （设了真实 Redis 会让「Redis 不可用应直改 DB」这类断言失真）。
       # 真实 Redis 由 integration job 的 Testcontainers 提供。
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
       - run: uv sync --frozen
       # auth 独立库（fixture 需要）：业务库由 service 建出，auth 库需显式建
       - name: 建 auth 库
-        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE lkm_auth"
+        env:
+          PGPASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
+        run: psql -h localhost -U postgres -c "CREATE DATABASE lkm_auth"
       - name: pytest（默认排除 integration）
         run: uv run pytest -q
 
   integration:
     name: integration（Testcontainers 起 PG/Redis/Pulsar）
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       LKM_IT_USE_TESTCONTAINERS: "1"
-      LKM_DB_PASSWORD: postgres
-      LKM_AUTH_DB_PASSWORD: postgres
+      LKM_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
+      LKM_AUTH_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
       - run: uv sync --frozen
       # Testcontainers 刻意**不进 pyproject/lock**：它只在集成 job 需要，装进主依赖会让
-      # 所有镜像与本地环境都背上它（且改 lock 会击穿镜像依赖层缓存）。用 --with 临时装。
+      # 所有镜像与本地环境都背上它（且改 lock 会击穿镜像依赖层缓存）。用 --with 临时装，
+      # 但必须钉死版本：>=4.8 每次跑都重新解析，上游发新版会在零代码改动下改变行为。
+      # 钉在当前解析到的 4.15.0（即本 CI 一直实际运行的版本）。
       - name: pytest -m integration（Testcontainers）
-        run: uv run --with 'testcontainers[postgres,redis]>=4.8' pytest -m integration -q
+        run: uv run --with 'testcontainers[postgres,redis]==4.15.0' pytest -m integration -q
 
   image:
     name: image（docker build）
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: false

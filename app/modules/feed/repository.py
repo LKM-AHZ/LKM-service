@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.db.base import now_iso
-from app.db.repository import AsyncRepository
+from app.db.repository import AsyncRepository, DbSession
 from app.modules.content.models import Board
 from app.modules.feed.models import BoardFollow, FeedItemMaterialized, UserFollow
 
@@ -124,15 +124,31 @@ class BoardFollowRepository(AsyncRepository[BoardFollow]):
         return list(rows.scalars().all())
 
 
-class FeedBoardRepository(AsyncRepository[Board]):
-    """feed 侧只读用板块表（标题回填 / 关注目标存在性）。"""
+class FeedBoardRepository:
+    """feed 侧**只读**板块表缝（标题回填 / 关注目标存在性）。
 
-    model = Board
+    刻意不继承 ``AsyncRepository[Board]``：继承会把 create/update/delete/pg_upsert 这整套写面
+    暴露给 feed 域，既与该类 docstring、也与 pyproject 里「feed->content.models 只读缝」的
+    import-linter 豁免口径相矛盾；而且 ``Board`` 没有 ``deleted_at``，继承来的
+    soft_delete/soft_delete_where 会静默退化成真 DELETE（内容表实删）。
+    这里只暴露 feed 真正用到的那两个读方法，写路径请回 content 域自己的仓储。
+    """
+
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
+
+    async def get(self, board_id: uuid.UUID) -> Board | None:
+        """按主键取板块（不存在 → ``None``）。"""
+        return await self.db.get(Board, board_id)
 
     async def title_map(self, board_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
         if not board_ids:
             return {}
-        rows = await self.get_many(Board.id.in_(board_ids))
+        rows = (
+            (await self.db.execute(select(Board).where(Board.id.in_(board_ids))))
+            .scalars()
+            .all()
+        )
         return {b.id: b.title for b in rows}
 
 
@@ -150,17 +166,21 @@ class FeedItemMaterializedRepository(AsyncRepository[FeedItemMaterialized]):
         """物化表按 (created_at, id) 游标取一页（时间倒序）。
 
         下滤条件与 ``feed.feed._before_conds`` 严格同式（本类自持一份，避免仓库层
-        反向依赖实时合流模块）。
+        反向依赖实时合流模块）；同理，``before_id`` 缺失时退化为纯时间下滤——
+        不能保留 ``id < NULL``（SQL 中恒为 NULL，会把同一时刻的行整批漏掉）。
         """
         conds: list[Any] = [FeedItemMaterialized.user_id == user_id]
         if before_time is not None:
-            conds.append(
-                (FeedItemMaterialized.created_at < before_time)
-                | (
-                    (FeedItemMaterialized.created_at == before_time)
-                    & (FeedItemMaterialized.id < before_id)
+            if before_id is None:
+                conds.append(FeedItemMaterialized.created_at < before_time)
+            else:
+                conds.append(
+                    (FeedItemMaterialized.created_at < before_time)
+                    | (
+                        (FeedItemMaterialized.created_at == before_time)
+                        & (FeedItemMaterialized.id < before_id)
+                    )
                 )
-            )
         return await self.get_many(
             *conds,
             order_by=(

@@ -12,6 +12,7 @@ Pydantic ``FeedResponse`` 仍负责构造/校验；本模块只做「校验后 �
 from __future__ import annotations
 
 import datetime
+import uuid
 
 import msgspec
 
@@ -22,14 +23,15 @@ class FeedItemWire(msgspec.Struct):
     """``FeedItem`` 的 msgspec 镜像（字段同序同名）。"""
 
     item_type: str
-    id: int
-    author_id: int | None
+    # 与 schemas.FeedItem 保持一致：三个 id 都是 uuid.UUID（镜像的契约就是逐字段对齐）
+    id: uuid.UUID
+    author_id: uuid.UUID | None
     author_name: str
     title: str
     content_preview: str
     created_at: datetime.datetime
     sort_score: float
-    board_id: int | None
+    board_id: uuid.UUID | None
     url: str
 
 

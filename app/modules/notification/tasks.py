@@ -157,8 +157,15 @@ async def _actor_name(db: AsyncSession, actor_id: uuid.UUID) -> str:
     return snap.display_name if snap is not None else ""
 
 
-async def notify_from_point_event(actor_id: uuid.UUID, event: str, ref_id: str) -> None:
+async def notify_from_point_event(
+    actor_id: uuid.UUID | str, event: str, ref_id: str
+) -> None:
     """订阅 handler：解析事件 → 落站内信 → 提交后推送（best-effort）。"""
+    # 事件链路（outbox JSONB → Pulsar JSON）会把 uuid 序列化成字符串（见
+    # db/outbox._jsonable 的消费侧契约），直调路径传的才是 UUID 对象。这里统一归一：
+    # 否则下面 `t.owner_id == actor_id` 是 UUID==str 恒 False，自己触发自己的去重失效，
+    # 且快照/入库的 Uuid 绑定拿到 str 也会走偏。
+    actor_id = uuid.UUID(str(actor_id))
     db = await new_session()
     pending: list[tuple[uuid.UUID, uuid.UUID, str, dict[str, Any], bool]] = []
     try:
@@ -196,6 +203,12 @@ async def notify_from_point_event(actor_id: uuid.UUID, event: str, ref_id: str) 
     for user_id, nid, type_, payload, enabled in pending:
         if not enabled:
             continue
+        # 聚合更新复用同一行（id 不变）而 payload.count 递增：若 event_id 仍是 notification:{id}，
+        # 前端按「同 event_id 重推」去重会把这次内容变化丢掉（未读数停在旧值）。故 count>1
+        # （即确实发生过聚合）时把计数并进 event_id，让每次内容变化都成为一次新事件；
+        # 首次推送保持原 event_id 格式，不动既有前端契约。
+        count = int(payload.get("count", 1) or 1)
+        event_id = f"notification:{nid}" if count <= 1 else f"notification:{nid}:{count}"
         await publish_notification(
             user_id,
             {
@@ -204,7 +217,7 @@ async def notify_from_point_event(actor_id: uuid.UUID, event: str, ref_id: str) 
                 "type": type_,
                 "payload": payload,
             },
-            event_id=f"notification:{nid}",
+            event_id=event_id,
             version=nid.int,
         )
 

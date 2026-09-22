@@ -245,8 +245,12 @@ async def _ensure_hypertables(conn: Any) -> list[str]:
 async def _create_all() -> None:
     """create_all 降级通道：按 Base.metadata 建缺失的表，并补已存在表缺失的列/索引。
 
-    仅在 ``settings.use_alembic=False`` 时启用。多 worker 安全：create_all 对已存在的
-    表是 no-op、补列/索引均幂等，无需 Redis 迁移锁。注意必须 import 所有模型模块，
+    仅在 ``settings.use_alembic=False`` 时启用。调用方（:func:`init_db`）会用 Redis
+    迁移锁串行化本函数：``create_all`` 的 ``checkfirst`` 是**先查后建**的非原子检查，
+    而 compose 默认同时拉起 backend + 多个 worker，首次建库时两个进程可能同时判定某表
+    缺失并发起 ``CREATE TABLE``，后到者拿到 ``DuplicateTable``/``ProgrammingError``
+    直接启动失败（补列/补索引与 hypertable 装配都已容错，唯独建表这一步不能裸奔）。
+    注意必须 import 所有模型模块，
     metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
     各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`；
     建表后另做 TimescaleDB 装配（hypertable + 压缩/保留策略），见 :func:`_ensure_hypertables`。
@@ -304,7 +308,13 @@ async def init_db() -> None:
     from app.core.config import settings
 
     if not settings.use_alembic:
-        await _create_all()
+        # 建表同样要上锁（理由见 _create_all docstring）；Redis 不可用时锁 fail-open，
+        # 退回「不设锁直接建」的原语义
+        held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)
+        try:
+            await _create_all()
+        finally:
+            await release_migration_lock(held, _MIGRATION_LOCK_KEY)
         await _seed_base_data()
         return
     held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)

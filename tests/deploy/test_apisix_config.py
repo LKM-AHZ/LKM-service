@@ -423,6 +423,9 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
         **os.environ,
         "APISIX_SRC": str(_APISIX_DIR / "apisix.yaml"),
         "APISIX_OUT": str(out),
+        # render.sh 现在渲染并校验两个产物，缺这两项会去写容器路径 /src、/out（对齐 _run_render）
+        "APISIX_SRC_CONFIG": str(_APISIX_DIR / "config.yaml"),
+        "APISIX_OUT_CONFIG": str(tmp_path / "out" / "config.yaml"),
         "APISIX_CERT_ROOT": str(cert_root),
         "APISIX_RENDER_ONCE": "1",
     }

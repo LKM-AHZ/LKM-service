@@ -11,8 +11,9 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-# autogenerate 把时间列的 TypeDecorator 渲染成全路径，需显式 import（同 env.py 对 app 模型层的依赖）
-import app.db.base  # noqa: E402
+# 时间列统一写 sa.DateTime(timezone=True)：UTCDateTime 的 impl 就是 DateTime(timezone=True)，DDL 等价。
+# 基线 revision 必须自包含——import 应用代码会让「UTCDateTime 改名/挪位或 app.db.base 导入链断裂」
+# 在全新库上以 ImportError 直接打断 alembic upgrade head，且只能靠改历史 revision 才能修。
 
 # revision identifiers, used by Alembic.
 revision: str = '72a6bdf65538'
@@ -23,8 +24,10 @@ depends_on: Union[str, Sequence[str], None] = None
 # 前置共享对象（内联以保持迁移自包含，不 import 应用代码）。
 # 所有 UUID 主键列的 server_default 都指向它；PG 建表即解析 DEFAULT 表达式，
 # 函数不存在会直接报错，故必须在首个 create_table 之前建出。
-# RFC 9562 uuid7（Method 3：48 位毫秒 + 12 位亚毫秒填入 rand_a）——时间有序，
-# 保证 order_by(id) 与游标分页语义与整数自增一致。
+# uuid7 变体：48 位放 unix epoch 的「微秒/4096 刻度」（≈4.096ms 粒度，见下方 us >> 12），
+# 低 12 位亚刻度填入 rand_a——时间有序，保证 order_by(id) 与游标分页语义与整数自增一致。
+# 注意：这 48 位**不是** RFC 9562 规定的 unix_ts_ms，按「毫秒」解码会得到偏小约 4096 倍的时间
+# （2026 年会读成 ~1978），外部工具请按上述刻度换算。
 UUID7_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
 DECLARE
@@ -61,20 +64,27 @@ BEGIN
   END;
 
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
-    PERFORM create_hypertable('outbox_events', 'created_at',
-        chunk_time_interval => INTERVAL '7 days',
-        if_not_exists => TRUE, migrate_data => TRUE);
-    PERFORM create_hypertable('outbox_archived', 'created_at',
-        chunk_time_interval => INTERVAL '7 days',
-        if_not_exists => TRUE, migrate_data => TRUE);
-    ALTER TABLE outbox_archived SET (
-        timescaledb.compress,
-        timescaledb.compress_segmentby = 'routing_key',
-        timescaledb.compress_orderby = 'created_at DESC');
-    PERFORM add_compression_policy('outbox_archived', INTERVAL '7 days',
-        if_not_exists => TRUE);
-    PERFORM add_retention_policy('outbox_events', INTERVAL '30 days',
-        if_not_exists => TRUE);
+    -- 整段装配再包一层 EXCEPTION：扩展在、但装配本身失败（版本差异导致函数签名不符、
+    -- 托管实例权限不足、表无法转换）时只告警，不中断整条基线迁移。内层 savepoint 回滚后
+    -- 两表保持普通表可用，与上面「失败仅告警不中断」的约定一致。
+    BEGIN
+      PERFORM create_hypertable('outbox_events', 'created_at',
+          chunk_time_interval => INTERVAL '7 days',
+          if_not_exists => TRUE, migrate_data => TRUE);
+      PERFORM create_hypertable('outbox_archived', 'created_at',
+          chunk_time_interval => INTERVAL '7 days',
+          if_not_exists => TRUE, migrate_data => TRUE);
+      ALTER TABLE outbox_archived SET (
+          timescaledb.compress,
+          timescaledb.compress_segmentby = 'routing_key',
+          timescaledb.compress_orderby = 'created_at DESC');
+      PERFORM add_compression_policy('outbox_archived', INTERVAL '7 days',
+          if_not_exists => TRUE);
+      PERFORM add_retention_policy('outbox_events', INTERVAL '30 days',
+          if_not_exists => TRUE);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'timescaledb 装配失败，outbox 两表保持普通表：%', SQLERRM;
+    END;
   END IF;
 END $$;
 """
@@ -106,7 +116,7 @@ def upgrade() -> None:
     sa.Column('slug', sa.String(length=50), nullable=False),
     sa.Column('title', sa.String(length=100), nullable=False),
     sa.Column('sort', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('slug')
@@ -114,9 +124,9 @@ def upgrade() -> None:
     op.create_table('blog_repo_quarantine',
     sa.Column('repo_name', sa.String(length=120), nullable=False),
     sa.Column('src_dir', sa.String(length=500), nullable=False),
-    sa.Column('quarantined_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('quarantined_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('repo_name', name='uq_blog_repo_quarantine_repo_name')
@@ -128,8 +138,8 @@ def upgrade() -> None:
     sa.Column('cover_url', sa.Text(), nullable=True),
     sa.Column('repo_name', sa.String(length=100), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('repo_name')
@@ -143,8 +153,8 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('reviewer_id', sa.Uuid(), nullable=True),
     sa.Column('review_note', sa.Text(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('reviewed_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('slug')
@@ -159,8 +169,8 @@ def upgrade() -> None:
     sa.Column('require_certified', sa.Boolean(), nullable=False),
     sa.Column('daily_post_limit', sa.Integer(), nullable=False),
     sa.Column('is_public', sa.Boolean(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['parent_id'], ['boards.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -175,8 +185,8 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('reviewer_id', sa.Uuid(), nullable=True),
     sa.Column('review_note', sa.Text(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('reviewed_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -187,8 +197,8 @@ def upgrade() -> None:
     sa.Column('attempts', sa.Integer(), nullable=False),
     sa.Column('reason', sa.String(length=255), nullable=False),
     sa.Column('status', sa.String(length=32), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('requeued_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('requeued_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -200,7 +210,7 @@ def upgrade() -> None:
     sa.Column('payload_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('attempt_count', sa.Integer(), nullable=False),
     sa.Column('reason', sa.String(length=255), nullable=False),
-    sa.Column('folded_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('folded_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -208,7 +218,7 @@ def upgrade() -> None:
     op.create_table('event_processed',
     sa.Column('scope', sa.String(length=64), nullable=False),
     sa.Column('event_id', sa.String(length=36), nullable=False),
-    sa.Column('processed_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('processed_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('scope', 'event_id')
     )
     op.create_table('exams',
@@ -222,10 +232,10 @@ def upgrade() -> None:
     sa.Column('is_published', sa.Boolean(), nullable=False),
     sa.Column('unlock_level', sa.String(length=10), nullable=True),
     sa.Column('unlock_role', sa.String(length=20), nullable=True),
-    sa.Column('starts_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('ends_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('starts_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('ends_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -243,9 +253,9 @@ def upgrade() -> None:
     )
     op.create_table('feed_fanout_state',
     sa.Column('source', sa.String(length=20), nullable=False),
-    sa.Column('last_created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('last_created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('last_id', sa.Uuid(), nullable=True),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('source')
     )
     op.create_table('feed_items',
@@ -258,7 +268,7 @@ def upgrade() -> None:
     sa.Column('title', sa.String(length=200), nullable=False),
     sa.Column('content_preview', sa.String(length=300), nullable=False),
     sa.Column('url', sa.String(length=300), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'item_type', 'source_id', name='uq_feed_item')
@@ -281,7 +291,7 @@ def upgrade() -> None:
     sa.Column('review_comment', sa.Text(), nullable=True),
     sa.Column('download_count', sa.Integer(), nullable=False),
     sa.Column('view_count', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('stored_name')
@@ -293,8 +303,8 @@ def upgrade() -> None:
     sa.Column('weight', sa.Float(), nullable=False),
     sa.Column('scope', sa.String(length=20), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -302,14 +312,14 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('type', sa.String(length=40), nullable=False),
     sa.Column('enabled', sa.Boolean(), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('user_id', 'type')
     )
     op.create_table('notification_tokens',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('token', sa.String(length=255), nullable=False),
     sa.Column('platform', sa.String(length=20), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'token', name='uq_notification_token')
@@ -320,8 +330,8 @@ def upgrade() -> None:
     sa.Column('actor_id', sa.Uuid(), nullable=True),
     sa.Column('target_id', sa.Uuid(), nullable=True),
     sa.Column('payload', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-    sa.Column('read_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('read_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -333,9 +343,9 @@ def upgrade() -> None:
     sa.Column('routing_key', sa.String(length=64), nullable=False),
     sa.Column('payload_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('attempt_count', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('archived_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     # 复合主键含分区列 created_at：本表是 hypertable（见 TIMESCALE_DDL 与 app/db/outbox_archive.py）
     sa.PrimaryKeyConstraint('created_at', 'id')
@@ -348,10 +358,10 @@ def upgrade() -> None:
     sa.Column('payload_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('status', sa.String(length=16), nullable=False),
     sa.Column('attempt_count', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('next_retry_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('locked_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('next_retry_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('locked_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('locked_by', sa.String(length=64), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     # hypertable 的每个唯一索引都必须含分区列：主键并入 created_at，event_id 的唯一约束同理
@@ -367,7 +377,7 @@ def upgrade() -> None:
     sa.Column('reason', sa.String(length=50), nullable=False),
     sa.Column('ref_type', sa.String(length=50), nullable=False),
     sa.Column('ref_id', sa.String(length=128), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'ref_type', 'ref_id', name='uq_points_ledger_ref')
@@ -382,8 +392,8 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('reviewer_id', sa.Uuid(), nullable=True),
     sa.Column('review_note', sa.Text(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('reviewed_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -405,8 +415,8 @@ def upgrade() -> None:
     sa.Column('tags', sa.JSON(), nullable=False),
     sa.Column('reports', sa.JSON(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -415,7 +425,7 @@ def upgrade() -> None:
     sa.Column('author_id', sa.Uuid(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('is_accepted', sa.Boolean(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     # qa_answers ↔ qa_questions 互为外键（循环依赖），建表期无法互相引用：
     # 此 FK 延后到 qa_questions 建出后补加（见下方 create_foreign_key）
@@ -435,8 +445,8 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('category', sa.String(length=20), nullable=False),
     sa.Column('accepted_answer_id', sa.Uuid(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['accepted_answer_id'], ['qa_answers.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -455,8 +465,8 @@ def upgrade() -> None:
     sa.Column('reporter_name', sa.String(length=100), nullable=False),
     sa.Column('reason', sa.String(length=500), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('handled_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('handled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -465,7 +475,7 @@ def upgrade() -> None:
     op.create_table('role_permissions',
     sa.Column('role_name', sa.String(length=40), nullable=False),
     sa.Column('permission', sa.String(length=80), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('role_name', 'permission')
@@ -481,9 +491,9 @@ def upgrade() -> None:
     sa.Column('temperature', sa.Float(), nullable=False),
     sa.Column('top_p', sa.Float(), nullable=False),
     sa.Column('max_tokens', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_starhope_ai_agents_user_id'), 'starhope_ai_agents', ['user_id'], unique=False)
@@ -493,9 +503,9 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=100), nullable=False),
     sa.Column('parent_id', sa.String(length=36), nullable=True),
     sa.Column('sort', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_starhope_folders_user_id'), 'starhope_folders', ['user_id'], unique=False)
@@ -508,13 +518,13 @@ def upgrade() -> None:
     sa.Column('answers', sa.Text(), nullable=False),
     sa.Column('results', sa.Text(), nullable=True),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('started_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('completed_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('time_limit', sa.Integer(), nullable=True),
     sa.Column('passing_grade', sa.Integer(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_starhope_practice_sessions_user_id'), 'starhope_practice_sessions', ['user_id'], unique=False)
@@ -529,15 +539,15 @@ def upgrade() -> None:
     sa.Column('tags', sa.Text(), nullable=False),
     sa.Column('folder_id', sa.String(length=36), nullable=True),
     sa.Column('difficulty', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_starhope_questions_user_id'), 'starhope_questions', ['user_id'], unique=False)
     op.create_table('tags',
     sa.Column('name', sa.String(length=50), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
@@ -557,7 +567,7 @@ def upgrade() -> None:
     op.create_table('user_balances',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('balance', sa.Integer(), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('user_id')
     )
     op.create_table('user_behavior_stats',
@@ -565,7 +575,7 @@ def upgrade() -> None:
     sa.Column('stats', sa.JSON(), nullable=False),
     sa.Column('last_checkin_date', sa.String(length=10), nullable=True),
     sa.Column('checkin_streak', sa.Integer(), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('user_id')
     )
     op.create_table('user_dim',
@@ -577,16 +587,16 @@ def upgrade() -> None:
     sa.Column('account_level', sa.String(length=10), nullable=False),
     sa.Column('is_banned', sa.Boolean(), nullable=False),
     sa.Column('is_locked', sa.Boolean(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('sync_ts', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('sync_ts', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('user_id')
     )
     op.create_table('user_follows',
     sa.Column('follower_id', sa.Uuid(), nullable=False),
     sa.Column('following_id', sa.Uuid(), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('follower_id', 'following_id', name='uq_user_follows_pair')
@@ -604,13 +614,13 @@ def upgrade() -> None:
     sa.Column('publisher', sa.String(length=100), nullable=True),
     sa.Column('department', sa.String(length=100), nullable=True),
     sa.Column('keywords', sa.Text(), nullable=True),
-    sa.Column('published', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('published', sa.DateTime(timezone=True), nullable=True),
     sa.Column('views', sa.Integer(), nullable=False),
     sa.Column('likes', sa.Integer(), nullable=False),
     sa.Column('comments', sa.Integer(), nullable=False),
     sa.Column('bookmarks', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['category_id'], ['article_categories.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -623,10 +633,10 @@ def upgrade() -> None:
     sa.Column('series_id', sa.Uuid(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('parent_id', sa.Uuid(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['parent_id'], ['blog_comments.id'], ),
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -637,8 +647,8 @@ def upgrade() -> None:
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('sha3', sa.String(length=128), nullable=True),
     sa.Column('version', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -648,7 +658,7 @@ def upgrade() -> None:
     op.create_table('blog_stars',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('series_id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('user_id', 'series_id')
     )
@@ -657,8 +667,8 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('created_by', sa.Uuid(), nullable=False),
     sa.Column('reason', sa.String(length=200), nullable=False),
-    sa.Column('expires_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -667,8 +677,8 @@ def upgrade() -> None:
     op.create_table('board_follows',
     sa.Column('follower_id', sa.Uuid(), nullable=False),
     sa.Column('board_id', sa.Uuid(), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -695,8 +705,8 @@ def upgrade() -> None:
     sa.Column('badges', sa.Text(), nullable=False),
     sa.Column('board_id', sa.Uuid(), nullable=True),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['application_id'], ['column_applications.id'], ),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
@@ -711,8 +721,8 @@ def upgrade() -> None:
     sa.Column('answers', sa.Text(), nullable=False),
     sa.Column('score', sa.Integer(), nullable=False),
     sa.Column('passed', sa.Boolean(), nullable=False),
-    sa.Column('started_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('submitted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('submitted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('time_spent_s', sa.Integer(), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['exam_id'], ['exams.id'], ),
@@ -726,7 +736,7 @@ def upgrade() -> None:
     sa.Column('score', sa.Integer(), nullable=False),
     sa.Column('passed', sa.Boolean(), nullable=False),
     sa.Column('cert_no', sa.String(length=64), nullable=False),
-    sa.Column('issued_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('issued_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['exam_id'], ['exams.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -744,7 +754,7 @@ def upgrade() -> None:
     sa.Column('difficulty', sa.Integer(), nullable=False),
     sa.Column('score', sa.Integer(), nullable=False),
     sa.Column('sort_order', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['exam_id'], ['exams.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -764,7 +774,7 @@ def upgrade() -> None:
     sa.Column('question_id', sa.Uuid(), nullable=False),
     sa.Column('url', sa.Text(), nullable=False),
     sa.Column('sort', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['question_id'], ['qa_questions.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -775,7 +785,7 @@ def upgrade() -> None:
     sa.Column('achievement_id', sa.Uuid(), nullable=False),
     sa.Column('progress', sa.Integer(), nullable=False),
     sa.Column('unlocked', sa.Boolean(), nullable=False),
-    sa.Column('unlocked_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('unlocked_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['achievement_id'], ['achievements.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -798,10 +808,10 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('parent_id', sa.Uuid(), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['article_id'], ['articles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['parent_id'], ['article_comments.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -811,14 +821,14 @@ def upgrade() -> None:
     op.create_table('article_likes',
     sa.Column('article_id', sa.Uuid(), nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['article_id'], ['articles.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('article_id', 'user_id')
     )
     op.create_table('article_tag',
     sa.Column('article_id', sa.Uuid(), nullable=False),
     sa.Column('tag_id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['article_id'], ['articles.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['tag_id'], ['tags.id'], ),
     sa.PrimaryKeyConstraint('article_id', 'tag_id')
@@ -835,9 +845,9 @@ def upgrade() -> None:
     sa.Column('view_count', sa.Integer(), nullable=False),
     sa.Column('like_count', sa.Integer(), nullable=False),
     sa.Column('comment_count', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['column_id'], ['columns.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -868,12 +878,12 @@ def upgrade() -> None:
     sa.Column('comment_count', sa.Integer(), nullable=False),
     sa.Column('bookmark_count', sa.Integer(), nullable=False),
     sa.Column('forward_count', sa.Integer(), nullable=False),
-    sa.Column('counts_reconciled_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
-    sa.Column('published_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('counts_reconciled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['board_id'], ['boards.id'], ),
     sa.ForeignKeyConstraint(['column_id'], ['columns.id'], ),
     sa.ForeignKeyConstraint(['qa_question_id'], ['qa_questions.id'], ),
@@ -898,9 +908,9 @@ def upgrade() -> None:
     sa.Column('floor_number', sa.Integer(), nullable=False),
     sa.Column('parent_id', sa.Uuid(), nullable=True),
     sa.Column('like_count', sa.Integer(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.Column('deleted_at', app.db.base.UTCDateTime(timezone=True), nullable=True),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ),
     sa.ForeignKeyConstraint(['parent_id'], ['content_comments.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -910,14 +920,14 @@ def upgrade() -> None:
     op.create_table('content_likes',
     sa.Column('content_id', sa.Uuid(), nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ),
     sa.PrimaryKeyConstraint('content_id', 'user_id')
     )
     op.create_table('interaction_favorites',
     sa.Column('content_id', sa.Uuid(), nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('content_id', 'user_id')
     )
@@ -925,7 +935,7 @@ def upgrade() -> None:
     op.create_table('interaction_view_logs',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('content_id', sa.Uuid(), nullable=False),
-    sa.Column('viewed_at', app.db.base.UTCDateTime(timezone=True), nullable=False),
+    sa.Column('viewed_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),

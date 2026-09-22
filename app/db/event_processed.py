@@ -64,12 +64,22 @@ async def already_processed(
 async def record_processed(
     db: AsyncSession, event_id: str, *, scope: str = DEFAULT_SCOPE
 ) -> bool:
-    """记录一笔成功处理；并发下撞主键忽略、返回是否新增。"""
+    """记录一笔成功处理；并发下撞主键忽略、返回是否新增。
+
+    注意：本函数**拥有事务边界**——会对传入的 ``db`` 执行 commit，撞主键时执行 rollback，
+    故调用方不得在同一 session 上挂载其它待提交的变更（现唯一调用方 worker 的
+    ``_dispatch_with_dedup`` 传的是专用会话）。
+    """
     db.add(EventProcessed(scope=scope, event_id=event_id))
     try:
         await db.commit()
         return True
     except IntegrityError:
         # 并发重复标记：另一消费者已抢先落账，视为已记账不报错。
+        # 但 IntegrityError 也可能是**别的**约束失败（NOT NULL/FK/CHECK 等）：一律当
+        # 「已记账」会让消费者误跳过该事件的副作用，故回滚后复查——行确实在才算重复，
+        # 否则原样抛出，让失败走重投/DLQ 而不是静默丢副作用。
         await db.rollback()
-        return False
+        if await already_processed(db, event_id, scope=scope):
+            return False
+        raise

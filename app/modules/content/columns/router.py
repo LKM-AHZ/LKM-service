@@ -129,6 +129,11 @@ async def review_column_application(
         Permission.columns_application_review,
     ):
         raise BizError(CommonErr.FORBIDDEN)
+    # 职责分离：审核人不得是申请人本人。当前只有 super_admin 持审核点，属预防性护栏——
+    # 将来若拆出「既可申请又可审核」的角色，没有这道检查就能自审自过。
+    application = await get_application(db, application_id)
+    if application.user_id == cur.id:
+        raise BizError(CommonErr.FORBIDDEN, "不能审核自己提交的申请")
     return await review_application(db, application_id, info, cur.id)
 
 

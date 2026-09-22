@@ -1,6 +1,6 @@
 import datetime
 import uuid
-from typing import ClassVar
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,10 +9,16 @@ class QuestionCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     situation: str = Field(..., min_length=1, max_length=5000)
     content: str = Field(..., min_length=1, max_length=20000)
-    category: str = Field(default="help", max_length=20)  # help|volunteer
+    # 取值域与 models.QAQuestion.category 注释、前端 QaCategory = "help" | "volunteer" 一致：
+    # 原先只限长度，任意串都能落库，而列表按 category 逐字过滤 → 脏值会把 tab 内容切碎。
+    category: Literal["help", "volunteer"] = "help"
     bounty_people: int = Field(..., ge=1, le=10)
     bounty_per_person: int = Field(..., ge=0)
-    images: list[str] = Field(default_factory=list)  # 附件 URL/引用（后接真上传）
+    # 附件 URL/引用（后接真上传）：每条一行落库，故逐条限长 + 限条数，
+    # 否则单请求可推入任意多条任意长的 URL（不可控写放大）
+    images: list[Annotated[str, Field(max_length=2048)]] = Field(
+        default_factory=list, max_length=9
+    )
 
 
 class QuestionOut(BaseModel):
@@ -37,6 +43,18 @@ class QuestionOut(BaseModel):
 
 class AnswerCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
+
+
+class AcceptIn(BaseModel):
+    """采纳某个回答。字段必填，缺键/拼错由 FastAPI 直接给 422（而非下游 404）。"""
+
+    answer_id: uuid.UUID
+
+
+class CloseIn(BaseModel):
+    """关闭提问（可选地同时采纳一个回答）。"""
+
+    accepted_answer_id: uuid.UUID | None = None
 
 
 class AnswerOut(BaseModel):

@@ -35,11 +35,18 @@ def build_scheduler() -> AsyncIOScheduler:
     task_registry.ensure_tasks_registered()
     s = AsyncIOScheduler()
     for job in task_registry.cron_jobs():
-        trigger = CronTrigger.from_crontab(job["cron"])
-        s.add_job(
-            _fire,
-            trigger,
-            kwargs={"routing_key": job["routing_key"], "fn": job["fn"]},
-            id=job["id"],
-        )
+        # 按 job 隔离：cron 表达式/字段来自各模块 tasks.py 的声明（外部输入），任一写错
+        # （from_crontab 抛 ValueError 或 KeyError）都不该让调度进程起不来、把**全部** cron
+        # 拖停——与文件头的 fail-open 理念一致；日志带 job id 便于定位是谁写错了
+        try:
+            trigger = CronTrigger.from_crontab(job["cron"])
+            s.add_job(
+                _fire,
+                trigger,
+                kwargs={"routing_key": job["routing_key"], "fn": job["fn"]},
+                id=job["id"],
+            )
+        except (KeyError, ValueError):
+            logger.exception("cron job %r 定义非法，跳过", job.get("id"))
+            continue
     return s

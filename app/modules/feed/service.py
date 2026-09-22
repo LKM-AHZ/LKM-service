@@ -36,7 +36,11 @@ from app.core.cache import (
 from app.core.config import settings
 from app.core.err import BizError
 from app.db.repository import DbSession
-from app.modules.admin.moderation.engine import evaluate, load_active_rules
+from app.modules.admin.moderation.engine import (
+    ModerationResult,
+    evaluate,
+    load_active_rules,
+)
 from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.errors import FollowErr
@@ -91,8 +95,10 @@ async def unfollow_user(
         raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能操作自己的关注")
     changed = await UserFollowRepository(db).unfollow(follower_id, following_id)
     if changed:
-        # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）
-        await fanout.remove_author_items(db, follower_id, following_id)
+        # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）；
+        # 仍在关注的版块所覆盖的行保留（与 unfollow_board 的 keep 语义对称）。
+        keep = set(await get_followed_board_ids(db, follower_id))
+        await fanout.remove_author_items(db, follower_id, following_id, keep)
         await _invalidate_follow_cache(follower_id)
 
 
@@ -126,21 +132,30 @@ async def unfollow_board(
 
 
 async def get_following_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """我关注的所有用户 id（缓存，供时间线过滤）。"""
+    """我关注的所有用户 id（缓存，供时间线过滤）。
 
-    async def load() -> list[uuid.UUID]:
-        return await UserFollowRepository(db).list_following_ids(user_id)
+    缓存层是 ``json.dumps``/``json.loads``：UUID 不可序列化，直接缓存 list[UUID] 会被
+    fail-open 静默丢弃（缓存永不生效、每请求回库），命中时还会拿回 list[str]。故缓存里
+    存 str、读回再转 UUID（与物化页 model_dump(mode="json") 同思路）。
+    """
 
-    return await cached_read(_following_key(user_id), TTL_ITEM_S, load)
+    async def load() -> list[str]:
+        ids = await UserFollowRepository(db).list_following_ids(user_id)
+        return [str(i) for i in ids]
+
+    raw = await cached_read(_following_key(user_id), TTL_ITEM_S, load)
+    return [uuid.UUID(x) for x in (raw or [])]
 
 
 async def get_followed_board_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """我关注的所有版块 id（缓存，供时间线过滤）。"""
+    """我关注的所有版块 id（缓存，供时间线过滤）。序列化口径同 get_following_ids。"""
 
-    async def load() -> list[uuid.UUID]:
-        return await BoardFollowRepository(db).list_board_ids(user_id)
+    async def load() -> list[str]:
+        ids = await BoardFollowRepository(db).list_board_ids(user_id)
+        return [str(i) for i in ids]
 
-    return await cached_read(_board_ids_key(user_id), TTL_ITEM_S, load)
+    raw = await cached_read(_board_ids_key(user_id), TTL_ITEM_S, load)
+    return [uuid.UUID(x) for x in (raw or [])]
 
 
 async def is_following_user(
@@ -223,10 +238,27 @@ def _recency_multiplier(created_at: datetime.datetime, now: datetime.datetime) -
     return (age_hours + 2.0) ** -1.2
 
 
+def _filter_hidden(
+    items: list[FeedItem], rules: list[Any]
+) -> tuple[list[FeedItem], dict[tuple[str, uuid.UUID], ModerationResult]]:
+    """一次审校：返回 ``(可见项, 每项审校结果)``。
+
+    结果表供打分阶段复用，避免同一条文本在一请求内跑两遍规则匹配（正则/子串都可能很贵）。
+    """
+    kept: list[FeedItem] = []
+    mods: dict[tuple[str, uuid.UUID], ModerationResult] = {}
+    for it in items:
+        mod = evaluate(f"{it.title} {it.content_preview}", rules)
+        mods[(it.item_type, it.id)] = mod
+        if not mod.should_hide:
+            kept.append(it)
+    return kept, mods
+
+
 async def _compute_scores(
     items: list[FeedItem],
     following_ids: set[uuid.UUID] | None,
-    rules: list[Any],
+    mods: dict[tuple[str, uuid.UUID], ModerationResult],
 ) -> list[FeedItem]:
     now = datetime.datetime.now(datetime.UTC)
     for it in items:
@@ -238,10 +270,9 @@ async def _compute_scores(
         follow_bonus = 0.0
         if following_ids is not None and it.author_id in following_ids:
             follow_bonus = 5.0
-        # 审校：hide 已在上游剔除；这里只处理 derank 扣分
-        text = f"{it.title} {it.content_preview}"
-        mod = evaluate(text, rules)
-        penalty = 0.0 if mod.should_hide else mod.penalty
+        # 审校：hide 已在上游剔除；这里只取 derank 扣分（结果由 _filter_hidden 一次算好）
+        mod = mods.get((it.item_type, it.id))
+        penalty = max(0.0, mod.penalty) if mod is not None else 0.0
         # 时间基分(recency*1000)保证 0 热度内容也有>0基分，使 derank 扣分可分辨；
         # 关注权重(follow_bonus)加在前面、不被审校削减。
         base = it.sort_score * 500 + recency * 1000
@@ -274,8 +305,20 @@ async def get_timeline(
     )
 
 
-def _materialized_key(user_id: uuid.UUID, cursor: str | None) -> str:
-    return make_key("feed", user_id, cursor or "")
+def _materialized_key(
+    user_id: uuid.UUID,
+    before_time: datetime.datetime | None,
+    before_id: uuid.UUID | None,
+    limit: int,
+) -> str:
+    """键含 limit 与游标**解码后**的值。
+
+    缓存值是已按 limit 切好的整页（含由该页推出的 ``next_cursor``），故 limit 必须进键，
+    否则同一游标下不同 limit 的请求会互相拿到长度不符的页并跳条。游标用解码值而非原始
+    字符串：原始游标是客户端可控的任意 base64，进键会为每个畸形串各开一份缓存与 singleflight
+    航班（缓存模块按「键基数自然有界」设计），解码值则天然收敛（畸形统一落到首页）。
+    """
+    return make_key("feed", user_id, before_time or "", before_id or "", limit)
 
 
 async def _materialized_timeline(
@@ -304,12 +347,12 @@ async def _materialized_timeline(
 
         await _fill_authors(db, items)
         rules = await load_active_rules(db)
-        kept = [
-            it
-            for it in items
-            if not evaluate(f"{it.title} {it.content_preview}", rules).should_hide
-        ]
-        await _compute_scores(kept, following_ids, rules)
+        kept, mods = _filter_hidden(items, rules)
+        if not kept:
+            # 本页候选全被审校隐藏：不能缓存空页（客户端会在 TTL_LIST_S 内一直看到空流），
+            # 返回 {} 让 get_timeline 回退实时合流去够更老的候选
+            return {}
+        await _compute_scores(kept, following_ids, mods)
         kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
         page = kept[:limit]
         next_cursor: str | None = None
@@ -318,7 +361,9 @@ async def _materialized_timeline(
             next_cursor = _encode_cursor(last.created_at, last.id)
         return FeedResponse(items=page, next_cursor=next_cursor).model_dump(mode="json")
 
-    cached = await cached_read(_materialized_key(user_id, cursor), TTL_LIST_S, _load)
+    cached = await cached_read(
+        _materialized_key(user_id, before_time, before_id, limit), TTL_LIST_S, _load
+    )
     if not cached:
         return None
     return FeedResponse.model_validate(cached)
@@ -406,7 +451,9 @@ async def _realtime_timeline(
             a_ids = following_ids
         else:
             a_ids, b_ids = None, None
-        return await fetch(db, a_ids, b_ids, before_time, before_id, limit)
+        # 多取一条：与物化路径同口径，用「是否多出可见项」判断还有没有下一页
+        # （否则恰好凑满 limit 时会误判为到底，客户端提前结束）
+        return await fetch(db, a_ids, b_ids, before_time, before_id, limit + 1)
 
     fetched: list[list[FeedItem]] = await asyncio.gather(
         *(_fetch_one(n) for n in source_names)
@@ -416,16 +463,10 @@ async def _realtime_timeline(
     # 合并回填作者名：各源只返回 author_id，此处一次性批量查询（抵消每源各查一次）
     await _fill_authors(db, candidates)
 
-    # 审校隐藏剔除 + 排序分计算
+    # 审校隐藏剔除 + 排序分计算（审校只跑一遍，结果传给打分层）
     rules = await load_active_rules(db)
-    kept: list[FeedItem] = []
-    for it in candidates:
-        text = f"{it.title} {it.content_preview}"
-        mod = evaluate(text, rules)
-        if mod.should_hide:
-            continue
-        kept.append(it)
-    await _compute_scores(kept, following_ids, rules)
+    kept, mods = _filter_hidden(candidates, rules)
+    await _compute_scores(kept, following_ids, mods)
 
     # 主序：时间倒序（稳定性靠 id 倒序兜底）
     kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)

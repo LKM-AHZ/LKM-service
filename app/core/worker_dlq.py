@@ -35,8 +35,12 @@ def _make_model(
     topic: str,
 ) -> DlqMessage:
     """把一条死信消息映射为 DlqMessage。"""
+    if not routing_key:
+        # 不拿 topic 顶替：DLQ topic 不是合法 routing_key，重投只会以「未知 routing_key」
+        # 失败，且列表里看不出这条根本不可重投。缺失即落显式哨兵 + 告警。
+        logger.warning("死信缺少 routing_key property topic=%s（标记为不可重投）", topic)
     return DlqMessage(
-        routing_key=routing_key or topic or "unknown",
+        routing_key=routing_key or "unknown",
         payload_json={"payload": payload},
         exchange=topic,
         attempts=attempts,
@@ -61,10 +65,19 @@ async def _persist(model: DlqMessage) -> None:
 
 async def requeue(db: Any, dlq_id: uuid.UUID) -> bool:
     """把一条 pending 死信 re-publish 回原 routing_key，标记 requeued。"""
-    m = await db.scalar(select(DlqMessage).where(DlqMessage.id == dlq_id))
+    # 行锁读：publish 是 await（会让出事件循环），若不锁行，两个并发重投（双请求/
+    # 双副本）都会读到 pending 并各发一次同一死信；行锁让后到者在其后读到 requeued 而返回 False。
+    m = await db.scalar(
+        select(DlqMessage).where(DlqMessage.id == dlq_id).with_for_update()
+    )
     if m is None or m.status != "pending":
         return False
-    parsed = m.payload_json.get("payload", {})
+    # 缺 payload / payload 非对象：不能退化成「重投一个空事件」（消费端会拒收或空跑），
+    # 如实拒绝并留日志，让这条坏行可见
+    parsed = (m.payload_json or {}).get("payload")
+    if not isinstance(parsed, dict):
+        logger.error("死信 payload 缺失/非法 id=%s，拒绝重投", dlq_id)
+        return False
     ok = await messaging.publish(m.routing_key, parsed)
     if ok:
         m.status = "requeued"

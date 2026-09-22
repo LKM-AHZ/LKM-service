@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import inspect
 import logging
@@ -51,6 +52,10 @@ class ClickHouseClient(Protocol):
 # 测试 seam：注入 fake 客户端工厂（同步或 async 返回均可）
 _client_factory: Callable[[], Any] | None = None
 _client: Any = None
+# 建/关单例的互斥：工厂是网络 I/O（await 期间会挂起），非原子的先查后建会让并发调用
+# 各建一个客户端，败者被覆盖后永不 close（连接池泄漏）；close 与建连并发时也会把新建的
+# 客户端丢在 shutdown 之后，故两边共用同一把锁
+_client_lock = asyncio.Lock()
 
 
 def set_client_factory(factory: Callable[[], Any] | None) -> None:
@@ -96,24 +101,32 @@ async def get_client() -> ClickHouseClient:
         raise ClickHouseUnavailableError(
             "ClickHouse 未启用（LKM_CLICKHOUSE_ENABLED/URL）"
         )
-    factory = _client_factory or _default_factory
-    try:
-        client = factory()
-        if inspect.isawaitable(client):
-            client = await client
-    except Exception as exc:
-        logger.exception("ClickHouse 客户端建连失败")
-        raise ClickHouseUnavailableError("ClickHouse 连接不可用") from exc
-    _client = client
+    async with _client_lock:
+        # 双检：等锁期间别人可能已建好
+        if _client is not None:
+            return _client
+        factory = _client_factory or _default_factory
+        try:
+            client = factory()
+            if inspect.isawaitable(client):
+                client = await client
+        except Exception as exc:
+            logger.exception("ClickHouse 客户端建连失败")
+            raise ClickHouseUnavailableError("ClickHouse 连接不可用") from exc
+        _client = client
     logger.info("ClickHouse 客户端已连接 database=%s", settings.clickhouse_database)
     return _client
 
 
 async def close() -> None:
-    """幂等释放单例连接（应用 shutdown / 测试复位）。"""
+    """幂等释放单例连接（应用 shutdown / 测试复位）。
+
+    取单例在锁内：若与一次建连并发，等锁可保证「关掉的是最终那个客户端」，而不是让
+    在途建连的结果在建完之后被留在 shutdown 之后（永不释放）。
+    """
     global _client
-    client = _client
-    _client = None
+    async with _client_lock:
+        client, _client = _client, None
     if client is None:
         return
     with suppress(Exception):

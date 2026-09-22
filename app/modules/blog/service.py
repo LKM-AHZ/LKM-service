@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from app.core.common import PageData, paginate_offset, paginate_pages
 from app.core.err import BizError, CommonErr
@@ -286,14 +286,17 @@ async def delete_series(
     if not as_admin and series.owner_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
 
-    await asyncio.to_thread(git_svc.delete_repo, series.repo_name)
-    # 正常删除系列时，同步清理可能的隔离台账(幂等:无则忽略)
+    owner_id = series.owner_id
+    repo_name = series.repo_name
+    # 顺序：先落库（含隔离台账）再删物理仓库。DB 步骤失败时磁盘完好、无损；反过来
+    # 「行还在、目录已删」没有任何补偿路径（对账只管无行的孤儿目录），是最坏方向。
+    # 而「行已删、目录残留」由每周 blog 对账隔离并在超龄后回收（tasks.reconcile_blog_repos）。
     quarantine_repo = BlogRepoQuarantineRepository(db)
-    qrow = await quarantine_repo.get_by_repo_name(series.repo_name)
+    qrow = await quarantine_repo.get_by_repo_name(repo_name)
     if qrow is not None:
         await quarantine_repo.delete(qrow)
-    owner_id = series.owner_id
     await BlogSeriesRepository(db).delete(series)
+    await asyncio.to_thread(git_svc.delete_repo, repo_name)
     return owner_id
 
 
@@ -328,11 +331,14 @@ async def create_comment(
     )
 
     if info.parent_id is not None:
+        # 必须显式过滤软删：get_or_raise 不带 deleted_at 过滤，
+        # 允许挂到已删父评论下，而 list_comments 又过滤掉该父行 → 回复会以「根评论」露面
         parent = await get_or_raise(
             db,
             BlogComment,
             CommonErr.INVALID_INPUT,
             BlogComment.id == info.parent_id,
+            BlogComment.deleted_at.is_(None),
         )
         if parent.series_id != series_id:
             raise BizError(CommonErr.INVALID_INPUT, "Parent comment not found")
@@ -497,10 +503,18 @@ async def publish_series_file(
     first_line = content.split("\n", 1)[0].replace("# ", "").strip()
     title = str(override.get("title") or fm.get("title") or first_line or slug)
     category_slug = str(override.get("category") or fm.get("category") or "blog")
-    tags = [
-        str(t) for t in cast("list[Any]", override.get("tags") or fm.get("tags") or [])
-    ]
-    description = override.get("description") or fm.get("description")
+    # frontmatter/override 是未类型化输入：tags 可能是逗号串（逐个字符拆成标签）、
+    # 数字（不可迭代 → TypeError）、description 可能是 int/date/list 而形参声明 str|None
+    raw_tags: Any = override.get("tags") or fm.get("tags") or []
+    if isinstance(raw_tags, str):
+        normalized_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    elif isinstance(raw_tags, (list, tuple)):
+        normalized_tags = [str(t) for t in raw_tags]
+    else:
+        normalized_tags = []
+    tags = normalized_tags
+    raw_description = override.get("description") or fm.get("description")
+    description = str(raw_description) if raw_description is not None else None
 
     board_id = await _ensure_board(db, category_slug)
     return await publish_blog_item(

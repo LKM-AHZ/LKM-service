@@ -75,6 +75,8 @@ def _get_storage() -> StorageBackend:
         reveal(settings.s3_access_key),
         reveal(settings.s3_secret_key),
         settings.s3_prefix,
+        # 工厂把这个值也传给了 S3Storage，漏进签名会让「只改它」的配置变更留着旧后端
+        settings.s3_public_endpoint_url,
     )
     if sig != _storage_sig:
         get_storage.cache_clear()
@@ -83,12 +85,14 @@ def _get_storage() -> StorageBackend:
 
 
 def _avatar_key(user_id: uuid.UUID) -> str:
-    """版本化 key：``avatars/{uid}/v{ms}.webp``，每次上传 ms 不同 → 新 key。
+    """版本化 key：``avatars/{uid}/v{ms}-{rand}.webp``，每次上传都不同 → 新 key。
 
     旧 key 不覆盖（immutable 长缓存下旧 URL 自然失效），由数据库改指向新 key。
+    随机段不能省：只靠毫秒的话同毫秒内的两次上传会算出同一个 key，就地覆盖对象，
+    而 immutable/max-age=31536000 的缓存契约要求「新 URL = 新内容」，客户端会继续吃到旧字节。
     """
     ms = int(time.time() * 1000)
-    return f"avatars/{user_id}/v{ms}.{_AVATAR_EXT}"
+    return f"avatars/{user_id}/v{ms}-{uuid.uuid4().hex[:8]}.{_AVATAR_EXT}"
 
 
 async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) -> str:
@@ -114,13 +118,15 @@ async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) ->
             raise BizError(AuthErr.AVATAR_NOT_FOUND, detail=exc.detail) from exc
         raise
 
-    # 成功后尽力删除旧头像（key 已删视为成功，不覆盖新头像写入异常）
+    # 先落库再删旧 key：反过来的话 flush/commit 一旦失败，库里仍指向刚被删掉的旧 key，
+    # 用户头像直接 404。新 key 落库后旧对象最多成为孤儿（可被清理脚本回收）。
+    profile.avatar = new_key
+    await ProfileRepository(db).flush()
+
+    # 尽力删除旧头像（key 已删视为成功，不覆盖新头像写入异常）
     if old_key:
         with suppress(BizError):
             await _get_storage().delete(old_key)
-
-    profile.avatar = new_key
-    await ProfileRepository(db).flush()
     # 头像为展示 URL（immutable 指纹 key），Profile.avatar 变更须同步失效 user:snap。
     await events.notify_user_updated(db, user_id)
     return new_key
@@ -147,6 +153,9 @@ async def serve_avatar(db: DbSession, user_id: uuid.UUID) -> StreamingResponse:
         except BizError as exc:
             if exc.errcode == StorageErr.NOT_FOUND:
                 return
+            # 后端/权限/IO 类故障不能在此静默吞掉：响应头已发出无法改状态码，但至少
+            # 上抛让连接中断并留下栈（否则客户端拿到 200 + 截断图片，故障无迹可查）。
+            raise
 
     return StreamingResponse(
         it(),

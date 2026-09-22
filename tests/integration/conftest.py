@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from collections.abc import Iterator
 from typing import Any
 
@@ -34,7 +35,6 @@ def _integration_containers() -> Iterator[None]:
         return
 
     containers: list[Any] = []
-    started = False
     try:
         import time
 
@@ -62,8 +62,10 @@ def _integration_containers() -> Iterator[None]:
             .with_command("bin/pulsar standalone")
         )
         for c in (postgres, redis, pulsar):
-            c.start()
+            # 先登记再 start：start() 中途抛错（拉镜像失败/端口占用）时该容器可能已经起来，
+            # 只有先 append 才能被 finally 回收。
             containers.append(c)
+            c.start()
 
         def _pulsar_admin(*args: str) -> int:
             """在 Pulsar 容器内跑 pulsar-admin（走 docker-py 原生 exec，跨版本稳定）。"""
@@ -78,6 +80,10 @@ def _integration_containers() -> Iterator[None]:
             if _pulsar_admin("brokers", "healthcheck") == 0:
                 break
             time.sleep(3)
+        else:
+            # 超时不得静默放行：否则会带着「一个没就绪的 broker」继续建租户/注入 URL，
+            # 失败点散落到后续用例里，变成难查的 flaky，而不是明确的环境错误。
+            raise RuntimeError("Pulsar 未在 180s 内就绪（integration fixture 中止）")
 
         # 租户/namespace（幂等；生产由 compose 的 pulsar entrypoint 建）
         for args in (
@@ -110,18 +116,27 @@ def _integration_containers() -> Iterator[None]:
                 "postgresql+psycopg2://", "postgresql+asyncpg://"
             ),
         )
-        started = True
     except Exception as exc:
         print(f"[integration] Testcontainers 环境不可用，按 env 判定走 skip：{exc}")
 
     try:
         yield
     finally:
-        if started:
-            for c in reversed(containers):
-                # stop() 之外再走底层 docker-py 强制 remove：实测仅 stop() 会留下
-                # 运行中的容器（stop 卡住/异常被 suppress），残留会一直占资源。
-                with contextlib.suppress(Exception):
-                    c.stop()
-                with contextlib.suppress(Exception):
-                    c.get_wrapped_container().remove(force=True)
+        # 不再用「全部就绪才算 started」做闸门：setup 中途失败（Pulsar 就绪超时、
+        # get_exposed_port 抛错、settings 导入失败……）时同样要把已起的容器收掉，
+        # 否则它们会一直留在机器上占资源。
+        for c in reversed(containers):
+            # stop() 之外再走底层 docker-py 强制 remove：实测仅 stop() 会留下
+            # 运行中的容器（stop 卡住/异常被 suppress），残留会一直占资源。
+            # 两级清理都失败时必须留痕：这正是「残留容器」场景，静默吞掉等于问题不可见。
+            try:
+                c.stop()
+            except Exception as exc:
+                print(f"[integration] 容器 stop 失败（尝试强制 remove）：{exc}")
+            try:
+                c.get_wrapped_container().remove(force=True)
+            except Exception as exc:
+                print(
+                    f"[integration] ✗ 容器 remove 也失败，可能残留：{c!r}：{exc}",
+                    file=sys.stderr,
+                )

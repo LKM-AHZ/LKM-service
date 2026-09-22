@@ -4,7 +4,7 @@ import datetime
 import uuid
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class QuestionCreate(BaseModel):
@@ -17,8 +17,27 @@ class QuestionCreate(BaseModel):
     score: int = Field(default=10, ge=1)
     sort_order: int = Field(default=0)
 
+    @model_validator(mode="after")
+    def _check_single_choice_answer(self) -> QuestionCreate:
+        """单选题目必须给选项且 answer 命中某个 key。
+
+        判分是把考生作答与 answer 直接比较，选项为空或 answer 不在 key 集合里
+        等于出一道永远无法得分的题。（判断题为 T/F，允许 options 为空。）
+        """
+        if self.kind == "single":
+            keys = {o.get("key") for o in self.options}
+            if not keys or self.answer not in keys:
+                raise ValueError("single 题的 answer 必须是 options 中某个 key")
+        return self
+
 
 class QuestionOut(BaseModel):
+    """管理端题目视图（含 answer/analysis）。
+
+    刻意与考生侧 DTO 区分：考生侧必须用 :class:`QuestionForAttempt`（不含答案）。
+    本类若被接进任何考生可见的响应，答案即泄露、交卷必满分——接线时务必只挂在管理端。
+    """
+
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -45,6 +64,24 @@ class ExamCreate(BaseModel):
     starts_at: datetime.datetime | None = None
     ends_at: datetime.datetime | None = None
     questions: list[QuestionCreate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_schedule_window(self) -> ExamCreate:
+        # 反序/零长时间窗会让 _check_window 对所有考生恒判 EXAM_NOT_OPEN，
+        # 考试创建成功后却永久不可用，且报错完全不指向配置错误 → 建考前就拦下
+        if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
+            raise ValueError("ends_at 必须晚于 starts_at")
+        return self
+
+    @model_validator(mode="after")
+    def _check_pass_score(self) -> ExamCreate:
+        """题目非空且 pass_score 不超过满分：否则「全对也不及格」「空卷考试」都能被建出来。"""
+        if not self.questions:
+            raise ValueError("考试至少需要一道题目")
+        total = sum(q.score for q in self.questions)
+        if self.pass_score > total:
+            raise ValueError(f"pass_score 不能超过满分 {total}")
+        return self
 
 
 class ExamOut(BaseModel):

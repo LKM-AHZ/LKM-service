@@ -94,11 +94,14 @@ async def get_current_admin(
     if not seam_enabled():
         raise BizError(CommonErr.FORBIDDEN, "Admin auth service not configured")
 
-    return await _resolve_admin_via_seam(
-        user_id,
-        int(payload.get("token_version", 0)),
-        payload.get("iat"),
-    )
+    # 同 sub：声明是裸值，可能是 null/字符串/浮点，直接 int() 会以 TypeError/ValueError
+    # 冒成 500；解析失败按 fail-closed 拒（而非放行）
+    try:
+        expect_tv = int(payload.get("token_version", 0))
+    except (TypeError, ValueError):
+        raise BizError(CommonErr.FORBIDDEN, "Admin session token version invalid") from None
+
+    return await _resolve_admin_via_seam(user_id, expect_tv, payload.get("iat"))
 
 
 async def _resolve_admin_via_seam(
@@ -142,7 +145,12 @@ async def get_current_admin_2fa(
     mfa_at = payload.get("mfa_at")
     if mfa_at is None:
         raise BizError(CommonErr.MFA_REQUIRED, "MFA required")
-    tried_at: Any = datetime.datetime.fromtimestamp(float(mfa_at), tz=datetime.UTC)
+    # mfa_at 是原始 claim：非数字/null/inf/超大值都会让 float()/fromtimestamp 抛错，
+    # 冒成 500 就丢掉了 step-up 拒绝语义，故一律 fail-closed 转 MFA_REQUIRED
+    try:
+        tried_at: Any = datetime.datetime.fromtimestamp(float(mfa_at), tz=datetime.UTC)
+    except (TypeError, ValueError, OverflowError, OSError):
+        raise BizError(CommonErr.MFA_REQUIRED, "MFA required") from None
     trusted_until = tried_at + datetime.timedelta(seconds=MFA_TRUST_SECONDS)
     if trusted_until < datetime.datetime.now(datetime.UTC):
         raise BizError(CommonErr.MFA_REQUIRED, "MFA trust expired")

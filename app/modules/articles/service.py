@@ -161,6 +161,9 @@ async def get_article(db: DbSession, slug: str) -> ArticleDetail:
             },
             tags=[t.name for t in (article.tags or [])],
         )
+        # 与 _article_to_detail 对齐：不填 category_title 会留下 schema 默认空串，
+        # 详情查询（GraphQL article.categoryTitle）恒报空分类
+        detail.category_title = await _load_category_title(db, article.category_id)
         detail.reading_time = estimate_reading_time(article.content)
         return detail.model_dump()
 
@@ -231,15 +234,18 @@ async def toggle_article_like(
     repo = ArticleLikeRepository(db)
     existing = await repo.get_one_like(article_id=article.id, user_id=user_id)
     if existing:
-        await repo.delete(existing)
-        await _bump_article_count(db, article.id, "likes", -1)
+        # 原子删除：并发两次「取消」只有一个真删到行，不会重复 -1
+        if await repo.release_like(article_id=article.id, user_id=user_id):
+            await _bump_article_count(db, article.id, "likes", -1)
         liked = False
     else:
-        await repo.create(article_id=article.id, user_id=user_id)
-        await _bump_article_count(db, article.id, "likes", 1)
+        # 原子占位：并发两次「点赞」只有一个真插入（原先后到者撞复合主键报错，且两边
+        # 都 +1、都入队积分事件）
+        if await repo.claim_like(article_id=article.id, user_id=user_id):
+            await _bump_article_count(db, article.id, "likes", 1)
+            # 仅新增点赞路径入队（取消点赞不重复计分）
+            await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
         liked = True
-        # 仅新增点赞路径入队（取消点赞不重复计分）
-        await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
     like_count = await repo.count_for(article.id)
     return {"liked": liked, "like_count": like_count}
 
@@ -462,6 +468,9 @@ async def update_article_ex(
     if "keyword_str" in data:
         article.keywords = str(data["keyword_str"])
         data.pop("keyword_str")
+    # tags 不能走通用 setattr：Article.tags 是 list[Tag] 关系列，赋 list[str] 会污染
+    # 关系状态并在 flush 时炸；标签只由下面的 _sync_article_tags 走仓储维护
+    data.pop("tags", None)
     for k, v in data.items():
         setattr(article, k, v)
     if patch.tags is not None:

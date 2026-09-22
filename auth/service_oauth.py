@@ -8,6 +8,8 @@ import secrets
 import uuid
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.err import BizError
 from app.db.base import expires_at, now_iso
 from app.db.repo import consume_once, get_or_raise
@@ -20,8 +22,10 @@ from auth.repository import (
     OAuthStateRepository,
     UserOAuthRepository,
     UserRepository,
+    is_integrity_error,
 )
 from auth.service_auth import (
+    _check_account_locked,
     create_user_with_profile,
     ensure_unique_username,
     finalize_auth_response,
@@ -102,6 +106,9 @@ async def handle_oauth_callback(
         user = await UserRepository(db).get_with_profile_or_raise(
             oauth.user_id, AuthErr.USER_NOT_FOUND
         )
+        # 既有绑定同样是登录：审计要像 login_password 那样每次成功都记，否则最常见的老用户
+        # 复登录在 oauth_login 审计里完全缺席（原先只有「新建用户」分支才有 log_audit）。
+        await log_audit(db, user.id, "oauth_login", provider.name)
         return await _oauth_login_response(db, user)
 
     # 2. 邮箱已被注册 → 拒绝自动绑定登录（需显式绑定后登录，防账号接管）
@@ -163,12 +170,23 @@ async def bind_oauth(
 
     user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
 
-    await UserOAuthRepository(db).create(
-        user_id=user.id,
-        provider=provider.name,
-        provider_user_id=info.provider_user_id,
-        provider_email=info.provider_email,
-    )
+    try:
+        await UserOAuthRepository(db).create(
+            user_id=user.id,
+            provider=provider.name,
+            provider_user_id=info.provider_user_id,
+            provider_email=info.provider_email,
+        )
+    except IntegrityError as exc:
+        # 上面的存在性检查与这里的 insert 不是原子：两个并发回调可能都通过检查，
+        # 由 uq_oauth_provider_user 兜底；翻译成与「已被他人绑定」同一语义的领域错误，
+        # 而不是把 IntegrityError 冒成 500。
+        if is_integrity_error(exc):
+            raise BizError(
+                AuthErr.OAUTH_EMAIL_TAKEN,
+                f"This {provider.name.capitalize()} account is already bound",
+            ) from exc
+        raise
 
     await upgrade_to_normal(db, user)
 
@@ -176,5 +194,8 @@ async def bind_oauth(
 
 
 async def _oauth_login_response(db: DbSession, user: User) -> dict[str, Any]:
-    """检查 TOTP 要求并返回认证响应。"""
+    """检查锁定与 TOTP 要求后返回认证响应。"""
+    # OAuth 回调同样是一条登录入口：is_locked 是封禁标志，其余入口（login_password/
+    # login_code）都在发令牌前过 _check_account_locked，此处漏掉会让被封账号经 GitHub 登录。
+    await _check_account_locked(user)
     return await finalize_auth_response(db, user)

@@ -264,15 +264,22 @@ class Transport(Protocol):
 _transport: Transport | None = None
 _client: Any = None
 _producers: dict[str, Any] = {}
+# 已关闭标记：close() 只清缓存不是终态，关闭后并发中的 publish/消费重连仍会惰性新建 client，
+# 把 broker 连接与后台线程带到 shutdown 之后。
+_closed = False
 # 单一线程锁保护 client/producer 创建：Pulsar 同步 API 在线程中调用；用 threading.Lock 而非
 # asyncio.Lock，避免跨事件循环（多 loop 测试/多次 asyncio.run）绑定报错。
 _client_lock = threading.Lock()
 
 
 def set_transport(transport: Transport | None) -> None:
-    """注入/清除发布 transport（测试用；None 恢复真实 Pulsar 路径）。"""
-    global _transport
+    """注入/清除发布 transport（测试用；None 恢复真实 Pulsar 路径）。
+
+    同时复位「已关闭」标记：close() 兼作测试复位，注入新 transport 即代表新一轮使用。
+    """
+    global _transport, _closed
     _transport = transport
+    _closed = False
 
 
 def _client_locked() -> Any:
@@ -297,15 +304,24 @@ def _get_client_sync() -> Any:
 
 
 def _create_producer_cached(topic: str) -> Any:
-    """取/建该 topic 的 producer（加锁去重；须在线程中调用）。"""
-    with _client_lock:
-        producer = _producers.get(topic)
-        if producer is None:
-            producer = _client_locked().create_producer(
-                topic, schema=make_event_schema(topic)
-            )
-            _producers[topic] = producer
+    """取/建该 topic 的 producer（缓存去重；须在线程中调用）。
+
+    阻塞的 ``create_producer``（含 broker 侧 schema 注册/兼容性检查，可能卡数秒）刻意
+    放在锁外：``_create_consumer_sync`` 取 client 要用同一把锁，若持锁建 producer，
+    一个慢 producer 会把所有订阅的建连与重建一起堵死（消费线程集体停摆）。
+    """
+    producer = _producers.get(topic)
+    if producer is not None:
         return producer
+    client = _get_client_sync()  # 短临界区：只取/建 client
+    producer = client.create_producer(topic, schema=make_event_schema(topic))
+    with _client_lock:
+        # 并发首建同一 topic：以先落缓存者为准，本线程多建的那个关掉，避免连接泄漏
+        cached = _producers.setdefault(topic, producer)
+    if cached is not producer:
+        with suppress(Exception):
+            producer.close()
+    return cached
 
 
 async def _get_producer(topic: str) -> Any:
@@ -326,6 +342,10 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
     if topic is None:
         logger.error("未知 routing_key=%s，丢弃发布", routing_key)
         return False
+    if _closed:
+        # close() 之后不再新建 client/producer，否则 shutdown 会留下活着的 broker 连接与线程
+        logger.warning("消息总线已关闭，丢弃发布 routing_key=%s", routing_key)
+        return False
 
     # 发布 span（M5 7.2.2）：未启用 tracing 时为 no-op；traceparent 注入 props 供消费端续链
     with tracing.tracer("lkm.messaging").start_as_current_span(
@@ -335,7 +355,15 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             span.set_attribute("messaging.system", "pulsar")
             span.set_attribute("messaging.destination.name", topic)
             span.set_attribute("messaging.pulsar.routing_key", routing_key)
-        data = _encode_event(dict(payload))
+        try:
+            data = _encode_event(dict(payload))
+        except Exception:
+            # 编码必须在 try 内：payload 含不可 JSON 序列化对象（args 里的
+            # datetime/UUID/Decimal）时 json.dumps 抛 TypeError，直接冒出会破坏本函数
+            # 声明的 fail-open 契约，且漏计 notify_failed_total。
+            logger.exception("payload 编码失败 rk=%s", routing_key)
+            notify_failed_total.inc()
+            return False
         props: dict[str, str] = {"routing_key": routing_key}
         fn = payload.get("fn")
         if isinstance(fn, str):
@@ -432,12 +460,18 @@ def _handle_message(
         redelivery_count=redelivery_count,
     )
 
+    future = None
     try:
         future = asyncio.run_coroutine_threadsafe(
             _run_handler(handler, payload, meta), loop
         )
         future.result(timeout=JOB_TIMEOUT_S)
     except Exception:
+        # 超时/失败先尽力取消：消息马上被负确认并重投，若原协程还排在主循环里未开跑，
+        # 取消可避免同一事件长时间双跑。已在 await 中的协程取消不掉（返回 False），
+        # 那部分仍只能靠 handler 自身幂等兜底。
+        if future is not None:
+            future.cancel()
         logger.exception("消费失败→负确认 subscription=%s", sub_name)
         with suppress(Exception):
             consumer.negative_acknowledge(msg)
@@ -508,7 +542,10 @@ async def run_subscription(
     handler 为 async 回调（worker 侧注入 task_registry 分派 + 幂等记账）；本函数负责
     线程生命周期与消息 ack 语义。
     """
-    if not settings.message_bus_enabled and _transport is None:
+    if not settings.message_bus_enabled:
+        # 只按总线配置与否判：注入的 transport 只覆盖 publish，不提供消费能力，
+        # 总线未配置时起 daemon 线程只会用空 pulsar_url 反复建连失败（每 _CONSUMER_RETRY_S
+        # 打整栈日志），且永远收不到任何消息
         logger.error("消息总线未配置，订阅 %s 无法启动", name)
         return
     sub = SUBSCRIPTIONS.get(name)
@@ -533,9 +570,10 @@ async def run_subscription(
         await asyncio.to_thread(thread.join, 5.0)
 
 
-async def close() -> None:
-    """幂等收尾：关闭 producer 缓存与客户端（应用 shutdown / 测试复位）。"""
-    global _client
+async def _release_resources() -> None:
+    """释放 producer 缓存与 client，并复位 transport（不置终态标记）。"""
+    global _client, _transport
+    _transport = None
     with _client_lock:
         producers = list(_producers.values())
         _producers.clear()
@@ -547,3 +585,24 @@ async def close() -> None:
     if client is not None:
         with suppress(Exception):
             await asyncio.to_thread(client.close)
+
+
+async def close() -> None:
+    """幂等收尾：关闭 producer 缓存与客户端（**可复位**，测试/重连场景用）。
+
+    刻意不置终态标记：本函数兼作「复位单例」——测试与集成 fixture 先 close() 再指向
+    新的 broker URL 发布（tests/integration/test_pulsar_queue_integration.py），
+    若在这里判死，publish 会一律返回 False。终态关闭用 :func:`shutdown`。
+    """
+    await _release_resources()
+
+
+async def shutdown() -> None:
+    """终态关闭（应用 shutdown 专用）：释放资源后置「已关闭」标记。
+
+    之后 publish 直接失败、不再惰性重建 client —— 否则进程退出阶段仍在飞的 publish
+    会把 broker 连接与后台线程带到 shutdown 之后。set_transport 会解除该标记。
+    """
+    global _closed
+    _closed = True
+    await _release_resources()

@@ -331,7 +331,7 @@ class OnboardingProgress(AuthBase):
         UTCDateTime, nullable=False, default=now_iso
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
+        UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
 
 
@@ -363,20 +363,36 @@ class User(UUIDPrimaryKeyMixin, AuthBase):
     profile: Mapped[Profile] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    refresh_tokens: Mapped[list[RefreshToken]] = relationship(back_populates="user")
-    oauth_bindings: Mapped[list[UserOAuth]] = relationship(back_populates="user")
-    totp: Mapped[TOTP | None] = relationship(back_populates="user", uselist=False)
-    recovery_codes: Mapped[list[RecoveryCode]] = relationship(back_populates="user")
+    # 子表 FK 均带 ondelete="CASCADE"：这里补 ORM 侧 cascade + passive_deletes，
+    # 使 session.delete(user) 不再逐个把子行 user_id 置 NULL（那些列 NOT NULL，会抛
+    # IntegrityError），而是交给 DB 级联删除
+    refresh_tokens: Mapped[list[RefreshToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+    oauth_bindings: Mapped[list[UserOAuth]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
+    totp: Mapped[TOTP | None] = relationship(
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    recovery_codes: Mapped[list[RecoveryCode]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
     passkey_credentials: Mapped[list[PasskeyCredential]] = relationship(
-        back_populates="user"
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
 class Profile(AuthBase):
     __tablename__: str = "profiles"
 
+    # 与本模块其余 FK 一致补 ondelete：裸 FK 是 NO ACTION，DB 级 DELETE users 会因
+    # 外键冲突失败（ORM 侧靠 profile 关系的 delete-orphan 兜底，但 DB 语义应自洽）
     user_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("users.id"), primary_key=True
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)
     avatar: Mapped[str | None] = mapped_column(Text, nullable=True)

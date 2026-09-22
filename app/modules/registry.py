@@ -35,24 +35,20 @@ MODULES: list[str] = [
     # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
 ]
 
-# 注册副作用需要显式导入其 errors 的模块（rbac 无 errors，故单独列出）。
-# 注：各模块错误码通过 ``register()`` 副作用注册，导入即生效。
+# 不做顶层 errors.py 的模块（rbac 无 errors 且不在 MODULES 内，另有三条子包路径单列）。
+_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "health"})
+
+# 注册副作用需要显式导入其 errors 的模块。各模块错误码通过 ``register()`` 副作用注册，
+# 导入即生效。这里**由 MODULES 派生**而非另抄一份清单：两份手维护清单必然漂移（此前
+# "storage" 就漏了，只靠 files/auth 的 import 链顺带注册；admin 的错误码在子包
+# admin.moderation 下，按约定路径 app.modules.admin.errors 根本导不到，只能单列）。
 _ERROR_MODULES: list[str] = [
-    "articles",
-    "blog",
-    "content",  # ContentErr（统一内容核心）
+    *(m for m in MODULES if m not in _NO_TOP_ERRORS),
+    "admin.moderation",  # ModerationErr（子包路径，非 app.modules.admin.errors）
     "content.boards",  # BoardErr
     "content.columns",  # ColumnErr
     "content.qa",  # QaErr
-    "exam",
-    "feed",  # FollowErr（关注关系；M2.3 原 follow 域并入）
-    "files",
-    "interaction",
-    "notification",
-    "points",
-    "projects",
-    "search",
-    "starhope",
+    "storage",  # StorageErr：原缺失，显式化以免某个进程两条 import 链都不断时漏注册
 ]
 
 

@@ -2,7 +2,7 @@
 
 独立 database 承载 auth 自持表；只针对 ``AuthBase``/``auth_metadata``（app/db/auth_base.py）。
 S1–S5 auth.models 仍挂在 monolith Base 上、auth_metadata 为空，此链仅空跑占位；
-S5 把 auth.models 迁到 AuthBase 后，本链经 autogenerate 产身具 auth 库迁移。
+S5 把 auth.models 迁到 AuthBase 后，本链经 autogenerate 产出具体的 auth 库迁移。
 ``alembic -c alembic.auth.ini`` 驱动时 URL 取自 ``settings.auth_database_url``（async→sync）。
 """
 
@@ -10,8 +10,13 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-# 让 alembic 能找到 app / auth 包（从仓库根 sys.path 挂载）
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 让 alembic 能找到 app / auth 包（从仓库根 sys.path 挂载）。
+# 注：ini 的 prepend_sys_path 已由 alembic 在加载本文件之前挂好仓库根
+# （alembic/script/base.py：``sys.path[:0] = prepend_sys_path``），这里只是非 CLI 驱动路径的
+# 兜底；先判重再插入，避免同一路径被重复堆进 sys.path。
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from sqlalchemy import engine_from_config, pool
 
@@ -56,7 +61,11 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    config.set_main_option("sqlalchemy.url", _sync_url(_auth_url()))
+    # configparser 把 % 当插值起始符（ini 里的 %(here)s 就靠它）。settings 的连接串用
+    # quote_plus 编码密码，密码含特殊字符时会出现裸 %XX，set_main_option 当场抛
+    # ValueError(invalid interpolation syntax) 使迁移无法启动；按 configparser 规则
+    # 把 % 转义成 %%，get_section 读回时还原为原值。
+    config.set_main_option("sqlalchemy.url", _sync_url(_auth_url()).replace("%", "%%"))
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

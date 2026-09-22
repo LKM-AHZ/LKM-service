@@ -219,7 +219,12 @@ async def seed_exams(db: AsyncSession) -> int:
         if exists is not None:
             continue
         questions = spec["questions"]
-        exam = Exam(**{k: v for k, v in spec.items() if k != "questions"})
+        # 显式 is_published=True：模型默认 False，而 start_attempt 会拒绝未发布考试，
+        # 且本模块没有任何发布/更新端点 → 种子考试若留在默认值就永远无法作答
+        exam = Exam(
+            is_published=True,
+            **{k: v for k, v in spec.items() if k != "questions"},
+        )
         db.add(exam)
         await db.flush()
         for qi in questions:

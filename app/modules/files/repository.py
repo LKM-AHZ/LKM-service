@@ -45,8 +45,10 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
         limit: int = 20,
     ) -> list[LibraryFile]:
         """文件列表分页；``sort == "downloads"`` 按下载量倒序，否则按 id 倒序。"""
+        # downloads 排序补 id 兜底：download_count 相同的行在 PG 里无稳定次序，
+        # 不同 offset 的两次分页可能重复或漏行
         order = (
-            LibraryFile.download_count.desc()
+            (LibraryFile.download_count.desc(), LibraryFile.id.desc())
             if sort == "downloads"
             else LibraryFile.id.desc()
         )
@@ -78,9 +80,14 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
         )
 
     async def sync_ref_count(self, sha3_hash: str) -> None:
-        """把全局引用计数写回该哈希对应的所有条目，保证 ref_count 列不漂移。"""
+        """把**存活引用数**写回该哈希对应的所有条目，保证 ref_count 列不漂移。
+
+        用 count_live_by_hash（不含 DELETED）而非全部行数：物理删除的判据就是
+        「存活引用归零」（delete_file 里同源），若这里算上 DELETED 行，blob 已删而
+        ref_count 仍 >0，与 models.py 里「ref_count 归零时清理磁盘文件」的契约矛盾。
+        """
         if not sha3_hash:
             return
-        count = await self.count_by_hash(sha3_hash)
+        count = await self.count_live_by_hash(sha3_hash)
         for row in await self.list_by_hash(sha3_hash):
             row.ref_count = count

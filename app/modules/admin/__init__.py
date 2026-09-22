@@ -39,7 +39,9 @@ def __getattr__(name: str) -> Any:
                 router_analytics,
                 router_bot,
             ]
-        return _exported_routers
+        # 返回浅拷贝：直接给缓存列表的话，任何调用方 append/remove 都会污染
+        # 进程级缓存，影响后续所有消费方
+        return list(_exported_routers)
     if name == "GRAPHQL":
         if _exported_graphql is None:
             _exported_graphql = []

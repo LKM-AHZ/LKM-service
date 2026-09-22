@@ -21,6 +21,24 @@ from app.modules.blog.service import (
 )
 from auth.schemas import ProfileInfo
 
+# GraphQL 分页边界（同 content/columns 与 articles/graphql 口径）：pageSize 缺省时 service
+# 会「不限量」整表拉取（公开字段，易被 DoS），page<=0 会产生负 offset 报错。夹紧后再下传。
+_GRAPHQL_PAGE_SIZE = 20
+_GRAPHQL_PAGE_MAX = 100
+
+# 评论树最大展开深度（详见 _map_comment）
+_MAX_COMMENT_DEPTH = 20
+
+
+def _bounded_page_size(page_size: int | None) -> int:
+    if page_size is None:
+        return _GRAPHQL_PAGE_SIZE
+    return max(1, min(page_size, _GRAPHQL_PAGE_MAX))
+
+
+def _bounded_page(page: int) -> int:
+    return max(1, page)
+
 
 @strawberry.type
 class GraphFileTreeNode:
@@ -115,7 +133,14 @@ def _comment_author(c: BlogCommentInfo) -> GraphSeriesCommentAuthor | None:
     return GraphSeriesCommentAuthor(id=c.user_id, name=name or None)
 
 
-def _map_comment(c: BlogCommentInfo) -> GraphSeriesComment:
+def _map_comment(c: BlogCommentInfo, *, depth: int = 0) -> GraphSeriesComment:
+    # 展开深度上限：深层回复链或脏数据里的 parent_id 环会让递归无限展开并抛
+    # RecursionError，整条 GraphQL 查询随之失败；到顶后截断 replies 而不是报错
+    replies = (
+        [_map_comment(r, depth=depth + 1) for r in c.replies]
+        if depth < _MAX_COMMENT_DEPTH
+        else []
+    )
     return GraphSeriesComment(
         id=c.id,
         userId=c.user_id,
@@ -124,7 +149,7 @@ def _map_comment(c: BlogCommentInfo) -> GraphSeriesComment:
         parentId=c.parent_id,
         createdAt=c.created_at.isoformat(),
         author=_comment_author(c),
-        replies=[_map_comment(r) for r in c.replies],
+        replies=replies,
     )
 
 
@@ -136,7 +161,10 @@ class BlogQuery:
     ) -> GraphSeriesPage:
         db = _get_db(info)
         page_data = await list_series(
-            db, current_user_id=None, page=page, limit=pageSize
+            db,
+            current_user_id=None,
+            page=_bounded_page(page),
+            limit=_bounded_page_size(pageSize),
         )
         return GraphSeriesPage(
             items=[_map_series(s) for s in page_data.items],

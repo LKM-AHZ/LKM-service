@@ -8,7 +8,6 @@
 - **可观测**：命中/未命中用 `lkm.cache` 的 DEBUG 级日志，配合模块0结构化日志观测命中率。
 """
 
-import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -16,6 +15,7 @@ from typing import Any
 
 import app.core.redis as redis_client
 from app.core import logging as lkm_logging
+from app.core import singleflight
 from app.core.config import settings
 
 logger = logging.getLogger("lkm.cache")
@@ -30,9 +30,19 @@ def _cache_env() -> str:
     return settings.env or "dev"
 
 
+def _escape_seg(seg: str) -> str:
+    """转义分段里的分隔符与转义符本身（顺序要紧：先 % 再 |，否则转义不可逆）。"""
+    return seg.replace("%", "%25").replace("|", "%7C")
+
+
 def make_key(prefix: str, *parts: Any) -> str:
-    """键规范：`lkm:{env}:{prefix}:{parts...}`。parts 的 None 归并为空段。"""
-    seg = [str(p) if p is not None else "" for p in parts]
+    """键规范：`lkm:{env}:{prefix}:{parts...}`。parts 的 None 归并为空段。
+
+    分段先转义 ``|``/``%`` 再拼接：``|`` 本身是合法字符，不转义时 ("a|b","c") 与
+    ("a","b|c") 会拼出同一个键，让一个变体读到另一个变体的缓存。None 与 "" 仍按既有约定
+    归并成同一段——两者在调用点语义相同，属刻意行为。
+    """
+    seg = [_escape_seg("" if p is None else str(p)) for p in parts]
     return f"lkm:{_cache_env()}:{prefix}:{'|'.join(seg)}"
 
 
@@ -106,13 +116,6 @@ async def bump_collection_version(name: str) -> None:
         logger.debug("bump version skip name=%s", name)
 
 
-# 单飞（single-flight）：同一事件循环内，同一 key 的并发 miss 只让一个协程执行
-# loader／回填，其余协程复用其结果，避免热点 key 击穿时同时打穿 DB。进程内锁即可
-# 覆盖单 worker 内的并发；跨 worker 的击穿由 Redis SET NX 接续（此处未启用）。
-# 锁字典按 key 常驻，key 数量受「不同缓存端点 × 过滤器组合」约束、天然有界，不做
-# 清理——若动态增删锁，释放与移除之间会产生窗口让后到者拿到新锁、并发挤进 loader。
-_flight_locks: dict[str, asyncio.Lock] = {}
-
 # 空值缓存标记：loader 返回 None（业务上不存在）时写入该标记 + 短 TTL，读取端据此
 # 在窗口内直接返回 None 而不反复调 loader，防御无效 slug/id 的缓存穿透。
 _NULL_MARKER = "\x00__CACHE_NULL__"
@@ -126,7 +129,10 @@ async def cached_read[T](
 ) -> T:
     """读缓存命中直接返回；未命中执行 loader 并回填。loader 输出需 JSON 可序列化。
 
-    - 并发 miss 走单飞：同一 key 同时仅有一个 loader 在执行。
+    - 并发 miss 走单飞（``core.singleflight``，按引用计数自回收）：同一 key 同时仅有一个
+      loader 在执行。此前这里自持 ``_flight_locks`` 锁字典，但键里含用户可控 slug 与每次
+      bump 都变的版本号（见调用方 make_key），字典只增不减 → 无界内存；且 asyncio.Lock
+      首次 await 会绑定事件循环，跨 loop 复用会抛错。
     - 传 ``null_ttl`` 时，loader 返回 None 会以该短 TTL 写入空值标记缓存，
       在窗口内让无效查询（如不存在的 slug/id）命中缓存而不再穿透到 DB。
       未命中缓存时返回 None，语义与不缓存一致。
@@ -137,16 +143,12 @@ async def cached_read[T](
             return None  # ty: ignore[invalid-return-type]  # 空值标记：业务上"不存在"，返回 None
         return cached
 
-    lock = _flight_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _flight_locks[key] = lock
-    async with lock:
-        # 已持有锁：可能之前协程已回填，先重读；仍 miss 才执行 loader
+    async def _load_and_fill() -> T:
+        # 拿到 flight 后先重读：可能前一个协程已回填；仍 miss 才执行 loader
         cached2 = await cache_get(key)
         if cached2 is not None:
             if cached2 == _NULL_MARKER:
-                return None  # ty: ignore[invalid-return-type]  # 空值标记：业务上"不存在"，返回 None
+                return None  # ty: ignore[invalid-return-type]  # 空值标记：业务上"不存在"
             return cached2
         value = await loader()
         if value is not None:
@@ -154,3 +156,5 @@ async def cached_read[T](
         elif null_ttl is not None:
             await cache_set(key, _NULL_MARKER, null_ttl)
         return value
+
+    return await singleflight.run(key, _load_and_fill)

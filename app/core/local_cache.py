@@ -29,7 +29,11 @@ def _now() -> float:
 
 
 def l1_get(key: str) -> Any | None:
-    """命中且未过期返回值（并刷新 LRU 位置）；未命中/过期/空值 → None。"""
+    """命中且未过期返回值（并刷新 LRU 位置）；未命中/过期/空值 → None。
+
+    注意 None 同时是「未命中」哨兵：本缓存不接受 None 作为可缓存值
+    （``l1_set`` 会忽略它），否则「命中且值为 None」与 miss 无法区分。
+    """
     item = _data.get(key)
     if item is None:
         return None
@@ -42,8 +46,15 @@ def l1_get(key: str) -> Any | None:
 
 
 def l1_set(key: str, value: Any, ttl: float) -> None:
-    """写入并设置 TTL；超容量按 LRU 逐出最旧条目。ttl<=0 视为不缓存。"""
-    if ttl <= 0:
+    """写入并设置 TTL；超容量按 LRU 逐出最旧条目。ttl<=0 视为不缓存。
+
+    ``value is None`` 直接忽略：None 已是 miss 哨兵（见 ``l1_get``），存进去永远
+    命不中，只会让人误以为「这条缓存过了」。
+    """
+    if ttl <= 0 or value is None:
+        # ttl<=0 表示「本次不要缓存这条」：必须把旧条目一并清掉，
+        # 否则调用方以为已放弃、读者却仍会命中它的旧值（陈旧数据）
+        _data.pop(key, None)
         return
     _data[key] = (_now() + ttl, value)
     _data.move_to_end(key)

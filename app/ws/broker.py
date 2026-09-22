@@ -19,10 +19,13 @@
 """
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from app.core.redis import get_redis
+
+logger = logging.getLogger(__name__)
 
 CHANNEL_UPLOAD = "upload"
 CHANNEL_NOTIFY = "notify"
@@ -73,20 +76,50 @@ async def publish(
     if redis is None:
         return
     body = dict(payload)
-    body["event_id"] = event_id or str(uuid.uuid4())
-    body["version"] = version if version is not None else 0
+    # 幂等键优先保留调用方（或 payload 里）已给的值：前端靠 event_id/version 去重，
+    # 无条件覆盖会丢掉重发事件的原标识。显式参数 > payload 自带 > 新生成/默认。
+    if event_id is not None:
+        body["event_id"] = event_id
+    else:
+        body.setdefault("event_id", str(uuid.uuid4()))
+    if version is not None:
+        body["version"] = version
+    else:
+        body.setdefault("version", 0)
     try:
-        await redis.publish(
-            ws_channel(user_id, channel), json.dumps(body, ensure_ascii=False)
+        data = json.dumps(body, ensure_ascii=False)
+    except (TypeError, ValueError):
+        # 序列化失败属调用方编程错误（payload 含不可 JSON 序列化对象），不得与
+        # 「Redis 不可用」的 fail-open 混为一谈：留日志并抛出，让问题暴露
+        logger.warning(
+            "ws publish payload 不可序列化: channel=%s",
+            ws_channel(user_id, channel),
+            exc_info=True,
         )
+        raise
+    try:
+        await redis.publish(ws_channel(user_id, channel), data)
     except Exception:
         # 广播失败不影响主流程；前端靠超时/刷新兜底
+        logger.warning(
+            "ws publish failed: channel=%s",
+            ws_channel(user_id, channel),
+            exc_info=True,
+        )
         return
 
 
-async def publish_upload_bound(uploader_id: uuid.UUID, payload: dict[str, Any]) -> None:
-    """把登记完成的 payload 发布到该 uploader 的 upload 通道。"""
-    await publish(uploader_id, CHANNEL_UPLOAD, payload)
+async def publish_upload_bound(
+    uploader_id: uuid.UUID,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None = None,
+    version: int | None = None,
+) -> None:
+    """把登记完成的 payload 发布到该 uploader 的 upload 通道（可带幂等键）。"""
+    await publish(
+        uploader_id, CHANNEL_UPLOAD, payload, event_id=event_id, version=version
+    )
 
 
 async def publish_notification(

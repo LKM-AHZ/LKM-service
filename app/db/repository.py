@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any
 
 from sqlalchemy import ColumnElement, Result, Select, delete, func, select
@@ -30,6 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.err import BizError, ErrCode
+
+logger = logging.getLogger("lkm.db.repository")
 
 ValuesDict = dict[str, Any]
 
@@ -228,6 +231,11 @@ class AsyncRepository[ModelT]:
 
     async def update_where(self, values: ValuesDict, *conditions: Any) -> int:
         """批量 UPDATE，返回受影响行数（**不**施加软删过滤，谓词由调用方给全）。"""
+        # 空谓词 = 全表改写/全表删除且静默返回行数，几乎必然是漏传条件；宁可直接炸
+        if not conditions:
+            raise ValueError("update_where 至少需要一个条件，禁止无谓词全表更新")
+        if not values:
+            raise ValueError("update_where 的 values 不能为空，否则生成非法 SQL")
         result: Result[Any] = await self.db.execute(
             sa_update(self.model).where(*conditions).values(**values)
         )
@@ -241,6 +249,8 @@ class AsyncRepository[ModelT]:
 
     async def hard_delete_where(self, *conditions: Any) -> int:
         """按条件批量硬删，返回受影响行数。"""
+        if not conditions:
+            raise ValueError("hard_delete_where 至少需要一个条件，禁止无谓词全表删除")
         result: Result[Any] = await self.db.execute(
             delete(self.model).where(*conditions)
         )
@@ -252,8 +262,17 @@ class AsyncRepository[ModelT]:
     async def soft_delete(
         self, obj: ModelT, *, at: datetime.datetime | None = None
     ) -> None:
-        """打软删时间戳并 flush；模型没有 ``deleted_at`` 列时退化为硬删。"""
+        """打软删时间戳并 flush；模型没有 ``deleted_at`` 列时退化为硬删。
+
+        ``soft_delete_column is None`` 的分支会**不可恢复地**物理删除（且 ``restore``
+        退化为空操作），调用方若按「可撤销删除」使用就会丢数据——故至少留下 error 级日志，
+        让「调错了模型」这件事在日志里可见。
+        """
         if self.soft_delete_column is None:
+            logger.error(
+                "soft_delete 被用于无 deleted_at 列的模型 %s：退化为硬删（不可恢复）",
+                type(obj).__name__,
+            )
             await self.delete(obj)
             return
         obj.deleted_at = at or _utcnow()  # type: ignore[attr-defined]
@@ -311,6 +330,17 @@ class AsyncRepository[ModelT]:
                 )
             )
         else:
+            # 两种组合会拼出非法 SQL 且只在执行期才暴露，故在构造语句前显式校验
+            if not update_columns and not update_values:
+                raise ValueError(
+                    "pg_upsert 非 do_nothing 时必须给出 update_columns 或 update_values"
+                    "（否则 ON CONFLICT DO UPDATE SET 无赋值项）"
+                )
+            if index_elements is None and constraint is None:
+                raise ValueError(
+                    "pg_upsert 的 ON CONFLICT DO UPDATE 必须给出冲突目标"
+                    "（index_elements 或 constraint）"
+                )
             set_: ValuesDict = dict(update_values or {})
             for column in update_columns or []:
                 set_[column] = getattr(stmt.excluded, column)

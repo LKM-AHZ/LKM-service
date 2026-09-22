@@ -179,6 +179,13 @@ async def _stream_to_stdin(proc: asyncio.subprocess.Process, request: Request) -
             proc.stdin.close()
 
 
+async def _read_pipe(stream: asyncio.StreamReader | None) -> bytes:
+    """抽干一个管道到 EOF（stdout/stderr 恒为 PIPE，None 仅作防御）。"""
+    if stream is None:
+        return b""
+    return await stream.read()
+
+
 # 同一 handler 同时服务 smart HTTP 的 GET(拉取)与 POST(推送)，
 # 拆成两个路由并给独立 operation_id，避免 FastAPI 生成重复 Operation ID。
 # 内部按 request.method 区分 is_push。
@@ -259,16 +266,54 @@ async def git_http_backend(
             status_code=500, detail="git executable not found"
         ) from None
 
+    # stdout/stderr 必须与写 stdin 并发抽干：子进程（receive-pack 经 sideband 发的进度、
+    # 或大批量 refs 的响应）可能在还没读完请求体前就写出超过管道缓冲的数据，此时若本端
+    # 仍在写 stdin，两边互等 → 大 push 只能卡到超时变 504。
+    out_task = asyncio.create_task(_read_pipe(proc.stdout))
+    err_task = asyncio.create_task(_read_pipe(proc.stderr))
     try:
         async with asyncio.timeout(120):
             await _stream_to_stdin(proc, request)
-            stdout, _ = await proc.communicate()
+            stdout = await out_task
+            stderr = await err_task
+        await proc.wait()
     except TimeoutError:
         proc.kill()
         await proc.wait()
         raise HTTPException(status_code=504, detail="Git operation timed out") from None
+    except BaseException:
+        # 其它退出路径（客户端中断的 ClientDisconnect、communicate 类错误）同样要杀掉并
+        # 回收子进程，否则每个中断请求都漏一个仍占着仓库目录的 git 进程
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        raise
+    finally:
+        # 超时/异常路径的两个读任务可能仍在等 EOF，取消并回收，避免 pending task 泄漏
+        for _task in (out_task, err_task):
+            if not _task.done():
+                _task.cancel()
+        await asyncio.gather(out_task, err_task, return_exceptions=True)
 
     resp = _parse_git_response(stdout)
+    if resp.status_code >= 400 and stderr.strip():
+        # http-backend 的失败细节只写在 stderr（原先直接丢弃），不留痕则线上只能看到状态码
+        logger.warning(
+            "git http-backend 失败 repo=%s status=%s stderr=%s",
+            repo_name,
+            resp.status_code,
+            stderr.decode("utf-8", errors="replace").strip()[:2000],
+        )
     if is_push and resp.status_code < 400:
-        await maybe_backfill_after_push(repo_name, old_sha)
+        # 只看状态码不够：receive-pack 即使拒更（非快进/钩子拒）也回 200 + sideband
+        # report-status，会对「其实没更新的仓库」跑回填，写出与仓库不一致的 blog_content。
+        # 先确认 HEAD 真的变了再回填（首推时 old_sha 为 None，同样满足）。
+        new_sha = await asyncio.to_thread(git_svc.revparse_or_none, repo_name)
+        if new_sha and new_sha != old_sha:
+            await maybe_backfill_after_push(repo_name, old_sha)
+        else:
+            logger.info(
+                "push 未推进 refs（被拒/空提交），跳过回填 repo=%s", repo_name
+            )
     return resp

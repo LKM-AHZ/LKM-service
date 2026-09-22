@@ -11,6 +11,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import jobs
@@ -80,7 +81,9 @@ async def _send_reg_code(
         f"reg:{channel.name}:{contact}", max_count=5, window=3600
     )
     code, _ = await channel.create_verification(db, contact, "register")
-    await jobs.send_code(channel.name, contact, code)
+    # 延后到响应之后发送（与本文件 resend 路径同款）：原先这里 await，参数被白挂，
+    # SMTP/短信往返被算进注册请求时延，两条路径语义也不一致
+    background_tasks.add_task(jobs.send_code, channel.name, contact, code)
 
 
 async def _complete_reg_verify(
@@ -133,7 +136,14 @@ async def edit_profile(
     return await get_profile(db, user_id)
 
 
-@router.post("/avatar", response_model=ApiResp[MessageResponse])
+class _AvatarUploadResp(BaseModel):
+    """头像上传响应：MessageResponse 只有 message，返回的 avatar key 会被 FastAPI 过滤掉。"""
+
+    message: str
+    avatar: str
+
+
+@router.post("/avatar", response_model=ApiResp[_AvatarUploadResp])
 @respond
 async def upload_avatar(
     file: UploadFile = File(...),
@@ -279,7 +289,8 @@ async def login_code_request(
     code, _ = await channel.create_verification(db, contact, "login")
     background_tasks.add_task(channel.send_code, contact, code)
 
-    return {"message": "Verification code sent"}
+    # 与不存在分支返回**同一**文案：文案不同即账号存在性预言机（调用方直接比对响应即可枚举）
+    return {"message": "If account exists, verification code sent"}
 
 
 @router.post("/login/code", response_model=ApiResp[AuthTokenData])
@@ -299,9 +310,13 @@ async def login_code(
 @router.post("/login/password", response_model=ApiResp[AuthTokenData])
 @respond
 async def login_password_route(
-    info: UserLoginPassword, db: AsyncSession = Depends(get_auth_session)
+    info: UserLoginPassword,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
-    return await service_auth.login_password(db, info)
+    # 传 IP 才会触发 service 层的密码登录限流（IP 桶 + 全局桶，fail-close）；不传则整条
+    # 防爆破路径被静默跳过。IP 取法与 refresh 同源（网关后读 X-Real-IP）。
+    return await service_auth.login_password(db, info, ip_address=client_ip(request))
 
 
 @router.post("/refresh", response_model=ApiResp[TokenPair])

@@ -1,7 +1,9 @@
 [project]
+# name 仍是 `uv init` 的占位名：它同时被 uv.lock 记录（`name = "backend"`），改名必须同步重跑
+# `uv lock` 才能过 CI 的 `uv sync --locked`（本单元不跑 uv / 不动 lock），故只改下面这条占位描述。
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "理科迷社区后端服务（FastAPI + SQLAlchemy + PostgreSQL + Pulsar）"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
@@ -171,6 +173,10 @@ ignore_imports = [
     "app.db.model_registry -> app.modules.starhope.models",
 ]
 
+# 注：app.modules.rbac / app.modules.storage 刻意不入下面的 source/forbidden 名单——
+# 它们是全模块共享的基础设施（rbac 的 deps/permissions/service 是各 router 的鉴权原语，
+# storage 的 base/errors/factory 是存储抽象），实测把它们纳入会产生 9 组 40+ 条跨模块边，
+# 只能靠同等规模的 ignore 白名单堆出来，反而掩盖真正的越界。故在此显式声明为共享基础设施。
 [[tool.importlinter.contracts]]
 name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
@@ -223,6 +229,7 @@ forbidden_modules = [
     "auth.admin_router",
     "auth.admin_session",
     "auth.audit_export",
+    "auth.bot_sso",
     "auth.channels",
     "auth.db",
     "auth.errors",
@@ -238,6 +245,7 @@ forbidden_modules = [
     "auth.router",
     "auth.router_2fa",
     "auth.router_authz",
+    "auth.router_bot_sso",
     "auth.router_jwks",
     "auth.router_oauth",
     "auth.router_onboarding",

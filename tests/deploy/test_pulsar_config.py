@@ -78,6 +78,12 @@ def test_entrypoint_creates_are_idempotent(script: str) -> None:
             assert "|| true" in line or "|| :" in line, (
                 f"创建命令必须幂等容错（`|| true`），否则重启即失败: {line.strip()}"
             )
+    # `|| true` 只该对「已存在」宽容：create 之后必须各复查一次资源到底在不在，
+    # 不在就非 0 退出 —— 否则鉴权失败/admin-url 写错也被吞掉，脚本照样打「已就绪」，
+    # 而 compose healthcheck 正是校验 namespace 存在，依赖方会无限等待。
+    assert "tenants list" in body, "创建租户后缺少存在性复查（tenants list）"
+    assert "namespaces list" in body, "创建 namespace 后缺少存在性复查（namespaces list）"
+    assert "exit 1" in body, "复查不通过必须非 0 退出，而不是继续打「已就绪」"
 
 
 def test_entrypoint_forwards_stop_signal(script: str) -> None:

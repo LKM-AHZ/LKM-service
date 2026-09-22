@@ -15,7 +15,10 @@ from auth import jwt_keys
 router = APIRouter(tags=["jwks"])
 
 
+# 同步 def（FastAPI 会丢进线程池）：本链路没有 await，而 jwt_keys._pem() 在「密钥来自文件」
+# （k8s Secret 卷 / compose 只读挂载）时**每次请求**都做一次阻塞的 Path.read_text()
+# ——只有 PEM 解析带 lru_cache，文件读取没有。本端点是高频轮询目标，放事件循环上会拖住其它请求。
 @router.get("/.well-known/jwks.json")
-async def get_jwks() -> dict[str, object]:
+def get_jwks() -> dict[str, object]:
     """当前 RSA 验签公钥集合（无密钥时为空集）。"""
     return jwt_keys.jwks_document()

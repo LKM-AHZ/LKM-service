@@ -30,7 +30,9 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core import logging as app_logging
 from app.core import redis as redis_client
+from app.core.apm import init_sentry
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.middleware import install_security_middleware
@@ -40,6 +42,7 @@ from auth import (
     admin_router,
     router_2fa,
     router_authz,
+    router_bot_sso,
     router_jwks,
     router_oauth,
     router_onboarding,
@@ -62,6 +65,9 @@ _AUTH_ROUTERS = [
     admin_router.router,  # S5-A2 Step0：后台 admin 会话写面（auth 域自足版，DB=独立 auth 库）
     router_2fa.router,
     router_authz.router,
+    # bot-ticket 内部端点：业务进程的 user_http.mint_bot_sso_ticket 打的就是
+    # {auth_http_url}{api_prefix}/auth/internal/bot-ticket，漏挂会让拆库部署恒 404。
+    router_bot_sso.router,
     router_oauth.router,
     router_onboarding.router,
     router_passkey.router,
@@ -73,13 +79,21 @@ _AUTH_ROUTERS = [
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    # 启动：初始化本进程自持的 auth 独立库 schema（AuthBase）。auth 表已迁出单体
-    # Base.metadata，无其他进程会建它们，故是 auth 进程的职责；业务库 schema 仍由
-    # backend 进程的 init_db 负责，二者分库、各自的 Alembic 链与迁移锁互不干扰。
-    await init_auth_db()
+    # 可观测基座与单体 app.main.lifespan 对齐：结构化日志（JSON 格式 + request-id/trace
+    # 上下文，均幂等；Sentry DSN 为空则不加载）。不调 setup_logging 的话本进程走 root
+    # logger，下面 catch-all 处理器里 map_err 打的 "Unhandled exception" 既无 JSON 结构
+    # 也无 request/trace 关联，线上定位几乎无从下手。
+    app_logging.setup_logging()
+    init_sentry()
     # 链路追踪在 create_auth_app 装配期挂载（不能放 lifespan：中间件栈已定型，
     # instrument 不生效、HTTP span 采不到；详见 core.tracing.setup_tracing 说明）
     try:
+        # 启动：初始化本进程自持的 auth 独立库 schema（AuthBase）。auth 表已迁出单体
+        # Base.metadata，无其他进程会建它们，故是 auth 进程的职责；业务库 schema 仍由
+        # backend 进程的 init_db 负责，二者分库、各自的 Alembic 链与迁移锁互不干扰。
+        # 放进 try：schema 初始化失败时 finally 仍会跑清理（tracing/引擎/redis），
+        # 否则启动失败会连清理一起跳过。
+        await init_auth_db()
         yield
     finally:
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
@@ -135,8 +149,12 @@ def main() -> None:
     """
     import uvicorn
 
+    # 直接传已建好的 app 对象，不要用 "auth.main:app" 字符串：`python -m auth.main` 下本模块
+    # 先以 __main__ 执行过一次（模块级 app = create_auth_app() 已把 _tracer_provider 建好），
+    # uvicorn 再按字符串 import auth.main 会**第二次**建 app——而 setup_tracing 见 provider
+    # 已存在就早退，那个被真正 serve 的 app 从未挂 FastAPIInstrumentor，HTTP server span 全丢。
     uvicorn.run(
-        "auth.main:app",
+        app,
         host="0.0.0.0",
         port=8001,
         log_level="info",

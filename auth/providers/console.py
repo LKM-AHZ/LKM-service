@@ -19,7 +19,8 @@ class ConsoleSmsProvider(SmsProvider):
     """
 
     async def send_code(self, phone: str, code: str) -> None:
-        masked = code[:2] + "****"
+        # 整体遮蔽：保留前两位会把 6 位码缩到 10^4 种可能，len<=2 时更是原样打出
+        masked = "*" * len(code)
         logger.info("[SMS] To: %s | Code: %s", phone, masked)
 
     async def send_alert(self, phone: str, message: str) -> None:
@@ -33,15 +34,20 @@ class ConsoleEmailProvider(EmailProvider):
     """
 
     async def send_code(self, email: str, code: str) -> None:
-        masked = code[:2] + "****"
+        # 整体遮蔽，理由同 ConsoleSmsProvider.send_code
+        masked = "*" * len(code)
         logger.info("[EMAIL] To: %s | Code: %s", email, masked)
 
     async def send_magic_link(self, email: str, link: str) -> None:
-        # 仅记录域名，不记录完整的带令牌链接
+        # 仅记录站点（scheme+host），连 path 也不记：令牌现在在 query 里，但链接形态一旦
+        # 改成 /auth/magic/<token> 就会连明文令牌一起打进日志——这层脱敏本就该与格式无关。
         try:
             parsed = urlparse(link)
-            safe = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        except Exception:
+            safe = f"{parsed.scheme}://{parsed.netloc}"
+        except ValueError:
+            # urlparse 对畸形输入只抛 ValueError：收窄到它并留一条日志，别把解析问题
+            # 静默吞成一句写死的 [redacted]。
+            logger.warning("[EMAIL] 无法解析 magic link（只记录站点名，不回显链接）")
             safe = "[redacted]"
         logger.info("[EMAIL] To: %s | Magic Link sent: %s", email, safe)
 

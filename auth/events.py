@@ -62,8 +62,11 @@ async def notify_user_banned_committed(user_id: uuid.UUID) -> None:
     故此处自建会话把 ``event.user.banned`` 独立提交，保证「锁定成 → 失效事件必达」。
     Redis 未启用 → ``enqueue_outbox`` 门控直返；异常打日志不阻断锁定语义（fail-open）。
     """
-    db = await new_session()
+    db: AsyncSession | None = None
     try:
+        # 会话获取也放进 try：new_session 可能因懒建引擎失败（database_url 缺失/坏）或池工厂
+        # 报错而抛出，那属于本函数承诺吞掉的失败面，漏在外面会把登录流程一起带崩。
+        db = await new_session()
         await enqueue_outbox(
             db, RKEY_USER_BANNED, {"fn": _EVENT_FN, "args": [user_id]}
         )
@@ -71,4 +74,5 @@ async def notify_user_banned_committed(user_id: uuid.UUID) -> None:
     except Exception:
         logger.exception("outbox user.banned own-tx enqueue 失败 user_id=%s", user_id)
     finally:
-        await db.close()
+        if db is not None:
+            await db.close()

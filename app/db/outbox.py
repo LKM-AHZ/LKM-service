@@ -119,6 +119,14 @@ async def enqueue_outbox(
     - payload 须为 worker 可直接分派的完整 dict（含 "fn"/"args"）。
 
     返回 True=本次已 join 进事务待提交；False=被 gate 跳过或幂等已存在。
+
+    **该幂等是 best-effort（先查后插，不是 DB 级保证）**：本表是 TimescaleDB hypertable，
+    唯一索引必须包含分区列，故唯一约束只能是 ``(event_id, created_at)``（见模型 docstring）
+    ——没有「event_id 单列唯一」可用。两个并发事务以同一 event_id 入队（各自 created_at
+    不同）都会插入成功 → 事件被投两次（由下游按 event_id 幂等兜底）；若两者的 created_at
+    恰好落在同一微秒，第二个会撞唯一索引并以 IntegrityError 打断调用方业务事务（小概率，
+    event_id 通常按业务唯一键派生）。要做成 DB 级强保证必须换承载方式（如独立去重表），
+    不在本轮范围。
     """
     if not settings.message_bus_enabled:
         return False

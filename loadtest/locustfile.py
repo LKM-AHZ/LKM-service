@@ -11,11 +11,15 @@
         --users 10 --spawn-rate 5 --run-time 20s --headless -u 10 -r 5 -t 20s
 """
 
+import os
+
 from locust import HttpUser, between, task
 
-# auth 登录探测：密码登录走 Redis 限流，负载下多数会被限流拒(ACCOUNT_LOCKED)，属预期
-_LOGIN_USER = "bench_user"
-_LOGIN_PASSWORD = "BenchPass!123"
+# auth 登录探测：密码登录走 Redis 限流，负载下多数会被限流拒(ACCOUNT_LOCKED)，属预期。
+# 凭据一律从环境取——明文密码写进仓库等于把 bench 账号密码公开（会被 secret scanner 抓，
+# 也可能被真账号复用）；密码默认留空表示「未配置」，此时登录只用来观测 4xx 分支。
+_LOGIN_USER = os.environ.get("LKM_BENCH_USER", "bench_user")
+_LOGIN_PASSWORD = os.environ.get("LKM_BENCH_PASSWORD", "")
 
 
 class LKMReadUser(HttpUser):
@@ -62,9 +66,9 @@ class LKMAuthUser(HttpUser):
             json={"username": _LOGIN_USER, "password": _LOGIN_PASSWORD},
             catch_response=True,
         ) as resp:
-            if resp.status_code >= 500:
-                resp.failure(f"5xx: {resp.status_code}")
-            elif resp.status_code in (200, 400, 401, 403, 423):
+            if resp.status_code in (200, 400, 401, 403, 423):
                 resp.success()
             else:
-                resp.success()
+                # 5xx 与任何「非预期状态」（网关 429、404/405、3xx…）都算失败：
+                # 原先 5xx 之外一律 success，等于把登录路径的回归也报成通过。
+                resp.failure(f"unexpected status: {resp.status_code}")

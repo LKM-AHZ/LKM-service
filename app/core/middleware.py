@@ -83,9 +83,15 @@ def install_security_middleware(application: FastAPI) -> None:
     """装配安全面中间件（含生产必填校验；仅 HTTP 服务进程调用）。"""
     settings.assert_web_security_configured()
 
-    application.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list
-    )
+    allowed_hosts = settings.allowed_hosts_list
+    if settings.is_production and "*" in allowed_hosts:
+        # assert_web_security_configured 只拦「空值」，LKM_ALLOWED_HOSTS=*（或 *,foo）能过闸；
+        # 而 Starlette 见到 "*" 会置 allow_any=True 整体跳过校验——恰恰在生产把这道
+        # 「挡绕过网关直连容器端口」的纵深防御静默关掉，故这里显式拒绝
+        raise ValueError(
+            "生产禁用通配 LKM_ALLOWED_HOSTS=*：会使 TrustedHost 校验整体失效"
+        )
+    application.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
     # CORS 只在非生产挂载：生产唯一权威是 APISIX（见模块 docstring 的取舍说明）
     if not settings.is_production:
         origins = settings.cors_origins_list

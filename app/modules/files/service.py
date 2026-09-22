@@ -168,51 +168,84 @@ def _bucket_key_of(f: LibraryFile) -> str | None:
     return _build_bucket_key(f.sha3_hash) if f.sha3_hash else None
 
 
+# /preview（inline）允许的类型白名单：mime_type 由上传方给出，只有这些类型能按原
+# Content-Type 内联返回；其余（尤其 text/html、image/svg+xml）降级为附件下载，
+# 否则审核通过的 HTML/SVG 会在 API 源上被当页面渲染（存储型 XSS）
+_INLINE_SAFE_TYPES: frozenset[str] = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "audio/mpeg",
+        "audio/ogg",
+        "video/mp4",
+        "video/webm",
+    }
+)
+
+
 # ---- 内容哈希级互斥（串行化「去重复用」与「末引用物理删除」，防 TOCTOU）----
 # delete_file 在"引用归零"时物理删 blob，create_file 可能在删除的前后复用同一 blob。
 # 二者对同一 content_hash 的决策必须互斥，否则出现空引用/孤儿 blob。Redis 有则用
 # 分布式锁（跨 worker 生效），无则退回进程内锁（单 worker / 测试语义仍正确）。
 _HASH_LOCK_TTL_SECONDS = 30
 _hash_locks_inproc: dict[str, asyncio.Lock] = {}
+# 进程内锁没有"值"的概念，用固定 token 占位，使持有者判定在两种后端下一致
+_INPROC_LOCK_TOKEN = "inproc"
+
+# 仅当值仍是自己的 token 才删除：租约 30s 到期后锁可能已被他人重获，
+# 无条件 DEL 会删掉**别人的**锁，让第三个持有者挤进临界区
+_RELEASE_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 
 
-async def _acquire_hash_lock(content_hash: str) -> bool:
-    """尝试获取 content_hash 级互斥锁；拿到返回 True（调用方必须 __release_hash_lock）。"""
+async def _acquire_hash_lock(content_hash: str) -> str | None:
+    """尝试获取 content_hash 级互斥锁；拿到返回持有者 token（释放时须回传），否则 None。"""
     redis = await get_redis()
     if redis is None:
         lock = _hash_locks_inproc.setdefault(content_hash, asyncio.Lock())
-        return await lock.acquire()
+        return _INPROC_LOCK_TOKEN if await lock.acquire() else None
+    token = uuid.uuid4().hex
     got = await redis.set(
-        f"files:hash:{content_hash}", "1", ex=_HASH_LOCK_TTL_SECONDS, nx=True
+        f"files:hash:{content_hash}", token, ex=_HASH_LOCK_TTL_SECONDS, nx=True
     )
-    return bool(got)
+    return token if got else None
 
 
-async def _release_hash_lock(content_hash: str) -> None:
+async def _release_hash_lock(content_hash: str, token: str) -> None:
     redis = await get_redis()
     if redis is None:
         lock = _hash_locks_inproc.get(content_hash)
         if lock is not None:
             lock.release()
         return
-    await redis.delete(f"files:hash:{content_hash}")
+    await redis.eval(_RELEASE_LOCK_LUA, 1, f"files:hash:{content_hash}", token)
 
 
 @asynccontextmanager
 async def _hash_lock(content_hash: str) -> AsyncIterator[None]:
     """await 获取锁，确保拿到后在退出时释放。锁等不到/Redis 异常按放行(不阻断上传/删除)。"""
+    token: str | None = None
     try:
-        acquired = await _acquire_hash_lock(content_hash)
+        token = await _acquire_hash_lock(content_hash)
     except Exception:
-        acquired = False
+        token = None
     # 拿不到锁（并发争抢或 Redis 抖动）→ 重验仍可能竞争，但返回 None 不额外报错；
     # 为不放大风险，拿不到时也照常放行（原语义），锁主要串行化常规并发窗口。
     try:
         yield
     finally:
-        if acquired:
+        if token is not None:
             with suppress(Exception):
-                await _release_hash_lock(content_hash)
+                await _release_hash_lock(content_hash, token)
 
 
 def _storage_path_for(content_hash: str) -> str:
@@ -286,7 +319,10 @@ async def create_file(
     StorageErr → FileErr 转换保证前端契约不变。ref_count 仍在 DB 聚合，供删除/清理断言。
     """
     limit = max_bytes or settings.max_upload_bytes
-    total, content_hash, buf = _buffer_and_hash(stream, limit)
+    # 读流 + SHA3 + 写 spool 全是同步阻塞 I/O（最大可达 max_upload_bytes），
+    # 直接在事件循环里跑会把整个 worker 的其他请求一起卡住 → 丢线程池；
+    # buf 只是普通文件对象，跨线程交回后调用方照常 close/读取
+    total, content_hash, buf = await asyncio.to_thread(_buffer_and_hash, stream, limit)
     bucket_key = _build_bucket_key(content_hash)
 
     # 落盘（写字节的细节交给 storage 层）；dedup 语义：已存在则复用、不重写。
@@ -476,7 +512,17 @@ def _serve(
             async for chunk in _get_storage().open(_bucket_key_of(f) or ""):
                 yield chunk
         except BizError as exc:
+            # 响应头已发出（Starlette 先发 start 再迭代 body），此处只能尽力收尾，
+            # 无法再变成 404/500——真正的「对象缺失」由 serve_content 的预检拦截
             _raise_storage_as_file(exc)
+
+    media_type = f.mime_type
+    if disposition == "inline" and f.mime_type not in _INLINE_SAFE_TYPES:
+        # mime_type 来自上传方（UploadFile.content_type / 直传 payload），内联渲染
+        # text/html、image/svg+xml 这类可执行脚本的类型会在 API 源上形成存储型 XSS
+        # （同源 cookie 可直接打接口）→ 不在白名单就降级为附件下载
+        disposition = "attachment"
+        media_type = "application/octet-stream"
 
     # 头只能含 latin-1 可编码字节，中文等非 ASCII 文件名按 RFC 5987 filename* 编码，
     # 同时给一个 ASCII 化的 filename 兜底，保证旧客户端也能识别。
@@ -491,8 +537,10 @@ def _serve(
         "Content-Disposition": cd,
         # 文件端点需登录私有：禁 public immutable，避免未经授权的内容被缓存/跨代理复用
         "Cache-Control": "private, no-store",
+        # 禁内容嗅探（老浏览器可能把八位字节流嗅探成 HTML）
+        "X-Content-Type-Options": "nosniff",
     }
-    return StreamingResponse(it(), media_type=f.mime_type, headers=headers)
+    return StreamingResponse(it(), media_type=media_type, headers=headers)
 
 
 async def serve_content(
@@ -505,6 +553,15 @@ async def serve_content(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
     _require_approved(f, action="preview" if disposition == "inline" else "download")
+    key = _bucket_key_of(f)
+    if key is None:
+        # 无哈希列的行定位不到对象（download_url 对同一情况已抛 NOT_FOUND，两处口径须一致）；
+        # 否则会把空 key 交给 storage.open（Local 后端即 root 前缀路径）
+        raise BizError(FileErr.NOT_FOUND, detail="File has no storage key")
+    # 预检对象存在性：响应头一旦发出，生成器里的存储错误无法再变成 404/500
+    # （客户端会收到 200 + 截断体）。这里先探一次，把缺失/failed blob 拦在响应之前。
+    if not await _get_storage().exists(key):
+        raise BizError(FileErr.NOT_FOUND, detail="Stored object not found")
     if disposition == "inline":  # 预览计次 view
         f.view_count += 1
         await LibraryFileRepository(db).flush()

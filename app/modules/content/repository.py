@@ -155,10 +155,16 @@ class ColumnRepository(AsyncRepository[Column]):
         return await self.get_many(Column.id.in_(column_ids))
 
     async def list_page(
-        self, *, offset: int | None = None, limit: int | None = None
+        self,
+        *,
+        offset: int | None = None,
+        limit: int | None = None,
+        status: str | None = None,
     ) -> list[Column]:
+        """``status`` 给定时只取该状态（公开读口把可见性下推到 SQL，避免分页后再过滤）。"""
+        conditions = [Column.status == status] if status is not None else []
         return await self.get_many(
-            order_by=Column.id.desc(), offset=offset, limit=limit
+            *conditions, order_by=Column.id.desc(), offset=offset, limit=limit
         )
 
 
@@ -182,9 +188,14 @@ class ColumnPostRepository(AsyncRepository[ColumnPost]):
         *,
         offset: int | None = None,
         limit: int | None = None,
+        status: str | None = None,
     ) -> list[ColumnPost]:
+        """``status`` 给定时只取该状态（公开读口下推可见性用）。"""
+        conditions: list[object] = [ColumnPost.column_id == column_id]
+        if status is not None:
+            conditions.append(ColumnPost.status == status)
         return await self.get_many(
-            ColumnPost.column_id == column_id,
+            *conditions,
             order_by=ColumnPost.id.desc(),
             offset=offset,
             limit=limit,

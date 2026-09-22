@@ -3,6 +3,8 @@
 import json
 import uuid
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.err import BizError
 from app.db.base import now_iso
 from app.db.repository import DbSession
@@ -64,22 +66,30 @@ async def _applicant_names(
 async def submit_application(
     db: DbSession, applicant_id: uuid.UUID, info: ProjectApplicationCreate
 ) -> ProjectApplicationOut:
-    # 同一申请人同名的 pending 申请唯一性（防重复刷单）
+    # 同一申请人同名的 pending 申请唯一性（防重复刷单）；落库前 strip，
+    # 与 repository 的小写比较口径一致，避免 "LKM "/"LKM" 视为两条
+    title = info.title.strip()
     if await ProjectApplicationRepository(db).pending_duplicate_exists(
-        applicant_id=applicant_id, title=info.title
+        applicant_id=applicant_id, title=title
     ):
         raise BizError(ProjectErr.DUPLICATE_APPLICATION)
-    app_ = await ProjectApplicationRepository(db).create(
-        applicant_id=applicant_id,
-        title=info.title,
-        summary=info.summary,
-        description=info.description,
-        member_claims=json.dumps(
-            [m.model_dump(mode="json") for m in info.member_claims],
-            ensure_ascii=False,
-        ),
-        status="pending",
-    )
+    try:
+        # savepoint 包住插入：并发下撞部分唯一索引 uq_project_applications_pending 时
+        # 只回滚这一条插入（不污染调用方事务），再翻译成业务错误码
+        async with db.begin_nested():
+            app_ = await ProjectApplicationRepository(db).create(
+                applicant_id=applicant_id,
+                title=title,
+                summary=info.summary,
+                description=info.description,
+                member_claims=json.dumps(
+                    [m.model_dump(mode="json") for m in info.member_claims],
+                    ensure_ascii=False,
+                ),
+                status="pending",
+            )
+    except IntegrityError:
+        raise BizError(ProjectErr.DUPLICATE_APPLICATION) from None
     return _app_to_schema(app_)
 
 
@@ -108,6 +118,7 @@ async def review_application(
     app_ = await ProjectApplicationRepository(db).get_or_raise(
         application_id, ProjectErr.APPLICATION_NOT_FOUND
     )
+    repo = ProjectApplicationRepository(db)
     if app_.status != "pending":
         raise BizError(ProjectErr.APPLICATION_ALREADY_REVIEWED)
 
@@ -122,11 +133,23 @@ async def review_application(
     else:
         claims = []
 
-    app_.reviewer_id = reviewer_id
-    app_.review_note = body.note
-    app_.reviewed_at = now_iso()
-    app_.status = "approved" if body.approve else "rejected"
-    await ProjectApplicationRepository(db).flush()
+    # 原子占位（条件 UPDATE ... WHERE status='pending' + 受影响行数）：并发两个审核只有一个
+    # 能改到行，另一个拿到 0 → 判「已复核」。原先的读-改-写会让两个请求都通过 pending 检查，
+    # 各自建一个 Project 并各跑一次纳入升级。
+    status = "approved" if body.approve else "rejected"
+    claimed = await repo.update_where(
+        {
+            "reviewer_id": reviewer_id,
+            "review_note": body.note,
+            "reviewed_at": now_iso(),
+            "status": status,
+        },
+        ProjectApplication.id == application_id,
+        ProjectApplication.status == "pending",
+    )
+    if not claimed:
+        raise BizError(ProjectErr.APPLICATION_ALREADY_REVIEWED)
+    await db.refresh(app_)  # Core UPDATE 后用同一事务重读，保证返回体是新状态
 
     if body.approve:
         # 落 Project
@@ -155,8 +178,11 @@ async def review_application(
         ]
         member_repo = ProjectMemberRepository(db)
         await member_repo.add_all(members)
-        await _apply_incubation(db, app_.applicant_id)
+        # 先把业务侧写入 flush 成 SQL（成员 FK/唯一约束问题在此暴露），再调度跨 realm 升权：
+        # seam 在 auth realm 独立提交，若它之后业务侧还失败，申请人会带着 admin/incubated_member
+        # 却没有项目（残留风险见路线图；补偿需 outbox/重试，属设计改动）
         await member_repo.flush()
+        await _apply_incubation(db, app_.applicant_id)
     return _app_to_schema(app_)
 
 

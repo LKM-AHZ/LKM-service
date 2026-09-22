@@ -232,6 +232,19 @@ async def seed_columns(db: AsyncSession) -> int:
         if existing is not None:
             continue
         board_id = await _board_id(db, data.get("board_slug"))
+        # 先建申请记录并 flush，才能把 column.application_id 回填——真实审核流
+        # （service._ensure_column_for_application）就是这么做的。原先申请行建了但没回链，
+        # 结果 applicationId 对每个种子专栏都是 null、申请行成了孤儿。
+        application = ColumnApplication(
+            user_id=user.id,
+            title=str(data["title"]),
+            description=str(data["description"]),
+            reason="示例专栏申请",
+            status="approved",
+            reviewed_at=now_iso(),
+        )
+        db.add(application)
+        await db.flush()
         col = Column(
             owner_id=user.id,
             title=data["title"],
@@ -248,21 +261,11 @@ async def seed_columns(db: AsyncSession) -> int:
             tags=json.dumps(data["tags"], ensure_ascii=False),
             badges=json.dumps(data["badges"], ensure_ascii=False),
             board_id=board_id,
+            application_id=application.id,
             status=ColumnStatus.ACTIVE,
         )
         db.add(col)
         await db.flush()
-        # 关联的申请记录（approved），使数据链路自洽
-        db.add(
-            ColumnApplication(
-                user_id=user.id,
-                title=str(data["title"]),
-                description=str(data["description"]),
-                reason="示例专栏申请",
-                status="approved",
-                reviewed_at=now_iso(),
-            )
-        )
         for p in _SEED_POSTS_TEMPLATES.get(slug, []):
             db.add(
                 ColumnPost(

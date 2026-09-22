@@ -8,7 +8,14 @@ PG 级前置对象，故从 ``app/db/init_db.py`` 抽出为共享工具，避免
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger("lkm.db.shared_objects")
+
+# PG 并发建同一对象时的冲突特征：多进程 / 多 xdist worker 同时首次建库，
+# CREATE EXTENSION 与 CREATE OR REPLACE FUNCTION 之间仍会撞目录唯一约束
+_CONCURRENT_DDL_MARKERS = ("already exists", "duplicate key", "concurrently updated")
 
 UUID7_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
@@ -28,6 +35,30 @@ $$ LANGUAGE plpgsql VOLATILE;
 """
 
 
+async def _run_shared_ddl(conn: Any, sql: str, what: str) -> None:
+    """执行一条共享对象 DDL，容忍「并发下已被别的进程建好」。
+
+    本函数被多个进程/多个 xdist worker 在启动期并发调用，而 PG 对
+    ``CREATE EXTENSION`` / ``CREATE OR REPLACE FUNCTION`` 的目录写入并非完全可并发
+    （实测会撞 duplicate key / "tuple concurrently updated"）。这类失败等于「别人已建好」，
+    按成功处理并告警；其余异常（权限不足等）照抛，由调用方以真实原因失败。
+    """
+    import sqlalchemy as sa
+    from sqlalchemy.exc import IntegrityError, ProgrammingError
+
+    sp = await conn.begin_nested()
+    try:
+        await conn.execute(sa.text(sql))
+        await sp.commit()
+    except (ProgrammingError, IntegrityError) as exc:
+        await sp.rollback()
+        msg = str(getattr(exc, "orig", exc)).lower()
+        if any(marker in msg for marker in _CONCURRENT_DDL_MARKERS):
+            logger.warning("%s 已由并发建库方创建，跳过：%s", what, msg[:200])
+            return
+        raise
+
+
 async def ensure_shared_objects(conn: Any) -> None:
     """建表前必须就绪的库级共享对象（幂等）。
 
@@ -41,5 +72,24 @@ async def ensure_shared_objects(conn: Any) -> None:
     """
     import sqlalchemy as sa
 
-    await conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"))
-    await conn.execute(sa.text(UUID7_FUNCTION_SQL))
+    # pg_trgm 必须落在 public：索引 DDL 写死了 ``public.gin_trgm_ops``。直接
+    # ``CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public`` 在「扩展已存在于别的
+    # schema」时会静默什么都不做（SCHEMA 子句被忽略），直到建索引才以
+    # 「operator class public.gin_trgm_ops does not exist」这种不知所云的错炸开，
+    # 故先查实际 schema，必要时显式迁到 public。
+    ext_schema = await conn.scalar(
+        sa.text(
+            "SELECT n.nspname FROM pg_extension e"
+            " JOIN pg_namespace n ON n.oid = e.extnamespace"
+            " WHERE e.extname = 'pg_trgm'"
+        )
+    )
+    if ext_schema is None:
+        await _run_shared_ddl(conn, "CREATE EXTENSION pg_trgm SCHEMA public", "pg_trgm")
+    elif ext_schema != "public":
+        logger.warning(
+            "pg_trgm 装在 schema %s，迁到 public（trgm 索引 DDL 依赖 public.gin_trgm_ops）",
+            ext_schema,
+        )
+        await conn.execute(sa.text("ALTER EXTENSION pg_trgm SET SCHEMA public"))
+    await _run_shared_ddl(conn, UUID7_FUNCTION_SQL, "uuid_generate_v7")

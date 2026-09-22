@@ -43,10 +43,14 @@ from app.modules import registry
 TIMEOUT_MESSAGE = "query exceeded time budget"
 
 # 错误消息标记 → 拒绝原因：与防护实现同源（strawberry/graphql-core 的既有文案）。
-_REASON_MARKERS: tuple[tuple[str, str], ...] = (
-    ("maximum operation depth", "depth"),
-    ("tokens", "complexity"),
-    (TIMEOUT_MESSAGE, "timeout"),
+# 每个原因可要求**多个**子串同时命中：complexity 若只匹配 "tokens"，那 "invalid refresh
+# tokens" 这类业务报错也会被算成被拒、污染 rejected_total；graphql-core 的真实文案是
+# "Document contains more than N tokens. Parsing aborted."，故要求 "more than" 与
+# "tokens" 同时出现。
+_REASON_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("maximum operation depth",), "depth"),
+    (("more than", "tokens"), "complexity"),
+    ((TIMEOUT_MESSAGE,), "timeout"),
 )
 
 
@@ -57,6 +61,10 @@ class GraphQLGuard(SchemaExtension):
     - ``resolve``：每个字段解析前检查预算；耗尽即抛 ``GraphQLError(TIMEOUT_MESSAGE)``
       —— 由 GraphQL 引擎收成 `errors`（HTTP 仍是 200，非 500、非栈），前端可见受控错误。
     """
+
+    # 显式声明并置 None：旧实现用 getattr(self, "_deadline", float("inf")) 把「还没设截止
+    # 时刻」默默当成无限预算，等于这条防线失效且毫无信号。正常路径下 on_operation 一定先执行。
+    _deadline: float | None = None
 
     def on_operation(self) -> Iterator[None]:
         started = time.perf_counter()
@@ -76,7 +84,8 @@ class GraphQLGuard(SchemaExtension):
     ) -> Any:
         # 原样返回 _next 的结果（sync/async 混合由 strawberry 处理，不能在此强制 await：
         # 同步 resolver 返回 list/dict 时 await 会抛 "object list can't be used in 'await'"）。
-        if time.perf_counter() > getattr(self, "_deadline", float("inf")):
+        # 未初始化（没走 on_operation）按超时拒绝，而不是把预算当成无限静默放行。
+        if self._deadline is None or time.perf_counter() > self._deadline:
             raise GraphQLError(TIMEOUT_MESSAGE)
         return _next(root, info, *args, **kwargs)
 
@@ -87,8 +96,8 @@ def reject_reason(message: str) -> str | None:
     只认防护自身的文案，故业务 resolver 的执行错误不会污染 ``rejected_total``。
     """
     low = message.lower()
-    for marker, reason in _REASON_MARKERS:
-        if marker in low:
+    for markers, reason in _REASON_MARKERS:
+        if all(marker in low for marker in markers):
             return reason
     return None
 
@@ -128,12 +137,25 @@ def _all_graphql_types() -> list[type[Any]]:
 
 
 def build_schema() -> strawberry.Schema:
-    """合并全部模块 GraphQL Query/Mutation 类，构建带防护扩展的 schema。
+    """合并全部模块导出的 GraphQL 类型，构建带防护扩展的 schema。
+
+    注意 registry 的契约只是「任意 strawberry 类型的列表」，本函数把它们统一并进
+    ``query=``：模块若导出 Mutation 类，其字段会**变成 query 字段**（真 mutation 操作
+    反而校验失败），而 strawberry 的类不带 Query/Mutation 标记、无法按类型分流。
+    故这里按约定命名（``XxxMutation``）显式拦下，让这类错误在装配期就响，而不是静默
+    把写操作暴露成查询。要真正支持 mutation，须先扩 registry 契约（模块分导出 query
+    与 mutation 两类）再传 ``mutation=``。
 
     扩展以**工厂/类**形式注册（非实例）：strawberry 每请求实例化，避免
     ``GraphQLGuard`` 的计时状态跨并发请求串台（传实例已在新版被标记为弃用）。
     """
     classes = tuple(_all_graphql_types())
+    mutations = [c.__name__ for c in classes if c.__name__.endswith("Mutation")]
+    if mutations:
+        raise RuntimeError(
+            "GraphQL 聚合暂只支持 Query，但 registry 导出了 Mutation 类："
+            f"{mutations}（需先扩展 registry 契约以支持 mutation）"
+        )
     merged_query = merge_types("Query", classes)  # type: ignore[arg-type]
     extensions: list[Any] = [
         lambda: QueryDepthLimiter(max_depth=settings.graphql_max_depth),

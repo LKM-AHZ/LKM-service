@@ -7,6 +7,8 @@ PUT  /auth/onboarding/steps/{step}     {data} -> 合并某一步分步数据
 POST /auth/onboarding/skip             -> 整体跳过并视为完成
 """
 
+import json
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +26,9 @@ from auth.service_onboarding import (
 router = APIRouter(prefix="/auth/onboarding", tags=["auth"])
 
 ONBOARDING_STEPS = (1, 2, 3, 4)
+
+# 单步 data 的防御性上限（序列化字节）：四步向导的问答远小于此，仅防无界膨胀
+_DATA_MAX_BYTES = 16 * 1024
 
 
 @router.get("", response_model=ApiResp[OnboardingState])
@@ -44,9 +49,16 @@ async def put_onboarding_step(
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_auth_session),
 ) -> OnboardingState:
-    """提交某一步的分步数据并推进到该步。"""
+    """合并某一步的分步数据并记录当前 step（可回退/跳步：不强制前进序）。
+
+    ``data`` 是任意 JSON 且直接并入行内 JSON 列，故在此设一个防御性上限：
+    否则单个已登录用户可写入无界/深度嵌套的 JSON，撑大单行。真正的解法是收窄成
+    有界 schema，当前先按序列化长度兜底。
+    """
     if step not in ONBOARDING_STEPS:
         raise BizError(CommonErr.INVALID_INPUT, "Step out of range")
+    if len(json.dumps(body.data, ensure_ascii=False)) > _DATA_MAX_BYTES:
+        raise BizError(CommonErr.INVALID_INPUT, "Onboarding data too large")
     return await set_onboarding_step(db, cur.id, step, body.data)
 
 

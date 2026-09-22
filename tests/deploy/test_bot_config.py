@@ -402,6 +402,9 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     跨仓无法共享 import，故「同一来源」只能靠部署层实现 + 本断言锁：默认值在锚点里**只出现
     一次**（服务处的 ``<<`` 合并键不带默认值），且与两侧代码默认值逐字一致——后者从
     LKM-bot 源码里直接读字面量比对（跨仓且跨 venv，import 不了）。
+
+    TTL 是唯一的例外：它只被签发侧消费，故不进共享锚点（否则不消费它的 lkmbot 也会被灌），
+    单独挂在 auth 服务上；k8s 侧表里有它但 lkmbot 的 keyRef 不列。
     """
     from auth.bot_sso import (
         BOT_SSO_ACCOUNT_LEVEL,
@@ -414,29 +417,55 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     compose = _compose_raw()
     # 默认值各只写一次：在 x-bot-sso-env 锚点里
     assert compose.count("x-bot-sso-env: &bot-sso-env") == 1
-    assert compose.count(f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}") == 1
-    assert compose.count(f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}") == 1
+    # 两侧**都**消费的四个值：默认值在锚点里各出现一次
+    for env_name, default in (
+        ("LKM_BOT_SSO_AUDIENCE", BOT_SSO_AUD),
+        ("LKM_BOT_SSO_ISSUER", BOT_SSO_ISSUER),
+        ("LKM_BOT_SSO_TYPE", BOT_SSO_TYPE),
+        ("LKM_BOT_SSO_ACCOUNT_LEVEL", BOT_SSO_ACCOUNT_LEVEL),
+    ):
+        assert compose.count(f"${{{env_name}:-{default}}}") == 1, env_name
     # 签发侧 auth 与消费侧 lkmbot 经 YAML 合并键拿到**同一份**（yaml.safe_load 会展开 <<）
     for name in ("auth", "lkmbot"):
         env = _services()[name]["environment"]
         assert env["LKM_BOT_SSO_AUDIENCE"] == f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}", name
         assert env["LKM_BOT_SSO_ISSUER"] == f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}", name
+        assert env["LKM_BOT_SSO_TYPE"] == f"${{LKM_BOT_SSO_TYPE:-{BOT_SSO_TYPE}}}", name
+        assert (
+            env["LKM_BOT_SSO_ACCOUNT_LEVEL"]
+            == f"${{LKM_BOT_SSO_ACCOUNT_LEVEL:-{BOT_SSO_ACCOUNT_LEVEL}}}"
+        ), name
+    # TTL 只有签发侧消费：挂 auth，且**不**灌给 lkmbot（否则违反「谁真的用」原则）
+    assert (
+        _services()["auth"]["environment"]["LKM_BOT_SSO_TTL_SECONDS"]
+        == f"${{LKM_BOT_SSO_TTL_SECONDS:-{BOT_SSO_TTL_SECONDS}}}"
+    )
+    assert "LKM_BOT_SSO_TTL_SECONDS" not in _services()["lkmbot"]["environment"]
     # backend 不消费协议值（只经 seam 转发票据）：不给它灌变量
     assert "LKM_BOT_SSO_AUDIENCE" not in _services()["backend"]["environment"]
 
-    # k8s：一张 lkm-config-botsso 表 + auth envFrom + lkmbot 两个 keyRef（同一张表）
+    # k8s：一张 lkm-config-botsso 表 + auth envFrom + lkmbot 四个 keyRef（同一张表）
     app_cfg = (_K8S_BASE / "app-config.yaml").read_text(encoding="utf-8")
     assert "name: lkm-config-botsso" in app_cfg
-    assert f"LKM_BOT_SSO_AUDIENCE: {BOT_SSO_AUD}" in app_cfg
-    assert f"LKM_BOT_SSO_ISSUER: {BOT_SSO_ISSUER}" in app_cfg
+    for env_name, default in (
+        ("LKM_BOT_SSO_AUDIENCE", BOT_SSO_AUD),
+        ("LKM_BOT_SSO_ISSUER", BOT_SSO_ISSUER),
+        ("LKM_BOT_SSO_TYPE", BOT_SSO_TYPE),
+        ("LKM_BOT_SSO_ACCOUNT_LEVEL", BOT_SSO_ACCOUNT_LEVEL),
+    ):
+        assert f"{env_name}: {default}" in app_cfg, env_name
+    # TTL 在表里（auth envFrom 拿得到），但值是字符串字面量
+    assert f'LKM_BOT_SSO_TTL_SECONDS: "{BOT_SSO_TTL_SECONDS}"' in app_cfg
     # 不得塞进被 backend/worker envFrom 的公共表（本文件顶部「谁真的用」原则）
     assert "LKM_BOT_SSO" not in app_cfg.split("---", 1)[0]
     assert "lkm-config-botsso" in (_K8S_BASE / "app" / "auth.yaml").read_text(
         encoding="utf-8"
     )
     lkmbot_yaml = (_K8S_BASE / "app" / "lkmbot.yaml").read_text(encoding="utf-8")
-    assert lkmbot_yaml.count("name: lkm-config-botsso") == 2
+    # 只取它消费的四个键：TTL 是签发侧独有，keyRef 不列它
+    assert lkmbot_yaml.count("name: lkm-config-botsso") == 4
     assert "configMapKeyRef" in lkmbot_yaml
+    assert "key: LKM_BOT_SSO_TTL_SECONDS" not in lkmbot_yaml
 
     # 消费侧（LKM-bot）代码默认值必须与签发侧逐字相同（只读源码比对，不 import）
     sso_py = (_ROOT / "LKM-bot" / "astrbot" / "lkm" / "sso.py").read_text(encoding="utf-8")
@@ -449,8 +478,8 @@ def should_wire_bot_sso_protocol_values_once() -> None:
         assert f'_protocol_value("{env_name}", "{default}")' in sso_py, env_name
     # 消费侧确实把 issuer 校验用上了（本次补齐的漏洞：此前只验 aud/type）
     assert "issuer=BOT_SSO_ISSUER" in sso_py
-    # TTL 仅签发侧消费，不做部署变量
-    assert str(BOT_SSO_TTL_SECONDS) == "60"
+    # TTL 仅签发侧消费，故消费侧代码连默认值都不该有（读它就说明两侧职责串了）
+    assert "LKM_BOT_SSO_TTL_SECONDS" not in sso_py
 
 
 def should_ship_bundled_dashboard_dist_in_image() -> None:

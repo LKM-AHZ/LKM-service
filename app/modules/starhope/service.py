@@ -3,6 +3,8 @@ import json
 import uuid
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repository import DbSession
@@ -62,6 +64,17 @@ def _validate_entity_id(value: str) -> None:
         raise BizError(CommonErr.INVALID_INPUT, "Invalid entity id")
 
 
+def _as_utc(value: datetime.datetime) -> datetime.datetime:
+    """把客户端时间戳归一到 aware UTC。
+
+    客户端 ISO 串常无偏移（解析为 naive），而 DB 经 UTCDateTime 读回的是 aware；
+    StarHopeRepository.push 里的 LWW 比较 naive/aware 混用会抛 TypeError（→500）。
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.UTC)
+    return value.astimezone(datetime.UTC)
+
+
 def _dump_scalars(data: dict[str, Any]) -> dict[str, Any]:
     """把 In schema 里的 list/dict 字段（及 answer 这种 str|list union 字段）序列化为 JSON 文本。"""
     out = dict(data)
@@ -81,6 +94,7 @@ async def pull_entity(
 ) -> StarHopePullData[Any]:
     model, _in, out_schema = _lookup(entity)
     repo = StarHopeRepository(db, model)
+    cursor = now_iso()  # 查询前取游标（见下方 server_time 注释）
     rows = await repo.list_changed(user_id=user_id, since=since)
     items = [out_schema.model_validate(r).model_dump(mode="json") for r in rows]
 
@@ -89,8 +103,11 @@ async def pull_entity(
         for rid, deleted_at in await repo.list_tombstones(user_id=user_id, since=since)
     ]
 
+    # server_time 必须在查询**之前**取值：客户端拿它当下一次 since 游标（updated_at >
+    # since），若在查询后才取 now，两个 SELECT 与该时刻之间提交的行 updated_at <= server_time
+    # 却不在 items 里，增量拉取永远漏掉它们（静默丢数据）
     return StarHopePullData[Any](
-        items=items, tombstones=tombstones, server_time=now_iso()
+        items=items, tombstones=tombstones, server_time=cursor
     )
 
 
@@ -107,7 +124,14 @@ async def push_entity(
             CommonErr.INVALID_INPUT, f"Batch too large (max {_MAX_PUSH_BATCH})"
         )
 
-    parsed_upserts = [in_schema.model_validate(raw) for raw in upserts]
+    try:
+        # 路由侧 body 只保证 list[dict]，形状/类型校验都落在这里：pydantic 的
+        # ValidationError 是普通 ValueError，map_err 会落到 500 分支，故显式转成 400
+        parsed_upserts = [in_schema.model_validate(raw) for raw in upserts]
+    except ValidationError as err:
+        raise BizError(
+            CommonErr.INVALID_INPUT, f"Invalid {entity} payload: {err}"
+        ) from err
     for parsed in parsed_upserts:
         _validate_entity_id(parsed.id)
     for tomb in deletes:
@@ -117,12 +141,12 @@ async def push_entity(
     for parsed in parsed_upserts:
         data = parsed.model_dump()
         data["user_id"] = user_id
-        staged.append((parsed.id, _dump_scalars(data), parsed.updated_at))
+        staged.append((parsed.id, _dump_scalars(data), _as_utc(parsed.updated_at)))
 
     synced = await StarHopeRepository(db, model).push(
         user_id=user_id,
         upserts=staged,
-        deletes=[(tomb.id, tomb.deleted_at) for tomb in deletes],
+        deletes=[(tomb.id, _as_utc(tomb.deleted_at)) for tomb in deletes],
     )
     return StarHopePushResult(synced=synced, server_time=now_iso())
 

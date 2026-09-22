@@ -146,7 +146,12 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
     if not token:
         raise BizError(CommonErr.FORBIDDEN, "Not logged into admin panel")
 
-    payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
+    try:
+        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, jwt.DecodeError):
+        # 过期/伪造/算法不符的 cookie 是常态（陈旧会话），按「非法一律 FORBIDDEN」收口；
+        # 不兜住会从端点冒出 PyJWT 异常 → 500（与 _current_mfa_trust 对齐）。
+        raise BizError(CommonErr.FORBIDDEN, "Admin session invalid") from None
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
     sub = payload.get("sub")
@@ -190,8 +195,12 @@ async def admin_login(
     ``core.client_ip``（网关后读 ``X-Real-IP``）。用 ``request.client.host`` 会拿到
     apisix 容器地址，使这把锁退化成全站共享单桶。
     """
+    # 用户名桶带来源 IP：只按 username 计的话，任何人轮换 IP 发 5 次错密码就能把
+    # **目标管理员**锁 5 分钟（定向 DoS），而 IP 桶 20/5min 补不上这个缺口
     await check_code_rate_limit(
-        f"admin:login:user:{body.username}", max_count=5, window=300
+        f"admin:login:user:{client_ip(request)}:{body.username}",
+        max_count=5,
+        window=300,
     )
     await check_code_rate_limit(
         f"admin:login:ip:{client_ip(request)}", max_count=20, window=300
@@ -242,7 +251,11 @@ async def admin_refresh(
     db: AsyncSession = Depends(get_auth_session),
 ) -> JSONResponse:
     """用 refresh cookie 换新 access + 旋转新 refresh（auth 库原子 consume_once 复用检测）。"""
-    await check_code_rate_limit("admin:token:refresh:global", max_count=30, window=60)
+    # 按来源 IP 分桶：全局单桶时任一客户端打满 30/min 就会让所有管理员的刷新被限流，
+    # 而 access cookie 只有 15min，刷新被耗尽等价于把别人一起登出
+    await check_code_rate_limit(
+        f"admin:token:refresh:ip:{client_ip(request)}", max_count=30, window=60
+    )
 
     raw_refresh = request.cookies.get(REFRESH_NAME)
     if not raw_refresh:
@@ -275,8 +288,11 @@ async def admin_refresh(
     if user.account_level != "admin":
         return resp_json(CommonErr.FORBIDDEN, detail="会话无效")
 
-    # 继承当前 access cookie 的 2FA 信任，避免 15min cookie 轮换打断 1h 信任窗口
-    mfa_ok, mfa_at = _current_mfa_trust(request)
+    # 2FA 信任以 auth 库 refresh 行为真值：access cookie 只活 15min，只读它的话
+    # cookie 一过期就得到 (False, None)，新 refresh 行被写成 mfa_verified=False/mfa_at=NULL，
+    # 1 小时信任窗口被硬截成 15 分钟（与上面那条注释的意图相反）。同时把信任原点写回新行。
+    mfa_ok = bool(stored.mfa_verified)
+    mfa_at = int(stored.mfa_at.timestamp()) if stored.mfa_at else None
     access_token = create_admin_access_token(user, mfa_verified=mfa_ok, mfa_at=mfa_at)
     payload = _admin_user_dict(user)
 
@@ -287,6 +303,7 @@ async def admin_refresh(
             token_hash=hash_refresh_token(new_refresh),
             kind="admin",
             mfa_verified=mfa_ok,
+            mfa_at=stored.mfa_at,
             expires_at=now_iso()
             + datetime.timedelta(days=settings.refresh_token_expire_days),
             revoked_at=None,

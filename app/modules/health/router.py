@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import httpx
@@ -50,6 +51,8 @@ class ReadyData(BaseModel):
 # 即可离线端到端驱动（与 auth.user_http._client_factory 同款范式）。
 _auth_liveness_factory: Any = None
 
+logger = logging.getLogger(__name__)
+
 
 async def _probe_auth() -> DependencyStatus:
     """AUTH 依赖可选探针（M3 B1.3）：仅当配置了 ``auth_http_url`` 才探，否则 disabled。
@@ -68,7 +71,10 @@ async def _probe_auth() -> DependencyStatus:
         async with _build_auth_client() as client:
             resp = await client.get(url)
     except httpx.HTTPError as exc:
-        return DependencyStatus(status="error", detail=f"auth 不可达: {exc}")
+        # 细节只进日志：/health、/readiness 都是**匿名**可读端点，而驱动层异常文本常带
+        # 内网 host:port / 库名 / 账号，等于把基础设施信息白送给任何调用者。
+        logger.warning("health probe auth failed: %s", exc)
+        return DependencyStatus(status="error", detail="auth unreachable")
     if resp.status_code != 200:
         return DependencyStatus(
             status="error", detail=f"auth /liveness http {resp.status_code}"
@@ -104,7 +110,7 @@ def _coerce_liveness(resp: httpx.Response) -> dict[str, object] | None:
 
 
 async def _probe_db() -> DependencyStatus:
-    """探测数据库：执行 SELECT 1，失败返回 error（含 detail）。"""
+    """探测数据库：执行 SELECT 1，失败返回 error（detail 固定文案，细节只进日志）。"""
     engine = get_async_engine()
     if engine is None:
         return DependencyStatus(status="error", detail="engine not initialized")
@@ -113,7 +119,9 @@ async def _probe_db() -> DependencyStatus:
             await conn.execute(text("SELECT 1"))
         return DependencyStatus(status="up")
     except Exception as exc:
-        return DependencyStatus(status="error", detail=str(exc))
+        # 匿名可读的就绪面上不回显驱动异常（常含内网 host:port / 库名 / 用户名）
+        logger.warning("health probe db failed: %s", exc)
+        return DependencyStatus(status="error", detail="database unreachable")
 
 
 async def _probe_redis() -> DependencyStatus:
@@ -124,7 +132,8 @@ async def _probe_redis() -> DependencyStatus:
     try:
         ok = await client.ping()
     except Exception as exc:
-        return DependencyStatus(status="error", detail=str(exc))
+        logger.warning("health probe redis failed: %s", exc)
+        return DependencyStatus(status="error", detail="redis ping failed")
     if not ok:
         return DependencyStatus(status="error", detail="ping failed")
     return DependencyStatus(status="up")
@@ -188,6 +197,10 @@ async def health_check() -> dict[str, object]:
 
     AUTH 探针仅在配置 ``auth_http_url``(独立 AUTH 进程接出)时参与降级判定；默认空 →
     ``auth.disabled`` 不参与，overall 只取决于 DB+Redis，保持既存单进程就绪语义零变化。
+
+    注意：本端点**刻意不探 Pulsar**——它是「进程+依赖是否可用」的粗粒度视图，而 Pulsar
+    是 `/readiness` 的接流硬依赖。Pulsar 不可达时两者判定会不同（此处 ok / readiness 503），
+    属预期分工：要判断能否接流请看 `/readiness`，不要用本端点做接流判据。
     """
     db_status = await _probe_db()
     redis_status = await _probe_redis()

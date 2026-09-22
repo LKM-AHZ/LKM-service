@@ -156,7 +156,11 @@ async def get_user_snapshot(
     """
     cached = await user_cache.read_snap(user_id)
     if cached is not None:
-        return _from_cache_dict(cached)
+        # 缓存项存在但无法重建（如冻结字段新增后旧条目缺键）≠ 用户不存在：必须回落
+        # 取回填源，否则脏缓存会让所有老用户被判为「查无此人」直到 TTL 过期。
+        snap = _from_cache_dict(cached)
+        if snap is not None:
+            return snap
     if settings.user_snap_singleflight_enabled:
         key = user_cache.get_user_cache_key(user_id)
         return await singleflight.run(
@@ -176,7 +180,10 @@ async def _load_user_snapshot(
     """
     cached = await user_cache.read_snap(user_id)
     if cached is not None:
-        return _from_cache_dict(cached)
+        # 同 get_user_snapshot：脏缓存不可重建 → 继续走本 loader 回落取源。
+        snap = _from_cache_dict(cached)
+        if snap is not None:
+            return snap
     expected_epoch = await user_cache.current_epoch(user_id)
 
     fields, version = await _retrieve_fields(user_id, db)
@@ -321,7 +328,16 @@ async def _load_batch_uncached(
         logger.warning("auth_http batch read failed n=%s; skip rows", len(pending))
         return out
     for uid, (fields, source_version) in fetched.items():
-        if fields is None:  # 权威不存在：不缓存缺行，也不入结果（缺行 ≠ 故障）
+        # 权威不存在 → 不缓存缺行、不入结果（缺行 ≠ 故障）；非本批 id → 同样跳过：
+        # fetch_users_http_batch 只保证覆盖请求 id，不保证不多回，硬取 epochs[uid] 会 KeyError
+        # 并让整块被上层 except 吞掉（降级为全块空白，且看不出真实原因）。
+        if fields is None or uid not in epochs:
+            continue
+        # 与单读同纪律：先验可重建，畸形体既不回写缓存也不透出。
+        try:
+            _snap_from_fields(fields)
+        except (KeyError, TypeError, ValueError):
+            logger.warning("auth_http batch row not reconstructable uid=%s; skip", uid)
             continue
         out[uid] = fields
         if source_version is not None:

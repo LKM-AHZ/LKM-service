@@ -25,6 +25,7 @@ from app.core.clickhouse import (
     ClickHouseClient,
     ClickHouseUnavailableError,
     result_rows,
+    to_ch_datetime,
 )
 from app.core.common import ApiResp, PageData, paginate_pages
 from app.core.config import settings
@@ -113,14 +114,23 @@ async def admin_query_analytics(
     page_limit = min(limit, settings.clickhouse_query_limit_max)
     offset = (page - 1) * page_limit
 
+    # 先统一成 CH 口径的 naive UTC（与 export 路径同用 to_ch_datetime）：带偏移的入参
+    # 若按墙上时间直接绑给 UTC 的 DateTime64 列，窗口会整体平移；且 naive 与 aware 混用
+    # 在后面对比时会抛 TypeError。
+    since_utc = to_ch_datetime(since) if since is not None else None
+    until_utc = to_ch_datetime(until) if until is not None else None
+    if since_utc is not None and until_utc is not None and since_utc > until_utc:
+        # 反向区间只会查出空集，与「绝不返回空列表冒充无数据」的契约冲突，直接拒
+        raise BizError(CommonErr.INVALID_INPUT, "since must be <= until")
+
     where: list[str] = []
     params: dict[str, Any] = {}
-    if since is not None:
+    if since_utc is not None:
         where.append(f"{spec.time_column} >= {{since:DateTime64(3)}}")
-        params["since"] = since
-    if until is not None:
+        params["since"] = since_utc
+    if until_utc is not None:
         where.append(f"{spec.time_column} <= {{until:DateTime64(3)}}")
-        params["until"] = until
+        params["until"] = until_utc
     where_sql = f" WHERE {' AND '.join(where)}" if where else ""
 
     total_rows = result_rows(
@@ -132,7 +142,9 @@ async def admin_query_analytics(
     params["off"] = offset
     result = await client.query(
         f"SELECT {', '.join(spec.columns)} FROM {spec.table}{where_sql}"
-        f" ORDER BY {spec.order_by} LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}",
+        # off 用 UInt64：page 只限下界，offset 是 Python 大整数，大 page 会超出 UInt32
+        # 让 CH 直接拒绑参数（500）而不是干净地返回空页
+        f" ORDER BY {spec.order_by} LIMIT {{lim:UInt32}} OFFSET {{off:UInt64}}",
         params,
     )
     columns = list(getattr(result, "column_names", spec.columns))

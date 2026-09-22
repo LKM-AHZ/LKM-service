@@ -165,6 +165,28 @@ def test_ttl_env_invalid_falls_back_to_default(
             importlib.reload(bot_sso)
 
 
+def test_ttl_env_is_clamped_to_upper_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TTL 配得再大也被上界钳住。
+
+    票据在 iframe URL query 里明文传递、会进浏览器历史与代理日志，「配错了也不会长期可重放」
+    是硬约束——只钳下界挡不住 ``LKM_BOT_SSO_TTL_SECONDS=86400`` 这种误配。
+    """
+    from auth.bot_sso import _TTL_MAX_SECONDS
+
+    monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", str(_TTL_MAX_SECONDS + 86400))
+    try:
+        reloaded = importlib.reload(bot_sso)
+        assert reloaded.BOT_SSO_TTL_SECONDS == _TTL_MAX_SECONDS
+        # 上界内的值原样生效，不被误钳
+        monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", str(_TTL_MAX_SECONDS))
+        assert importlib.reload(bot_sso).BOT_SSO_TTL_SECONDS == _TTL_MAX_SECONDS
+    finally:
+        monkeypatch.delenv("LKM_BOT_SSO_TTL_SECONDS", raising=False)
+        importlib.reload(bot_sso)
+
+
 async def test_mint_ticket_rejects_non_admin() -> None:
     """非 admin 铸票直接拒（本票据只用于换 bot 面板管理员会话）。"""
     with pytest.raises(ValueError):

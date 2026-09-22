@@ -24,7 +24,28 @@ from prefect import flow, task
 
 logger = logging.getLogger("lkm.flows.analytics")
 
-_DEFAULT_WINDOW = int(os.getenv("LKM_CLICKHOUSE_EXPORT_WINDOW", "1000"))
+def _resolve_default_window() -> int:
+    """解析 ``LKM_CLICKHOUSE_EXPORT_WINDOW``；非法/非正数回退 1000 并告警。
+
+    原先写法是 import 期的 ``int(os.getenv(...))``：环境变量写成 "1e3"/"1000 " 之类
+    会让本模块（乃至 flow 加载）直接抛 ValueError 起不来，而 0/负数又会一路传到
+    exporter 变成 ``LIMIT 0`` 空跑或非法 SQL。
+    """
+    raw = os.getenv("LKM_CLICKHOUSE_EXPORT_WINDOW")
+    if raw is None:
+        return 1000
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("LKM_CLICKHOUSE_EXPORT_WINDOW=%r 非法，回退默认 1000", raw)
+        return 1000
+    if value <= 0:
+        logger.warning("LKM_CLICKHOUSE_EXPORT_WINDOW=%d 需为正数，回退默认 1000", value)
+        return 1000
+    return value
+
+
+_DEFAULT_WINDOW = _resolve_default_window()
 
 
 def _flow_span(traceparent: str) -> Any:
@@ -72,10 +93,27 @@ async def orchestrate_analytics_export(
     """纯编排（不依赖 Prefect）：两路各自导出至水位追平。
 
     生产注入 Prefect task（带重试），测试注入普通函数——两条路径共用同一控制流。
+
+    两路**并发且互不阻塞**（gather + return_exceptions）：原先先后 await，一路抛错就
+    再也不会跑另一路——某路持续失败（毒行/CH 瞬时不可用）会让 audit_logs 静默断供，
+    与模块 docstring「一路失败不影响另一路」的说法相悖。两路各自开各自 realm 的会话
+    与 client，故并发安全。
     """
-    failures = await export_failures(window=window)
-    audits = await export_audits(window=window)
-    return {"event_failures": failures, "audit_logs": audits}
+    if window <= 0:
+        # 0 → LIMIT 0 永久空跑（水位也不推进）；负数 → 非法 SQL
+        raise ValueError(f"window 必须为正数，收到 {window}")
+    results = await asyncio.gather(
+        export_failures(window=window),
+        export_audits(window=window),
+        return_exceptions=True,
+    )
+    errors = [r for r in results if isinstance(r, BaseException)]
+    for err in errors:
+        logger.error("analytics 导出一路失败: %r", err, exc_info=err)
+    if errors:
+        # 两路都已尝试（gather 保证互不阻塞），再抛出第一处错误让 Prefect/cron 感知失败
+        raise errors[0]
+    return {"event_failures": results[0], "audit_logs": results[1]}
 
 
 @flow(name="analytics-clickhouse-export", retries=1, retry_delay_seconds=60)

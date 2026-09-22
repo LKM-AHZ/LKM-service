@@ -37,7 +37,7 @@ from auth.snapshot import get_user_snapshot_batch
 def _question_for_attempt(q: ExamQuestion) -> QuestionForAttempt:
     """构造客户端安全的题目 DTO（不含 answer / analysis）。
 
-    ``options`` 在 DB 是 JSON 文本列，需显式解析（同 QuestionOut.from_model 的坑）。
+    ``options`` 在 DB 是 JSON 文本列，需显式解析。
     """
     return QuestionForAttempt(
         id=q.id,

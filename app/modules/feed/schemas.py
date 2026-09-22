@@ -43,7 +43,9 @@ class FeedItem(BaseModel):
 
     item_type: str  # discussion | article | column | qa | project | blog
     id: uuid.UUID
-    author_id: uuid.UUID | None  # Article 无作者外键 → None
+    # Pydantic v2 里 `X | None` 不带默认值仍是**必填**（None 合法 ≠ 可缺省），与同文件
+    # board_id 的写法也不一致；补 = None 让注解与「Article 无作者 → None」的口径一致。
+    author_id: uuid.UUID | None = None  # Article 无作者外键 → None
     author_name: str
     title: str
     content_preview: str
@@ -61,4 +63,4 @@ class FeedResponse(BaseModel):
     """
 
     items: list[FeedItem]
-    next_cursor: str | None
+    next_cursor: str | None = None  # None == 已到末尾（同上：补默认值才真的可缺省）

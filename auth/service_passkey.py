@@ -152,9 +152,16 @@ def _authentication_credential(credential: dict) -> dict:
     response = dict(credential.get("response") or {})
     signature_b64 = response.get("signature")
     if signature_b64:
-        response["signature"] = _b64(
-            _signature_raw_to_der(_b64decode(str(signature_b64)))
-        )
+        try:
+            signature = _signature_raw_to_der(_b64decode(str(signature_b64)))
+        except ValueError as exc:
+            # 客户端可控的 base64 解码失败是 binascii.Error（ValueError 子类），
+            # 既不是 WebAuthnException、也在 verify 之前抛出，调用方的 except 兜不住 →
+            # 畸形签名会把本该 4xx 的失败变成 500。
+            raise BizError(
+                AuthErr.PASSKEY_VERIFICATION_FAILED, "Malformed signature"
+            ) from exc
+        response["signature"] = _b64(signature)
     return {
         "id": raw_id,
         "rawId": raw_id,

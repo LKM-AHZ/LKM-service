@@ -4,9 +4,12 @@
 抓取端点。语义同 Sentry：
 
 - 默认开启（本地无副作用收集器，成本极低）；`LKM_METRICS_ENABLED=false` 可整体关闭；
-  关闭/初始化失败一律 fail-open（仅记日志，不阻塞应用启动）。
-- 幂等：仅在首次装配挂载，重复调用不重复注册（prometheus_client 用全局默认 REGISTRY，
-  同名 metric 重复注册会抛 ValueError）。
+  关闭/挂载失败一律 fail-open（仅记日志，不阻塞应用启动）。
+- 幂等：同一 app 重复装配不重复注册（prometheus_client 用全局默认 REGISTRY，同名 metric
+  重复注册会抛 ValueError）。
+- **依赖口径**：`prometheus_client` 是硬依赖——下面的指标对象在 import 期就登记到全局
+  REGISTRY，缺它会让 import `app.core.metrics`（进而 `app.main`）失败；fail-open 只覆盖
+  `/metrics` 与自动埋点的**挂载**（prometheus_fastapi_instrumentator 延迟 import）。
 """
 
 import logging
@@ -82,12 +85,21 @@ graphql_query_rejected_total = Counter(
 
 
 def setup_metrics(app: FastAPI) -> None:
-    """按 settings 装配 /metrics + 自动 HTTP 埋点；关闭或缺依赖均 fail-open（幂等）。"""
+    """按 settings 装配 /metrics + 自动 HTTP 埋点；关闭或挂载失败均 fail-open（幂等）。"""
     if not settings.metrics_enabled:
         logger.info("Prometheus metrics 已关闭（LKM_METRICS_ENABLED=false）")
         return
+    # 幂等按 app 判定：不能用模块级标志（测试会多次 create_app，每个 app 都需要自己的
+    # /metrics 与埋点），只有对**同一个 app** 重复调用才该短路，否则会重复挂 instrumentator
+    # 中间件并重复注册同名路由
+    if any(
+        getattr(route, "path", None) == settings.metrics_endpoint
+        for route in app.routes
+    ):
+        return
     try:
-        # 延迟导入：prometheus 依赖缺失时静默降级，防止把监控变启动硬依赖
+        # 延迟 import 的是 instrumentator（可选挂载件）；prometheus_client 本身是硬依赖，
+        # 见模块顶部指标对象在 import 期就注册（此处不再声称能缺件降级）
         from prometheus_fastapi_instrumentator import Instrumentator
 
         Instrumentator().instrument(app).expose(

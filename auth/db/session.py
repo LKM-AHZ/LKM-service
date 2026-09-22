@@ -81,9 +81,12 @@ async def get_auth_session() -> AsyncIterator[AsyncSession]:
     except IntegrityError as exc:
         await db.rollback()
         if _is_unique_violation(exc):
+            # 用 from exc 保留原始 IntegrityError：_is_unique_violation 对 auth 库**任意**唯一
+            # 约束都为真（passkeys/user_dim 等撞键也算），映射成 ALREADY_REGISTERED 只是给
+            # 客户端的统一话术；真正破了哪条约束，只有保留 cause 才能在日志里看出来。
             raise BizError(
                 AuthErr.ALREADY_REGISTERED, "Resource already exists"
-            ) from None
+            ) from exc
         raise
     except Exception:
         await db.rollback()

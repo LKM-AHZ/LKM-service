@@ -31,8 +31,8 @@ async def test_auth_entry_imports_and_app_assembles() -> None:
     paths = {r.path for r in health_auth.router.routes if isinstance(r, APIRoute)}
     assert {"/liveness", "/readiness"} <= paths
     # auth 域每个 router 都被聚合进了本进程装配清单（B1.1 健康 + B1.2 内部读缝 + M3.B S2
-    # 内部授权写缝 + S5-A2 admin 会话写面(login/refresh/logout/2fa)迁入 → 10）
-    assert len(auth.main._AUTH_ROUTERS) == 10
+    # 内部授权写缝 + S5-A2 admin 会话写面(login/refresh/logout/2fa) + bot-ticket 内部端点 → 11）
+    assert len(auth.main._AUTH_ROUTERS) == 11
 
 
 async def test_liveness_returns_ok_without_external_deps(auth_client) -> None:

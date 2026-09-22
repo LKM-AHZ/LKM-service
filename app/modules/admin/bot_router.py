@@ -15,7 +15,7 @@ auth 域，经 ``auth.seams.mint_bot_sso_ticket`` 走内部 HTTP 缝取。缝不
 from fastapi import APIRouter
 
 from app.core.common import ApiResp
-from app.core.err import respond
+from app.core.err import BizError, CommonErr, respond
 from auth.deps import CurrentUser
 from auth.seams import mint_bot_sso_ticket
 
@@ -36,7 +36,13 @@ async def admin_bot_sso_ticket(
     ``/api/v1/auth/sso`` 端点，由 bot 验签后自建面板会话。
     """
     issued = await mint_bot_sso_ticket(cur.id, cur.account_level)
-    return AdminBotSsoTicket(
-        ticket=str(issued["ticket"]),
-        expires_in=int(issued["expires_in"]),
-    )
+    # 校验缝返回的字段本身：上游只保证字段「存在」，`str(None)` 会变成字符串 "None"，
+    # 那样前端会以为已免登、把垃圾票塞进 iframe URL，admin 落到坏面板而非看到 503
+    ticket = issued.get("ticket")
+    if not isinstance(ticket, str) or not ticket:
+        raise BizError(CommonErr.UNAVAILABLE, "Bot SSO ticket malformed")
+    try:
+        expires_in = int(issued["expires_in"])
+    except (KeyError, TypeError, ValueError):
+        raise BizError(CommonErr.UNAVAILABLE, "Bot SSO ticket malformed") from None
+    return AdminBotSsoTicket(ticket=ticket, expires_in=expires_in)

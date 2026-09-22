@@ -45,10 +45,15 @@ SEED_REPORTS: list[dict[str, str]] = [
 async def seed_reports(db: AsyncSession) -> int:
     count = 0
     for data in SEED_REPORTS:
+        # 幂等键取举报的自然标识 (type, target_id)（模型上正是 ix_reports_target）：
+        # 用 target_title 去重会因标题撞车漏种，且标题一改就会重复插入
         existing = (
             (
                 await db.execute(
-                    select(Report).where(Report.target_title == data["target_title"])
+                    select(Report).where(
+                        Report.type == data["type"],
+                        Report.target_id == data["target_id"],
+                    )
                 )
             )
             .scalars()

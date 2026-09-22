@@ -107,7 +107,10 @@ async def list_notifications(
     total = await repo.count(*conditions)
     rows = await repo.get_many(
         *conditions,
-        order_by=Notification.id.desc(),
+        # 按 created_at 倒序：聚合分支会把被合并行的 created_at 刷成 now（聚合窗口前移），
+        # 若仍按随机的 UUID 主键 id 排序，刚被刷新的通知永远沉在原位置，与「最新在前」矛盾。
+        # id 仅作同秒并发时的稳定次级键。
+        order_by=(Notification.created_at.desc(), Notification.id.desc()),
         offset=paginate_offset(page, limit),
         limit=limit,
     )
@@ -155,10 +158,13 @@ async def set_preferences(
 ) -> list[PreferenceOut]:
     """局部更新偏好（白名单校验后 upsert），返回更新后的全量偏好。"""
     now = datetime.datetime.now(datetime.UTC)
-    repo = NotificationPreferenceRepository(db)
-    for type_, enabled in items:
+    # 先整批校验再落库：逐个 upsert 中途中止会把前几条改动作废成「半更新」，
+    # 调用方若 catch BizError 仍提交就会持久化部分偏好
+    for type_, _enabled in items:
         if type_ not in NOTIFICATION_TYPES:
             raise BizError(NotificationErr.INVALID_TYPE, f"未知通知类型: {type_}")
+    repo = NotificationPreferenceRepository(db)
+    for type_, enabled in items:
         await repo.upsert(user_id=user_id, type=type_, enabled=enabled, now=now)
     return await list_preferences(db, user_id)
 

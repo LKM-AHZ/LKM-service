@@ -5,15 +5,32 @@ build/
 dist/
 wheels/
 *.egg-info
-.vscode/
 docs/
+
+# 工具链缓存/覆盖率产物（与 .dockerignore 对齐，避免误提交）
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE / 编辑器
+.vscode/
+.idea
 
 # Virtual environments
 .venv
-.idea
 
 # Development environment files
 .env
+.env.*
+!.env.example
+# 密钥/证书材料：Dockerfile 有 COPY . .，误放进仓库即随镜像分发
+*.pem
+*.key
+*.p12
+id_rsa*
+secrets/
 DeveloperLog.md
 AUTH_DESIGN.md
 SQLALCHEMY_MIGRATION.md

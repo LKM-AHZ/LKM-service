@@ -5,6 +5,7 @@
 「@ 判断邮箱」这个启发式只存在于 :func:`detect` 一处。
 """
 
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.err import BizError, CommonErr
 from auth.deps import get_email_provider, get_sms_provider
 from auth.models import User
 from auth.service_verify import (
@@ -35,7 +37,8 @@ class ContactChannel:
     normalize: Callable[[str], str]
     username_from: Callable[[str], str]
     find_user: Callable[[AsyncSession, str], Awaitable[User | None]]
-    create_verification: Callable[[AsyncSession, str, str], Awaitable[tuple[str, int]]]
+    # 返回 (code/txn 标识, 验证记录 id)：service_verify 的两个实现返回 tuple[str, UUID]
+    create_verification: Callable[[AsyncSession, str, str], Awaitable[tuple[str, uuid.UUID]]]
     consume_code: Callable[[AsyncSession, str, str, str], Awaitable[bool]]
     send_code: Callable[[str, str], Awaitable[None]]
 
@@ -74,7 +77,11 @@ def _email_normalize(value: str) -> str:
 
 
 def _phone_normalize(value: str) -> str:
-    return value
+    """手机号规范化：与邮箱同口径，仅去首尾空白。
+
+    原先直接原样返回，导致 " 13800138000 " 这类带空白的输入被拿去查库/发短信。
+    """
+    return value.strip()
 
 
 def _email_username_from(value: str) -> str:
@@ -120,7 +127,9 @@ CHANNELS: dict[str, ContactChannel] = {
 
 
 def detect(contact: str) -> str:
-    """邮箱还是手机号 —— 整个代码库唯一的 '@' 启发式。"""
+    """邮箱还是手机号 —— 整个代码库唯一的 '@' 启发式。空/纯空白直接拒。"""
+    if not contact or not contact.strip():
+        raise BizError(CommonErr.INVALID_INPUT, "contact must not be empty")
     return "email" if "@" in contact else "phone"
 
 

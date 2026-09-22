@@ -10,6 +10,7 @@ M6.7 泛化：连接表从「按 user_id」扩为「按 user_id → channel」�
 """
 
 import asyncio
+import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
@@ -18,6 +19,24 @@ from typing import Any, Protocol
 
 from app.core.redis import get_redis
 from app.ws.broker import CHANNEL_UPLOAD, parse_channel
+
+logger = logging.getLogger(__name__)
+
+# 单连接发送上限：慢/死客户端（TCP 背压写满发送缓冲）会让 send_text 无限等，而本进程
+# 所有用户共用同一条订阅 task 串行扇出 → 一个卡住的连接会拖住其他所有人的消息
+_SEND_TIMEOUT_S = 5.0
+
+
+def _log_sub_task_exit(task: asyncio.Task[Any]) -> None:
+    """订阅 task 结束时的兜底留痕（任务无人 await，异常否则到 GC 才冒一句警告）。"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "ws 订阅 task 异常退出",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
 
 
 class Dispatcheable(Protocol):
@@ -68,12 +87,17 @@ class ConnectionManager:
             )
         for ws in targets:
             try:
-                await ws.send_text(message)
+                await asyncio.wait_for(ws.send_text(message), _SEND_TIMEOUT_S)
             except Exception:
-                async with self._lock:
-                    chans = self._connections.get(user_id)
-                    if chans:
-                        chans.get(channel, set()).discard(ws)
+                # 失效连接：与 unregister 对齐摘除**全部**通道订阅。原先只从当前 channel
+                # discard，死连接会在其它通道继续被当成目标，且留下空 set 不回收。
+                logger.warning(
+                    "ws 发送失败/超时，摘除连接 user=%s channel=%s",
+                    user_id,
+                    channel,
+                    exc_info=True,
+                )
+                await self.unregister(user_id, ws)
 
     # ---- Redis 订阅驱动（生命周期）----
 
@@ -85,6 +109,9 @@ class ConnectionManager:
             if self._sub_task is not None and not self._sub_task.done():
                 return
             self._sub_task = asyncio.create_task(self._sub_loop())
+            # 该 task 无人 await：挂 done 回调把异常记出来，否则「首轮 get_redis 抛错 →
+            # task 静默死掉 → 下次连接又新建一个」会一直掩盖根因
+            self._sub_task.add_done_callback(_log_sub_task_exit)
 
     async def _sub_loop(self) -> None:
         """常驻：psubscribe ``ws:*`` → 解析 (user_id, channel) → dispatch。
@@ -121,7 +148,9 @@ class ConnectionManager:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # 订阅链路异常：关连接后退避重连，保持常驻
+                # 订阅链路异常：关连接后退避重连，保持常驻。必须留痕——否则 Redis 凭证错误/
+                # 网络策略/Redis 重启这类持续性故障会静默重试到永远，运维只能看到「实时功能没了」。
+                logger.exception("ws pub/sub 异常，退避后重连")
                 with suppress(Exception):
                     await pubsub.aclose()
                 await asyncio.sleep(1)

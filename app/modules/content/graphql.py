@@ -215,6 +215,8 @@ class ContentQuery:
             return None
         if item.status != PUBLISHED_STATUS:
             return None
+        # 与 contentItem 对齐：slug 同样是公开详情读路径，不计数会让按 slug 打开的阅读永远不涨
+        await bump_item_view(item.id)
         return _map_item(item)
 
     @strawberry.field

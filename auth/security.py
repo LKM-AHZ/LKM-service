@@ -54,10 +54,11 @@ async def dummy_verify() -> None:
 _ACCESS_TYPE = "access"
 _TEMP_TYPE = "temp"
 
-# JWT audience：区分三套互不混用的令牌，防止 token 被误喂给其他端点
+# JWT audience：区分互不混用的令牌，防止 token 被误喂给其他端点。
+# 后台 admin cookie 的 audience 由 auth.admin_session._ADMIN_AUD 定义（本模块只签发前台
+# access 与一次性 temp），故不在此重复声明——那会是一份会漂移的第二事实源。
 _AUD_WEB = "lkm:web"  # 前台 Bearer access
 _AUD_TEMP = "lkm:temp"  # 一次性 temp（2FA/recovery/setup）
-_AUD_ADMIN = "lkm:admin"  # 后台 access cookie
 
 
 def create_access_token(
@@ -212,10 +213,26 @@ def encrypt_secret(plain: str) -> str:
 
 
 def decrypt_secret(cipher: str) -> str:
-    """base64-encoded AES-GCM"""
+    """base64-encoded AES-GCM（nonce(12) || ciphertext||tag）。
+
+    密文损坏/被轮换/被截断时统一抛 ``ValueError("malformed ciphertext")``：原来的
+    ``base64.b64decode`` 默认丢弃非字母表字符（静默解出错字节）、坏 padding 抛
+    binascii.Error、长度不足则在切片后崩、tag 不符抛 cryptography 的 InvalidTag——
+    四种形态各异且都不可诊断。收成一个明确的失败，日志里一眼能区分「密文坏了」和代码 bug。
+    """
+    from cryptography.exceptions import InvalidTag
+
     key = _derive_key()
     aesgcm = AESGCM(key)
-    raw = base64.b64decode(cipher)
+    try:
+        raw = base64.b64decode(cipher, validate=True)
+    except (binascii.Error, ValueError) as err:
+        raise ValueError("malformed ciphertext") from err
+    if len(raw) < 12 + 16:  # 12B nonce + 16B GCM tag
+        raise ValueError("malformed ciphertext")
     nonce = raw[:12]
     ct = raw[12:]
-    return aesgcm.decrypt(nonce, ct, None).decode("utf-8")
+    try:
+        return aesgcm.decrypt(nonce, ct, None).decode("utf-8")
+    except (InvalidTag, UnicodeDecodeError) as err:
+        raise ValueError("malformed ciphertext") from err

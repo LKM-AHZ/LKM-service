@@ -43,10 +43,18 @@ class InteractionContentItemRepository(AsyncRepository[ContentItem]):
     async def bump_bookmark_count(
         self, content_id: uuid.UUID, delta: int
     ) -> int | None:
-        """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 ``None``。"""
+        """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 ``None``。
+
+        「不存在」也包含已软删（``deleted_at`` 非空）——与同类的 ``get_bookmark_count`` /
+        ``exists_content`` 同口径：否则写路径会对一条读路径报 404 的内容照改计数，读不到却
+        改得动（service 的先读守卫是另一条语句，中间并发软删即可穿透）。
+        """
         result = await self.db.execute(
             sa_update(ContentItem)
-            .where(ContentItem.id == content_id)
+            .where(
+                ContentItem.id == content_id,
+                ContentItem.deleted_at.is_(None),
+            )
             .values(bookmark_count=func.greatest(ContentItem.bookmark_count + delta, 0))
             .returning(ContentItem.bookmark_count)
         )

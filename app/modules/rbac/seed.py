@@ -31,36 +31,42 @@ def _rows() -> list[dict[str, str]]:
 
 
 async def seed_rbac(db: AsyncSession) -> int:
-    """写入各复合角色默认权限；已存在则跳过（幂等）。返回实际新增行数。
+    """对账写入各复合角色默认权限；返回实际新增行数。
 
     并发/重复执行安全：用 ``INSERT ... ON CONFLICT DO NOTHING`` 交由数据库按
     ``(role_name, permission)`` 唯一约束去重，避免 SELECT-再-INSERT 的竞态窗口
     （多 worker 首次建库同时 seed 时，不会因唯一约束冲突启动失败）。
 
-    新增行数 = 插入后总量 - 插入前总量（result.rowcount 在 ty 的 SQLAlchemy
-    stub 中缺失，遂改用计数差值，避免类型抑制注释）。
+    新增行数取语句自身的 rowcount：原先用插入前后整表 COUNT 差值，会把并发 worker
+    同时插入/删除的行算进来，日志里的「实际新增」可以偏大、偏小甚至为负。
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.dialects.postgresql import insert as impl_insert
 
     rows = _rows()
     if not rows:
         return 0
-    before = int(
-        (await db.scalar(select(func.count()).select_from(RolePermission))) or 0
-    )
-    # PostgreSQL ON CONFLICT：显式冲突目标（role+permission 唯一约束）防重复插入 → 幂等。
-    from sqlalchemy.dialects.postgresql import insert as impl_insert
 
+    # 先对账删除：DEFAULT_GRANTS 仍管理的角色下、已从代码里移除的授权行必须清掉，
+    # 否则 role_permissions（运行时真相源）会保留代码已删除的权限，两处长期漂移
+    for role_name, grants in DEFAULT_GRANTS.items():
+        allowed = [g.permission.value for g in grants]
+        await db.execute(
+            sa_delete(RolePermission).where(
+                RolePermission.role_name == role_name,
+                RolePermission.permission.notin_(allowed),
+            )
+        )
+
+    # PostgreSQL ON CONFLICT：显式冲突目标（role+permission 唯一约束）防重复插入 → 幂等。
     stmt = impl_insert(RolePermission).values(rows)
     stmt = stmt.on_conflict_do_nothing(
         index_elements=[RolePermission.role_name, RolePermission.permission]
     )
-    await db.execute(stmt)
+    result = await db.execute(stmt)
     await db.flush()
-    after = int(
-        (await db.scalar(select(func.count()).select_from(RolePermission))) or 0
-    )
-    return after - before
+    # rowcount 在 ty 的 SQLAlchemy stub 里缺失，沿用仓库既有 getattr 兜底写法
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def _main() -> None:

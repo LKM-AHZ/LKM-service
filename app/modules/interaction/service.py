@@ -41,6 +41,18 @@ async def _bookmark_count(db: DbSession, content_id: uuid.UUID) -> int:
     return int(count)
 
 
+async def _current_bookmark_count(db: DbSession, content_id: uuid.UUID) -> int:
+    """即时收藏读数 = DB 计数列 + 未落库 Redis 增量，夹紧到 >= 0（不存在则 404）。
+
+    该读数是**近似值**：读 DB 与读 pending 之间若 flush 恰好 drain 并落库，会取到
+    「旧 base + 已清零 pending」而偏小。但下限必须夹紧——DB 回退路径用 greatest(...,0)，
+    这里不夹紧会在 flush 窗口/增量丢失时给前端负计数。
+    """
+    base = await _bookmark_count(db, content_id)
+    pending = await counters.pending_delta("bookmark_count", content_id)
+    return max(0, base + pending)
+
+
 async def _bump_bookmark(db: DbSession, content_id: uuid.UUID, delta: int) -> int:
     """增减 ``bookmark_count`` 并返回即时读数（下限 0）。
 
@@ -49,11 +61,7 @@ async def _bump_bookmark(db: DbSession, content_id: uuid.UUID, delta: int) -> in
     """
     repo = InteractionContentItemRepository(db)
     if await counters.bump_counter("bookmark_count", content_id, delta):
-        base = await repo.get_bookmark_count(content_id)
-        if base is None:
-            raise BizError(InteractionErr.CONTENT_NOT_FOUND)
-        pending = await counters.pending_delta("bookmark_count", content_id)
-        return int(base) + pending
+        return await _current_bookmark_count(db, content_id)
 
     new_count = await repo.bump_bookmark_count(content_id, delta)
     if new_count is None:
@@ -73,7 +81,8 @@ async def add_favorite(
     db: DbSession, user_id: uuid.UUID, content_id: uuid.UUID
 ) -> FavoriteState:
     """收藏：重复调用不报错也不重复计数（复合主键兜并发）。"""
-    count = await _bookmark_count(db, content_id)
+    # 幂等早退也要给「即时读数」：用纯 DB 快照会与真正变更分支返回的口径不一致
+    count = await _current_bookmark_count(db, content_id)
     if await _is_favorited(db, user_id, content_id):
         return FavoriteState(
             content_id=content_id, favorited=True, bookmark_count=count
@@ -100,7 +109,7 @@ async def remove_favorite(
     db: DbSession, user_id: uuid.UUID, content_id: uuid.UUID
 ) -> FavoriteState:
     """取消收藏：未收藏时幂等返回当前计数，不递减。"""
-    count = await _bookmark_count(db, content_id)
+    count = await _current_bookmark_count(db, content_id)
     removed = await InteractionFavoriteRepository(db).remove(
         user_id=user_id, content_id=content_id
     )

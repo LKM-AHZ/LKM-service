@@ -44,6 +44,19 @@ class UTCDateTime(TypeDecorator[datetime.datetime]):
     impl: TypeEngine[Any] | type[TypeEngine[Any]] = DateTime(timezone=True)
     cache_ok: bool | None = True
 
+    def process_bind_param(
+        self, value: datetime.datetime | None, dialect: Dialect
+    ) -> datetime.datetime | None:
+        """naive 值一律按 UTC 解释后再落库（与读取侧口径一致）。
+
+        没有这一层时，naive datetime 会被驱动的会话时区解释：实测本机会话时区是
+        Asia/Shanghai 时，绑定 ``2026-01-01 12:00`` 存进去变成 ``04:00:00+00``——
+        静默偏移 8 小时，且读写不对称（写按本地、读按 UTC）。
+        """
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=datetime.UTC)
+        return value
+
     def process_result_value(
         self, value: datetime.datetime | None, dialect: Dialect
     ) -> datetime.datetime | None:

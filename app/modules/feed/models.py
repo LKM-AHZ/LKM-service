@@ -91,7 +91,10 @@ class FeedItemMaterialized(UUIDPrimaryKeyMixin, Base):
         UniqueConstraint("user_id", "item_type", "source_id", name="uq_feed_item"),
         # 读路径游标：user_id + 时间倒序 + id 倒序（PG 可反向扫该索引）
         Index("ix_feed_items_user_cursor", "user_id", "created_at", "id"),
-        Index("ix_feed_items_source", "item_type", "source_id"),
+        # source_id 在前：唯一的消费方是 fanout.remove_source_item 的
+        # `DELETE ... WHERE source_id = :id`（没有只按 item_type 的查询），
+        # 原顺序下该删除走不了索引（PG 无 index skip scan），大表上退化为顺序扫描
+        Index("ix_feed_items_source", "source_id", "item_type"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # feed 所有者

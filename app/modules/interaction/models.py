@@ -51,6 +51,10 @@ class InteractionViewLog(UUIDPrimaryKeyMixin, Base):
         Index("ix_interaction_view_user_viewed", "user_id", "viewed_at"),
         # 保留策略清理任务按 viewed_at 扫描过期行
         Index("ix_interaction_view_viewed", "viewed_at"),
+        # content_id 反查：本表 content_id 带 ON DELETE CASCADE，而唯一约束
+        # (user_id, content_id) 与上面两个索引都不是 content_id 打头，内容行硬删时 PG 只能
+        # 顺序扫本表找引用行（对比 interaction_favorites 的复合主键就是 content_id 打头）。
+        Index("ix_interaction_view_content", "content_id"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)

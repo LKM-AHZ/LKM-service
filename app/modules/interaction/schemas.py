@@ -15,12 +15,20 @@ class FavoriteState(BaseModel):
     bookmark_count: int
 
 
-class FavoriteItem(BaseModel):
+class _ContentSummaryItem(BaseModel):
+    """收藏/历史共用的内容摘要字段：形状只在一处声明，避免两边各自漂移。
+
+    字段顺序保持与原两个模型一致（基类字段在前），JSON 出参顺序不变。
+    """
+
     content_id: uuid.UUID
     content_type: str
     title: str
     slug: str | None = None
     board_id: uuid.UUID
+
+
+class FavoriteItem(_ContentSummaryItem):
     created_at: datetime.datetime
 
 
@@ -31,10 +39,5 @@ class ViewState(BaseModel):
     viewed_at: datetime.datetime
 
 
-class HistoryItem(BaseModel):
-    content_id: uuid.UUID
-    content_type: str
-    title: str
-    slug: str | None = None
-    board_id: uuid.UUID
+class HistoryItem(_ContentSummaryItem):
     viewed_at: datetime.datetime

@@ -14,6 +14,10 @@ from app.modules.points.models import (
     UserBehaviorStat,
     UserTaskProgress,
 )
+from app.modules.points.repository import (
+    UserAchievementRepository,
+    UserTaskProgressRepository,
+)
 from app.modules.points.service import reward
 
 # 事件 → 行为统计计数键（写入 UserBehaviorStat.stats）
@@ -78,12 +82,15 @@ async def _get_or_create_stats(
         stat = await db.get(UserBehaviorStat, user_id)
     if stat is None:
         stat = UserBehaviorStat(user_id=user_id, stats={})
-        db.add(stat)
         # 用 savepoint 承载插入；并发撞主键只回滚本 savepoint，而非 db.rollback()
         # 整事务——否则会连带回滚调用方本事务里未提交的其它写（如 worker 里 reward()
         # 已写入的 ledger 流水），导致发分后续又因重试被跳过，数据不一致。
+        # db.add 必须在 begin_nested() **之后**：savepoint 回滚只 expunge 快照之后新增的
+        # 对象，若在快照前 add，回滚后该 pending 行仍留在 session.new，后续 flush/autoflush
+        # 会再 INSERT 撞主键，抛未捕获的 IntegrityError 拖垮整个事务。
         sp = await db.begin_nested()
         try:
+            db.add(stat)
             await db.flush()
             await sp.commit()
         except IntegrityError:
@@ -265,9 +272,27 @@ async def _recheck_achievements(
             .first()
         )
         if ua is None:
-            ua = UserAchievement(user_id=user_id, achievement_id=ach.id)
-            db.add(ua)
-            await db.flush()  # 先落库拿到该行，便于同会话后续查询可见
+            # 并发下两个事务都可能查不到该行：UserAchievement 有
+            # uq_user_achievement(user_id, achievement_id)，直接 insert+flush 撞唯一约束会
+            # 抛未捕获 IntegrityError 拖垮整个事务（连已写的积分流水一起回滚）。改用
+            # ON CONFLICT DO NOTHING 吸收撞键（同 _get_or_create_stats 的写法）后回读。
+            await UserAchievementRepository(db).pg_upsert(
+                {"user_id": user_id, "achievement_id": ach.id},
+                constraint="uq_user_achievement",
+                do_nothing=True,
+            )
+            ua = (
+                (
+                    await db.execute(
+                        select(UserAchievement).where(
+                            UserAchievement.user_id == user_id,
+                            UserAchievement.achievement_id == ach.id,
+                        )
+                    )
+                )
+                .scalars()
+                .one()
+            )
         ua.progress = min(progress, ach.threshold)
         if not ua.unlocked and progress >= ach.threshold:
             ua.unlocked = True
@@ -297,14 +322,31 @@ async def _advance_tasks(
             .first()
         )
         if up is None:
-            up = UserTaskProgress(
-                user_id=user_id,
-                task_id=t.id,
-                period_date=today,
-                progress=0,
+            # 同上（成就路径）：并发撞 uq_user_task_period 会抛未捕获 IntegrityError。
+            # ON CONFLICT DO NOTHING 吸收后回读，再就地推进。
+            await UserTaskProgressRepository(db).pg_upsert(
+                {
+                    "user_id": user_id,
+                    "task_id": t.id,
+                    "period_date": today,
+                    "progress": 0,
+                },
+                constraint="uq_user_task_period",
+                do_nothing=True,
             )
-            db.add(up)
-            await db.flush()  # 先落库（拿到 id）再就地推进，供同会话查询可见
+            up = (
+                (
+                    await db.execute(
+                        select(UserTaskProgress).where(
+                            UserTaskProgress.user_id == user_id,
+                            UserTaskProgress.task_id == t.id,
+                            UserTaskProgress.period_date == today,
+                        )
+                    )
+                )
+                .scalars()
+                .one()
+            )
         up.progress = min(int(up.progress) + 1, t.requirement_count)
         # 打卡特判：requirement_count==1 的 checkin 任务直接置 progress=1（幂等）
         if t.requirement_count == 1 and event == "checkin":

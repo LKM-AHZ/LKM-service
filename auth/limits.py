@@ -7,7 +7,7 @@
 bucket 语义：
   CODE_*_MAX/WINDOW       —— 验证码发放 / 核验（最常见：5 次 / 1 小时）
   REFRESH_*               —— 刷新令牌（按 IP）30 次 / 1 分钟
-  GLOBAL_WIDE_*           —— 跨渠道全局防御（magic-link/2FA 核验）10 次 / 1 小时
+  GLOBAL_VERIFY_*         —— 跨渠道全局防御（magic-link/2FA 核验）10 次 / 1 小时
   RECOVER_ADMIN_BEGIN_*   —— admin 恢复发起：3 次 / 1 小时
   RECOVER_ADMIN_VERIFY_*  —— admin 恢复核验：3 次 / 10 分钟
 """

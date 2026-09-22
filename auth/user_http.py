@@ -99,7 +99,11 @@ async def fetch_user_http_payload(
         raise UserHttpUnavailable(f"auth_http unexpected status {resp.status_code}")
 
     payload = _coerce_json(resp)
-    data_obj = payload.get("data")
+    # 区分「显式 data: null」（权威不存在）与「压根没有 data 键」（信封畸形）：后者按
+    # fail-open 契约必须抛 Unavailable 让调用方回落 DB，绝不能当作用户不存在。
+    if "data" not in payload:
+        raise UserHttpUnavailable("auth_http payload missing data")
+    data_obj = payload["data"]
     if data_obj is None:
         # 信封内明确无此行 == 权威不存在。
         return None, None
@@ -148,7 +152,11 @@ async def fetch_users_http_batch(
             uid = uuid.UUID(str(item["user_id"]))
         except (TypeError, ValueError):
             raise UserHttpUnavailable("auth_http batch malformed user_id") from None
-        data = item.get("data")
+        # 同单条信封：缺 data 键是畸形（抛 Unavailable 整块跳过），只有显式 null 才是
+        # 「权威不存在」。.get 会把两者混成一个 None。
+        if "data" not in item:
+            raise UserHttpUnavailable("auth_http batch item missing data")
+        data = item["data"]
         if data is None:
             out[uid] = (None, None)  # 权威不存在（与单条信封同义）
             continue
@@ -168,13 +176,15 @@ def _coerce_json(resp: httpx.Response) -> dict[str, Any]:
 
 
 def _coerce_sv(value: Any) -> int | None:
-    """sv 字段：非空 int-ish → int；缺失/坏值 → None（调用方按无来源版本处理，仍可写缓存）。"""
-    if value is None:
+    """sv 字段：**真 int** → 原值；缺失/坏值 → None（调用方按无来源版本处理，仍可写缓存）。
+
+    只认 ``int`` 而非任意 int-ish：``int(3.9)`` 会把浮点截断成 3、``int(True)`` 得 1，
+    于是一个被写坏的 sv 会变成「看似合理但错误」的来源版本，被拿去给 write_if_newer 做
+    CAS 判断，可能覆盖掉更新的缓存——本该按「无 sv」fail-open 处理。
+    """
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return value
 
 
 def _to_fields_or_unavailable(data: Any) -> dict[str, Any]:
@@ -232,8 +242,13 @@ async def authorize_via_seam(
     for f in _AUTHZ_FIELDS:
         if f not in payload:
             raise UserHttpUnavailable(f"auth_http authz missing field {f}")
+    # fail-closed 面上只认真正的 JSON 布尔：{"ok": "false"}/{"ok": 1} 这类畸形体若被
+    # bool() 强转成 truthy 就是放行，等于把服务端/网关的一次抖动变成越权。
+    ok = payload.get("ok")
+    if not isinstance(ok, bool):
+        raise UserHttpUnavailable("auth_http authz malformed ok flag")
     return {
-        "ok": bool(payload.get("ok")),
+        "ok": ok,
         "cause": payload.get("cause"),
         "account_level": payload.get("account_level"),
         "role": payload.get("role"),
@@ -338,12 +353,15 @@ async def mint_bot_sso_ticket(
     for f in _BOT_TICKET_FIELDS:
         if f not in payload:
             raise UserHttpUnavailable(f"auth_http bot-ticket missing field {f}")
+    ticket = payload["ticket"]
+    # 必须显式校验：str(None) == "None" 是个非空字符串，原实现会把空票当有效票据返回，
+    # 调用方再把它拼成 SSO iframe URL 发出去（违背「绝不返回空票」的 fail-closed 契约）。
+    if not isinstance(ticket, str) or not ticket:
+        raise UserHttpUnavailable(f"auth_http bot-ticket malformed ticket={ticket!r}")
     try:
-        return {
-            "ticket": str(payload["ticket"]),
-            "expires_in": int(payload["expires_in"]),
-        }
+        expires_in = int(payload["expires_in"])
     except (TypeError, ValueError):
         raise UserHttpUnavailable(
             f"auth_http bot-ticket malformed payload={payload!r}"
         ) from None
+    return {"ticket": ticket, "expires_in": expires_in}

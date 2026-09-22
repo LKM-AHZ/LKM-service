@@ -88,13 +88,19 @@ def _parse_created_at(meta_raw: str) -> datetime | None:
         meta = json.loads(meta_raw)
     except json.JSONDecodeError:
         return None
+    # 合法但非 dict 的 JSON（null/[]/123）无 created_at 可言 → 同样视为不可判龄
+    if not isinstance(meta, dict):
+        return None
     raw = meta.get("created_at")
     if not isinstance(raw, str):
         return None
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    # 无时区的遗留标记直接与 aware 的 now 相减会抛 TypeError，冒泡会中断整轮清扫；
+    # 按 UTC 归一，保持"不可判龄才跳过"的既有语义
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 async def cleanup_expired_uploads() -> None:
@@ -109,24 +115,33 @@ async def cleanup_expired_uploads() -> None:
     now = datetime.now(UTC)
     # redis.asyncio 的 scan_iter 是异步迭代器，直接 async for 消费
     async for marker in redis.scan_iter(match=_MATCH):
-        meta_raw = await redis.get(marker)
+        # GETDEL 原子认领：若 notify_upload/confirm_upload 刚认领同一标记并正在搬对象，
+        # 这里拿到 None 直接跳过，避免把在途登记赖以读取的随机对象删掉。
+        meta_raw = await redis.getdel(marker)
         if meta_raw is None:
-            continue  # 已被他人清扫/删除，跳过
+            continue  # 已被他人认领/清扫，跳过
         created_at = _parse_created_at(meta_raw)
         # 年龄窗口按"创建后至少 _UPLOAD_TTL 秒"判定过期；created_at 缺失/坏 JSON →
         # 保守不删（无法判龄），避免误删仍在直传中的标记。
         if created_at is None or (now - created_at).total_seconds() <= _UPLOAD_TTL:
+            with suppress(Exception):
+                await redis.set(marker, meta_raw)  # 未过期/不可判龄：尽力写回
             continue
-        # 过期：尽力删除对应随机 key 对象（key 字段存在时），再删标记
+        # 过期：先删对应随机 key 对象（key 存在时），删成功才删标记
         try:
             meta = json.loads(meta_raw)
         except json.JSONDecodeError:
             meta = {}
         key = meta.get("key")
         if isinstance(key, str) and key:
-            with suppress(Exception):
-                await storage.delete(key)  # 尽力清扫，单次失败不中断
-        await redis.delete(marker)
+            try:
+                await storage.delete(key)
+            except Exception:
+                # 对象删除失败：写回标记留给下一轮重试，否则标记先没、对象永久成孤儿
+                logger.warning("cleanup storage delete failed key=%s", key, exc_info=True)
+                with suppress(Exception):
+                    await redis.set(marker, meta_raw)
+                continue
 
 
 register_task(SUB_NOTIFY.name, "notify_upload", notify_upload)

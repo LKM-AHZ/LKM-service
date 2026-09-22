@@ -19,9 +19,21 @@ async def purge_stale_view_logs() -> None:
     """周期任务：删除超过保留期的浏览记录（无过期行时删除 0 行，不报错）。"""
     from app.core.config import settings
 
+    retention_days = settings.interaction_view_log_retention_days
+    if retention_days <= 0:
+        # cutoff = now - retention_days 天：0 会让截止时间落在「现在」、负数更是把截止点推到
+        # 未来，purge_before 会**不可逆地**删光全部浏览记录。而邻居配置（feed_backfill_limit /
+        # notification_aggregate_window_s / outbox_scan_window_s）都用 0 表示「关闭」，运维按
+        # 同一直觉设 0 时期望的是不清理，故这里直接跳过并告警。
+        logger.warning(
+            "interaction_view_log_retention_days=%s 非正数，跳过清理以免全表删除",
+            retention_days,
+        )
+        return
+
     db = await new_session()
     try:
-        removed = await _purge(db, settings.interaction_view_log_retention_days)
+        removed = await _purge(db, retention_days)
         await db.commit()
         if removed:
             logger.info("purged %d stale view logs", removed)

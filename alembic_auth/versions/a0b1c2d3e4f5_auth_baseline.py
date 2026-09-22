@@ -32,6 +32,10 @@ def upgrade() -> None:
     """Upgrade schema：建出 auth 库全部缺失表（幂等）。"""
     # env.py 的 target metadata 仅 import 空 auth_metadata，须先注册 auth models 才有表。
     register_models()
+    # register_models 若不再把模型绑到 AuthBase（S1-S4 期间模型仍挂在 monolith Base 上），
+    # create_all 会静默建 0 张表而 alembic 照常盖章 —— 必须失败出声，否则留下没建表的「已迁移」库。
+    if not auth_metadata.tables:
+        raise RuntimeError("auth_metadata 为空：auth 模型未注册到 AuthBase，拒绝空盖章")
     auth_metadata.create_all(bind=op.get_bind())
 
 

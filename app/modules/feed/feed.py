@@ -3,8 +3,11 @@
 每个源实现 ``fetch_items(db, author_ids, board_ids, before_time, before_id, limit)``，
 按可见时间降序返回当页候选（已按 cursor 下滤）。排序合并/游标推进在 service 统一做。
 
-* 可见时间（feed_time）：优先 ``published``/``published_at``，否则 ``created_at``——
-  即"内容对外可见的时间"，作为跨源排序锚点。
+* 排序锚点：各源当前统一用 ``created_at``（含游标与 ``FeedItem.created_at``，fanout 水位
+  也取自它）。**已知与早期设计不一致**：本文档原写「优先 published/published_at，否则
+  created_at」的可见时间锚，实际未实现——先存草稿后发布的内容会按创建时间排序、且可能落在
+  fanout 水位之前而不被物化（只能靠实时兜底看到）。是否改为 coalesce(published_at,
+  created_at) 属排序/水位语义的产品决定，待定。
 * 可见性过滤（各源 SQL WHERE）：Article 仅 published、Column 仅 PUBLISHED、
   QA 仅 open/accepted、Project 仅 active、Discussion 仅 status=PUBLISHED。
 * 作者名：逐源批查 ``User.profile.nickname`` 兜底 ``username``；Article 无作者外键，
@@ -135,11 +138,14 @@ async def _fetch_discussion(
         # 内容软删（批 4）：实时合流兜底路径同样不得返回已删内容
         ContentItem.deleted_at.is_(None),
     ]
-    # follow 模式：关注作者 或 关注版块；hot 模式不限制
-    if author_ids is not None and board_ids is not None:
-        conditions.append(
-            ContentItem.author_id.in_(author_ids) | ContentItem.board_id.in_(board_ids)
-        )
+    # follow 模式：关注作者 或 关注版块；hot 模式两者皆 None 不限制。
+    # 只看 author_ids 是否为 None（与其它源同款）：原先要求两者都非 None，调用方若只给
+    # author_ids（版块上下文未加载）会静默返回**全站**讨论帖，是个无声的越权/串流面。
+    if author_ids is not None:
+        author_cond = ContentItem.author_id.in_(author_ids)
+        if board_ids:
+            author_cond = author_cond | ContentItem.board_id.in_(board_ids)
+        conditions.append(author_cond)
     order_by = _cursor_order(
         ContentItem.created_at,
         ContentItem.id,

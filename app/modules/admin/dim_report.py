@@ -39,6 +39,23 @@ from app.db.user_dim import UserDim
 
 from .schemas import DimUserRow
 
+# 单次查询行数上限：本读口是无鉴权内部 port，正常消费方分页读，不需要一次拉全表
+_MAX_LIMIT = 500
+
+# LIKE 转义（与 app/modules/search/repository.py 同口径）。不能直接 import 那边的私有
+# 助手：import-linter 合同禁止业务模块间任意依赖，dim_report→search.repository 未在豁免列。
+_LIKE_ESCAPE = "\\"
+
+
+def _like_pattern(term: str) -> str:
+    """把用户输入转成 ILIKE 模式串，转义 ``%``/``_``/反斜杠，避免通配符全表匹配。"""
+    escaped = (
+        term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
+    return f"%{escaped}%"
+
 
 async def list_user_dim(
     db: AsyncSession,
@@ -58,9 +75,15 @@ async def list_user_dim(
       杜绝经报表横向散布）。
     - 本函数不带鉴权；授权由接入方按其门槛负责（对标管理面 A4 读口同处置）。
     - sync_ts 供读方判各行的物化新鲜度；若需"绝不读出未对账过的陈旧行"由接入方过滤。
+    - ``offset``/``limit`` 在此 clamp：负数在 PG 上直接 `ProgrammingError: LIMIT must not be
+      negative`（500 而非空页），超大 limit 则会在单请求里把整张宽表拉出来。
     """
+    offset = max(0, offset)
+    limit = max(1, min(limit, _MAX_LIMIT))
     count_q = select(func.count(UserDim.user_id))
-    cond = UserDim.username.ilike(f"%{q}%") if q else None
+    cond = (
+        UserDim.username.ilike(_like_pattern(q), escape=_LIKE_ESCAPE) if q else None
+    )
     if cond is not None:
         count_q = count_q.where(cond)
     total = int((await db.execute(count_q)).scalar_one() or 0)

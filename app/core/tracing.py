@@ -18,6 +18,7 @@ import contextlib
 import logging
 from collections.abc import Callable, Iterator
 from typing import Any
+from weakref import WeakSet
 
 from app.core.config import settings
 
@@ -30,7 +31,9 @@ _EXCLUDED_URLS = "/metrics,/api/v1/health,/liveness,/readiness"
 _exporter_factory: Callable[[], Any] | None = None
 
 _tracer_provider: Any = None
-_sqlalchemy_engine_id: int | None = None
+# 已挂 SQLAlchemy 埋点的引擎（弱引用）：用 WeakSet 而非 id(engine)——既不阻止引擎回收
+# （测试每用例新建引擎不会堆积），也不会因对象地址被回收后复用而误判「已挂过」
+_sqlalchemy_engines: WeakSet[Any] = WeakSet()
 
 
 def is_enabled() -> bool:
@@ -85,6 +88,7 @@ def setup_tracing(app: Any = None, *, service_suffix: str = "") -> None:
     if not settings.otel_enabled:
         logger.info("OpenTelemetry 未启用，跳过埋点（可观测可选）")
         return
+    provider: Any = None
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
@@ -116,6 +120,18 @@ def setup_tracing(app: Any = None, *, service_suffix: str = "") -> None:
         _tracer_provider = provider
         logger.info("OpenTelemetry 已初始化 service=%s", _service_name(service_suffix))
     except Exception:
+        # 半初始化回滚：provider 可能已建（BatchSpanProcessor 导出线程 + OTLP session）、
+        # instrumentor 可能已挂。不回收则线程/会话泄漏到进程结束，且 is_enabled() 为 False
+        # 而埋点仍在，下次成功 setup 会在残留埋点上再建一个 provider（状态不一致）。
+        if provider is not None:
+            with contextlib.suppress(Exception):
+                provider.shutdown()
+        with contextlib.suppress(Exception):
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+            from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+            FastAPIInstrumentor().uninstrument()
+            HTTPXClientInstrumentor().uninstrument()
         _tracer_provider = None
         logger.exception("OpenTelemetry 初始化失败，降级为不埋点（fail-open）")
 
@@ -127,10 +143,9 @@ def _exporter_factory_or_default() -> Any:
 
 def instrument_sqlalchemy(engine: Any) -> None:
     """给已建好的异步引擎挂 SQLAlchemy span；未启用/已挂/失败均安全跳过。"""
-    global _sqlalchemy_engine_id
     if _tracer_provider is None or engine is None:
         return
-    if _sqlalchemy_engine_id == id(engine):
+    if engine in _sqlalchemy_engines:
         return
     try:
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
@@ -138,7 +153,7 @@ def instrument_sqlalchemy(engine: Any) -> None:
         SQLAlchemyInstrumentor().instrument(
             engine=engine.sync_engine, tracer_provider=_tracer_provider
         )
-        _sqlalchemy_engine_id = id(engine)
+        _sqlalchemy_engines.add(engine)
         logger.info("OpenTelemetry SQLAlchemy 埋点已挂载")
     except Exception:
         logger.exception("OpenTelemetry SQLAlchemy 埋点失败，跳过（fail-open）")
@@ -193,12 +208,12 @@ def consume_span(
 
 def shutdown_tracing() -> None:
     """限时 flush 并卸载 instrumentor；幂等，异常仅记日志。"""
-    global _tracer_provider, _sqlalchemy_engine_id
+    global _tracer_provider
     provider = _tracer_provider
     _tracer_provider = None
-    _sqlalchemy_engine_id = None
-    if provider is None:
-        return
+    _sqlalchemy_engines.clear()
+    # 卸载**不依赖 provider**：半初始化失败（已挂 instrumentor 却把 provider 置空）或上一次
+    # 卸载静默失败时，在此早退就再也没有机会卸载——进程里残留埋点，下次 setup 会叠加一层
     with contextlib.suppress(Exception):
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
@@ -207,5 +222,7 @@ def shutdown_tracing() -> None:
         FastAPIInstrumentor().uninstrument()
         HTTPXClientInstrumentor().uninstrument()
         SQLAlchemyInstrumentor().uninstrument()
+    if provider is None:
+        return
     with contextlib.suppress(Exception):
         provider.shutdown()

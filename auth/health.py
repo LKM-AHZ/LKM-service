@@ -15,6 +15,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -22,7 +25,13 @@ from sqlalchemy import text
 from app.core import redis as redis_client
 from auth.db.session import get_auth_engine
 
+logger = logging.getLogger("lkm.auth.health")
+
 router = APIRouter(tags=["auth-health"])
+
+# DB 探活上限：引擎未配 command_timeout（app/db/session.py 建引擎时无 connect_args），
+# 黑洞主机下 asyncpg 建连默认可挂 60s，探针会把 ASGI 事件循环一起拖住
+_PROBE_TIMEOUT_S = 3.0
 
 
 class AuthDepStatus(BaseModel):
@@ -52,30 +61,45 @@ async def probe_db() -> AuthDepStatus:
     """探 DB：auth 专属引擎（auth.db.session.get_auth_engine）SELECT 1 校验连通。
 
     get_auth_engine 惰性建引擎、不会返 None（建引擎不建连接）；连接失败 → error。
+    detail 只回异常类名，完整堆栈进日志：本端点通常无鉴权可达，而 asyncpg/SQLAlchemy
+    的报错文本里常带 DSN/host/端口/用户名，原样回显等于对外泄露基础设施信息。
     """
     try:
         engine = get_auth_engine()
     except Exception as exc:  # 配置错误（URL 构建失败等）也按 error 回报，不 500
-        return AuthDepStatus(status="error", detail=str(exc))
-    if engine is None:
-        return AuthDepStatus(status="disabled", detail="engine 未初始化")
-    try:
+        logger.warning("auth readiness: 引擎构建失败", exc_info=True)
+        return AuthDepStatus(status="error", detail=type(exc).__name__)
+
+    async def _ping() -> None:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+    try:
+        await asyncio.wait_for(_ping(), _PROBE_TIMEOUT_S)
         return AuthDepStatus(status="up")
+    except TimeoutError:
+        logger.warning("auth readiness: DB 探活超时（%ss）", _PROBE_TIMEOUT_S)
+        return AuthDepStatus(status="error", detail="timeout")
     except Exception as exc:  # 探活不因底层抖动 500，转为 error 状态回报
-        return AuthDepStatus(status="error", detail=str(exc))
+        logger.warning("auth readiness: DB 探活失败", exc_info=True)
+        return AuthDepStatus(status="error", detail=type(exc).__name__)
 
 
 async def probe_redis() -> AuthDepStatus:
     """探 Redis：get_redis 未配置/不可用返回 None→disabled；可用则 ping。"""
-    client = await redis_client.get_redis()
+    try:
+        # 与 probe_db 对称：get_redis 自身的降级路径（关连接池）也可能抛，不该让探针 500
+        client = await redis_client.get_redis()
+    except Exception as exc:
+        logger.warning("auth readiness: redis 客户端获取失败", exc_info=True)
+        return AuthDepStatus(status="error", detail=type(exc).__name__)
     if client is None:
         return AuthDepStatus(status="disabled", detail="redis_url 未配置或不可用")
     try:
         ok = await client.ping()
     except Exception as exc:
-        return AuthDepStatus(status="error", detail=str(exc))
+        logger.warning("auth readiness: redis ping 失败", exc_info=True)
+        return AuthDepStatus(status="error", detail=type(exc).__name__)
     if not ok:
         return AuthDepStatus(status="error", detail="ping failed")
     return AuthDepStatus(status="up")

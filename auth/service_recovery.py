@@ -170,6 +170,12 @@ def _generate_recovery_txn_id() -> str:
     return secrets.token_hex(32)
 
 
+#: admin 恢复发起的一律文案：两个分支必须逐字相同，否则响应体差异就是 admin 账号枚举 oracle。
+_ADMIN_RECOVER_BEGIN_MSG = (
+    "If the account is eligible, recovery instructions have been sent."
+)
+
+
 async def recover_admin_begin(
     db: DbSession,
     contact: str,
@@ -208,19 +214,18 @@ async def recover_admin_begin(
         if background_tasks is not None:
             cast(Any, background_tasks).add_task(channel.send_code, contact, code)
 
-        return {
-            "message": "If the account is eligible, recovery instructions have been sent.",
-            "txn_id": txn_id,
-        }
+        return {"message": _ADMIN_RECOVER_BEGIN_MSG, "txn_id": txn_id}
 
     await check_code_rate_limit(
         f"recover:admin:{contact}",
         max_count=RECOVER_ADMIN_BEGIN_MAX,
         window=RECOVER_ADMIN_BEGIN_WINDOW,
     )
-    return {
-        "message": "If the account is eligible, recovery instructions will be sent to the registered contact."
-    }
+    # 与命中分支**同文案、同字段**：文案或字段差异本身就是「该联系方式是否属于 admin」的
+    # oracle（上方 dummy_verify 维持的恒定时序会被响应体差异抵消）；且缺 txn_id 会让
+    # AdminRecoverBeginResponse 响应校验失败，把 200 变成 500。这里返回一个不落库的诱饵
+    # txn_id，下一步必然以「事务不存在」失败，语义仍是 fail-closed。
+    return {"message": _ADMIN_RECOVER_BEGIN_MSG, "txn_id": _generate_recovery_txn_id()}
 
 
 async def _get_recovery_txn(db: DbSession, txn_id: str) -> RecoveryTransaction:

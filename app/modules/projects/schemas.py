@@ -15,7 +15,10 @@ class ProjectApplicationCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     summary: str = Field(..., min_length=1, max_length=300)
     description: str = Field(..., min_length=1, max_length=500)
-    member_claims: list[MemberClaim] = Field(default_factory=list)
+    # 每个标量字段都有上限，这个列表原先没有：整份 claims 会序列化进
+    # project_applications.member_claims(Text)，审核时再解析/遍历 → 不限量即廉价的
+    # 资源耗尽面。50 与「项目成员」这一业务量级相称（远超实际，但足以封顶）。
+    member_claims: list[MemberClaim] = Field(default_factory=list, max_length=50)
 
 
 class ProjectApplicationOut(BaseModel):

@@ -82,24 +82,33 @@ async def _trigger_prefect_flow(deployment: str, parameters: dict[str, Any]) -> 
     认的 ``PREFECT_API_*`` 环境变量（Infisical 只注入 ``LKM_`` 前缀，故此处做映射）。
     重活全部在 prefect-worker 内完成，本进程只做触发；traceparent 由本进程注入续链。
     """
-    import os
-
-    from app.core import tracing
-    from app.core.config import settings
-    from app.core.secrets import reveal
-
-    os.environ.setdefault("PREFECT_API_URL", settings.prefect_api_url)
-    token = reveal(settings.prefect_api_token)
-    if token:
-        os.environ.setdefault("PREFECT_API_KEY", token)
-
-    from prefect.deployments import run_deployment
-
-    carrier: dict[str, str] = {}
-    tracing.inject_context(carrier)
-    params = dict(parameters)
-    params.setdefault("traceparent", carrier.get("traceparent", ""))
+    # 整个函数体都在 try 内（含 import 与 tracing 注入）：本函数对调用方的契约是
+    # 「任何失败都返回 False 以便回落直调」，若 import prefect / 配置校验 / 注入抛出
+    # 未被兜住，reconcile_user_dim 与 export_analytics_clickhouse 会在回落之前就崩掉，
+    # 反而让 cron 任务彻底不跑。
     try:
+        import os
+
+        from app.core import tracing
+        from app.core.config import settings
+        from app.core.secrets import reveal
+
+        # 显式赋值而非 setdefault：Settings 是这两个值的唯一事实源，进程环境里残留的旧
+        # PREFECT_API_* 若优先命中，会悄悄把触发打到错误的 deployment/项目上，而运维以为
+        # 配置生效了。（注意 PREFECT_API_KEY 明文落在 os.environ：prefect 的
+        # run_deployment 只认环境/客户端凭证，此处只能如此，子进程与 /proc/<pid>/environ
+        # 可读，属已知暴露面。）
+        os.environ["PREFECT_API_URL"] = settings.prefect_api_url
+        token = reveal(settings.prefect_api_token)
+        if token:
+            os.environ["PREFECT_API_KEY"] = token
+
+        from prefect.deployments import run_deployment
+
+        carrier: dict[str, str] = {}
+        tracing.inject_context(carrier)
+        params = dict(parameters)
+        params.setdefault("traceparent", carrier.get("traceparent", ""))
         await run_deployment(deployment, parameters=params, timeout=0)
         return True
     except Exception:

@@ -60,7 +60,9 @@ class StarHopeQuestionOut(_Out):
     @field_validator("answer", mode="before")
     @classmethod
     def _answer(cls, v: object) -> str | list[str]:
-        parsed = _parse_json_text(v, "")
+        # 用 None 作哨兵，区分「非 JSON 文本（解析失败）」与「JSON 字符串字面量」：
+        # 若默认值用 ""，纯文本答案（"A"/"对"）会被解析失败的默认值吞成空串，答案丢失。
+        parsed = _parse_json_text(v, None)
         if isinstance(parsed, list):
             return cast(list[str], parsed)
         if isinstance(parsed, str):

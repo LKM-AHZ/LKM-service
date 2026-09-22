@@ -50,6 +50,13 @@ def _pem(value: Any, path: str = "") -> str | None:
         text = reveal(value).strip()
         if text:
             return text
+        if not path:
+            # 显式配了却解析为空（Secret/env 注入成空串——常见于密钥卷没挂上）：
+            # 静默返回 None 会让 RS256 悄悄退回 HS256 签名，而只验签的网关/backend
+            # 拿不到私钥推导的公钥，全线 401；比启动期直接失败危险得多。
+            raise RuntimeError(
+                "JWT key is configured but empty (blank PEM value and no *_file path)"
+            )
     if path:
         try:
             text = Path(path).read_text(encoding="utf-8").strip()
@@ -101,7 +108,13 @@ def encode(payload: dict[str, Any]) -> str:
     """按 :func:`signing_algorithm` 签发。"""
     if signing_algorithm() == RS256:
         private_pem = _pem(settings.jwt_private_key, settings.jwt_private_key_file)
-        assert private_pem is not None  # signing_algorithm() 已保证
+        # 不能用 assert：signing_algorithm() 只保证「有私钥 或 jwt_algorithm==RS256」，
+        # 显式配 LKM_JWT_ALGORITHM=RS256 而未配私钥时这里就是 None；断言还会在
+        # python -O 下被剥掉，退化成 _load_private(None) 的 AttributeError。
+        if private_pem is None:
+            raise RuntimeError(
+                "JWT 签发算法为 RS256 但未配置 RSA 私钥（LKM_JWT_PRIVATE_KEY/_FILE）"
+            )
         return jwt.encode(payload, _load_private(private_pem), algorithm=RS256)
     return jwt.encode(
         payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm

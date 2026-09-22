@@ -23,6 +23,7 @@ ORM 的类型安全。
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -41,7 +42,11 @@ ALLOWLIST: dict[str, str] = {
     "app/modules/admin/analytics_router.py": "ClickHouse 查询，无 ORM",
 }
 
-SQL_PREFIXES = ("SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM")
+#: 裸 SQL 语句前导关键字；按空白（空格/换行/制表）而非字面空格匹配分隔符——三引号 SQL 的
+#: 关键字后常直接换行（`"SELECT\n* FROM t"`），用 startswith("SELECT ") 会漏判。
+_SQL_PREFIX_RE = re.compile(
+    r"^\s*(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s", re.IGNORECASE
+)
 
 
 def _docstring_ids(tree: ast.AST) -> set[int]:
@@ -63,7 +68,7 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
 
 
 def _looks_like_sql(text_value: str) -> bool:
-    return text_value.lstrip().upper().startswith(SQL_PREFIXES)
+    return _SQL_PREFIX_RE.match(text_value) is not None
 
 
 def _callee_name(func: ast.expr) -> str | None:
@@ -115,11 +120,14 @@ def _scan(tree: ast.AST) -> list[tuple[int, str]]:
         ):
             hits.append((node.lineno, "字符串字面量是一条 SQL 语句"))
         elif isinstance(node, ast.JoinedStr):
-            # f-string：把静态片段拼起来判断，动态部分视作空。
-            static = "".join(
+            # f-string：静态片段照抄，**每个动态片段换成一个空格**再判前缀。
+            # 动态部分视作空串的话，`f"SELECT{x}* FROM t"` 会拼成 "SELECT* FROM t"，
+            # 关键字后没有空白 → 判定失败、静默漏报；换成空格就能还原成 "SELECT * FROM t"。
+            static = " ".join(
                 part.value
-                for part in node.values
                 if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                else " "
+                for part in node.values
             )
             if _looks_like_sql(static):
                 hits.append((node.lineno, "f-string 拼出 SQL 语句"))
@@ -127,16 +135,28 @@ def _scan(tree: ast.AST) -> list[tuple[int, str]]:
 
 
 def main() -> int:
-    errors: list[str] = []
+    errors: list[str] = []  # 裸 SQL 命中
+    scan_errors: list[str] = []  # 门禁自身故障（读不了文件/语法错/扫描根缺失/allowlist 失效）
+    scanned: set[str] = set()
     for scan_root in SCAN_ROOTS:
+        if not scan_root.is_dir():
+            # rglob 对不存在的目录静默返回空 → 扫描根改名/搬迁后门禁会「零命中通过」，
+            # 这里必须显式报错，否则 CI 绿灯是假的。
+            scan_errors.append(f"扫描根不存在或不是目录：{scan_root}")
+            continue
         for path in sorted(scan_root.rglob("*.py")):
             rel = path.relative_to(REPO_ROOT).as_posix()
+            scanned.add(rel)
             try:
-                tree = ast.parse(
-                    path.read_text(encoding="utf-8"), filename=str(path)
-                )
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                # 非 UTF-8 / 读不了：与语法错误同属扫描失败，不得让裸异常把整个门禁带崩。
+                scan_errors.append(f"{rel}: 无法读取，扫描失败：{exc}")
+                continue
+            try:
+                tree = ast.parse(source, filename=str(path))
             except SyntaxError as exc:
-                errors.append(f"{rel}: 语法错误，无法扫描：{exc}")
+                scan_errors.append(f"{rel}: 语法错误，无法扫描：{exc}")
                 continue
             hits = _scan(tree)
             if not hits:
@@ -146,15 +166,33 @@ def main() -> int:
                 continue
             errors.extend(f"{rel}:{line}: {why}" for line, why in hits)
 
-    if errors:
-        print("裸 SQL 门禁未通过——业务查询请改用 ORM/AsyncRepository：", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        print(
-            "  确属 ORM 无法表达的（DDL/探活/ClickHouse），在 "
-            "scripts/check_raw_sql.py 的 ALLOWLIST 登记原因。",
-            file=sys.stderr,
-        )
+    if not scanned:
+        scan_errors.append("未扫描到任何 .py 文件（扫描根被移动/改名？）")
+    # allowlist 条目指向已改名/删除的文件时，放行会静默失效（该文件重新受管是好事，
+    # 但条目本身成了误导），显式提示以便清理。
+    scan_errors.extend(
+        f"ALLOWLIST 条目未命中任何被扫描文件（已改名/删除？）：{stale}"
+        for stale in sorted(set(ALLOWLIST) - scanned)
+    )
+
+    if errors or scan_errors:
+        if errors:
+            print(
+                "裸 SQL 门禁未通过——业务查询请改用 ORM/AsyncRepository：",
+                file=sys.stderr,
+            )
+            for e in errors:
+                print(f"  - {e}", file=sys.stderr)
+            print(
+                "  确属 ORM 无法表达的（DDL/探活/ClickHouse），在 "
+                "scripts/check_raw_sql.py 的 ALLOWLIST 登记原因。",
+                file=sys.stderr,
+            )
+        if scan_errors:
+            # 与裸 SQL 无关的门禁自身故障单列一段：否则读者会照着 ALLOWLIST 提示去排查语法错误。
+            print("扫描未完成（门禁自身故障，与裸 SQL 无关）：", file=sys.stderr)
+            for e in scan_errors:
+                print(f"  - {e}", file=sys.stderr)
         return 1
     print("裸 SQL 门禁通过")
     return 0

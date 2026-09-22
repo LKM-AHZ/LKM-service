@@ -48,7 +48,7 @@ from sqlalchemy.pool import NullPool, StaticPool
 from app.core import local_cache as _local_cache
 from app.core import singleflight as _singleflight
 from app.core.config import settings
-from app.db.base import Base, now_iso
+from app.db.base import Base
 from app.db.session import get_read_session, get_session
 from app.db.shared_objects import ensure_shared_objects
 from app.main import app
@@ -168,16 +168,24 @@ def _db_url(base_url: str, db_name: str) -> str:
     )
 
 
-def _maint_engine() -> AsyncEngine:
-    """维护连接：连主库、AUTOCOMMIT（建删库不能在事务内）、NullPool（可并发开多条）。"""
+def _maint_engine(base_url: str = "") -> AsyncEngine:
+    """维护连接：连 ``base_url``（缺省业务主库）、AUTOCOMMIT（建删库不能在事务内）、
+    NullPool（可并发开多条）。
+
+    **必须按库域分别建**：``settings.auth_database_url`` 由独立的 auth_db_host/port/user
+    拼装，完全可以指向另一台 PG 实例；维护 auth 库（建/删/封模板）时若仍连业务主库，
+    CREATE/DROP 会落到错的实例上——模板建在错服务器、业务实例残留孤儿库、克隆时找不到库名。
+    """
     return create_async_engine(
-        settings.database_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
+        base_url or settings.database_url,
+        isolation_level="AUTOCOMMIT",
+        poolclass=NullPool,
     )
 
 
 async def _build_template(name: str, base_url: str, metadatas: tuple[Any, ...]) -> None:
     """建模板库：template0 起底（不带主库既有数据/扩展）→ 共享对象 → 全量建表。"""
-    maint = _maint_engine()
+    maint = _maint_engine(base_url)
     try:
         async with maint.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
@@ -192,10 +200,10 @@ async def _build_template(name: str, base_url: str, metadatas: tuple[Any, ...]) 
                 await conn.run_sync(md.create_all)
     finally:
         await eng.dispose()
-    await _seal_template(name)
+    await _seal_template(name, base_url)
 
 
-async def _seal_template(name: str) -> None:
+async def _seal_template(name: str, base_url: str) -> None:
     """封库：踢掉模板库上的残留会话，并禁止再连。
 
     本仓 PG 预载 timescaledb（见 docker-compose postgres 段），其后台 worker
@@ -205,7 +213,7 @@ async def _seal_template(name: str) -> None:
     并不要求源库可连（``template0`` 本身就是 ``ALLOW_CONNECTIONS false``）——故封掉根治；
     后续 worker 即便重试也会被拒连，不再占用。
     """
-    maint = _maint_engine()
+    maint = _maint_engine(base_url)
     try:
         async with maint.connect() as conn:
             await conn.execute(
@@ -220,9 +228,9 @@ async def _seal_template(name: str) -> None:
         await maint.dispose()
 
 
-async def _drop_database(name: str) -> None:
-    """删库（WITH FORCE 连残留会话一并清掉），幂等。"""
-    maint = _maint_engine()
+async def _drop_database(name: str, base_url: str = "") -> None:
+    """删库（WITH FORCE 连残留会话一并清掉），幂等；``base_url`` 指明该库所在实例。"""
+    maint = _maint_engine(base_url)
     try:
         async with maint.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
@@ -245,9 +253,14 @@ def _pg_templates() -> Iterator[None]:
         )
 
     async def _cleanup() -> None:
-        for name in (_TMPL_BIZ, _TMPL_AUTH, _TMPL_FUSED):
+        # 逐个按各自的库域连接删库：auth 模板可能在另一台 PG 实例上
+        for name, url in (
+            (_TMPL_BIZ, settings.database_url),
+            (_TMPL_AUTH, settings.auth_database_url),
+            (_TMPL_FUSED, settings.database_url),
+        ):
             with contextlib.suppress(Exception):
-                await _drop_database(name)
+                await _drop_database(name, url)
 
     asyncio.run(_build())
     yield
@@ -264,7 +277,7 @@ async def _cloned_session(
     删库放在 finally：库名含 pid、建前先 DROP IF EXISTS，故即便上轮崩溃残留也不影响正确性。
     """
     name = _next_db(kind)
-    maint = _maint_engine()
+    maint = _maint_engine(base_url)
     try:
         async with maint.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
@@ -427,10 +440,11 @@ async def auth_app_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
 # auth_user：跨 realm 身份工厂（M3.B S5 拆库后业务测试的生产者）
 #
 # S5 把 users/profiles 物理迁出 monolith Base.metadata：业务库不再有 users 表，
-# 业务行只能引用一个**逻辑 int user_id**（FK→users 已断成裸 int）。本 fixture 让
-# 测试先在"该测试专属的 auth 库 schema"（经 auth_db, AuthBase=18 表）写入一个真实
-# User(+可选 Profile)，返回其稳定 int id；业务测再把该 id 写进业务表的 int 列。
-# 每测 auth schema 独立（Alembic/conftest schema-per-test）→ id 自 1 对齐。
+# 业务行只能引用一个**逻辑 user_id**（FK→users 已断成裸 uuid 列）。本 fixture 让
+# 测试先在该测试专属的 **auth 库**（经 auth_db：本轮起是 database-per-test，整库克隆
+# 模板，不再是旧的 schema-per-test/Alembic 口径）写入一个真实 User(+可选 Profile)，
+# 返回其 ``uuid.UUID`` 主键（uuid7，PG server_default 生成，跨断言稳定）；
+# 业务测再把该 uuid 写进业务表的裸 uuid 列。
 #
 # 使用：
 #     async def t(auth_db: DB, db: DB):
@@ -439,11 +453,11 @@ async def auth_app_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
 #
 # 对"需展示名/身份存在"的业务读：跨库不许同事务 join → 业务 service 须走
 # auth.snapshot 或 auth HTTP seam（auth_http_url/token 启用），不侧挂 auth engine
-# 同事务。测试即可用 auth_http 替身 seam（见测试层 HTTP 替身），或直接断言 int 列。
+# 同事务。测试即可用 auth_http 替身 seam（见测试层 HTTP 替身），或直接断言 uuid 列。
 # -----------------------------------------------------------------------------
 @dataclass
 class AuthUser:
-    """在 auth 独立库 schema 建立的用户身份（S5 拆库常驻）。"""
+    """在 auth 独立库建立的用户身份（S5 拆库常驻）。"""
 
     id: uuid.UUID  # auth 库 uuid 主键：业务行以裸 uuid 列引用此值
     username: str
@@ -462,10 +476,10 @@ async def auth_user_uid(
     role: str = "member",
     with_token: bool = True,
 ) -> AuthUser:
-    """在 auth 独立库 schema 建一线用户并返回 :class:`AuthUser`。
+    """在 auth 独立库建一线用户并返回 :class:`AuthUser`。
 
-    auth_db 是调用测试内连到 auth 独立 metadata/schema 的会话（Alembic/conftest
-    schema-per-test）。用户 id 为 uuid7（PG server_default 生成，本测内稳定）；返回 token
+    auth_db 是调用测试内连到 auth 独立库的会话（本轮起 database-per-test：整库克隆
+    模板）。用户 id 为 uuid7（PG server_default 生成，本测内稳定）；返回 token
     供把该用户作为 "current 登录身份"发起业务 HTTP（须 seam 支持跨库裁决，或业务 local
     seam 直读）。
     """
@@ -554,34 +568,26 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(_cfg, "auth_http_token", "internal-test-secret")
     monkeypatch.setattr(_cfg, "auth_http_timeout_s", 1.0)
 
-    async def _authz(*, user_id: uuid.UUID, **_: object) -> dict[str, object]:
-        from sqlalchemy import select
+    async def _authz(
+        *,
+        user_id: uuid.UUID,
+        expect_token_version: int = 0,
+        iat_ts: float | int | None = None,
+        require_admin: bool = False,
+    ) -> dict[str, object]:
+        # 直接委托 auth 侧真原语：替身若自行简化，就会把 token_version 撤销、改密 iat、
+        # admin 门槛这三道裁决吞掉（require_admin 的 admin 门禁只在 verdict 这一处裁决），
+        # 使 seam 用例与产线口径不一致、掩盖真实鉴权缺陷。carrier 即本测的 auth realm 会话，
+        # 与 AUTH 进程内执行等价。
+        from auth import service_authz
 
-        from auth.models import Profile, User
-
-        state: dict[str, object] = {
-            "ok": False,
-            "cause": None,
-            "account_level": None,
-            "role": None,
-        }
-        u = (
-            await carrier.execute(select(User).where(User.id == user_id))
-        ).scalar_one_or_none()
-        if u is None:
-            state["cause"] = "not_found"
-            return state
-        now = now_iso()
-        if u.is_locked and u.locked_until and u.locked_until > now:
-            state["cause"] = "locked"
-            return state
-        prof = (
-            await carrier.execute(select(Profile).where(Profile.user_id == user_id))
-        ).scalar_one_or_none()
-        state["ok"] = True
-        state["account_level"] = u.account_level
-        state["role"] = prof.role if prof else "member"
-        return state
+        return await service_authz.authorize_user(
+            carrier,
+            user_id=user_id,
+            expect_token_version=expect_token_version,
+            iat_ts=iat_ts,
+            require_admin=require_admin,
+        )
 
     async def _fetch(user_id: uuid.UUID) -> Any:
         from sqlalchemy import select
@@ -617,6 +623,11 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
 
         if kind == "incubation":
             return await service_authz.grant_incubation(carrier, user_id)
+        # 真端点 /auth/internal/grant 只认 {"exam_unlock", "incubation"}；替身原先把所有非
+        # incubation 的 kind 都当 exam_unlock 执行，拼错/新增的 kind 会静默变成另一次特权
+        # 升权，测试仍绿却掩盖调用方 bug。
+        if kind != "exam_unlock":
+            raise ValueError(f"unexpected grant kind {kind!r}")
         return await service_authz.grant_exam_unlock(
             carrier,
             user_id,

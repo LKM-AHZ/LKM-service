@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -25,6 +26,8 @@ from app.core.clickhouse import (
     to_ch_datetime,
 )
 from app.db.event_failure import EventFailure
+
+logger = logging.getLogger("lkm.db.event_failure_export")
 
 CH_TABLE = "lkm.event_failures"
 CH_COLUMNS: tuple[str, ...] = (
@@ -81,4 +84,12 @@ async def export_event_failures(
         watermark = str(rows[-1].id)
         if len(rows) < window:
             break
+    else:
+        # for 正常跑完（未 break）= 用满 max_batches 仍有积压：返回值与「追上水位」同形，
+        # 调用方只看正数分不出来，故显式告警——持续写入速率高于每轮导出量时积压会永久落后
+        logger.warning(
+            "event_failures 导出达到 max_batches=%d，水位=%s，剩余积压留待下轮",
+            max_batches,
+            watermark,
+        )
     return total

@@ -14,14 +14,18 @@
 
 import asyncio
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.err import BizError
 from app.db.session import new_session
 from app.ws.broker import CHANNEL_UPLOAD, CHANNELS
 from app.ws.manager import manager
 from auth.seams import resolve_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -41,7 +45,13 @@ async def _authorize(token: str) -> uuid.UUID | None:
     db = await new_session()
     try:
         cur = await resolve_current_user(token, db)
+    except BizError:
+        # 真正的鉴权失败：按未授权处理
+        return None
     except Exception:
+        # 基础设施故障（DB/seam 异常）也返回 None → 客户端只会看到 4401「未授权」，
+        # 运维毫无信号，排障时与「凭据错」无法区分，故必须留痕
+        logger.exception("ws 鉴权出现非鉴权类异常（按未授权关闭）")
         return None
     finally:
         await db.close()
@@ -82,9 +92,11 @@ async def ws_events(websocket: WebSocket) -> None:
         return
 
     await websocket.accept()
-    await manager.register(user_id, websocket, channels)
-    await manager.ensure_subscription()
     try:
+        # 登记与订阅驱动也放进 try：此处抛错时连接已 accept，若不清理会永久留在
+        # manager 表里（unregister 幂等，未登记过也能安全调用）。
+        await manager.register(user_id, websocket, channels)
+        await manager.ensure_subscription()
         # 只推送；循环接收以维持连接并感知对端断开（收到文本即忽略）。
         # 心跳：Starlette 无内置服务端 receive 超时，客户端静默断线时 receive_text()
         # 会无限挂起占住连接。这里用 wait_for 加窗，超时即发 ping 探活——对端已死时

@@ -33,6 +33,9 @@ from auth.service_auth import issue_session_tokens, log_audit
 _TOTP_MAX_FAILED = 3
 _RECOVERY_MAX_FAILED = 3  # 恢复码暴力尝试上限（对齐 TOTP 的失败锁定）
 
+# 临时令牌用途白名单（模块级常量）：只有 "2fa" 可发登录会话，"recovery" 仅授予第二因素证明。
+_ALLOWED_PURPOSES = {"2fa", "recovery"}
+
 
 async def get_enabled_totp(db: DbSession, user_id: uuid.UUID) -> TOTP | None:
     """取用户**已启用**的 TOTP 记录，供各处判断"是否开启 2FA"复用。"""
@@ -137,6 +140,9 @@ async def consume_recovery_code(
     if not consumed:
         await _record_recovery_failure(db, user_id)
         raise BizError(AuthErr.RECOVERY_CODE_INVALID)
+    # 成功：把该用户**其余**未用恢复码的失败计数一并清零。consume_once 只重置被消费那一行，
+    # 别的码上累积的失败次数会继续逼近 _RECOVERY_MAX_FAILED，让合法用户被自己的历史失败锁死。
+    await _reset_recovery_failures(db, user_id)
 
 
 def _decode_temp_token(raw_token: str) -> dict[str, Any]:
@@ -280,6 +286,14 @@ async def verify_2fa(
     # 仅解码 —— 不消费。消费在成功的第二因素验证*之后*进行，
     # 错误的TOTP/恢复码不会永久地消耗临时令牌或满足恢复检查。
     payload = _decode_temp_token(raw_token=temp_token)
+    purpose = payload.get("purpose", "2fa")
+    # 用途白名单必须在**任何消费/第二因素动作之前**校验：原实现放在 _check_and_consume_temp_token
+    # 之后，非白名单用途的令牌会先被原子消费掉再被拒——令牌白白作废且用户无法重试。
+    if purpose not in _ALLOWED_PURPOSES:
+        raise BizError(
+            AuthErr.TOKEN_INVALID,
+            f"Temp token purpose '{purpose}' not allowed for 2FA verification",
+        )
     user_id = payload["user_id"]
     user = await UserRepository(db).get_with_profile_or_raise(
         user_id, AuthErr.USER_NOT_FOUND
@@ -310,20 +324,8 @@ async def verify_2fa(
     else:
         raise BizError(AuthErr.TOTP_CODE_INVALID)
 
-    # 成功 —— 现在原子地消费临时令牌
+    # 成功 —— 现在原子地消费临时令牌（用途白名单已在入口处校验过）
     await _check_and_consume_temp_token(db, temp_token, user_id, txn_id=txn_id)
-
-    purpose = payload.get("purpose", "2fa")
-
-    # 临时令牌用途的严格白名单
-    # 只有 "2fa" 可以发放登录会话。"recovery" 仅授予第二因素证明。
-    # 任何其他用途都会被拒绝。
-    _ALLOWED_PURPOSES = {"2fa", "recovery"}
-    if purpose not in _ALLOWED_PURPOSES:
-        raise BizError(
-            AuthErr.TOKEN_INVALID,
-            f"Temp token purpose '{purpose}' not allowed for 2FA verification",
-        )
 
     if purpose == "recovery":
         return {

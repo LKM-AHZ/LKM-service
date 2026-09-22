@@ -263,10 +263,17 @@ async def _login_or_error(
     """已有账号时核对密码；正确则补全联系方式并升级为 ``normal``，供各注册入口复用。
 
     密码缺失或不匹配时报 ``ALREADY_REGISTERED``，避免泄露已有账号信息。
+    该路径等于一次密码登录，故同样要过锁定门禁并计入失败计数：否则被锁（=封禁）账号
+    仍能经注册入口换 token，且可在此无限试密码而不触发 5 次锁定。
     """
+    await _check_account_locked(user)
     if not user.hashed_password or not await verifypwd(
         password_to_check, user.hashed_password
     ):
+        locked = await _record_failed_attempt(db, user)
+        if locked:
+            await log_audit(db, user.id, "account_locked", "5 failed login attempts")
+            await events.notify_user_banned_committed(user.id)
         raise BizError(
             AuthErr.ALREADY_REGISTERED, "Account exists but password is incorrect"
         )
@@ -288,6 +295,9 @@ async def register_by_verify(db: DbSession, field: str, value: str) -> dict[str,
     normalized_value = channel.normalize(value)
     existing = await channel.find_user(db, normalized_value)
     if existing:
+        # 自动登录前过锁定门禁：is_locked 同时是封禁标志，否则被封账号可用邮箱/手机码
+        # 绕过封禁拿 token（本路径由验证码证明联系方式归属，无需再计密码失败次数）。
+        await _check_account_locked(existing)
         await upgrade_to_normal(db, existing)
         await UserRepository(db).flush()
         await log_audit(db, existing.id, "register_code", f"auto-login via {field}")
@@ -506,8 +516,16 @@ async def login_code(db: DbSession, contact: str, code: str) -> dict[str, Any]:
     if user.account_level == "local":
         raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
 
+    # 与 login_password 同款：先采样**入库持久态**的 is_locked，再让 _check_account_locked
+    # 把过期锁自动解除（它会把 ORM 值改成 False）。采样晚了就漏掉 True→False 翻转，
+    # user:snap.banned 会保持陈旧的「已封禁」。
+    was_locked = bool(user.is_locked)
     if user.is_locked:
         await _check_account_locked(user)
+
+    if was_locked:
+        # 走到这里说明上面的过期锁已被自动解除（仍锁定会直接抛），发失效让快照跟上
+        await events.notify_user_updated(db, user.id)
 
     # 没有 TOTP 的管理员 —— 与密码登录相同的设置流程
     return await finalize_auth_response(db, user)
@@ -529,7 +547,9 @@ async def request_magic_link(
     对于不存在的用户，响应和时序无法区分
     —— 不会创建或发送链接，但仍会消耗速率限制配额。
     """
-    rate_limit_key = f"magiclink:{email}"
+    # 桶必须含 purpose（docstring 承诺「每（邮箱, 用途）对 5 次/小时」）：只按 email 分桶时
+    # 某个用途耗尽配额会连带封掉同邮箱的其它用途；同时用规范化后的邮箱保证桶稳定
+    rate_limit_key = f"magiclink:{_normalize_email(email)}:{purpose}"
     await check_code_rate_limit(rate_limit_key, max_count=5, window=3600)
 
     user = await UserRepository(db).get_by_email(email)

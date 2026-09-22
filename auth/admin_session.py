@@ -28,7 +28,9 @@ from auth import jwt_keys
 
 COOKIE_NAME = "admin_session"
 REFRESH_NAME = "admin_refresh"
-ACCESS_TOKEN_MINUTES = 15
+# 与 cookie max_age 同源（auth.admin_router._set_access_cookie 用 settings.admin_access_cookie_minutes）：
+# 写死 15 时运维只改 settings 会让 JWT exp 与 cookie 存活期漂移（cookie 还在但请求全 403）
+ACCESS_TOKEN_MINUTES = settings.admin_access_cookie_minutes
 # 与前台/后台分离的 audience：后台 access cookie 只认本 audience，防被其它会话冒用。
 _ADMIN_AUD = "lkm:admin"
 # cookie Path 需覆盖 admin 后台全部路径（含 /api/v1/boards、/projects 等危险操作端点），

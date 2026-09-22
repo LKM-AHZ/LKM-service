@@ -22,10 +22,19 @@ _CATEGORIES: list[dict[str, int | str]] = [
     {"slug": "engineering", "title": "工程", "sort": 3},
 ]
 
+class _LazyMarkdown:
+    """惰性正文占位：seed 时才读盘。
+
+    模块 import（连测试收集也算）不该有文件系统副作用——原先在模块级 read_text，
+    文件被移动/删除会让任何 import 本模块的地方直接 FileNotFoundError。
+    """
+
+    def render(self) -> str:
+        return (Path(__file__).parent / "markdown-test.md").read_text(encoding="utf-8")
+
+
 # Markdown 渲染测试文章（独立 md 文件作为单一内容源）
-_MARKDOWN_TEST_CONTENT = (Path(__file__).parent / "markdown-test.md").read_text(
-    encoding="utf-8"
-)
+_MARKDOWN_TEST_CONTENT = _LazyMarkdown()
 
 # 文章种子：category 存分类 slug，创建时解析为 category_id
 SEED_ARTICLES: list[dict[str, object]] = [
@@ -88,7 +97,11 @@ SEED_ARTICLES: list[dict[str, object]] = [
 
 
 async def seed_categories(db: AsyncSession) -> int:
-    """幂等写入文章分类：按 slug 去重，存在则跳过，返回实际新建条数。"""
+    """幂等写入文章分类：按 slug 去重，存在则跳过，返回实际新建条数。
+
+    自己 commit：只 flush 的话单独调用（如运维只补分类）在会话关闭时全部丢失，
+    且 main() 里会跟 seed_articles 的失败绑死——articles 报错就把分类一起回滚。
+    """
     created = 0
     for spec in _CATEGORIES:
         exists = await db.scalar(
@@ -99,6 +112,7 @@ async def seed_categories(db: AsyncSession) -> int:
         db.add(ArticleCategory(**spec))
         await db.flush()
         created += 1
+    await db.commit()
     return created
 
 
@@ -124,11 +138,15 @@ async def seed_articles(db: AsyncSession) -> int:
             continue
         category_slug = data["category"]
         assert isinstance(category_slug, str)
+        fields = {k: v for k, v in data.items() if k != "category"}
+        content = fields.get("content")
+        if isinstance(content, _LazyMarkdown):  # 惰性正文：此时才读盘
+            fields["content"] = content.render()
         article = Article(
             published=now_iso(),
             status="published",
             category_id=await _resolve_category_id(db, category_slug),
-            **{k: v for k, v in data.items() if k != "category"},
+            **fields,
         )
         db.add(article)
         count += 1

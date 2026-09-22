@@ -33,6 +33,11 @@ logger = logging.getLogger("lkm.flows.user_dim")
 _DEFAULT_MAX_ROUNDS = int(os.getenv("LKM_USER_DIM_RECONCILE_MAX_ROUNDS", "200"))
 _DEFAULT_WINDOW = 500
 
+# reconcile 模式的收敛判据要用 periodic 入口真实批大小，而它是 auth 侧固定的
+# RECONCILE_WINDOW（auth/user_dim_sync.py:64 = 500）；auth 内部模块对 app 不可见
+# （import-linter 边界合同），只能在此镜像同一常量。改 auth 侧窗口时须同步此处。
+_RECONCILE_BATCH = 500
+
 
 def _flow_span(traceparent: str) -> Any:
     """把 flow 执行挂到触发方 trace（跨进程续链，fail-open）。
@@ -140,7 +145,12 @@ async def orchestrate_user_dim(
         n = await reconcile_once()
         total += n
         rounds += 1
-        if n < window:
+        # 收敛阈值必须用 periodic 入口的真实批大小，不能用 flow 入参 window：
+        # _reconcile_once → reconcile_user_dim_periodic 内部固定按 RECONCILE_WINDOW
+        # 取批（auth/user_dim_sync.py），window 传不进去。用 window 会在 window>500
+        # 时「每拍补行恒 < window」→ 第一拍就判收敛，静默漏补；window<500 时
+        # 永远判不收敛 → 跑满 max_rounds 空转。
+        if n < _RECONCILE_BATCH:
             break
     return {"mode": mode, "updated": total, "rounds": rounds}
 
@@ -173,7 +183,20 @@ async def user_dim_reconcile_flow(
 
 
 def _parse_ids(raw: str) -> list[int]:
-    return [int(x) for x in raw.replace(" ", "").split(",") if x]
+    """解析 ``--ids`` 逗号分隔的 user id；非法 token 由 argparse 报用法错误。
+
+    原先裸 ``int()`` 对 ``--ids 1,abc`` 抛未捕获的 ValueError + 裸栈，
+    运维分不清是参数写错还是回填本身失败。
+    """
+    ids: list[int] = []
+    for token in raw.replace(" ", "").split(","):
+        if not token:
+            continue
+        try:
+            ids.append(int(token))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"invalid user id: {token!r}") from exc
+    return ids
 
 
 def main() -> None:

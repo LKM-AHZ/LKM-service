@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import sqlalchemy as sa
@@ -31,6 +32,8 @@ from app.core.err import BizError
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentComment, ContentItem, ContentLike
 from app.modules.interaction.models import InteractionFavorite
+
+logger = logging.getLogger(__name__)
 
 # 计数列白名单：字段名 → ORM 列（同时用于 UPDATE 表达式构造）
 _COLUMNS: dict[str, sa.Column[int]] = {
@@ -75,11 +78,15 @@ async def bump_content_counter(
     if field not in _COLUMNS:
         raise ValueError(f"unsupported counter field: {field!r}")
 
+    # 先确认内容行存在，**再**写 Redis：反过来（先 INCR 后校验）会在内容不存在/已删时
+    # 留下无人认领的增量键——本调用抛 CONTENT_NOT_FOUND，但那个 +1 不会被回滚，
+    # flush 时 UPDATE 命中 0 行而被静默丢弃，后续 id 复用还会继承这个陈旧值。
+    col = _COLUMNS[field]
+    base = await db.scalar(select(col).where(ContentItem.id == item_id))
+    if base is None:
+        raise BizError(ContentErr.CONTENT_NOT_FOUND)
+
     if await counters.bump_counter(field, item_id, delta):
-        col = _COLUMNS[field]
-        base = await db.scalar(select(col).where(ContentItem.id == item_id))
-        if base is None:
-            raise BizError(ContentErr.CONTENT_NOT_FOUND)
         return int(base) + await counters.pending_delta(field, item_id)
 
     return await _direct_bump(db, item_id, field, delta)
@@ -114,8 +121,25 @@ async def flush_counters(db: AsyncSession) -> int:
             .where(ContentItem.id == item_id)
             .values(**{field: func.greatest(col + delta, 0)})
         )
-        applied += int(result.rowcount or 0)
+        affected = int(result.rowcount or 0)
+        if affected == 0:
+            # 目标行已不存在（内容被硬删）：该增量被丢弃，原本静默无痕
+            logger.warning(
+                "flush_counters 未命中行，丢弃增量 field=%s item=%s delta=%s",
+                field,
+                item_id,
+                delta,
+            )
+        applied += affected
     return applied
+
+
+async def _has_pending_delta(item_id: uuid.UUID) -> bool:
+    """该行三项计数是否还有未落库的 Redis 差值（Redis 不可用时恒 False）。"""
+    for field in _COLUMNS:
+        if await counters.pending_delta(field, item_id):
+            return True
+    return False
 
 
 async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int, int]:
@@ -124,6 +148,8 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
     以 ``id`` 键集分窗（每窗一条聚合查询 + 至多 N 条修正 UPDATE），内存与命令数有界。
     只更新**确有偏差**的行，并把 ``counts_reconciled_at`` 记为该行被修正的时刻——
     因此连续两次对账第二次 ``affected == 0``，收敛可证伪（见 tests/test_counters.py）。
+    例外：该行若仍有未落库的 Redis 增量则本拍跳过（否则会与随后的 ``flush_counters``
+    叠加成超调），留待下一拍收敛。
     """
     scanned = 0
     affected = 0
@@ -175,6 +201,11 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
             current = (int(row[1]), int(row[2]), int(row[3]))
             real = (int(row[4]), int(row[5]), int(row[6]))
             if real == current:
+                continue
+            # 还有未落库的 Redis 差值时不纠正：明细 COUNT 已包含这些增量，
+            # 此刻写回真值后，随后的 flush_counters 会把同一增量再加一遍（超调）。
+            # 等下一拍（flush 之后）再收敛，漂移只是延后一拍，不是永久。
+            if await _has_pending_delta(item_id):
                 continue
             await db.execute(
                 sa.update(ContentItem)

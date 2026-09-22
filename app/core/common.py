@@ -1,7 +1,7 @@
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, cast
+from typing import Annotated
 
 from fastapi import Query
 from pydantic import BaseModel
@@ -40,7 +40,9 @@ def parse_tags(value: object) -> list[str]:
     非法 JSON / 非列表均回退为空列表，避免下游拿到 dict/str 的类型漂移。
     """
     if isinstance(value, list):
-        return cast("list[str]", value)
+        # 过滤非 str 元素：cast 是空操作，JSON 串里混进 null/数字时「声明 list[str] 却把
+        # 非字符串漏给下游」正是本函数要挡的类型漂移
+        return [x for x in value if isinstance(x, str)]
     if not isinstance(value, str):
         return []
     try:
@@ -48,17 +50,28 @@ def parse_tags(value: object) -> list[str]:
     except (json.JSONDecodeError, TypeError):
         return []
     if isinstance(parsed, list):
-        return cast("list[str]", parsed)
+        return [x for x in parsed if isinstance(x, str)]
     return []
 
 
 def paginate_offset(page: int, page_size: int) -> int:
-    """分页偏移：(page-1)*page_size。收敛 forum/files 里重复的 offset 计算。"""
-    return (page - 1) * page_size
+    """分页偏移：(page-1)*page_size（下界夹到 0）。收敛 forum/files 里重复的 offset 计算。
+
+    不夹会让 page<1 或 page_size<0 产出负 offset 直接进 SQL（``OFFSET -20``）——PG 直接报错，
+    而 GraphQL 等入口会把客户端传入的 page 原样透传（无 ge=1 校验），故在共享助手里兜住。
+    """
+    return max(page - 1, 0) * max(page_size, 0)
 
 
 def paginate_pages(total: int, page_size: int) -> int:
-    """分页总页数：向上取整。收敛 forum/files 里重复的 pages 计算。"""
+    """分页总页数：向上取整。收敛 forum/files 里重复的 pages 计算。
+
+    ``page_size <= 0`` 直接返回，不靠调用方 clamp：GraphQL 等入口会把客户端传入的
+    pageSize 原样透传下来，除零会变成 500。口径与既有调用点
+    ``paginate_pages(total, limit) if limit else (1 if total else 0)`` 保持一致。
+    """
+    if page_size <= 0:
+        return 1 if total else 0
     return (total + page_size - 1) // page_size
 
 
@@ -94,5 +107,7 @@ class PaginateDep:
         page: Annotated[int, Query(ge=1)] = 1,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> PaginateParams:
-        # le=100 已在 Query 层 clamp；此处仅组装
-        return PaginateParams(page=page, limit=limit, offset=(page - 1) * limit)
+        # le=100 已在 Query 层 clamp；offset 走共享助手，别在此重写公式（否则助手改了这里不同步）
+        return PaginateParams(
+            page=page, limit=limit, offset=paginate_offset(page, limit)
+        )

@@ -1,6 +1,7 @@
 # ---- 构建阶段:用 uv 安装依赖 ----
 FROM python:3.13-slim-bookworm AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# uv 显式钉版本：`:latest` 属第三方可变标签，会在无代码改动时静默换掉解析依赖图的工具本身
+COPY --from=ghcr.io/astral-sh/uv:0.12.12 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 WORKDIR /app
@@ -39,4 +40,4 @@ EXPOSE 8000
 # uvicorn(0.51) `--workers N` 用 multiprocess spawn(ASGI worker)，无需 gunicorn/worker-class。
 # 启停：uvicorn 收 SIGTERM 通知各 worker，FastAPI lifespan yield 后清理
 # （cleanup_task / redis close / dispose_engine）由 app.main.lifespan 负责。
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${LKM_WEB_WORKERS:-1}"]
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${LKM_WEB_WORKERS:-1}"]

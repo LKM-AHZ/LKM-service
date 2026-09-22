@@ -7,7 +7,7 @@
 import uuid
 from typing import Any
 
-from app.core.cache import cache_get, cache_set, make_key
+from app.core.cache import cached_read, make_key
 from app.core.err import BizError, CommonErr
 from app.db.repository import DbSession
 from app.modules.rbac.permissions import Permission, composible_role
@@ -23,16 +23,19 @@ async def role_has_permission(
     role_name: str,
     permission: Permission,
 ) -> bool:
-    """查询复合角色是否被授予指定权限点。Redis 可用走短 TTL 缓存，否则直查库。"""
+    """查询复合角色是否被授予指定权限点。Redis 可用走短 TTL 缓存，否则直查库。
+
+    走 ``cached_read``：TTL 到期的并发请求由进程内单飞收敛成一次 loader，
+    避免鉴权热路径同时打穿 DB（这是每个带权限点的请求都会过的路径）。
+    """
+
+    async def _load() -> bool:
+        return await RolePermissionRepository(db).has_permission(
+            role_name, permission.value
+        )
+
     key = make_key("rbac:perm", role_name, permission.value)
-    cached = await cache_get(key)
-    if cached is not None:
-        return bool(cached)
-    result = await RolePermissionRepository(db).has_permission(
-        role_name, permission.value
-    )
-    await cache_set(key, result, _PERM_TTL)
-    return result
+    return await cached_read(key, _PERM_TTL, _load)
 
 
 async def check_owner(

@@ -1,9 +1,23 @@
 """自动审校规则 CRUD 请求/响应模型。"""
 
+from __future__ import annotations
+
+import re
 import uuid
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+def _assert_compilable(pattern: str, is_regex: bool) -> None:
+    """正则规则写入前先编译一次：引擎侧吞 re.error 返回 False，坏 pattern 会
+    存成「启用但永不命中」的规则，管理员看到 0 命中却毫无提示。"""
+    if not is_regex:
+        return
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"invalid regex pattern: {exc}") from exc
 
 
 class RuleCreate(BaseModel):
@@ -14,6 +28,11 @@ class RuleCreate(BaseModel):
     scope: str = "content"
     enabled: bool = True
 
+    @model_validator(mode="after")
+    def _validate_regex(self) -> RuleCreate:
+        _assert_compilable(self.pattern, self.is_regex)
+        return self
+
 
 class RuleUpdate(BaseModel):
     pattern: str | None = Field(default=None, min_length=1, max_length=255)
@@ -22,6 +41,14 @@ class RuleUpdate(BaseModel):
     weight: float | None = Field(default=None, ge=0.0, le=1.0)
     scope: str | None = None
     enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _validate_regex(self) -> RuleUpdate:
+        # 只在本次同时给出 pattern 与 is_regex=True 时可判（局部更新时另一字段沿用旧值，
+        # 归属 service 的合并后校验；此处至少挡住「自带 pattern 的正则」这一类）
+        if self.pattern is not None:
+            _assert_compilable(self.pattern, bool(self.is_regex))
+        return self
 
 
 class RuleInfo(BaseModel):

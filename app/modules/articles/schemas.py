@@ -1,8 +1,14 @@
 import datetime
 import uuid
-from typing import ClassVar, cast
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from auth.schemas import ProfileInfo
 
@@ -37,7 +43,9 @@ class ArticleDetail(ArticleListItem):
         if isinstance(v, str):
             return [k.strip() for k in v.split(",") if k.strip()]
         if isinstance(v, list):
-            return cast(list[str], v)
+            # 显式拷贝：cast 在运行期是 no-op，直接返回原列表会让响应对象与 ORM 属性
+            # 共享同一个 list，调用方一改就污染实例状态
+            return [str(k) for k in v]
         return []
 
 
@@ -82,6 +90,17 @@ class ArticleUpdate(BaseModel):
     )
     tags: list[str] | None = None
 
+    @model_validator(mode="after")
+    def _reject_null_for_not_null_columns(self) -> "ArticleUpdate":
+        """显式传 null 只允许落在可空列：title/content/category_id 在 ORM 里是 NOT NULL，
+        而调用方用 model_dump(exclude_unset=True) + setattr 落库，显式 null 会被当成「已设置」
+        写进去（轻则清空权威列，重则 flush 时 IntegrityError → 500）。此处改抛 422。
+        （tags 显式 null 表示「不改标签」，由 _sync_article_tags 处理，不在此列。）"""
+        for name in ("title", "content", "category_id"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} 不能为 null")
+        return self
+
 
 class ReviewArticleRequest(BaseModel):
     approve: bool
@@ -99,7 +118,8 @@ class ArticleLikeStatus(BaseModel):
 
 
 class ArticleCommentCreate(BaseModel):
-    content: str
+    # 与文章正文一致的边界：无下限会收下空/纯空白评论，无上限则单条评论可任意长
+    content: str = Field(..., min_length=1, max_length=2000)
     parent_id: uuid.UUID | None = None
 
 

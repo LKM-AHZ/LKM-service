@@ -19,7 +19,11 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set the database URL
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# configparser 把 % 当插值起始符（ini 里的 %(here)s 靠它）。settings 的连接串用 quote
+# 编码密码，密码含保留字符时会出现裸 %XX，set_main_option 会当场抛
+# ValueError(invalid interpolation syntax) 让迁移根本起不来（实测）。按 configparser
+# 规则转义成 %%，get_main_option/get_section 读回时还原成原值。
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Import all models so metadata is fully populated for autogenerate
 from app.db.base import Base
@@ -36,7 +40,9 @@ def run_migrations_offline() -> None:
     Configures the context with just a URL, not an Engine.
     Calls to ``context.execute()`` emit the given SQL to the script output.
     """
-    url = config.get_main_option("sqlalchemy.url")
+    # 与 online 路径同一口径：离线生成 SQL 也要走同步方言，否则读的是 import 时写入的
+    # asyncpg URL，产物按 asyncpg 方言渲染、且要额外依赖 async 驱动可导入
+    url = _sync_url(config.get_main_option("sqlalchemy.url") or "")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -65,7 +71,9 @@ def run_migrations_online() -> None:
     Creates an Engine and associates a connection with the context.
     统一 PostgreSQL 目标。
     """
-    config.set_main_option("sqlalchemy.url", _sync_url(settings.database_url))
+    config.set_main_option(
+        "sqlalchemy.url", _sync_url(settings.database_url).replace("%", "%%")
+    )
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

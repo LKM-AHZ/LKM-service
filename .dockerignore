@@ -1,13 +1,37 @@
 .venv/
-__pycache__/
-*.py[cod]
+venv/
+env/
+.tox/
+*.egg-info/
+**/__pycache__/
+**/*.py[cod]
 .pytest_cache/
 .ruff_cache/
 .git/
 .gitignore
 .env
+# .env.* 变体（.env.local / .env.production…）与密钥材料同样不能进构建上下文：
+# 运行阶段是 `COPY . .`，漏一条就会把本机真实口令/证书烤进镜像层
+.env.*
+*.pem
+*.key
+*.crt
+docker-compose*.yml
 blog_repos/
 files_store/
 tests/
 docs/
+# 构建/测试产物、IDE 与 CI 配置：与运行无关，留在上下文里只会让镜像变大
+.github/
+.idea/
+.vscode/
+.DS_Store
+.coverage
+htmlcov/
+*.log
+dist/
+build/
 *.md
+# pyproject 声明 readme = "README.md"，而上面把整类 *.md 排除了：一旦构建需要读项目元数据
+# （去掉 --no-install-project，或任何读元数据的工具）就会因缺文件失败。这里放回来。
+!README.md

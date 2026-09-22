@@ -10,6 +10,7 @@ biz Base）；ROLE 权限栅 RolePermission 仍在 **biz 库**。故每个数据
 """
 
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -32,7 +33,7 @@ from app.modules.content.models import ContentItem, ContentType
 from app.modules.files.models import LibraryFile
 from app.modules.rbac.permissions import Permission
 from auth.deps import CurrentUser
-from auth.seams import get_auth_session as _get_auth_session_raw
+from auth.seams import new_auth_session as _new_auth_session_raw
 from auth.snapshot import (
     count_active_users,
     list_user_snapshots,
@@ -43,6 +44,8 @@ from .deps import require_admin
 from .permissions import require_permission
 from .schemas import AdminStats, AdminTrendItem, AdminUserListItem
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/admin", tags=["admin-data"])
 
 
@@ -50,12 +53,16 @@ async def get_admin_auth_read_session() -> AsyncIterator[AsyncSession]:
     """admin 数据面读 auth authoritative 用的 **auth 库只读会话**（yield → FastAPI 于请求末负责关）。
 
     拆库后 user 真值只在 auth 库。数据面 reader 需同时问 biz(role/聚合) 与 auth(users 列表/
-    数/趋势)，故给 reader 端点再加一个 auth 会话；本函数把 ``auth.seams.get_auth_session``
+    数/趋势)，故给 reader 端点再加一个 auth 会话；本函数把 ``auth.seams.new_auth_session``
     包成 **yield-generator dependency** —— 生产时 new 一个真实 auth 会话并在此收尾 close；测试/多
     进程拆分前同源码单进程两会话分连两库也合法。消费方只可做**只读**（读 auth.snapshot 数字/
     列表缝），绝不做写。授权(RBAC RolePermission)仍在 biz，不在本会话判。
+
+    取会话必须用 ``new_auth_session``（普通协程工厂）而非 ``get_auth_session``：后者是
+    async generator 函数，``await`` 其返回值会抛 TypeError（本依赖每次请求都 500，
+    测试因 dependency_overrides 覆盖了本依赖而掩盖）。
     """
-    sess = await _get_auth_session_raw()
+    sess = await _new_auth_session_raw()
     try:
         yield sess
     finally:
@@ -109,10 +116,17 @@ async def admin_list_users(
 
 
 async def _safe_count(db: AsyncSession, stmt: Any) -> int:
-    """单计数器容错：某模块表缺失/不可用时不拖垮整页统计（对聚合类后台端点友好）。"""
+    """单计数器容错：某模块表缺失/不可用时不拖垮整页统计（对聚合类后台端点友好）。
+
+    必须记日志并 rollback：静默 return 0 让真实故障与「本来就是 0」不可区分；而 PG 事务
+    一旦出错即进入 aborted 状态，不 rollback 会让本请求后续所有计数器也连带归零。
+    """
     try:
         return (await db.execute(stmt)).scalar() or 0
     except Exception:
+        logger.exception("admin stats counter failed; reporting 0")
+        with contextlib.suppress(Exception):
+            await db.rollback()
         return 0
 
 

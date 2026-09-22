@@ -16,7 +16,6 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.db.base import now_iso
 from app.db.repository import AsyncRepository, DbSession, ValuesDict
 
 
@@ -76,7 +75,12 @@ class StarHopeRepository(AsyncRepository[Any]):
         for rid, data, updated_at in upserts:
             existing = existing_map.get(rid)
             if existing is None:
-                self.db.add(self.model(**data))
+                obj = self.model(**data)
+                self.db.add(obj)
+                # 登记进 existing_map：同一批次里重复的 id 走下面的合并分支，
+                # 不会暂存两个同主键实例（flush 时双 INSERT 撞键）；也令随后的
+                # delete 分支能看到这条新行并打墓碑。
+                existing_map[rid] = obj
                 synced += 1
                 continue
             # 已软删：只有 incoming 更新才恢复
@@ -93,9 +97,13 @@ class StarHopeRepository(AsyncRepository[Any]):
             existing = existing_map.get(rid)
             if existing is None:
                 continue
-            if existing.deleted_at is None or deleted_at > existing.deleted_at:
+            # 与 upsert 分支同为 LWW：比的是该行「最后一次写入」（墓碑时间或内容更新时间），
+            # 而不是只看墓碑——后者会让陈旧的 tombstone 覆盖更新的编辑，也会重复墓碑化
+            # 一条已被复活（deleted_at is None）的行。时间戳同域：都用客户端值，不再混入服务端 now。
+            last_write = existing.deleted_at or existing.updated_at
+            if deleted_at > last_write:
                 existing.deleted_at = deleted_at
-                existing.updated_at = now_iso()
+                existing.updated_at = deleted_at
                 synced += 1
 
         await self.flush()

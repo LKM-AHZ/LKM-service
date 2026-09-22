@@ -41,12 +41,22 @@ from auth.snapshot import get_user_snapshot_batch
 
 
 async def ensure_balance(db: DbSession, user_id: uuid.UUID) -> UserBalance:
-    """惰性取/建用户 balance 行。"""
+    """惰性取/建用户 balance 行（并发安全）。"""
     repo = UserBalanceRepository(db)
     row = await repo.get(user_id)
     if row is not None:
         return row
-    return await repo.create(user_id=user_id, balance=0)
+    # 品牌新用户并发首次访问：两个请求都看到 None 后各自 insert，后提交者撞 user_id
+    # 主键抛 IntegrityError。沿用 do_checkin 对 user_behavior_stats 的写法：
+    # ON CONFLICT DO NOTHING 吸收撞键，再回读（本次插入或并发方已提交的那行）。
+    await repo.pg_upsert(
+        {"user_id": user_id, "balance": 0},
+        index_elements=["user_id"],
+        do_nothing=True,
+    )
+    row = await repo.get(user_id)
+    assert row is not None  # 理论上不可达：刚插入或并发方已提交
+    return row
 
 
 async def _apply_delta(
@@ -81,13 +91,18 @@ async def reward(
     不一致抛 DUPLICATE_REWARD。返回本次（或既有）流水。
     """
     ledger = PointsLedgerRepository(db)
+    # 行锁必须先于幂等预检：否则同一 ref 的两个并发投递会双双通过 get_by_ref 的空判、
+    # 各做一次 apply_delta，而唯一约束只把其中一条流水 DO NOTHING 掉 → 余额被加两次，
+    # 且与流水的 balance_after 不一致。锁住该用户余额行后，「预检 → 变动 → 落流水」
+    # 对同一用户串行（不同用户互不影响）。
+    await ensure_balance(db, user_id)
+    await UserBalanceRepository(db).lock_for_update(user_id)
     existing = await ledger.get_by_ref(user_id, ref_type, ref_id)
     if existing is not None:
         if existing.delta == delta:
             return LedgerEntry.model_validate(existing)
         raise BizError(PointsErr.DUPLICATE_REWARD)
 
-    await ensure_balance(db, user_id)
     balance_after = await _apply_delta(db, user_id, delta, allow_negative)
     # 并发撞 (user, ref_type, ref_id) 唯一约束由 ON CONFLICT DO NOTHING 吸收（替原
     # savepoint 插入：不产生异常、不回滚 savepoint，也不污染调用方其它未提交写）。
@@ -137,14 +152,36 @@ async def transfer(
 ) -> tuple[LedgerEntry, LedgerEntry]:
     """1:1 原子转账：from 扣 + to 加，两笔流水共享 (ref_type, ref_id) 实现幂等。
 
+    幂等按**转出方**的 (from_id, ref_type, ref_id) 判定：流水唯一约束是
+    (user_id, ref_type, ref_id)，而两笔行 user_id 不同、无法互相去重，故重放
+    （客户端超时重发）时先回读既有对并原样返回，而不是让唯一约束抛成 500。
     单事务内完成；任一失败（如 from 余额不足）整体回滚，不产生部分流水。
     """
     if amount <= 0:
         raise BizError(PointsErr.INSUFFICIENT_BALANCE, "转账金额须为正")
     if from_id == to_id:
         raise BizError(PointsErr.INSUFFICIENT_BALANCE, "不能转账给自己")
+    ledger = PointsLedgerRepository(db)
+    # 与 reward 同理：幂等预检前先锁双方余额行（否则并发重放会各扣各加一次、流水被唯一约束
+    # 撞掉一条 → 两笔余额都错）。按 uuid 排序取锁，避免「A→B 与 B→A」相互等待成死锁。
     await ensure_balance(db, from_id)
     await ensure_balance(db, to_id)
+    balance_repo = UserBalanceRepository(db)
+    for uid in sorted((from_id, to_id)):
+        await balance_repo.lock_for_update(uid)
+    existing_out = await ledger.get_by_ref(from_id, ref_type, ref_id)
+    if existing_out is not None:
+        existing_in = await ledger.get_by_ref(to_id, ref_type, ref_id)
+        if (
+            existing_in is not None
+            and existing_out.delta == -amount
+            and existing_in.delta == amount
+        ):
+            return (
+                LedgerEntry.model_validate(existing_out),
+                LedgerEntry.model_validate(existing_in),
+            )
+        raise BizError(PointsErr.DUPLICATE_REWARD)
     from_after = await _apply_delta(db, from_id, -amount, allow_negative=False)
     to_after = await _apply_delta(db, to_id, amount, allow_negative=True)
     out_entry = PointsLedger(
@@ -329,9 +366,11 @@ _ACH_TYPE_TO_STAT: dict[str, str] = {
 }
 
 
-async def _read_progress(db: DbSession, user_id: uuid.UUID, type_: str) -> int:
-    """只读计算某成就类型的当前进度（读 UserBehaviorStat.stats，不写库）。"""
-    stat = await UserBehaviorStatRepository(db).get(user_id)
+def _progress_from_stat(stat: Any, type_: str) -> int:
+    """由**已取好**的 UserBehaviorStat 行算某成就类型进度（读 stats，不写库）。
+
+    调用方一次性取 stat 行后循环调用（原先每个成就类型各查一次 = N+1）。
+    """
     key = _ACH_TYPE_TO_STAT.get(type_)
     if stat is None or not key:
         return 0
@@ -344,17 +383,21 @@ async def list_achievements(
     """成就定义全量 + 当前用户进度（无登录则不显示进度，归默认值）。"""
     achievements = await AchievementRepository(db).list_ordered()
     progress_map: dict[uuid.UUID, tuple[int, bool]] = {}
+    stat: Any = None
     if user_id is not None:
         ua_rows = await UserAchievementRepository(db).list_for_user(user_id)
         for ua in ua_rows:
             progress_map[ua.achievement_id] = (ua.progress, ua.unlocked)
+        # 行为统计行整批只需一行：原先在循环里对每个无成就记录的类型各查一次（仓库是
+        # select().scalars().first()，没有 identity-map 短路）→ 典型的 N+1
+        stat = await UserBehaviorStatRepository(db).get(user_id)
     out: list[AchievementOut] = []
     for a in achievements:
         if a.id in progress_map:
             prog, unlocked = progress_map[a.id]
         else:
             prog = (
-                min(await _read_progress(db, user_id, a.type), a.threshold)
+                min(_progress_from_stat(stat, a.type), a.threshold)
                 if user_id is not None
                 else 0
             )

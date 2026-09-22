@@ -1,6 +1,7 @@
 """FastAPI 路由的 JWT 依赖注入。"""
 
 import datetime as _dt
+import logging
 import os
 import time as _time
 import uuid
@@ -31,6 +32,8 @@ from auth.service_authz import (
 
 _LEVEL_ORDER = {"local": 0, "normal": 1, "admin": 2}
 
+logger = logging.getLogger(__name__)
+
 
 class CurrentUser(BaseModel):
     """从已验证的 JWT 访问令牌中提取的用户信息。"""
@@ -42,16 +45,26 @@ class CurrentUser(BaseModel):
     phone: str | None = None
 
 
+def _bearer_token(authorization: str | None) -> str | None:
+    """从 Authorization 头取出 Bearer 令牌；缺失/格式不对返回 None（与 _parse_bearer 共用同一套解析规则）。"""
+    if not authorization:
+        return None
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1]
+
+
 def _parse_bearer(
     authorization: str | None = Header(None, alias="Authorization"),
 ) -> str:
     """从 Authorization 请求头中提取 Bearer 令牌。如果请求头缺失或格式错误，则抛出 BizError(FORBIDDEN)。"""
+    token = _bearer_token(authorization)
+    if token is not None:
+        return token
     if not authorization:
         raise BizError(CommonErr.FORBIDDEN, "Missing authorization header")
-    parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise BizError(CommonErr.FORBIDDEN, "Invalid authorization header format")
-    return parts[1]
+    raise BizError(CommonErr.FORBIDDEN, "Invalid authorization header format")
 
 
 async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
@@ -204,18 +217,20 @@ async def get_current_user(
 
 
 async def get_optional_user(
-    token: str | None = Header(None, alias="Authorization"),
+    authorization: str | None = Header(None, alias="Authorization"),
     db: AsyncSession = Depends(get_auth_session),
 ) -> CurrentUser | None:
     """可选 JWT 认证依赖。不抛出ERROR"""
-    if not token:
-        return None
-    parts = token.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
+    # 复用 _bearer_token：否则 scheme 大小写/空白规则会在必选与可选两条路径上各写一遍、日后漂移
+    token = _bearer_token(authorization)
+    if token is None:
         return None
     try:
-        return await _resolve_current_user(parts[1], db)
-    except (BizError, PyJWTError):
+        return await _resolve_current_user(token, db)
+    except (BizError, PyJWTError) as exc:
+        # 可选依赖确实不该抛错，但吞掉要留痕：否则「account state 服务不可用」这类
+        # 基础设施故障在线上表现为「偶尔匿名」，没有任何可查的线索
+        logger.debug("optional auth ignored: %s", exc)
         return None
 
 
@@ -270,20 +285,31 @@ require_2fa = Depends(get_current_user_2fa)
 
 
 def get_sms_provider() -> SmsProvider:
-    """返回已配置的短信服务提供商。"""
+    """返回已配置的短信服务提供商。
+
+    仓库里目前**只有**测试用的 ConsoleSmsProvider（把脱敏验证码写日志），没有任何真实网关
+    实现，也没有读取 ``LKM_SMS_PROVIDER`` 的装配代码（该名字此前只出现在下面的报错文本里）。
+    故非测试环境一律 fail-closed：绝不退回 console（那等于把验证码写进生产日志）。
+    """
     if os.environ.get("LKM_ENV") == "test" or os.environ.get("PYTEST_RUNNING"):
         return ConsoleSmsProvider()
     raise RuntimeError(
-        "No SMS provider configured. ConsoleProvider is forbidden outside test mode. "
-        "Set LKM_SMS_PROVIDER to a real provider."
+        "No SMS provider available: only the test-only ConsoleSmsProvider is implemented and "
+        "no real gateway is wired (nothing reads LKM_SMS_PROVIDER). "
+        "Implement/register one under auth/providers/ before enabling SMS flows."
     )
 
 
 def get_email_provider() -> EmailProvider:
-    """返回已配置的邮件服务提供商。"""
+    """返回已配置的邮件服务提供商。
+
+    与 :func:`get_sms_provider` 同：只有测试用 ConsoleEmailProvider，非测试环境 fail-closed，
+    报错文本不再指向一个无人读取的环境变量。
+    """
     if os.environ.get("LKM_ENV") == "test" or os.environ.get("PYTEST_RUNNING"):
         return ConsoleEmailProvider()
     raise RuntimeError(
-        "No Email provider configured. ConsoleProvider is forbidden outside test mode. "
-        "Set LKM_EMAIL_PROVIDER to a real provider."
+        "No Email provider available: only the test-only ConsoleEmailProvider is implemented "
+        "and no real mail gateway is wired (nothing reads LKM_EMAIL_PROVIDER). "
+        "Implement/register one under auth/providers/ before enabling email flows."
     )

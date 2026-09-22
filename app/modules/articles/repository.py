@@ -10,7 +10,9 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.common import tag_names_sequence
 from app.db.repository import AsyncRepository
@@ -64,8 +66,12 @@ class ArticleRepository(AsyncRepository[Article]):
         return await self.exists(Article.slug == slug)
 
     async def list_page(self, *, offset: int, limit: int) -> list[Article]:
+        # published 可空且 PG 里 DESC 默认 NULLS FIRST，仅按它排序会让未发布文章排在最前、
+        # 且同值行无稳定次序（offset 分页可能重复/漏行）；补 nulls_last + 唯一键兜底
         return await self.get_many(
-            order_by=Article.published.desc(), offset=offset, limit=limit
+            order_by=(Article.published.desc().nulls_last(), Article.id.desc()),
+            offset=offset,
+            limit=limit,
         )
 
     async def list_for_search(
@@ -80,8 +86,9 @@ class ArticleRepository(AsyncRepository[Article]):
         stmt = (
             select(Article)
             .where(cond)
-            # 仅子串命中（无 FTS 相关度）为 NULL → 排到 FTS 命中之后
-            .order_by(rank.desc().nulls_last())
+            # 仅子串命中（无 FTS 相关度）为 NULL → 排到 FTS 命中之后；
+            # 同相关度无稳定次序会让 offset 分页重复/漏行，故补唯一键兜底
+            .order_by(rank.desc().nulls_last(), Article.id.desc())
             .offset(offset)
             .limit(limit)
         )
@@ -137,6 +144,37 @@ class ArticleLikeRepository(AsyncRepository[ArticleLike]):
         return await self.get_one(
             ArticleLike.article_id == article_id, ArticleLike.user_id == user_id
         )
+
+    async def claim_like(self, *, article_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """原子占位点赞：**本次真正插入**返回 True，已存在（并发/重复请求）返回 False。
+
+        复合主键即唯一约束。ON CONFLICT DO NOTHING + RETURNING 让「是否首次点赞」的
+        判定与插入原子化：check-then-insert 竞态下后到者会在 flush 时撞主键报错，
+        且两遍都计入计数、都入队积分事件。
+        """
+        stmt = (
+            pg_insert(ArticleLike)
+            .values(article_id=article_id, user_id=user_id)
+            .on_conflict_do_nothing(index_elements=["article_id", "user_id"])
+            .returning(ArticleLike.article_id)
+        )
+        return (await self.db.execute(stmt)).first() is not None
+
+    async def release_like(self, *, article_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """原子取消点赞：确实删掉行才返回 True（并发双删只有一个为真，不会重复减计数）。
+
+        用 DELETE ... RETURNING 判定（result.rowcount 在类型存根里不存在），
+        删到行才有返回行。
+        """
+        stmt = (
+            sa_delete(ArticleLike)
+            .where(
+                ArticleLike.article_id == article_id,
+                ArticleLike.user_id == user_id,
+            )
+            .returning(ArticleLike.article_id)
+        )
+        return (await self.db.execute(stmt)).first() is not None
 
     async def count_for(self, article_id: uuid.UUID) -> int:
         return await self.count(ArticleLike.article_id == article_id)
@@ -239,6 +277,15 @@ class ArticleTagRepository(AsyncRepository[ArticleTag]):
             tag_id = name_to_id[n]
             if tag_id not in existing:
                 self.db.add(ArticleTag(article_id=article_id, tag_id=tag_id))
+
+        # 4) 删掉不在本次列表里的旧关联：方法名/文档都是 sync（替换语义），只补不删会让
+        # 「更新文章去掉某个标签」静默失效，列表仍返回旧标签
+        await self.db.execute(
+            sa_delete(ArticleTag).where(
+                ArticleTag.article_id == article_id,
+                ArticleTag.tag_id.notin_(tag_ids),
+            )
+        )
 
     async def list_tag_counts(self) -> list[tuple[str, int]]:
         """标签名 + 被引用文章数（内连接聚合）。"""
