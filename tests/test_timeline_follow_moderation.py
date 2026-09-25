@@ -22,13 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.admin.moderation import service as mod_service
 from app.modules.admin.moderation.engine import Rule, evaluate, load_active_rules
 from app.modules.admin.moderation.schemas import RuleCreate, RuleUpdate
-from app.modules.articles.models import Article, ArticleCategory
+from app.modules.content.articles.models import Article, ArticleCategory
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.models import ContentItem
-from app.modules.feed import service as follow_service
-from app.modules.feed.models import UserFollow
 from app.modules.feed.service import get_timeline
+from app.modules.interaction import service as follow_service
+from app.modules.interaction.models import UserFollow
 from tests.conftest import auth_user_uid
 
 

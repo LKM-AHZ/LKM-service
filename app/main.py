@@ -12,7 +12,12 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from strawberry.fastapi import BaseContext
 
-from app.api.graphql import GuardedGraphQLRouter, build_schema
+from app.api.graphql import (
+    GRAPHQL_DEFAULT_VERSION,
+    GRAPHQL_VERSIONS,
+    GuardedGraphQLRouter,
+    build_schema,
+)
 from app.api.router import api_router
 from app.core import clickhouse, messaging, user_cache_events
 from app.core import logging as logger
@@ -21,7 +26,7 @@ from app.core.apm import init_sentry
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
-from app.core.middleware import install_security_middleware
+from app.core.middleware import GraphQLHTTPMiddleware, install_security_middleware
 from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
 from app.core.tracing import (
     instrument_sqlalchemy,
@@ -165,29 +170,30 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # GraphQL 查询级**硬**超时（§2 第 3 条）：**最先加 → 最内层**用户中间件。
+    # 两个理由都不是风格问题：
+    # ① 它超时靠取消内层 task 生效，而 `_log_requests` 是 BaseHTTPMiddleware（内部另起
+    #    anyio task group）——把它圈进取消边界会让取消在跨 task 的 cancel scope 上收尾，
+    #    收益为零、风险不小；放在 `_log_requests` **之内**即绕开。
+    # ② 放在内层后，504 仍会经 `_log_requests` 记录、并带上外层的安全头与 X-Request-ID
+    #    （反过来则超时请求在访问日志里彻底消失，而那正是最需要排查的请求）。
+    application.add_middleware(GraphQLHTTPMiddleware)
+
     @application.middleware("http")
     async def _log_requests(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        """结构化访问日志：注入 request_id，记录 method/route/status/latency。"""
-        # 客户端传来的 X-Request-ID 不可直接采信：CR/LF 等控制字符会造成日志伪造/响应头
-        # 注入（h11 会直接拒答），非 ASCII 也会污染日志；不合规就另生成一个
-        candidate_id = request.headers.get("X-Request-ID") or ""
-        request_id = (
-            candidate_id
-            if candidate_id
-            and candidate_id.isascii()
-            and candidate_id.isprintable()
-            and len(candidate_id) <= 128
-            else uuid.uuid4().hex
-        )
-        token = logger.set_request_id(request_id)
+        """结构化访问日志：记录 method/route/status/latency。
+
+        request_id 的生成/净化/回写响应头已上移到 ``core.middleware.RequestIdMiddleware``
+        （两进程共用，auth 进程原本完全没有 → 其响应无头也无日志关联）。这里只读同一次
+        请求已注入 ContextVar 的值。
+        """
         start = time.perf_counter()
         try:
             response = await call_next(request)
             latency_ms = (time.perf_counter() - start) * 1000
-            response.headers.setdefault("X-Request-ID", request_id)
             request_logger.info(
                 "http.request",
                 extra={
@@ -215,8 +221,6 @@ def create_app() -> FastAPI:
                 },
             )
             raise
-        finally:
-            logger.reset_request_id(token)
 
     # 公网安全面（M6.1）：TrustedHost + CORS 白名单 + 安全响应头。**最后加 → 最外层**，
     # 使访问日志与其下全部业务路由、以及 TrustedHost/CORS 的拒答响应都带上安全头。
@@ -240,13 +244,24 @@ def create_app() -> FastAPI:
         # cur 可选（带 Bearer 则解析出 user_id，供关注流/时间线等按登录态个性化）。
         return GraphQLContext(db=db, user_id=cur.id if cur is not None else None)
 
-    merged_schema = build_schema()  # §7：registry 聚合全部模块 GraphQL Query
-    graphql_router = GuardedGraphQLRouter(
-        merged_schema,
-        path="/graphql",
-        context_getter=_graphql_context,
+    # §2 多端点版本化：每个版本各挂一个**独立 schema** 的端点（`{graphql_path}/vN`），
+    # 旧端点永久保留服务存量客户端；网关按 X-API-Version 分流（deploy/apisix/apisix.yaml）。
+    for _version in GRAPHQL_VERSIONS:
+        application.include_router(
+            GuardedGraphQLRouter(
+                build_schema(_version),  # §7：registry 按版本聚合模块 GraphQL Query
+                path=f"{settings.graphql_path}/{_version}",
+                context_getter=_graphql_context,
+            )
+        )
+    # 无版本路径 = 默认版本别名（与 REST 的「不带版本」对称），前端既有集成零改动。
+    application.include_router(
+        GuardedGraphQLRouter(
+            build_schema(GRAPHQL_DEFAULT_VERSION),
+            path=settings.graphql_path,
+            context_getter=_graphql_context,
+        )
     )
-    application.include_router(graphql_router)
 
     @application.get("/")
     async def root() -> dict[str, str]:

@@ -111,7 +111,7 @@ class TestAuthProcessAdminLogin:
         await auth_user_uid(auth_db, username="member1", account_level="normal")
         resp = await _login(auth_app_client, "member1")
         assert resp.status_code == 403
-        assert resp.json()["msg"] == "无后台访问权限"
+        assert resp.json()["message"] == "无后台访问权限"
 
     async def should_reject_unknown_username(
         self, auth_db: AsyncSession, auth_app_client: AsyncClient

@@ -20,6 +20,65 @@ async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> An
     return body["data"]
 
 
+_INTROSPECTION = "query { __schema { queryType { name } } }"
+
+
+async def should_expose_versioned_and_alias_endpoints(client: AsyncClient) -> None:
+    """§2 多端点版本化：``/graphql/v1`` 与无版本别名 ``/graphql`` 同时可用且 schema 相同。
+
+    别名保留是为了让存量前端（照旧打 ``/graphql``）零改动；带版本端点才是契约锚点，
+    响应头 ``X-API-Version`` 让调用方确认命中的是哪个版本。
+    """
+    versioned = await client.post("/graphql/v1", json={"query": _INTROSPECTION})
+    alias = await client.post("/graphql", json={"query": _INTROSPECTION})
+
+    assert versioned.status_code == alias.status_code == 200
+    assert versioned.json()["data"] == alias.json()["data"]
+    assert versioned.headers["X-API-Version"] == "v1"
+    # 别名路径不替调用方猜「现在等价于哪个版本」（见 core.middleware 的说明）
+    assert "X-API-Version" not in alias.headers
+
+
+async def should_register_only_declared_versions(client: AsyncClient) -> None:
+    """未登记的版本端点不存在（访问即 404）——不静默回落到默认版本。"""
+    resp = await client.post("/graphql/v99", json={"query": _INTROSPECTION})
+
+    assert resp.status_code == 404
+
+
+async def should_query_multiple_root_fields_in_one_operation(
+    client: AsyncClient,
+) -> None:
+    """一次操作里查**多个根字段**必须成功（聚合读的基本形态）。
+
+    回归的是 2026-09-26 真机验收发现的既有缺陷：graphql-core 并发执行同级字段，而所有
+    resolver 共享同一个 AsyncSession → 两个都打 DB 的根字段并发即
+    ``This session is provisioning a new connection; concurrent operations are not
+    permitted`` → 500。蓝图把 GraphQL 定位为「聚合读」，聚合恰恰就是多根字段，只是前端
+    目前只发单根才长期没暴露。
+    """
+    resp = await client.post(
+        "/graphql/v1",
+        json={"query": "query { contentItems(pageSize: 1) { total } boards { id } }"},
+    )
+    body = resp.json()
+
+    assert resp.status_code == 200, body
+    assert body.get("errors") is None, body
+    assert body["data"]["contentItems"] is not None
+    assert body["data"]["boards"] is not None
+
+
+async def should_still_raise_for_unknown_root_field(client: AsyncClient) -> None:
+    """串行化不能把「字段不存在」这类校验错误吞掉或变成 500。"""
+    resp = await client.post(
+        "/graphql/v1", json={"query": "query { noSuchRootField { id } }"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json().get("errors"), resp.json()
+
+
 @pytest.fixture(autouse=True)
 async def _write_session_on_test_db(db, monkeypatch: pytest.MonkeyPatch) -> None:
     """content 浏览计数的独立写会话默认走全局 ``new_session()``（连默认库，测试 schema

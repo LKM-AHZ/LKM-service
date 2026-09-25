@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import settings
-from app.modules.blog import git_svc
+from app.modules.content.blog import git_svc
 
 
 @pytest.fixture

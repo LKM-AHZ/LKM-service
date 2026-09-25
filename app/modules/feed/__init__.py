@@ -1,13 +1,12 @@
-"""信息流(feed)域：社交图(关注) + read-time 时间线(read 合流)。
+"""信息流(feed)域：read-time 时间线(read 合流 + 关注过滤 + 审校降权)。
 
-M2.3 物理合一 follow（用户/版块关注，时间线过滤数据源）与 timeline（read-time 合流 +
-关注过滤 + 审校降权）：社交图 + 信息流语义归为单一 feed 域。模块公共 API——跨模块 import
-的唯一合法入口。
+**关注关系不在本域**：蓝图 §3.1 与 §7.2 的目标形态都把「关注」划给 interaction
+（「收窄：收藏、关注、浏览记录」），而信息流域只负责「时间线生成」。故 follow 的模型/
+仓储/服务/路由/GraphQL 已迁入 ``app.modules.interaction``（REST URL 与 GraphQL 字段名
+一字不变）；本域只经 interaction 的公开读口消费关注关系。
 
-``ROUTERS`` = user_follow_router(/users…) + board_follow_router(/content/boards…) +
-timeline_router(/timeline…)；``GRAPHQL`` = FollowQuery + TimelineQuery 两 Query 类
-（api 层 merge_types 合并进单一 GraphQL Query）。REST URL 前缀与 GraphQL 字段名在聚合中
-保持不破。
+模块公共 API——跨模块 import 的唯一合法入口。
+``ROUTERS`` = timeline_router(/timeline…)；``GRAPHQL`` = TimelineQuery。
 """
 
 from __future__ import annotations
@@ -22,22 +21,14 @@ def __getattr__(name: str) -> Any:
     global _exported_routers, _exported_graphql
     if name == "ROUTERS":
         if _exported_routers is None:
-            from app.modules.feed.router import (
-                board_follow_router,
-                timeline_router,
-                user_follow_router,
-            )
+            from app.modules.feed.router import timeline_router
 
-            _exported_routers = [
-                user_follow_router,
-                board_follow_router,
-                timeline_router,
-            ]
+            _exported_routers = [timeline_router]
         return _exported_routers
     if name == "GRAPHQL":
         if _exported_graphql is None:
-            from app.modules.feed.graphql import FollowQuery, TimelineQuery
+            from app.modules.feed.graphql import TimelineQuery
 
-            _exported_graphql = [FollowQuery, TimelineQuery]
+            _exported_graphql = [TimelineQuery]
         return _exported_graphql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -25,10 +25,10 @@ from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item
 from app.modules.feed import fanout
 from app.modules.feed.models import FeedItemMaterialized
-from app.modules.feed.service import (
+from app.modules.feed.service import get_timeline
+from app.modules.interaction.service import (
     follow_board,
     follow_user,
-    get_timeline,
     unfollow_board,
     unfollow_user,
 )

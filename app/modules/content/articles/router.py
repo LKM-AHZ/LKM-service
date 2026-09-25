@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common import ApiResp
 from app.core.err import respond
 from app.db.session import get_session
-from app.modules.articles.models import ArticleComment
-from app.modules.articles.schemas import (
+from app.modules.content.articles.models import ArticleComment
+from app.modules.content.articles.schemas import (
     ArticleCommentCreate,
     ArticleCommentOut,
     ArticleCreate,
@@ -19,7 +19,7 @@ from app.modules.articles.schemas import (
     CategoryOut,
     ReviewArticleRequest,
 )
-from app.modules.articles.service import (
+from app.modules.content.articles.service import (
     create_article_comment,
     create_article_ex,
     create_category_ex,

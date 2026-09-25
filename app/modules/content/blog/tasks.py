@@ -24,7 +24,7 @@ from app.core.messaging import RKEY_RECONCILE, SUB_JOBS
 from app.core.redis import get_redis
 from app.core.task_registry import register_cron_job, register_task
 from app.db.session import new_worker_session as new_session
-from app.modules.blog.models import BlogRepoQuarantine, BlogSeries
+from app.modules.content.blog.models import BlogRepoQuarantine, BlogSeries
 
 logger = logging.getLogger(__name__)
 

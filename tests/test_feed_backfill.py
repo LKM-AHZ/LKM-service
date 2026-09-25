@@ -20,7 +20,7 @@ from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item
 from app.modules.feed import feed as feed_src
 from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
-from app.modules.feed.service import follow_user
+from app.modules.interaction.service import follow_user
 from tests.conftest import AuthUser, auth_user_uid
 
 

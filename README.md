@@ -158,12 +158,14 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 ```json
 {
   "code": 0,
-  "msg": "OK",
-  "data": {}
+  "message": "OK",
+  "data": {},
+  "request_id": "..."
 }
 ```
 
-错误响应也使用同一结构，`code` 为业务错误码，`msg` 为错误说明，HTTP 状态码由 `ERRTABLE` 映射。
+错误响应也使用同一结构，`code` 为业务错误码，`message` 为错误说明，HTTP 状态码由 `ERRTABLE`
+映射。`request_id` 与响应头 `X-Request-ID`、结构化日志同源，便于把一次前端报错对到后端日志。
 
 模块状态接口，如 `/api/v1/boards/status`、`/api/v1/columns/status`，直接返回 `ModuleStatus`，包含：
 

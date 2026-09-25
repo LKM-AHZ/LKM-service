@@ -14,15 +14,15 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.blog import backfill
-from app.modules.blog.git_http import (
+from app.modules.content.blog import backfill
+from app.modules.content.blog.git_http import (
     _decode_basic_auth,
     _is_receive_pack,
     _require_owner_for_push,
     _resolve_series_id,
     maybe_backfill_after_push,
 )
-from app.modules.blog.models import BlogContent, BlogSeries
+from app.modules.content.blog.models import BlogContent, BlogSeries
 from auth.models import User
 from auth.seams import seam_enabled
 from auth.security import hashpwd
@@ -87,7 +87,7 @@ class TestGitHttpDbErrorPropagates:
         import os
 
         from app.core.config import settings
-        from app.modules.blog.git_http import git_http_backend
+        from app.modules.content.blog.git_http import git_http_backend
 
         repo_dir = str(tmp_path / "blog_repos")
         monkeypatch.setattr(settings, "blog_repo_dir", repo_dir)
@@ -129,7 +129,7 @@ class TestGitHttpStreamsBody:
         import os
 
         from app.core.config import settings
-        from app.modules.blog.git_http import git_http_backend
+        from app.modules.content.blog.git_http import git_http_backend
 
         repo_dir = str(tmp_path / "blog_repos")
         monkeypatch.setattr(settings, "blog_repo_dir", repo_dir)
@@ -357,7 +357,7 @@ class TestMaybeBackfillAfterPush:
         async def _factory() -> AsyncSession:
             return db
 
-        monkeypatch.setattr("app.modules.blog.git_http._session_factory", _factory)
+        monkeypatch.setattr("app.modules.content.blog.git_http._session_factory", _factory)
 
     async def _make_series(self, db, repo_name: str) -> uuid.UUID:
         # 先建真实 owner 取 uuid 再挂 series 属主（owner_id 现为 auth realm uuid）。

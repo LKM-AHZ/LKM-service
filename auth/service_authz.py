@@ -156,11 +156,18 @@ async def grant_exam_unlock(
     if not unlock_level and not unlock_role:
         # 无任何解锁目标：无动作（与现实现一致：_apply_unlock 头部早退）。
         return 0
-    return await _apply_upgrades(db, user_id, unlock_level, unlock_role)
+    return await _apply_upgrades(
+        db, user_id, unlock_level, unlock_role, reason="grant_exam_unlock"
+    )
 
 
 async def _apply_upgrades(
-    db: DbSession, user_id: uuid.UUID, unlock_level: str | None, unlock_role: str | None
+    db: DbSession,
+    user_id: uuid.UUID,
+    unlock_level: str | None,
+    unlock_role: str | None,
+    *,
+    reason: str,
 ) -> int:
     """执行单向升权：有任一真实提升才 bump token + 失效；返回是否改（0/1）。"""
     await _lock_user_row(db, user_id)
@@ -192,7 +199,9 @@ async def _apply_upgrades(
         await UserRepository(db).bump_token_version(user_id)
         await UserRepository(db).flush()
         # 升权即身份升迁 → user.updated 失效快照 + 使旧令牌作废（镜像 auth.service.upgrade_to_normal）
-        await events.notify_user_updated(db, user_id)
+        await events.notify_user_updated(user_id)
+        # §5.2 audit.permission_change：权限/等级真实变更才发（独立提交，见 auth.events docstring）
+        await events.notify_audit_permission_change(user_id, reason)
         return 1
     return 0
 
@@ -224,7 +233,9 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
     if changed:
         await UserRepository(db).bump_token_version(user_id)
         await UserRepository(db).flush()
-        await events.notify_user_updated(db, user_id)
+        await events.notify_user_updated(user_id)
+        # §5.2 audit.permission_change：见 _apply_upgrades 的同款说明
+        await events.notify_audit_permission_change(user_id, "grant_incubation")
         return 1
     return 0
 

@@ -33,7 +33,7 @@ from app.modules.content.column_models import (
 
 if TYPE_CHECKING:
     # 跨模块字符串 relationship 目标类型（运行时由 registry 解析，仅类型注解用）
-    from app.modules.feed.models import BoardFollow
+    from app.modules.interaction.models import BoardFollow
 
 
 class ColumnApplication(UUIDPrimaryKeyMixin, Base):

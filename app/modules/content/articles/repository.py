@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.common import tag_names_sequence
 from app.db.repository import AsyncRepository
-from app.modules.articles.models import (
+from app.modules.content.articles.models import (
     Article,
     ArticleCategory,
     ArticleComment,

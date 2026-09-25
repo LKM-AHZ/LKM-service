@@ -1,41 +1,13 @@
-"""信息流(feed)域请求/响应模型：关注关系(follow) + 时间线 read 聚合产物。
+"""信息流(feed)域响应模型：时间线 read 聚合产物。
 
-关注关系模型 (FollowToggle/FollowState/FollowUser/FollowBoard) 原属 follow 域；
-时间线统一条目/分页响应 (FeedItem/FeedResponse) 原属 timeline 域。随 M2.3 合入单一
-feed 域，两类无重名、语义独立，合居此文件。
+关注关系出参 (FollowToggle/FollowState/FollowUser/FollowBoard) 已随归属迁入
+``app.modules.interaction.schemas``（蓝图 §7.2 目标形态），本文件只剩时间线条目/分页。
 """
 
 import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
-
-
-class FollowToggle(BaseModel):
-    """follow/unfollow 操作结果：follower 当前是否正关注该目标。"""
-
-    following: bool
-
-
-class FollowState(BaseModel):
-    """查询某目标对当前用户的关注状态（follow/unfollow 之外的可选展示）。"""
-
-    is_following: bool
-
-
-class FollowUser(BaseModel):
-    """「我关注的用户」列表项。"""
-
-    user_id: uuid.UUID
-    display_name: str
-    avatar: str | None = None
-
-
-class FollowBoard(BaseModel):
-    """「我关注的版块」列表项。"""
-
-    board_id: uuid.UUID
-    title: str
 
 
 class FeedItem(BaseModel):

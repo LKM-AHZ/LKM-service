@@ -77,7 +77,7 @@ async def _reset_password(db: DbSession, user: User, new_password: str) -> None:
 
     await log_audit(db, user.id, "password_reset", detail="recovery")
     # 账户密码重置：解锁 + 清错次 + 抬 updated_at + 全量吊销，属快照相关身份重置 → 失效。
-    await events.notify_user_session_revoke(db, user.id)
+    await events.notify_user_session_revoke(user.id)
 
 
 async def check_recovery_methods(_db: DbSession, _account: str) -> dict[str, Any]:

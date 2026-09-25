@@ -136,7 +136,7 @@ class TestLazySingletonNoSelfDeadlock:
     **同一线程二取非重入锁 = 永久自死锁**：没有异常、没有日志，进程只是不再响应。
 
     实测原始症状：`tests/test_auth_service.py::TestLoginPassword::should_lock_after_5_failed_attempts`
-    走到「触达锁定阈值 → `auth.events.notify_user_banned_committed` → `new_session()`」这条
+    走到「触达锁定阈值 → `auth.events.notify_user_banned` → `new_session()`」这条
     **首次**建会话的路径时整体挂死（faulthandler 栈停在 `session.py` 的 `with _engine_lock`）。
 
     用线程 + `join(timeout)` 跑：把「永久挂起」变成一条可读的断言失败，而不是让整个 pytest

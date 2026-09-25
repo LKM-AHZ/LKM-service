@@ -40,6 +40,8 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_CONTENT_PUBLISHED,
         messaging.RKEY_CONTENT_UPDATED,
         messaging.RKEY_CONTENT_DELETED,
+        messaging.RKEY_AUDIT_LOGIN_FAIL,
+        messaging.RKEY_AUDIT_PERMISSION_CHANGE,
     }
     assert set(messaging.ROUTING_KEY_TOPICS) == expected
 
@@ -65,6 +67,9 @@ def test_subscription_definitions() -> None:
         messaging.RKEY_CONTENT_UPDATED,
         messaging.RKEY_CONTENT_DELETED,
     } <= set(topo["content-index"])
+    # §5.2 audit.* 家族：每种审计语义一个 topic + 一个订阅
+    assert topo["audit"] == [messaging.RKEY_AUDIT_LOGIN_FAIL]
+    assert topo["audit-permission"] == [messaging.RKEY_AUDIT_PERMISSION_CHANGE]
 
 
 def test_registry_handlers_registered() -> None:

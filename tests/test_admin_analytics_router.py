@@ -104,7 +104,7 @@ async def should_reject_unknown_dataset(
     resp = await client.get("/api/v1/admin/analytics/not_a_table")
 
     assert resp.status_code == 422
-    assert "unknown dataset" in resp.json()["msg"]
+    assert "unknown dataset" in resp.json()["message"]
 
 
 async def should_clamp_limit_to_configured_max(

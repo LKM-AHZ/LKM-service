@@ -1,4 +1,4 @@
-"""官方文章示例数据。用法：uv run python -m app.modules.articles.seed"""
+"""官方文章示例数据。用法：uv run python -m app.modules.content.articles.seed"""
 
 import asyncio
 import uuid
@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import now_iso
 from app.db.session import new_worker_session as new_session
-from app.modules.articles.models import Article, ArticleCategory
+from app.modules.content.articles.models import Article, ArticleCategory
 from auth import register_models
 
 register_models()  # 注册 auth ORM 映射类（幂等）

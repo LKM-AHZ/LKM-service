@@ -16,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.err import BizError
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
-from app.modules.blog import git_svc
-from app.modules.blog.errors import BlogErr
-from app.modules.blog.models import BlogContent, BlogSeries
+from app.modules.content.blog import git_svc
+from app.modules.content.blog.errors import BlogErr
+from app.modules.content.blog.models import BlogContent, BlogSeries
 
 
 @dataclass

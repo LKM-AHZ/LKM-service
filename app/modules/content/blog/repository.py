@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.err import BizError, CommonErr
 from app.db.repository import AsyncRepository
-from app.modules.blog.models import (
+from app.modules.content.blog.models import (
     BlogComment,
     BlogContent,
     BlogRepoQuarantine,

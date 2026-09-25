@@ -8,9 +8,17 @@ from pydantic import BaseModel
 
 
 class ApiResp[T](BaseModel):
+    """统一响应信封（蓝图 §6.1）：``{code, message, data, request_id}``。
+
+    ``request_id`` 与请求头 ``X-Request-ID``、结构化日志同源（``core.logging._request_id``
+    ContextVar，由 ``core.middleware.RequestIdMiddleware`` 注入），便于把一次前端报错直接
+    对到后端日志。
+    """
+
     code: int
-    msg: str
+    message: str
     data: T | None = None
+    request_id: str = ""
 
 
 class ListData[T](BaseModel):

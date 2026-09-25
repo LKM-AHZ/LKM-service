@@ -33,6 +33,8 @@ NOTIFICATION_SUBSCRIPTION = messaging.SUB_NOTIFICATION.name
 USER_INVALIDATE_SUBSCRIPTION = messaging.SUB_USER_INVALIDATE.name
 JOBS_SUBSCRIPTION = messaging.SUB_JOBS.name
 CONTENT_INDEX_SUBSCRIPTION = messaging.SUB_CONTENT_INDEX.name
+AUDIT_SUBSCRIPTION = messaging.SUB_AUDIT.name
+AUDIT_PERMISSION_SUBSCRIPTION = messaging.SUB_AUDIT_PERMISSION.name
 
 # 死信 topic（worker_dlq 消费）
 DLQ = messaging.TOPIC_DLQ
@@ -170,8 +172,15 @@ async def run_points_worker() -> None:
 
 
 async def run_default_worker() -> None:
-    """jobs worker：并行消费 cron 订阅与 auth 用户事件失效订阅。"""
+    """jobs worker：并行消费 cron、auth 用户事件失效、以及 audit.* 审计订阅。
+
+    audit.* 的消费体只是「记一个指标 + 一条结构化日志」（见 ``auth.tasks.record_audit_event``），
+    不落库、无外部依赖，故与 user-invalidate 同款**折进本 worker**，不为它单开容器；
+    单开会让部署面多一个空转进程，而收益只是隔离——这里没有需要隔离的重活。
+    """
     await asyncio.gather(
         _consume(JOBS_SUBSCRIPTION),
         _consume(USER_INVALIDATE_SUBSCRIPTION),
+        _consume(AUDIT_SUBSCRIPTION),
+        _consume(AUDIT_PERMISSION_SUBSCRIPTION),
     )

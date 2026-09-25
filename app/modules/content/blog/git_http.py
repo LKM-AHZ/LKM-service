@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.err import BizError
 from app.db.session import get_read_session, new_session
-from app.modules.blog import backfill, git_svc
-from app.modules.blog.models import BlogSeries
+from app.modules.content.blog import backfill, git_svc
+from app.modules.content.blog.models import BlogSeries
 from auth.entities import User
 from auth.seams import seam_enabled, verify_password_via_seam, verifypwd
 

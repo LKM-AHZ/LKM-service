@@ -38,6 +38,15 @@ _EXPECTED_KEYS = {
 }
 
 _ITEM_ID = uuid.UUID("00000000-0000-7000-8000-000000000001")
+
+
+def _without_request_id(body: dict[str, Any]) -> dict[str, Any]:
+    """剔除 request_id 后的信封——它每请求生成，跨两次请求比对时必须排除。
+
+    该字段由 ``test_request_id.py`` 专门守（与 X-Request-ID 头同值），这里只管
+    「除它以外两条序列化路径逐字段相同」。
+    """
+    return {k: v for k, v in body.items() if k != "request_id"}
 _AUTHOR_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
 _BOARD_ID = uuid.UUID("00000000-0000-7000-8000-000000000003")
 
@@ -99,15 +108,15 @@ _PAYLOADS = [
 @pytest.mark.parametrize("resp", _PAYLOADS)
 def test_msgspec_json_equivalent_to_pydantic(resp: FeedResponse) -> None:
     """msgspec 输出与既有 model_dump(mode="json") 解析后逐字段等价。"""
-    old = ApiResp(code=0, msg="OK", data=resp).model_dump(mode="json")
+    old = ApiResp(code=0, message="OK", data=resp).model_dump(mode="json")
     new = json.loads(msgspec_ok(to_wire(resp)).body)
     assert new == old
 
 
 def test_envelope_shape_and_snake_case() -> None:
     body = json.loads(msgspec_ok(to_wire(_PAYLOADS[1])).body)
-    assert set(body) == {"code", "msg", "data"}
-    assert body["code"] == 0 and body["msg"] == "OK"
+    assert set(body) == {"code", "message", "data", "request_id"}
+    assert body["code"] == 0 and body["message"] == "OK"
     assert set(body["data"]) == {"items", "next_cursor"}
     assert set(body["data"]["items"][0]) == _EXPECTED_KEYS  # 无 camelCase 字段
 
@@ -127,8 +136,10 @@ async def test_endpoint_msgspec_matches_legacy_path(
     off = await client.get("/api/v1/timeline", params={"mode": "hot"})
 
     assert on.status_code == off.status_code == 200
-    assert on.json() == off.json()
-    assert set(on.json()) == {"code", "msg", "data"}
+    # request_id 是**每请求**生成的，两次请求本就不同 → 比对时剔掉它，其余必须逐字段相同
+    assert _without_request_id(on.json()) == _without_request_id(off.json())
+    assert set(on.json()) == {"code", "message", "data", "request_id"}
+    assert on.json()["request_id"] and off.json()["request_id"]
     assert set(on.json()["data"]) == {"items", "next_cursor"}
 
 
@@ -175,7 +186,7 @@ _SEARCH_PAGES = [
 
 @pytest.mark.parametrize("page", _SEARCH_PAGES)
 def test_search_msgspec_json_equivalent(page: PageData[SearchHit]) -> None:
-    old = ApiResp(code=0, msg="OK", data=page).model_dump(mode="json")
+    old = ApiResp(code=0, message="OK", data=page).model_dump(mode="json")
     new = json.loads(msgspec_ok(search_to_wire(page)).body)
     assert new == old
 
@@ -190,7 +201,8 @@ async def test_search_endpoint_msgspec_matches_legacy_path(
     off = await client.get("/api/v1/search", params={"q": "黎曼"})
 
     assert on.status_code == off.status_code == 200
-    assert on.json() == off.json()
+    # 同上：request_id 每请求不同，剔掉后比对
+    assert _without_request_id(on.json()) == _without_request_id(off.json())
 
 
 # ---- B6c：interaction / notification / files 列表扩面（纯 JSON 等价）----
@@ -199,7 +211,7 @@ _DT = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
 
 
 def _assert_equivalent(page: Any, wire: Any) -> None:
-    old = ApiResp(code=0, msg="OK", data=page).model_dump(mode="json")
+    old = ApiResp(code=0, message="OK", data=page).model_dump(mode="json")
     new = json.loads(msgspec_ok(wire).body)
     assert new == old
 

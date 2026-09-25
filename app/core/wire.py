@@ -20,6 +20,7 @@ import msgspec
 from starlette.responses import Response
 
 from app.core.err import ERRTABLE, CommonErr
+from app.core.logging import get_request_id
 
 
 class MsgspecJSONResponse(Response):
@@ -35,12 +36,13 @@ class Envelope(msgspec.Struct):
     """与 ``common.ApiResp`` 同形的成功 envelope（业务读热端点专用）。"""
 
     code: int
-    msg: str
+    message: str
     data: Any = None
+    request_id: str = ""
 
 
 def msgspec_ok(data: Any, *, headers: dict[str, str] | None = None) -> Response:
-    """构造成功响应（``code/msg/data``），序列化走 msgspec。
+    """构造成功响应（``code/message/data/request_id``），序列化走 msgspec。
 
     **``data`` 必须已是 msgspec 可编码的值**（本模块/各模块 ``wire.py`` 的 Struct、dict、
     list、str/int/float/bool/None、datetime/UUID/Decimal 等）。Pydantic 模型实例、任意对象、
@@ -53,6 +55,8 @@ def msgspec_ok(data: Any, *, headers: dict[str, str] | None = None) -> Response:
     status, msg = ERRTABLE[CommonErr.OK]
     return MsgspecJSONResponse(
         status_code=status,
-        content=Envelope(code=int(CommonErr.OK), msg=msg, data=data),
+        content=Envelope(
+            code=int(CommonErr.OK), message=msg, data=data, request_id=get_request_id()
+        ),
         headers=headers,
     )

@@ -16,8 +16,8 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.feed import service as follow_service
-from app.modules.feed.service import (
+from app.modules.interaction import service as follow_service
+from app.modules.interaction.service import (
     is_following_user,
     list_followed_boards,
     list_following_users,

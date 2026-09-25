@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.jobs import RKEY_NOTIFY
+from app.core.logging import get_request_id
 from app.core.secrets import reveal
 from app.db.outbox import enqueue_outbox
 from app.db.session import new_session
@@ -129,7 +130,12 @@ async def notify_object(
     if not _authorized(authorization):
         return JSONResponse(
             status_code=401,
-            content={"code": 401, "msg": "Unauthorized", "data": None},
+            content={
+                "code": 401,
+                "message": "Unauthorized",
+                "data": None,
+                "request_id": get_request_id(),
+            },
         )
 
     try:
@@ -145,4 +151,12 @@ async def notify_object(
         # fire-and-forget：入队失败不影响回执（worker 侧可重投/恢复）
         await _enqueue_upload(upload_id)
 
-    return JSONResponse(status_code=200, content={"code": 0, "msg": "OK", "data": None})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "code": 0,
+            "message": "OK",
+            "data": None,
+            "request_id": get_request_id(),
+        },
+    )

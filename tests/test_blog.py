@@ -12,15 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
-from app.modules.blog.errors import BlogErr
-from app.modules.blog.models import BlogSeriesStatus
-from app.modules.blog.schemas import (
+from app.modules.content.blog.errors import BlogErr
+from app.modules.content.blog.models import BlogSeriesStatus
+from app.modules.content.blog.schemas import (
     BlogCommentCreate,
     BlogSeriesCreate,
     BlogSeriesInfo,
     BlogSeriesUpdate,
 )
-from app.modules.blog.service import (
+from app.modules.content.blog.service import (
     create_comment,
     create_series,
     delete_comment,
@@ -256,7 +256,7 @@ class TestBlogSeries:
     async def should_clean_quarantine_on_delete(
         self, db: AsyncSession, blog_dir: str
     ) -> None:
-        from app.modules.blog.models import BlogRepoQuarantine
+        from app.modules.content.blog.models import BlogRepoQuarantine
 
         user_id = await _user(db)
         series = await _series(db, user_id=user_id)
@@ -1183,7 +1183,7 @@ class TestBlogContent:
     async def _get_row(
         self, db: AsyncSession, series_id: uuid.UUID, path: str
     ) -> Any:
-        from app.modules.blog.models import BlogContent
+        from app.modules.content.blog.models import BlogContent
 
         return (
             (
@@ -1217,7 +1217,7 @@ class TestBlogContent:
         await write_series_file(db, series.id, user_id, "a.md", "v1")
         await write_series_file(db, series.id, user_id, "a.md", "v2")
 
-        from app.modules.blog.models import BlogContent
+        from app.modules.content.blog.models import BlogContent
 
         row = await self._get_row(db, series.id, "a.md")
         assert row is not None

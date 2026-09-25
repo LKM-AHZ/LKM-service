@@ -13,9 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.models import RolePermission
-from app.modules.articles.models import Article, ArticleComment
-from app.modules.articles.schemas import CategoryCreate
-from app.modules.articles.service import create_category_ex
+from app.modules.content.articles.models import Article, ArticleComment
+from app.modules.content.articles.schemas import CategoryCreate
+from app.modules.content.articles.service import create_category_ex
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 

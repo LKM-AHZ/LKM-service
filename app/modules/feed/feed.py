@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.articles.models import Article
+from app.modules.content.articles.models import Article
 from app.modules.content.models import (
     ColumnPost,
     ColumnPostStatus,

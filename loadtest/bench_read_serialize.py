@@ -68,7 +68,7 @@ def _baseline_bytes(resp: FeedResponse) -> bytes:
     只测 encode 不建 Response 会低估基线成本，从而低估 msgspec 的收益；
     msgspec 侧 ``msgspec_ok`` 建的是完整 Response，两边必须对称。
     """
-    content = ApiResp(code=0, msg="OK", data=resp).model_dump(mode="json")
+    content = ApiResp(code=0, message="OK", data=resp).model_dump(mode="json")
     return JSONResponse(content=content).body
 
 

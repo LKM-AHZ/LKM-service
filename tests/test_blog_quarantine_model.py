@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select
 
-from app.modules.blog.models import BlogRepoQuarantine
+from app.modules.content.blog.models import BlogRepoQuarantine
 
 
 @pytest.mark.asyncio

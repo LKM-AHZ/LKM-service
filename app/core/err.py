@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from app.core.common import ApiResp, PageData
+from app.core.logging import get_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class CommonErr(ErrCode):
     INTERNAL_ERROR = NS_COMMON.err(3)
     MFA_REQUIRED = NS_COMMON.err(4)  # 危险操作需重新完成 2FA（step-up）
     UNAVAILABLE = NS_COMMON.err(5)  # 依赖的后端未启用/不可达（如分析库 ClickHouse）
+    TIMEOUT = NS_COMMON.err(6)  # 请求超出执行预算被硬中断（GraphQL 查询级超时）
 
 
 ERRTABLE: dict[ErrCode, tuple[int, str]] = {}
@@ -82,6 +84,7 @@ register(
         CommonErr.INTERNAL_ERROR: (500, "Internal server error"),
         CommonErr.MFA_REQUIRED: (401, "MFA required"),
         CommonErr.UNAVAILABLE: (503, "Service unavailable"),
+        CommonErr.TIMEOUT: (504, "Request timed out"),
     }
 )
 
@@ -146,9 +149,12 @@ def resp_json(
 
     return JSONResponse(
         status_code=status,
-        content=ApiResp(code=errcode, msg=detail or msg, data=data).model_dump(
-            mode="json"
-        ),
+        content=ApiResp(
+            code=errcode,
+            message=detail or msg,
+            data=data,
+            request_id=get_request_id(),
+        ).model_dump(mode="json"),
         headers=headers,
     )
 

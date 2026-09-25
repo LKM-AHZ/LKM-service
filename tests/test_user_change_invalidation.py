@@ -8,8 +8,9 @@
 为何分三层（settings.pulsar_url 单测默认空 → ``enqueue_outbox`` fail-open 直接不入队，
 无真 relay/E2E；见 brief）：
 1) 真 outbox 行断言：monkeypatch pulsar_url 非空，走**真实写点**（update_profile /
-   upgrade_to_normal / _reset_password / notify_user_banned_committed）后 commit，查
-   ``OutboxMessage`` 的 routing_key + payload.args 断言落对源事件。
+   upgrade_to_normal / _reset_password / notify_user_banned），查 ``OutboxMessage`` 的
+   routing_key + payload.args 断言落对源事件。事件由 ``auth.events`` 的**自建会话独立提交**
+   （不依赖测试会话是否 commit，见 `_own_session_for_events`）。
 2) consumer 契约：直接调 ``auth.tasks.invalidate_user_snap``（worker 分派会跑的 handler），
    断言缓存被 del/epoch bump、幂等可重跑。
 3) HARD 新鲜度（profile 变更）：真 Profile 编改(update_profile) → 经上面同样机制失效 →
@@ -103,6 +104,25 @@ async def _dim_sync_throwaway(monkeypatch, _fused_realm) -> None:
         "auth.user_dim_sync._session_factory", _factory
     )
 
+
+
+@pytest.fixture(autouse=True)
+def _own_session_for_events(_fused_realm, monkeypatch: pytest.MonkeyPatch) -> None:
+    """把 ``auth.events`` 的自建会话指向**同一融合库的另一个会话**。
+
+    事件投递已统一为「自建业务库会话 + 独立提交」（拆库后 ``outbox_events`` 属业务库，
+    而调用方持有的是 auth 库会话——见 ``auth/events.py`` docstring），故必须让那个会话落在
+    本测 schema 里才能断言。
+
+    刻意用**另一个**会话而不是复用测试会话：复用会让「调用方回滚不影响事件」这条语义
+    测不出来（同一个会话被 commit 了，看起来也像独立提交）。
+    """
+    _engine, maker = _fused_realm
+
+    async def _new() -> AsyncSession:
+        return maker()
+
+    monkeypatch.setattr("auth.events.new_session", _new)
 
 
 @pytest.fixture(autouse=True)
@@ -237,27 +257,19 @@ class TestMutationSitesEmitOutboxEvents:
     async def test_account_lock_committed_emits_user_banned(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """自动锁定路径独立提交 banned 事件（自建会话指向测试库）。"""
+        """自动锁定路径发出 banned 事件；**不 commit 测试会话**也照样落库。
+
+        事件不依赖调用方事务——这原本是锁定路径的特殊需求，如今是全模块统一取法
+        （见 `_own_session_for_events`）。
+        """
         _enable_bus(monkeypatch)
         uid = await _mk_user(db, "lock_user")
-        # 沿用 files.notify 测法：把新的 own-session 指向测试 db，事件行落同一库便于断言。
-        monkeypatch.setattr(
-            "auth.events.new_session", _session_for(db)
-        )
-        await auth_events.notify_user_banned_committed(uid)
-        await db.commit()
+        await auth_events.notify_user_banned(uid)
 
         rows = await _rows(db)
         assert len(rows) == 1
         assert rows[0].routing_key == "event.user.banned"
         assert _payload_user_id(rows[0].payload_json) == uid
-
-
-def _session_for(db: AsyncSession):
-    async def _new() -> AsyncSession:
-        return db
-
-    return _new
 
 
 # ---- Layer 2：consumer handler 契约（幂等失效原语）----

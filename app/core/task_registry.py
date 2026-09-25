@@ -77,7 +77,7 @@ def import_task_modules() -> None:
     from auth import register_tasks
 
     register_tasks()
-    import app.modules.blog.tasks
+    import app.modules.content.blog.tasks
     import app.modules.content.tasks
     import app.modules.feed.tasks
     import app.modules.files.tasks

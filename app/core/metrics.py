@@ -107,6 +107,16 @@ counts_reconcile_repeated_total = Counter(
 )
 
 
+# 审计事件消费计数（蓝图 §5.2 的 audit.* 家族）：审计此前只批量导出到 ClickHouse，属
+# 「事后可查」；这里把登录失败/权限变更变成**实时可告警**的流。action 维度取
+# ``messaging.RKEY_AUDIT_*`` 的值；告警规则见 deploy/prometheus/rules/lkm-audit.yml。
+audit_events_total = Counter(
+    "audit_events_total",
+    "已消费的审计事件数（action=login_fail|permission_change；§5.2）",
+    ("action",),
+)
+
+
 # GraphQL 查询耗时（M6.4）：从 operation 开始到执行收束（含解析/校验/执行），供只读端点
 # 的性能看板；被防护拒绝的查询同样计入（耗时短，正是防护生效的形态）。
 graphql_query_duration_seconds = Histogram(

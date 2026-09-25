@@ -16,22 +16,22 @@ from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
 from app.db.repository import DbSession
-from app.modules.articles.errors import ArticleErr
-from app.modules.articles.models import (
+from app.modules.content.articles.errors import ArticleErr
+from app.modules.content.articles.models import (
     Article,
     ArticleComment,
 )
-from app.modules.articles.models import (
+from app.modules.content.articles.models import (
     ArticleCategory as ArticleCategoryORM,
 )
-from app.modules.articles.repository import (
+from app.modules.content.articles.repository import (
     ArticleCategoryRepository,
     ArticleCommentRepository,
     ArticleLikeRepository,
     ArticleRepository,
     ArticleTagRepository,
 )
-from app.modules.articles.schemas import (
+from app.modules.content.articles.schemas import (
     ArticleCategory,
     ArticleCommentOut,
     ArticleCreate,

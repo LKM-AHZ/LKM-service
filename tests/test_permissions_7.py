@@ -9,8 +9,8 @@ from app.modules.files.errors import FileErr
 def test_all_error_modules_register_without_duplicate() -> None:
     """导入全部 errors 模块（副作用注册）不抛重复错误码；关键码均已入表。"""
     # 触发全部注册（main 顶部集中 import 亦依赖此机制）
-    import app.modules.articles.errors
-    import app.modules.blog.errors
+    import app.modules.content.articles.errors
+    import app.modules.content.blog.errors
     import app.modules.content.errors
     import app.modules.files.errors
     import app.modules.starhope.errors  # noqa: F401

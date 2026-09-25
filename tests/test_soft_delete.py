@@ -21,10 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
 from app.db.repository import AsyncRepository
-from app.modules.articles.models import Article, ArticleCategory, ArticleComment
-from app.modules.articles.repository import ArticleCommentRepository
-from app.modules.blog.models import BlogSeries
-from app.modules.blog.repository import BlogCommentRepository
+from app.modules.content.articles.models import Article, ArticleCategory, ArticleComment
+from app.modules.content.articles.repository import ArticleCommentRepository
+from app.modules.content.blog.models import BlogSeries
+from app.modules.content.blog.repository import BlogCommentRepository
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import reconcile_counts
@@ -403,7 +403,7 @@ async def test_starhope_mixin_round_trip(db: DB) -> None:
 
 async def test_restore_is_noop_for_model_without_column(db: DB) -> None:
     """无 ``deleted_at`` 列的模型上 restore 是空操作（批 3 基类的动态判定契约）。"""
-    from app.modules.articles.models import ArticleCategory
+    from app.modules.content.articles.models import ArticleCategory
 
     class CategoryRepo(AsyncRepository[ArticleCategory]):
         model = ArticleCategory

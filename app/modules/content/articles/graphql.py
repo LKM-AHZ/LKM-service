@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
 from app.core.err import BizError
-from app.modules.articles.errors import ArticleErr
-from app.modules.articles.schemas import ArticleDetail, ArticleListItem
-from app.modules.articles.service import (
+from app.modules.content.articles.errors import ArticleErr
+from app.modules.content.articles.schemas import ArticleDetail, ArticleListItem
+from app.modules.content.articles.service import (
     get_about,
     get_article,
     list_articles,

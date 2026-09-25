@@ -87,7 +87,7 @@ class TestAdminMe:
         resp = await client.get("/api/v1/admin/auth/me")
         # business 不能本地裁决后台真值 → 一律拒（Admin auth service not configured）
         assert resp.status_code == 403
-        assert resp.json()["msg"] == "Admin auth service not configured"
+        assert resp.json()["message"] == "Admin auth service not configured"
 
     async def should_allow_seam_admin(
         self,

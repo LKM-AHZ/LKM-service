@@ -1,17 +1,10 @@
-"""信息流(feed)域服务：关注关系(follow) 写/查 + 时间线(read-time) 合流读。
+"""信息流(feed)域服务：时间线(read-time) 合流读。
 
-M2.3 合并 incoming follow/service.py（关注写 + 关注集合缓存，feed 过滤的数据源坐标）与
-timeline/service.py（时间线合流：follow 过滤 × hot 全站 × 游标分页）。两类函数名不冲突，
-语义独立合居此命名空间；关注集合读（get_following_ids/get_followed_board_ids）与时间线
-按关注过滤天然同域协作。
+**关注关系不在此域**：``UserFollow``/``BoardFollow`` 与其写/查服务已按蓝图 §7.2 目标形态
+迁入 interaction（信息流域只保留「时间线生成」）。本域只**消费**关注关系——经
+``interaction.service`` 的公开读口取「我关注了谁 / 我关注了哪些版块」用于过滤，不直接触达
+那两张表，也不缓存它们（缓存归 interaction 域所有）。
 
---- 关注关系（follow 原 service） ---
-幂等实现走「软删墓碑」：follow 时将已有行 ``deleted_at`` 置 NULL（若存在；否则新插入）；
-unfollow 仅置 ``deleted_at``，不删行。配合 ``(follower_id, following_id)`` 唯一约束保证不产生
-第二行活动关注。「我关注了谁」的 id 集合被时间线高频读取 → 短 TTL 缓存；follow/unfollow 写路径
-显式失效。
-
---- 时间线合流（timeline 原 service） ---
 合流策略（对齐 Solar 参考）：**查询时合流**，非写入 fan-out——每次请求实时从各内容源按
 (created_at, id) 游标各取一页，合并后过滤审校隐藏项，按（关注加权 + 审校排除后的）时间倒序返回。
 审校：命中 hide 的条目在合流前剔除；命中 derank 的压低 ``sort_score`` 字段值
@@ -26,15 +19,7 @@ import datetime
 import uuid
 from typing import Any
 
-from app.core.cache import (
-    TTL_ITEM_S,
-    TTL_LIST_S,
-    cache_invalidate,
-    cached_read,
-    make_key,
-)
-from app.core.config import settings
-from app.core.err import BizError
+from app.core.cache import TTL_LIST_S, cached_read, make_key
 from app.db.repository import DbSession
 from app.modules.admin.moderation.engine import (
     ModerationResult,
@@ -43,159 +28,13 @@ from app.modules.admin.moderation.engine import (
 )
 from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
-from app.modules.feed.errors import FollowErr
-from app.modules.feed.repository import (
-    BoardFollowRepository,
-    FeedBoardRepository,
-    FeedItemMaterializedRepository,
-    UserFollowRepository,
-)
+from app.modules.feed.repository import FeedItemMaterializedRepository
 from app.modules.feed.schemas import FeedItem, FeedResponse
-from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
-
-
-def _following_key(user_id: uuid.UUID) -> str:
-    return make_key("follow", "following", user_id)
-
-
-def _board_ids_key(user_id: uuid.UUID) -> str:
-    return make_key("follow", "boards", user_id)
-
-
-async def _invalidate_follow_cache(user_id: uuid.UUID) -> None:
-    """关注集合缓存显式失效（follow/unfollow 低频但需即时）。"""
-    await cache_invalidate(_following_key(user_id), _board_ids_key(user_id))
-
-
-async def follow_user(
-    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
-) -> None:
-    """follower 关注 following（幂等：重复关注静默成功）。"""
-    if follower_id == following_id:
-        raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能关注自己")
-    # 关注目标身份存在性走 auth 快照缝（business 不直读 auth.users）。
-    target_snap = await get_user_snapshot(db, user_id=following_id)
-    if target_snap is None:
-        raise BizError(FollowErr.TARGET_NOT_FOUND, "关注目标用户不存在")
-
-    created = await UserFollowRepository(db).follow(follower_id, following_id)
-    if created and settings.feed_backfill_limit > 0:
-        # M6.11：新关注即回填该作者最近内容，令物化 feed 当场可用（否则要等新内容 fanout）
-        await fanout.backfill_author(
-            db, follower_id, following_id, settings.feed_backfill_limit
-        )
-    await _invalidate_follow_cache(follower_id)
-
-
-async def unfollow_user(
-    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
-) -> None:
-    """follower 取消关注 following（幂等：末关注时静默成功）。"""
-    if follower_id == following_id:
-        raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能操作自己的关注")
-    changed = await UserFollowRepository(db).unfollow(follower_id, following_id)
-    if changed:
-        # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）；
-        # 仍在关注的版块所覆盖的行保留（与 unfollow_board 的 keep 语义对称）。
-        keep = set(await get_followed_board_ids(db, follower_id))
-        await fanout.remove_author_items(db, follower_id, following_id, keep)
-        await _invalidate_follow_cache(follower_id)
-
-
-async def follow_board(
-    db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
-) -> None:
-    """follower 关注版块（幂等）。"""
-    target = await FeedBoardRepository(db).get(board_id)
-    if target is None:
-        raise BizError(FollowErr.TARGET_NOT_FOUND, "关注版块不存在")
-
-    created = await BoardFollowRepository(db).follow(follower_id, board_id)
-    if created and settings.feed_backfill_limit > 0:
-        # M6.11：新关注版块即回填该版块最近讨论帖
-        await fanout.backfill_board(
-            db, follower_id, board_id, settings.feed_backfill_limit
-        )
-    await _invalidate_follow_cache(follower_id)
-
-
-async def unfollow_board(
-    db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
-) -> None:
-    """follower 取消关注版块（幂等）。"""
-    changed = await BoardFollowRepository(db).unfollow(follower_id, board_id)
-    if changed:
-        # M6.11：取关版块即清理其物化条目（保留仍因作者关注而可见的行）
-        keep = set(await get_following_ids(db, follower_id))
-        await fanout.remove_board_items(db, follower_id, board_id, keep)
-        await _invalidate_follow_cache(follower_id)
-
-
-async def get_following_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """我关注的所有用户 id（缓存，供时间线过滤）。
-
-    缓存层是 ``json.dumps``/``json.loads``：UUID 不可序列化，直接缓存 list[UUID] 会被
-    fail-open 静默丢弃（缓存永不生效、每请求回库），命中时还会拿回 list[str]。故缓存里
-    存 str、读回再转 UUID（与物化页 model_dump(mode="json") 同思路）。
-    """
-
-    async def load() -> list[str]:
-        ids = await UserFollowRepository(db).list_following_ids(user_id)
-        return [str(i) for i in ids]
-
-    raw = await cached_read(_following_key(user_id), TTL_ITEM_S, load)
-    return [uuid.UUID(x) for x in (raw or [])]
-
-
-async def get_followed_board_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """我关注的所有版块 id（缓存，供时间线过滤）。序列化口径同 get_following_ids。"""
-
-    async def load() -> list[str]:
-        ids = await BoardFollowRepository(db).list_board_ids(user_id)
-        return [str(i) for i in ids]
-
-    raw = await cached_read(_board_ids_key(user_id), TTL_ITEM_S, load)
-    return [uuid.UUID(x) for x in (raw or [])]
-
-
-async def is_following_user(
-    db: DbSession, follower_id: uuid.UUID, following_id: uuid.UUID
-) -> bool:
-    """follower 当前是否关注 following（软删过滤）。"""
-    return await UserFollowRepository(db).is_following(follower_id, following_id)
-
-
-async def list_following_users(
-    db: DbSession, user_id: uuid.UUID
-) -> list[tuple[uuid.UUID, str, str | None]]:
-    """我关注的用户列表：(user_id, display_name, avatar)。
-
-    display_name 取 ``nickname or username``（沿用 points 榜惯例；缝的 display_name
-    同口径），avatar 取快照 avatar。走 id 集合 + 读缝一次批量，避免逐条/跨域 join。
-    """
-    ids = await get_following_ids(db, user_id)
-    if not ids:
-        return []
-    snaps = await get_user_snapshot_batch(db, user_ids=ids)
-    return [
-        (
-            uid,
-            snaps[uid].display_name if uid in snaps else str(uid),
-            snaps[uid].avatar if uid in snaps else None,
-        )
-        for uid in ids
-    ]
-
-
-async def list_followed_boards(
-    db: DbSession, user_id: uuid.UUID
-) -> list[tuple[uuid.UUID, str]]:
-    """我关注的版块列表：(board_id, title)。"""
-    ids = await get_followed_board_ids(db, user_id)
-    if not ids:
-        return []
-    title_by_id = await FeedBoardRepository(db).title_map(ids)
-    return [(bid, title_by_id.get(bid, "")) for bid in ids]
+from app.modules.interaction.service import (
+    get_followed_board_ids,
+    get_following_ids,
+)
+from auth.snapshot import get_user_snapshot_batch
 
 
 async def _fill_authors(db: DbSession, items: list[FeedItem]) -> None:

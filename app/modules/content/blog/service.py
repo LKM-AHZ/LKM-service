@@ -8,14 +8,14 @@ from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from app.db.repo import get_or_raise
 from app.db.repository import DbSession
-from app.modules.blog import git_svc
-from app.modules.blog.errors import BlogErr
-from app.modules.blog.models import (
+from app.modules.content.blog import git_svc
+from app.modules.content.blog.errors import BlogErr
+from app.modules.content.blog.models import (
     BlogComment,
     BlogContent,
     BlogSeries,
 )
-from app.modules.blog.repository import (
+from app.modules.content.blog.repository import (
     BlogCommentRepository,
     BlogContentRepository,
     BlogRepoQuarantineRepository,
@@ -23,7 +23,7 @@ from app.modules.blog.repository import (
     BlogStarRepository,
     BoardRepository,
 )
-from app.modules.blog.schemas import (
+from app.modules.content.blog.schemas import (
     BlogCommentCreate,
     BlogCommentInfo,
     BlogSeriesCreate,

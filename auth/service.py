@@ -48,7 +48,7 @@ async def update_profile(
         profile.avatar = info.avatar
     await ProfileRepository(db).flush()
     # 快照 display_name/avatar 一并依赖 Profile.nickname/avatar（A6）→ 变更须失效 user:snap。
-    await events.notify_user_updated(db, user_id)
+    await events.notify_user_updated(user_id)
 
 
 class _Readable(Protocol):
@@ -128,7 +128,7 @@ async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) ->
         with suppress(BizError):
             await _get_storage().delete(old_key)
     # 头像为展示 URL（immutable 指纹 key），Profile.avatar 变更须同步失效 user:snap。
-    await events.notify_user_updated(db, user_id)
+    await events.notify_user_updated(user_id)
     return new_key
 
 

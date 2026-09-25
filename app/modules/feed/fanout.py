@@ -29,12 +29,7 @@ from app.core import redis as redis_client
 from app.core.cache import make_key
 from app.core.config import settings
 from app.modules.feed import feed as feed_src
-from app.modules.feed.models import (
-    BoardFollow,
-    FeedFanoutState,
-    FeedItemMaterialized,
-    UserFollow,
-)
+from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
 from app.modules.feed.schemas import FeedItem
 
 logger = logging.getLogger(__name__)
@@ -87,30 +82,25 @@ async def _audience(
     下结论，无需把超大作者/版块的全部关注者 id 拉进内存。低于 cap 时该 limit 不生效，
     集合仍完整。分开返回是为了按维度分别判定封顶——并集判定会把「版块受众超限」的
     条目连作者关注者也一起跳过，而读路径的实时补拉只认大 V 作者。
+
+    **读者归属**：``user_follows``/``board_follows`` 属 interaction 域（蓝图 §7.2），
+    故这里经其 service 公开读口取，不直查那两张表。
     """
+    # 惰性 import 破环：interaction.service 在模块级引用本模块（回填/清理入口），
+    # 顶层互相 import 会在任一侧先加载时构成循环。
+    from app.modules.interaction import service as interaction_service
+
     limit = settings.feed_fanout_max_followers + 1
     authors: set[uuid.UUID] = set()
     boards: set[uuid.UUID] = set()
     if author_id is not None:
-        rows = await db.execute(
-            select(UserFollow.follower_id)
-            .where(
-                UserFollow.following_id == author_id,
-                UserFollow.deleted_at.is_(None),
-            )
-            .limit(limit)
+        authors |= set(
+            await interaction_service.list_follower_ids(db, author_id, limit=limit)
         )
-        authors |= set(rows.scalars().all())
     if board_id is not None:
-        rows = await db.execute(
-            select(BoardFollow.follower_id)
-            .where(
-                BoardFollow.board_id == board_id,
-                BoardFollow.deleted_at.is_(None),
-            )
-            .limit(limit)
+        boards |= set(
+            await interaction_service.list_board_follower_ids(db, board_id, limit=limit)
         )
-        boards |= set(rows.scalars().all())
     return authors, boards
 
 

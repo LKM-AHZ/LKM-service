@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.common import ApiResp
 from app.core.err import respond
 from app.db.session import get_session
-from app.modules.blog.schemas import (
+from app.modules.content.blog.schemas import (
     BlogCommentCreate,
     BlogCommentInfo,
     BlogSeriesCreate,
@@ -16,7 +16,7 @@ from app.modules.blog.schemas import (
     SeriesFileWrite,
     SeriesPublish,
 )
-from app.modules.blog.service import (
+from app.modules.content.blog.service import (
     create_comment,
     create_series,
     delete_comment,

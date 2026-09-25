@@ -26,8 +26,12 @@ from typing import Any
 
 from app.core.messaging import (
     RKEY_ANALYTICS,
+    RKEY_AUDIT_LOGIN_FAIL,
+    RKEY_AUDIT_PERMISSION_CHANGE,
     RKEY_OPS_DAILY,
     RKEY_RECONCILE,
+    SUB_AUDIT,
+    SUB_AUDIT_PERMISSION,
     SUB_JOBS,
     SUB_SEND,
     SUB_USER_INVALIDATE,
@@ -73,6 +77,40 @@ async def invalidate_user_snap(user_id: int) -> None:
     except Exception:
         # B0.2 离线写，fail-open：绝不让 dim ETL 故障反过来影响在线失效语义
         logger.exception("user_dim 事件刷新失败(在线失效已完成) user_id=%s", user_id)
+
+
+async def record_audit_event(
+    user_id: str | None, action: str, detail: str = ""
+) -> None:
+    """任务：消费审计事件（§5.2 ``audit.*`` 家族），记为指标 + 结构化日志。
+
+    这是「审计 worker」的最小实现，也是本改动**唯一有真实价值**的消费侧：审计此前只写
+    ``audit_logs`` 表、再由批任务灌 ClickHouse（事后可查）；经总线实时消费后，
+    ``audit_events_total{action}`` 可以被 Prometheus 直接告警（如登录失败突增 = 暴力破解
+    探测），而不用等批量导出。
+
+    参数形状与事件 payload 的 ``args`` 一一对应（worker 按名展开调用）。本任务只读取、
+    不落库，天然幂等：重复投递只是把计数多记一次（计数器语义即可观测性，非账目）。
+    """
+    from app.core.metrics import audit_events_total
+
+    # action 直接取 routing key（路由键本身就是审计语义），只认白名单以免任何 payload 都能
+    # 造出任意 label 维度（label 无界 = 指标基数爆炸）。
+    known = {RKEY_AUDIT_LOGIN_FAIL, RKEY_AUDIT_PERMISSION_CHANGE}
+    if action not in known:
+        logger.warning("audit 事件携带未知 action=%r，已忽略", action)
+        return
+    audit_events_total.labels(action).inc()
+    logger.info(
+        "audit.event",
+        extra={
+            "extra_fields": {
+                "action": action,
+                "user_id": user_id or "",
+                "detail": detail,
+            }
+        },
+    )
 
 
 async def _trigger_prefect_flow(deployment: str, parameters: dict[str, Any]) -> bool:
@@ -190,6 +228,9 @@ register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_
 register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
 register_task(SUB_JOBS.name, "run_ops_daily", run_ops_daily)
+# 审计事件：两个 topic 各自的订阅绑同一 handler（action 由路由键区分）
+register_task(SUB_AUDIT.name, "record_audit_event", record_audit_event)
+register_task(SUB_AUDIT_PERMISSION.name, "record_audit_event", record_audit_event)
 # 低频 crash-safety 网：周期增量对账（非新鲜度主路；主路是上面的 user.* 事件）。每日 03:10
 # 由 scheduler 发布 cron.reconcile→jobs 订阅。routing/cron 复用既有 cron.reconcile 键/订阅。
 register_cron_job(

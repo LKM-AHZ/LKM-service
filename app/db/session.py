@@ -64,7 +64,7 @@ def _ensure_engine_locked() -> AsyncEngine:
     ——**同一个线程二取非重入锁 = 永久自死锁**：进程不再响应、也没有任何异常可捕获。
 
     实测复现：`tests/test_auth_service.py::TestLoginPassword::should_lock_after_5_failed_attempts`
-    走到「触达锁定阈值 → `notify_user_banned_committed` → `new_session()`」这条**首次**建会话
+    走到「触达锁定阈值 → `notify_user_banned` → `new_session()`」这条**首次**建会话
     的路径时整体挂死（faulthandler 栈停在 `session.py:58 with _engine_lock`）。
     """
     global _async_engine

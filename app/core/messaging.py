@@ -64,6 +64,10 @@ RKEY_OPS_DAILY = "cron.ops_daily"
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
 RKEY_CONTENT_DELETED = "event.content.deleted"
+# 审计事件（§5.2「audit.*」家族）：审计此前只落 auth 库 audit_logs 表、再由批任务灌
+# ClickHouse，**总线上零 audit 事件**；这两个键把「登录失败 / 权限变更」变成实时可告警的流。
+RKEY_AUDIT_LOGIN_FAIL = "audit.login_fail"
+RKEY_AUDIT_PERMISSION_CHANGE = "audit.permission_change"
 
 # ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
 
@@ -74,6 +78,10 @@ def _topic(namespace: str, name: str) -> str:
 
 TOPIC_EMAIL = _topic("auth", "email")
 TOPIC_USER_EVENTS = _topic("auth", "user.events")
+# §5.2 的审计家族 `persistent://lkm/auth/audit.*`：每种审计语义一个 topic（与该表把
+# `emails.*` 展开成邮件类事件同构）。命名空间 auth 已由 deploy 侧建好，无需新增。
+TOPIC_AUDIT_LOGIN_FAIL = _topic("auth", "audit.login_fail")
+TOPIC_AUDIT_PERMISSION_CHANGE = _topic("auth", "audit.permission_change")
 TOPIC_NOTIFY = _topic("biz", "notify.upload")
 TOPIC_POINTS = _topic("biz", "points.apply")
 TOPIC_CONTENT = _topic("biz", "content.events")
@@ -87,6 +95,8 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_USER_UPDATED: TOPIC_USER_EVENTS,
     RKEY_USER_BANNED: TOPIC_USER_EVENTS,
     RKEY_USER_SESSION_REVOKE: TOPIC_USER_EVENTS,
+    RKEY_AUDIT_LOGIN_FAIL: TOPIC_AUDIT_LOGIN_FAIL,
+    RKEY_AUDIT_PERMISSION_CHANGE: TOPIC_AUDIT_PERMISSION_CHANGE,
     RKEY_NOTIFY: TOPIC_NOTIFY,
     RKEY_POINTS: TOPIC_POINTS,
     RKEY_CONTENT_PUBLISHED: TOPIC_CONTENT,
@@ -135,6 +145,15 @@ SUB_CONTENT_INDEX = Subscription(
     (RKEY_CONTENT_PUBLISHED, RKEY_CONTENT_UPDATED, RKEY_CONTENT_DELETED),
 )
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
+# 审计消费（§5.2 的「审计 worker」）：把 audit.* 事件实时转成指标/告警，而不是只等批量导出。
+# 单订阅横跨两个 topic 不可行（订阅与 topic 一一对应），故这里按**主题族**取 login_fail 作
+# 主 topic；permission_change 的订阅在同命名空间内各自登记（见 SUB_AUDIT_PERMISSION）。
+SUB_AUDIT = Subscription("audit", TOPIC_AUDIT_LOGIN_FAIL, (RKEY_AUDIT_LOGIN_FAIL,))
+SUB_AUDIT_PERMISSION = Subscription(
+    "audit-permission",
+    TOPIC_AUDIT_PERMISSION_CHANGE,
+    (RKEY_AUDIT_PERMISSION_CHANGE,),
+)
 
 SUBSCRIPTIONS: dict[str, Subscription] = {
     s.name: s
@@ -148,6 +167,8 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
         SUB_USER_INVALIDATE,
         SUB_JOBS,
         SUB_CONTENT_INDEX,
+        SUB_AUDIT,
+        SUB_AUDIT_PERMISSION,
         SUB_DLQ,
     )
 }
@@ -191,6 +212,8 @@ EVENT_SCHEMA: dict[str, Any] = {
 TOPIC_SCHEMAS: dict[str, dict[str, Any]] = {
     TOPIC_EMAIL: EVENT_SCHEMA,
     TOPIC_USER_EVENTS: EVENT_SCHEMA,
+    TOPIC_AUDIT_LOGIN_FAIL: EVENT_SCHEMA,
+    TOPIC_AUDIT_PERMISSION_CHANGE: EVENT_SCHEMA,
     TOPIC_NOTIFY: EVENT_SCHEMA,
     TOPIC_POINTS: EVENT_SCHEMA,
     TOPIC_CRON: EVENT_SCHEMA,

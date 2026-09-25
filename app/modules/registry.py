@@ -16,10 +16,12 @@ from importlib import import_module
 from typing import Any
 
 # 唯一事实源：业务模块清单（顺序即聚合顺序）。新增模块在此登记。
+# **articles / blog 已并入 content 聚合（蓝图 M2「内容域收敛」）**：它们不再是独立业务域，
+# 而是 `app.modules.content` 下的子包（与 boards/columns/qa 同构，路由前缀与表结构不变
+# ——M2 验收明许「过渡期可目录合并+路由拆片」）。故从本表移除、由 content 聚合二者的
+# ROUTERS/GRAPHQL；跨模块 import 因此归零。
 MODULES: tuple[str, ...] = (
     "admin",
-    "articles",
-    "blog",
     "content",
     "exam",
     "feed",
@@ -35,8 +37,9 @@ MODULES: tuple[str, ...] = (
     # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
 )
 
-# 不做顶层 errors.py 的模块（rbac 无 errors 且不在 MODULES 内，另有三条子包路径单列）。
-_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "health"})
+# 不做顶层 errors.py 的模块：admin 的错误码在子包 admin.moderation 下；health 无错误码；
+# feed 的错误码（FollowErr）随关注关系迁入 interaction 后已无自有错误码。
+_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "feed", "health"})
 
 # 注册副作用需要显式导入其 errors 的模块。各模块错误码通过 ``register()`` 副作用注册，
 # 导入即生效。这里**由 MODULES 派生**而非另抄一份清单：两份手维护清单必然漂移（此前
@@ -45,6 +48,8 @@ _NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "health"})
 _ERROR_MODULES: list[str] = [
     *(m for m in MODULES if m not in _NO_TOP_ERRORS),
     "admin.moderation",  # ModerationErr（子包路径，非 app.modules.admin.errors）
+    "content.articles",  # ArticleErr：并入 content 后不再由 MODULES 派生，须单列
+    "content.blog",  # BlogErr：同上
     "content.boards",  # BoardErr
     "content.columns",  # ColumnErr
     "content.qa",  # QaErr

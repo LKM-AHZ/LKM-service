@@ -277,9 +277,36 @@ def test_auth_prefix_split() -> None:
 
 def test_graphql_websocket_enabled() -> None:
     routes = _rendered_routes()
-    assert routes["graphql-exact"]["enable_websocket"] is True
-    assert routes["graphql-prefix"]["enable_websocket"] is True
+    for rid in ("graphql-version-header", "graphql-exact", "graphql-prefix"):
+        assert routes[rid]["enable_websocket"] is True
     assert routes["graphql-exact"]["upstream"]["service_name"].startswith("backend:")
+
+
+def test_graphql_multi_endpoint_version_routing() -> None:
+    """§2 多端点版本化：网关按请求头把流量分流到带版本的端点。
+
+    断言三件事：① 带版本的路径（`/graphql/v1`）由 `graphql-prefix` 原样透传；
+    ② 客户端用 `X-API-Version` 声明版本时，由优先级更高的 `graphql-version-header` 命中并
+    **重写到版本端点**；③ 未声明版本的请求不能被它截走（落到 graphql-exact 的别名路径）。
+    """
+    routes = _rendered_routes()
+    header = routes["graphql-version-header"]
+    exact = routes["graphql-exact"]
+    prefix = routes["graphql-prefix"]
+
+    assert prefix["uri"] == "/graphql/*"  # /graphql/v1 由前缀路由覆盖，无需单开
+    assert header["uri"] == "/graphql"
+    assert header["vars"] == [["http_x_api_version", "==", "v1"]]
+    assert header["plugins"]["proxy-rewrite"]["uri"] == "/graphql/v1"
+    # 必须严格高于 graphql-exact，否则带版本头的请求会被无版本别名路由先接走
+    assert header["priority"] > exact["priority"] > prefix["priority"]
+
+    # 三个字段名都要进 CORS：请求头 allow 漏了浏览器预检直接失败，响应头 expose 漏了
+    # 浏览器读不到实际命中的版本
+    for rid in ("graphql-version-header", "graphql-exact", "graphql-prefix"):
+        cors = routes[rid]["plugins"]["cors"]
+        assert "X-API-Version" in cors["allow_headers"], rid
+        assert "X-API-Version" in cors["expose_headers"], rid
 
 
 def test_realtime_ws_endpoint_upgrade_enabled() -> None:
@@ -309,6 +336,7 @@ def test_upload_routes_have_body_limit() -> None:
         "auth-prefix",
         "api-exact",
         "api-prefix",
+        "graphql-version-header",
         "graphql-exact",
         "graphql-prefix",
     ):

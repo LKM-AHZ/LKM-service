@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.articles.models import Article, ArticleCategory
+from app.modules.content.articles.models import Article, ArticleCategory
 from auth.security import create_access_token
 from tests.conftest import AuthUser, auth_user_uid
 

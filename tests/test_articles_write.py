@@ -19,16 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.err import BizError, CommonErr
 from app.modules.admin.models import RolePermission
-from app.modules.articles.errors import ArticleErr
-from app.modules.articles.models import Article
-from app.modules.articles.models import ArticleCategory as ArticleCategoryORM
-from app.modules.articles.schemas import (
+from app.modules.content.articles.errors import ArticleErr
+from app.modules.content.articles.models import Article
+from app.modules.content.articles.models import ArticleCategory as ArticleCategoryORM
+from app.modules.content.articles.schemas import (
     ArticleCreate,
     ArticleUpdate,
     CategoryCreate,
 )
-from app.modules.articles.seed import seed_articles, seed_categories
-from app.modules.articles.service import (
+from app.modules.content.articles.seed import seed_articles, seed_categories
+from app.modules.content.articles.service import (
     create_article_ex,
     create_category_ex,
     delete_category_ex,
@@ -363,7 +363,7 @@ class TestArticleSeed:
     """seed_categories / seed_articles。"""
 
     async def test_seed_categories_idempotent(self, db: AsyncSession) -> None:
-        from app.modules.articles.seed import _CATEGORIES
+        from app.modules.content.articles.seed import _CATEGORIES
 
         first = await seed_categories(db)
         second = await seed_categories(db)

@@ -15,13 +15,13 @@ from app.core.client_ip import client_ip
 from app.core.common import ApiResp, PageData, PaginateDep, PaginateParams
 from app.core.err import respond
 from app.db.session import get_session
-from app.modules.articles.service import (
+from app.modules.content.articles.service import (
     delete_article_comment as delete_article_comment_svc,
 )
-from app.modules.blog.service import (
+from app.modules.content.blog.service import (
     delete_comment as delete_blog_comment_svc,
 )
-from app.modules.blog.service import (
+from app.modules.content.blog.service import (
     delete_series as delete_blog_series_svc,
 )
 from app.modules.content.schemas import ContentItemInfo

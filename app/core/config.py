@@ -155,17 +155,26 @@ class Settings(BaseSettings):
     read_msgspec_enabled: bool = True
 
     # ---- GraphQL 防护（M6.4）----
-    # 默认值由前端现有查询集实测校准（2026-09-17：最大深度 5、最大文档 ≈70 token，取
-    # 2×/14× 余量）后写死；前端加查询撞阈值时按需放宽，不随请求动态调整。
+    # 默认值由前端现有查询集实测校准（2026-09-17：最大深度 5，取 2× 余量）后写死；
+    # 前端加查询撞阈值时按需放宽，不随请求动态调整。
     graphql_max_depth: int = 10
-    # strawberry 无成本分析器：以「词法 token 数」作文档规模/复杂度上限的代理指标。
-    # **0 = 关闭该项**（不注册该限制器）。阈值余量经真机实测：前端最大查询远低于 1000，
-    # 连完整的 introspection 文档也只有 163 token（真机 2026-09-17 用 lexer 口径反解），
-    # 故默认放行 GraphiQL；置 0 只在需要完全免限时用（生产不建议）。
-    graphql_max_tokens: int = 1000
-    # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver，令查询以受控错误收束（不能中断
-    # 单个已在 await 中的 resolver，见 app/api/graphql.py 的局限说明）
+    # 查询成本上限（§2 第 2 条「field cost 而非词法代理」）：按 schema 真实的字段/列表规模
+    # 计分，见 app/api/graphql.py 的 QueryCostLimiter。**0 = 关闭该项**（不注册该限制器，
+    # 需要完全免限时用，生产不建议）。默认 1000 的余量经校准：带变量 pageSize 的真实前端
+    # 查询约 140 分（7× 余量），完整 introspection 亦远低于阈值 → GraphiQL 开箱可用。
+    graphql_max_cost: int = 1000
+    # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver，令查询以受控错误收束——**不能**中断
+    # 单个已在 await 中的 resolver（见 app/api/graphql.py 的局限说明），只保证扇出型慢查询
+    # 尽快收束。响应仍是 HTTP 200 + `errors`（前端可见「哪一层被拒」）。
     graphql_timeout_s: float = 5.0
+    # HTTP 兜底超时（秒）：§2 第 3 条要求「查询级执行超时**与** HTTP 兜底超时」两条。
+    # 兜底必须**显著宽于**查询级预算，否则它会把上面那条的「HTTP 200 + errors」抢先换成
+    # 504（中间件从请求进入即计时，必然早于引擎内的预算起点）。它唯一要覆盖的场景是
+    # 「协程已卡在 await 里、resolver 边界检查再也跑不到」——那时只有墙钟硬中断能救。
+    graphql_hard_timeout_s: float = 10.0
+    # GraphQL 端点基址：多端点版本化为 ``{graphql_path}/{version}``，无版本路径
+    # ``{graphql_path}`` = 最新版别名。收在此处避免路径字面量散落在 main/中间件/网关三处。
+    graphql_path: str = "/graphql"
 
     # ---- 消息总线（Apache Pulsar，M4 全量迁移）----
     # 空串 = 未启用消息总线（发布 fail-open 返回 False、outbox 不入队、relay 空转）。

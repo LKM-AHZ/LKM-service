@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.blog import git_svc
-from app.modules.blog import tasks as reconcile_blog_repos
-from app.modules.blog.models import BlogRepoQuarantine
+from app.modules.content.blog import git_svc
+from app.modules.content.blog import tasks as reconcile_blog_repos
+from app.modules.content.blog.models import BlogRepoQuarantine
 from tests.conftest import auth_user_uid
 
 
@@ -83,7 +83,7 @@ async def test_delete_quarantined_after_grace(db, repo_dir, inject_session):
 
 
 async def test_skip_when_series_exists(db, auth_db, repo_dir, inject_session):
-    from app.modules.blog.models import BlogSeries
+    from app.modules.content.blog.models import BlogSeries
 
     _mk_repo(repo_dir, "live")
     owner_id = await _owner_user(auth_db)

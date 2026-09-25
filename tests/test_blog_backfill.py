@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from app.modules.blog import backfill
-from app.modules.blog.models import BlogContent, BlogSeries
+from app.modules.content.blog import backfill
+from app.modules.content.blog.models import BlogContent, BlogSeries
 
 
 class _FakeGit:

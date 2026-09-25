@@ -273,7 +273,7 @@ async def _login_or_error(
         locked = await _record_failed_attempt(db, user)
         if locked:
             await log_audit(db, user.id, "account_locked", "5 failed login attempts")
-            await events.notify_user_banned_committed(user.id)
+            await events.notify_user_banned(user.id)
         raise BizError(
             AuthErr.ALREADY_REGISTERED, "Account exists but password is incorrect"
         )
@@ -482,9 +482,13 @@ async def login_password(
         locked = await _record_failed_attempt(db, user)
         if locked:
             await log_audit(db, user.id, "account_locked", "5 failed login attempts")
-            # 锁定经 isolated_update 的 savepoint 已提交且本请求将回滚 → 失效事件须自建会话独立
-            # 提交，避免与已落库的 is_locked=True 错位（漏失效会让 user:snap.banned 陈旧）。
-            await events.notify_user_banned_committed(user.id)
+            # 锁定经 isolated_update 的 savepoint 已提交且本请求将回滚：事件必须独立于本事务
+            # 落库，否则与已提交的 is_locked=True 错位（漏失效会让 user:snap.banned 陈旧）。
+            await events.notify_user_banned(user.id)
+        # §5.2 audit.login_fail：**不写 audit_logs 行**——失败登录是 DoS 敏感路径，每次失败插
+        # 一行是无界写入放大（现有代码也只在第 5 次失败时记 account_locked）。事件由
+        # auth.events 自建会话提交，因为本请求马上抛错回滚。
+        await events.notify_audit_login_fail(user.id, "password_mismatch", ip_address)
         raise BizError(AuthErr.INVALID_CREDENTIALS)
 
     # 成功 —— 通过子事务（savepoint）原子性地重置计数器，
@@ -495,10 +499,11 @@ async def login_password(
     # M3.A残项(成功登录解锁)：若本次成功登录真把 is_locked 从 True 翻到 False（先前自动锁后、
     # 过期锁在此刻被清除），发 user.updated 失效，令下次读 user:snap.banned=False，杜绝陈旧。
     # 只在翻转发生时发（was_locked_at_login=True），普通成功登录 is_locked 恒 False → 零噪声不入队；
-    # 本请求为成功路径(outer 会话将 commit)，同事务入队随其持久（与 upgrade 等 A7 载点同款）。若
-    # 此处无从翻转(本就 False)则不发——避免无谓回填。镜像 A7「无东西需失效就不发」约束。
+    # 事件由 auth.events 自建业务库会话独立提交（拆库后 outbox 属业务库，见该模块 docstring），
+    # 不依赖本请求事务是否 commit。若此处无从翻转(本就 False)则不发——避免无谓回填。
+    # 镜像 A7「无东西需失效就不发」约束。
     if was_locked_at_login:
-        await events.notify_user_updated(db, user.id)
+        await events.notify_user_updated(user.id)
 
     await log_audit(db, user.id, "login_password", "success")
 
@@ -525,7 +530,7 @@ async def login_code(db: DbSession, contact: str, code: str) -> dict[str, Any]:
 
     if was_locked:
         # 走到这里说明上面的过期锁已被自动解除（仍锁定会直接抛），发失效让快照跟上
-        await events.notify_user_updated(db, user.id)
+        await events.notify_user_updated(user.id)
 
     # 没有 TOTP 的管理员 —— 与密码登录相同的设置流程
     return await finalize_auth_response(db, user)
@@ -644,7 +649,7 @@ async def upgrade_to_normal(db: DbSession, user: User) -> None:
         await UserRepository(db).flush()
         await log_audit(db, user.id, "level_change", "local -> normal")
         # 快照 account_level 依赖 User.account_level：升级属身份升迁 → 失效 user:snap。
-        await events.notify_user_updated(db, user.id)
+        await events.notify_user_updated(user.id)
 
 
 async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any]:

@@ -8,7 +8,7 @@ import yaml
 
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
-from app.modules.blog.errors import BlogErr
+from app.modules.content.blog.errors import BlogErr
 
 # repo_name 来自用户输入（BlogSeriesCreate.repo_name 只限长度），拼进路径前必须收敛字符集：
 # 不加限制时 "../../tmp/evil" 会让 init_bare_repo 在仓库根外建目录、delete_repo 直接

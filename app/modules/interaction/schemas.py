@@ -41,3 +41,33 @@ class ViewState(BaseModel):
 
 class HistoryItem(_ContentSummaryItem):
     viewed_at: datetime.datetime
+
+
+# ---- 关注关系（原 follow 域，随归属迁入 interaction）----
+
+
+class FollowToggle(BaseModel):
+    """follow/unfollow 操作结果：follower 当前是否正关注该目标。"""
+
+    following: bool
+
+
+class FollowState(BaseModel):
+    """查询某目标对当前用户的关注状态（follow/unfollow 之外的可选展示）。"""
+
+    is_following: bool
+
+
+class FollowUser(BaseModel):
+    """「我关注的用户」列表项。"""
+
+    user_id: uuid.UUID
+    display_name: str
+    avatar: str | None = None
+
+
+class FollowBoard(BaseModel):
+    """「我关注的版块」列表项。"""
+
+    board_id: uuid.UUID
+    title: str

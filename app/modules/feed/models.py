@@ -1,77 +1,30 @@
+"""feed（信息流）域模型：物化时间线读模型 + fanout 水位。
+
+**不再包含关注关系**：``UserFollow`` / ``BoardFollow`` 已迁入 interaction（蓝图 §7.2 目标
+形态把「收藏、关注、浏览记录」划给 interaction，见该模块 docstring）。本域因此只剩
+「时间线生成」这一件事，对关注关系的读取一律经 ``interaction.service`` 的公开读口。
+"""
+
 from __future__ import annotations
 
 import datetime
 import uuid
-from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Float,
-    ForeignKey,
     Index,
     String,
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import (  # 注意 db.base 而非 db.models
     Base,
-    SoftDeleteMixin,
     UTCDateTime,
     UUIDPrimaryKeyMixin,
     now_iso,
 )
-
-if TYPE_CHECKING:
-    from app.modules.content.models import Board
-
-
-class UserFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
-    """用户关注关系（软删墓碑）：follower 关注 following。
-
-    唯一约束针对``(follower_id, following_id)``——软删行保留以便幂等重关注；
-    活动关注统一 ``deleted_at IS NULL``。反向查「谁关注了我」走 following_id 索引。
-    """
-
-    __tablename__: str = "user_follows"
-    __table_args__: tuple[UniqueConstraint, Index, Index] = (
-        UniqueConstraint("follower_id", "following_id", name="uq_user_follows_pair"),
-        Index("ix_user_follows_following_created", "following_id", "created_at"),
-        # "我关注了谁"（follower 视角）按时间排序/分页
-        Index("ix_user_follows_follower_created", "follower_id", "created_at"),
-    )
-
-    follower_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False
-    )  # S5: auth user_id
-    following_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False
-    )  # S5: auth user_id
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-
-
-class BoardFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
-    """用户关注版块关系（软删墓碑）：follower 关注 board_id。"""
-
-    __tablename__: str = "board_follows"
-    __table_args__: tuple[UniqueConstraint, Index] = (
-        UniqueConstraint("follower_id", "board_id", name="uq_board_follows_pair"),
-        Index("ix_board_follows_board", "board_id"),
-    )
-
-    follower_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False
-    )  # S5: auth user_id
-    board_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("boards.id"), nullable=False
-    )
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-
-    board: Mapped[Board] = relationship(back_populates="followers")
 
 
 class FeedItemMaterialized(UUIDPrimaryKeyMixin, Base):
