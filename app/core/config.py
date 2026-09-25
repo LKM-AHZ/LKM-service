@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     db_pool_max_overflow: int = 20
     # 取连接前 ping 探活，剔除坏连接，避免陈旧连接 0 连接时的短暂出错
     db_pool_pre_ping: bool = True
+    # worker / 后台批处理的**独立**池（蓝图 §3.3「不同组件独立连接池」标"关键"）：
+    # outbox relay、APScheduler 任务、各 worker 的周期突发走这里的池，不与 Web 请求争抢——
+    # 否则一次全量 ETL/对账就能把在线请求的连接挤干。尺寸刻意小于 Web 池（批处理并发有限，
+    # 且它本就不该抢占在线配额）。
+    db_worker_pool_size: int = 5
+    db_worker_pool_max_overflow: int = 10
 
     # JWT 签名密钥 — 所有非测试环境必须覆盖此值
     jwt_secret: SecretStr = SecretStr(
@@ -268,6 +274,9 @@ class Settings(BaseSettings):
     # analytics 导出 flow 的目标名，形如 "<flow 名>/<deployment 名>"，如
     # analytics-clickhouse-export/analytics-export；留空则不触发 analytics flow（回落直调导出）。
     prefect_analytics_deployment: str = ""
+    # 运营日报 flow 的目标名，形如 "ops-daily-report/ops-daily"；留空则不触发 flow（回落直调
+    # 纯体层 collect_daily_report）。
+    prefect_ops_daily_deployment: str = ""
 
     # ---- ClickHouse 分析管道（M5 7.2.6，日志/失败事件/审计分析）----
     # 默认关：不建连接、导出 no-op、admin 查询端点返回 503（不返回空数据造成假绿）。

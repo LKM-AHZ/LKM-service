@@ -80,6 +80,7 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "purge_stale_view_logs",  # M6.6
         "reconcile_content_counts",  # M6.10（两种模式都注册）
         "fanout_feed_items",  # M6.11
+        "run_ops_daily",  # 运营日报（蓝图 §5.5/§6.4）
     }
     if not settings.counters_write_through:
         expect_fns.add("flush_content_counters")  # 仅回退（write-behind）模式注册

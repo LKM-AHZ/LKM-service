@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.messaging import SUB_NOTIFICATION
 from app.core.task_registry import register_task
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.content.models import ContentComment, ContentItem
 from app.modules.notification.service import (
     NotificationType,

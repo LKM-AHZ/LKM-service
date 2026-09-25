@@ -10,6 +10,7 @@
 
 import json
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -24,6 +25,31 @@ logger = logging.getLogger("lkm.cache")
 # TTL 分级（秒）：单条目长缓存、列表短缓存
 TTL_ITEM_S = 300  # 5 min：单条目（如 get_by_slug / get）
 TTL_LIST_S = 60  # 1 min：列表/分页
+
+# TTL 随机扰动幅度（蓝图 §5.6「防雪崩」标"必须"）。同批写入的 key 若 TTL 完全相同，会在同一刻
+# 集体过期，缓存层瞬间全量回源打 DB/AUTH。写入时按此比例摊开过期时刻，每个 key 只算一次
+# （该 key 生命周期内不漂移）。
+#
+# 只适用于**缓存对象**的 TTL。锁与租约（`cache_lock_ttl_s`、outbox leader 租约、迁移锁、
+# 各类业务锁）绝不可扰动——它们的 TTL 是正确性参数（抢主/续约/持锁时序），抖动会引发误接管。
+_TTL_JITTER_RATIO = 0.3
+
+
+def jitter_ttl(base_seconds: float, *, lower_only: bool = False) -> int:
+    """给缓存 TTL 加随机扰动，返回整数秒。
+
+    - 默认 ±30%（`base × [0.7, 1.3)`）。
+    - ``lower_only=True`` 只向下扰动（`[0.7, 1.0)`）——用于 TTL 同时被当作**上界**语义的地方
+      （如 L1 的 ``user_snap_l1_ttl_s`` 是「pub/sub 丢广播时的陈旧窗口上界」，向上放大就破坏该保证）。
+    - 结果至少 1 秒：Redis 的 ``ex`` 不接受 0/负值。
+    """
+    if base_seconds <= 0:
+        return 1
+    if lower_only:
+        factor = 1.0 - _TTL_JITTER_RATIO * random.random()
+    else:
+        factor = 1.0 - _TTL_JITTER_RATIO + 2 * _TTL_JITTER_RATIO * random.random()
+    return max(1, int(base_seconds * factor))
 
 
 def _cache_env() -> str:
@@ -69,12 +95,18 @@ async def cache_get(key: str) -> Any | None:
 
 
 async def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
-    """写缓存；Redis 不可用静默跳过（不影响主路径）。"""
+    """写缓存；Redis 不可用静默跳过（不影响主路径）。
+
+    入参 ``ttl_seconds`` 是**基准**值：实际 `ex` 经 :func:`jitter_ttl` 加随机扰动后再落盘
+    （防雪崩，见该函数说明）。故本函数是所有 ``cached_read`` 类缓存 TTL 的公共收口点。
+    """
     client = await redis_client.get_redis()
     if client is None:
         return
     try:
-        await client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+        await client.set(
+            key, json.dumps(value, ensure_ascii=False), ex=jitter_ttl(ttl_seconds)
+        )
     except Exception:
         logger.debug("cache set skip key=%s", key)
 

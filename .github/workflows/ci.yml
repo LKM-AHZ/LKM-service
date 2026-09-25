@@ -32,6 +32,23 @@ jobs:
       - run: uv run lint-imports
       - run: uv run python scripts/check_raw_sql.py
 
+  typecheck:
+    # 蓝图 §6.4 的 CI 环节里有「类型」。**刻意非阻断**：存量 ty 诊断（91 条）尚未清零，
+    # 先提供可见性（每次 PR 都能看到类型问题在增还是在减），待清零后再去掉
+    # continue-on-error 收成阻断门禁。此处的 `continue-on-error` 是 job 级——
+    # 失败会标红但不影响工作流结论，避免「一加就红、人人绕过」。
+    name: type（ty check，非阻断）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ty check app auth
+
   migrations:
     name: migrations（逐 revision 双向离线 SQL）
     runs-on: ubuntu-latest

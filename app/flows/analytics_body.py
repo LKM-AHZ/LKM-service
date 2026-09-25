@@ -24,7 +24,7 @@ def _window(window: int | None) -> int:
 async def run_event_failures_export(*, window: int | None = None) -> int:
     """业务库 event_failures → CH；未启用 CH 视为 no-op(0)，不报错。"""
     from app.db.event_failure_export import export_event_failures
-    from app.db.session import new_session
+    from app.db.session import new_worker_session as new_session
 
     if not clickhouse.is_enabled():
         return 0

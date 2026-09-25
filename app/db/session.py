@@ -20,6 +20,11 @@ from app.core.err import (
 # 只触达 database_url（auth 独立库走单独的 auth/db/session.py，主进程不侧挂）。
 _async_engine: AsyncEngine | None = None
 _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
+# worker / 后台批处理的独立引擎与会话工厂（蓝图 §3.3「不同组件独立连接池」标"关键"）：
+# Web 请求、批处理各自持池，outbox relay/APScheduler/worker 的周期突发不会把在线请求的
+# 连接挤干。两者共用同一把 _engine_lock（成对创建，见下）。
+_worker_engine: AsyncEngine | None = None
+_WorkerSessionLocal: async_sessionmaker[AsyncSession] | None = None
 # 惰性单例的双检锁（见 get_async_engine 注释）：sync 依赖可能来自线程池，故用
 # threading.Lock 而非 asyncio.Lock（后者会绑定事件循环）
 _engine_lock = threading.Lock()
@@ -148,16 +153,75 @@ async def get_read_session() -> AsyncIterator[AsyncSession]:
 
 
 async def new_session() -> AsyncSession:
-    """创建独立异步会话，与主会话共享同一引擎（连接池）但独立事务。"""
+    """创建独立异步会话，与主会话共享同一引擎（连接池）但独立事务。
+
+    **Web 请求路径用这个**。后台批处理（worker / outbox relay / 调度任务 / flow）请用
+    :func:`new_worker_session`——它们走独立池，不与在线请求争抢连接。
+    """
     return _get_async_session_local()()
 
 
+def _ensure_worker_engine_locked() -> AsyncEngine:
+    """**调用方必须已持有 `_engine_lock`**；返回 worker 池的惰性单例引擎。
+
+    与 :func:`_ensure_engine_locked` 同因：`_engine_lock` 是非重入 `threading.Lock`，
+    持锁状态下不能再调 ``get_worker_engine()``（会自死锁）。
+    """
+    global _worker_engine
+    if _worker_engine is None:
+        _worker_engine = create_realm_async_engine(
+            settings.database_url,
+            pool_size=settings.db_worker_pool_size,
+            pool_max_overflow=settings.db_worker_pool_max_overflow,
+            pool_pre_ping=settings.db_pool_pre_ping,
+        )
+    return _worker_engine
+
+
+def get_worker_engine() -> AsyncEngine:
+    """worker 池引擎（与 Web 主池**不同实例**，池参数独立）。"""
+    if _worker_engine is None:
+        # 双检锁同 get_async_engine：sync 依赖可能来自线程池
+        with _engine_lock:
+            _ensure_worker_engine_locked()
+    return _worker_engine
+
+
+def _get_worker_session_local() -> async_sessionmaker[AsyncSession]:
+    global _WorkerSessionLocal
+    if _WorkerSessionLocal is None:
+        with _engine_lock:  # 与 worker 引擎共用同一把锁，保证成对且只建一次
+            if _WorkerSessionLocal is None:
+                _WorkerSessionLocal = async_sessionmaker(
+                    autocommit=False,
+                    autoflush=False,
+                    bind=_ensure_worker_engine_locked(),
+                    expire_on_commit=False,
+                )
+    return _WorkerSessionLocal
+
+
+async def new_worker_session() -> AsyncSession:
+    """创建**后台批处理**用的独立会话（独立连接池，不与 Web 请求争抢）。
+
+    语义与 :func:`new_session` 相同（调用方自行 commit/close），差别只在池。改用的调用点
+    建议以别名导入保持模块属性名不变（``from app.db.session import new_worker_session as
+    new_session``），这样测试对 ``new_session`` 的 monkeypatch 缝依旧生效。
+    """
+    return _get_worker_session_local()()
+
+
 async def dispose_engine() -> None:
-    global _async_engine, _AsyncSessionLocal
+    global _async_engine, _AsyncSessionLocal, _worker_engine, _WorkerSessionLocal
     if _async_engine is not None:
         await _async_engine.dispose()
         _async_engine = None
         _AsyncSessionLocal = None
+    # worker 引擎同样要释放，否则测试逐测重建时旧池会泄漏连接
+    if _worker_engine is not None:
+        await _worker_engine.dispose()
+        _worker_engine = None
+        _WorkerSessionLocal = None
 
 
 def _is_unique_violation(exc: IntegrityError) -> bool:

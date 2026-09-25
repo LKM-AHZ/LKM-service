@@ -133,7 +133,9 @@ async def test_invokes_rbac_seed(monkeypatch) -> None:
         # 同一引擎（StaticPool 已 SET search_path）→ 新会话仍落在该 schema
         return SessionLocal()
 
-    monkeypatch.setattr(db_session, "new_session", _fake_new_session)
+    # 后台路径（seed/建表）现走 worker 独立池的 new_worker_session；init_db 内部是
+    # **函数内** import，运行时从 app.db.session 取属性，故 patch 该名字即可生效。
+    monkeypatch.setattr(db_session, "new_worker_session", _fake_new_session)
 
     async def _noop_create_all() -> None:
         return None

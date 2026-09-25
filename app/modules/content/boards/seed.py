@@ -5,7 +5,7 @@ import asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.content.models import Board
 from auth import register_models
 

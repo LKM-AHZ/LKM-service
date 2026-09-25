@@ -16,6 +16,7 @@ from typing import Any
 
 from app.flows.analytics import analytics_export_flow
 from app.flows.feed_backfill import feed_backfill_flow
+from app.flows.ops_daily import ops_daily_flow
 from app.flows.search_reindex import search_reindex_flow
 from app.flows.user_dim import user_dim_reconcile_flow
 
@@ -57,6 +58,14 @@ DEPLOYMENTS: list[tuple[Any, str, str]] = [
         os.getenv(
             "LKM_PREFECT_FEED_BACKFILL_ENTRYPOINT",
             "app/flows/feed_backfill.py:feed_backfill_flow",
+        ),
+    ),
+    (
+        ops_daily_flow,
+        os.getenv("LKM_PREFECT_OPS_DAILY_DEPLOYMENT_NAME", "ops-daily"),
+        os.getenv(
+            "LKM_PREFECT_OPS_DAILY_ENTRYPOINT",
+            "app/flows/ops_daily.py:ops_daily_flow",
         ),
     ),
 ]

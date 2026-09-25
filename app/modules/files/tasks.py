@@ -18,13 +18,14 @@ from datetime import UTC, datetime
 from app.core.messaging import RKEY_CLEANUP, SUB_JOBS, SUB_NOTIFY
 from app.core.redis import get_redis
 from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.files.service import (
     _UPLOAD_TTL,
     _get_storage,
     _register_from_upload,
     _upload_key,
 )
+from app.modules.files.thumbnails import generate_variants_for_library_file
 from app.ws.broker import publish_upload_bound
 
 logger = logging.getLogger(__name__)
@@ -54,10 +55,16 @@ async def notify_upload(upload_id: str) -> None:
 
     db = await new_session()
     try:
+        storage = _get_storage()
         reg = await _register_from_upload(
-            db, meta, uuid.UUID(meta["uploader_id"]), _get_storage()
+            db, meta, uuid.UUID(meta["uploader_id"]), storage
         )
         await db.commit()
+        # 缩图（蓝图 §6.3）：登记完成、对象已在内容寻址 key 上，此时生成规格图。
+        # fail-open 由 thumbnails 内部收口——缩图失败绝不影响「上传登记成功」这一语义，
+        # 否则一次转码异常会把用户刚传的图连同登记一起丢掉。
+        if reg is not None:
+            await generate_variants_for_library_file(db, reg.id, storage)
         # 登记成功后广播给 uploader 的 WebSocket(仅成功路径；失败走下方恢复标记+重试)。
         # 广播自身 fail-open(见 broker),异常被吞,不影响任务成功语义。
         await publish_upload_bound(

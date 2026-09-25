@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.core import messaging
 from app.core.tracing import setup_tracing
 from app.db.base import now_iso
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.admin.models import DlqMessage
 
 logger = logging.getLogger("lkm.worker_dlq")

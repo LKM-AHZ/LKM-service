@@ -19,7 +19,7 @@ from app.core.messaging import (
     SUB_POINTS_TASKS,
 )
 from app.core.task_registry import register_task
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.points.rules import RULE_DELTAS
 from app.modules.points.service import reward
 

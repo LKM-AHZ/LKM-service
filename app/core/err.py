@@ -234,7 +234,11 @@ class AuthErr(ErrCode):
 
 register(
     {
-        AuthErr.ALREADY_REGISTERED: (400, "Username or email already registered"),
+        # 蓝图 §6.1：唯一约束冲突属 409（与同表其余「已存在/重复」语义的码一致，如
+        # OAUTH_EMAIL_TAKEN=409、各业务模块的 *_TAKEN/ALREADY_* 亦为 409）。业务码数值不变，
+        # 只动 HTTP 状态——前端只按 body.code 判成功、非 2xx 统一走 HTTP_CLIENT_ERROR，
+        # 不依赖具体状态码，故不破契约。
+        AuthErr.ALREADY_REGISTERED: (409, "Username or email already registered"),
         AuthErr.INVALID_CREDENTIALS: (401, "Invalid username or password"),
         AuthErr.USER_NOT_FOUND: (401, "User not found"),
         AuthErr.ACCOUNT_LOCKED: (423, "Account is locked"),

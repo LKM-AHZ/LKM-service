@@ -9,7 +9,7 @@ import logging
 
 from app.core.messaging import RKEY_CLEANUP, SUB_JOBS
 from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.interaction.service import purge_stale_view_logs as _purge
 
 logger = logging.getLogger(__name__)

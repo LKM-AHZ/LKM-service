@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import counters
 from app.core.config import settings
 from app.core.err import BizError
+from app.core.metrics import counts_reconcile_repeated_total
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentComment, ContentItem, ContentLike
 from app.modules.interaction.models import InteractionFavorite
@@ -165,7 +166,38 @@ async def _has_pending_delta(item_id: uuid.UUID) -> bool:
     return False
 
 
-async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int, int]:
+# 上一轮被修正的 key：本轮若再次命中同一 key，即为「多轮 diff 不降反升」的震荡信号。
+_last_corrected_ids: set[uuid.UUID] = set()
+
+
+def reset_reconcile_oscillation_state() -> None:
+    """清空震荡检测的跨轮状态（测试逐例隔离用；生产不需要调用）。"""
+    _last_corrected_ids.clear()
+
+
+def _record_oscillation(corrected: set[uuid.UUID]) -> None:
+    """对「连续两轮都需修正」的 key 发震荡告警并推进跨轮状态。
+
+    蓝图 §5.6 要求判定震荡。这里只**报告**、不自动暂停该 key 的对账——自动暂停会让它永久
+    失去兜底修正（计数越漂越远且无人修），风险大于收益；介入方式是运维按日志里的 id 排查
+    写方向是否被破坏。
+    """
+    repeated = corrected & _last_corrected_ids
+    if repeated:
+        counts_reconcile_repeated_total.inc(len(repeated))
+        shown = ", ".join(sorted(str(i) for i in repeated))[:500]
+        logger.warning(
+            "对账震荡：%d 个计数 key 连续两轮都需修正（写方向可能被破坏）: %s",
+            len(repeated),
+            shown,
+        )
+    _last_corrected_ids.clear()
+    _last_corrected_ids.update(corrected)
+
+
+async def reconcile_counts(
+    db: AsyncSession, batch_size: int = 500, *, only_unconverged: bool = True
+) -> tuple[int, int]:
     """按明细表重算三项计数并修正偏差，返回 ``(scanned, affected)``。
 
     以 ``id`` 键集分窗（每窗一条聚合查询 + 至多 N 条修正 UPDATE），内存与命令数有界。
@@ -173,9 +205,20 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
     因此连续两次对账第二次 ``affected == 0``，收敛可证伪（见 tests/test_counters.py）。
     例外：该行若仍有未落库的 Redis 增量则本拍跳过（否则会与随后的 ``flush_counters``
     叠加成超调），留待下一拍收敛。
+
+    ``only_unconverged=True``（默认，**增量拍**）：只扫 ``counts_reconciled_at IS NULL`` 的行
+    （尚未被对账确认过）。扫过且**无偏差**的行也会被一次性批量打上 ``counts_reconciled_at``，
+    让「已收敛」真正生效——否则未漂移的行会每拍重扫，对账自身空转（蓝图 §5.6「收敛终止条件」）。
+    **漂移兜底由日级全量负责**：传 ``only_unconverged=False`` 时无视标记、全表重扫，
+    用于捕获「标记之后又被改坏」的行（蓝图的两级设计：秒级增量 + 日级全量）。
+
+    **震荡检测**：连续两轮都需修正同一个 key → 计入 ``counts_reconcile_repeated_total``
+    并告警（见 :func:`_record_oscillation`）。
     """
     scanned = 0
     affected = 0
+    corrected: set[uuid.UUID] = set()
+    converged: set[uuid.UUID] = set()
     # 键集水位：uuid 主键无 0 起点，用最小值 nil UUID 作首窗下界（PG uuid 按字节序，
     # UUID(int=0) 全零即最小），后续直接取回上行 uuid，无需 int() 转换。
     last_id = uuid.UUID(int=0)
@@ -202,6 +245,14 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
             .scalar_subquery()
             .label("real_bookmark"),
         ]
+        where_conds = [ContentItem.id > last_id]
+        if only_unconverged:
+            # 只扫「还没被本轮之前的对账确认收敛过」的行。**刻意不叠加 updated_at 比较**：
+            # 模型的 onupdate 用的是 Python 侧 now()（晚于下方标记用的事务级 now()），
+            # 「counts_reconciled_at < updated_at」会恒真 → 每拍重扫、增量失效。
+            # 代价：标记后**又发生漂移**的行要等日级全量兜底（only_unconverged=False）——
+            # 这正是蓝图的两级设计（秒级增量 + 日级全量）。
+            where_conds.append(ContentItem.counts_reconciled_at.is_(None))
         rows = (
             await db.execute(
                 select(
@@ -211,7 +262,7 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
                     ContentItem.bookmark_count,
                     *real_cols,
                 )
-                .where(ContentItem.id > last_id)
+                .where(*where_conds)
                 .order_by(ContentItem.id)
                 .limit(batch_size)
             )
@@ -224,6 +275,7 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
             current = (int(row[1]), int(row[2]), int(row[3]))
             real = (int(row[4]), int(row[5]), int(row[6]))
             if real == current:
+                converged.add(item_id)  # 已收敛：本拍标记，下一拍不再重复扫它
                 continue
             # 还有未落库的 Redis 差值时不纠正：明细 COUNT 已包含这些增量，
             # 此刻写回真值后，随后的 flush_counters 会把同一增量再加一遍（超调）。
@@ -238,11 +290,29 @@ async def reconcile_counts(db: AsyncSession, batch_size: int = 500) -> tuple[int
                     comment_count=real[1],
                     bookmark_count=real[2],
                     counts_reconciled_at=func.now(),
+                    # 显式保持 updated_at 不动：对账是**内部收敛**，不该算作内容被编辑。
+                    # 不这样写的话，模型的 onupdate（Python 侧 now，晚于下面这个事务级
+                    # now()）会把 updated_at 顶到 counts_reconciled_at 之后，让增量谓词
+                    # 「counts_reconciled_at < updated_at」恒真 → 每拍重扫，增量失效。
+                    updated_at=ContentItem.updated_at,
                 )
             )
+            corrected.add(item_id)
             affected += 1
 
         scanned += len(rows)
         last_id = rows[-1][0]
 
+    if converged:
+        # 一次性批量标记「本拍确认已收敛」（摊薄写，不是每拍全表逐行），
+        # 让增量谓词在下一拍跳过它们。同样显式保持 updated_at（见上条注释）。
+        await db.execute(
+            sa.update(ContentItem)
+            .where(ContentItem.id.in_(converged))
+            .values(
+                counts_reconciled_at=func.now(),
+                updated_at=ContentItem.updated_at,
+            )
+        )
+    _record_oscillation(corrected)
     return scanned, affected

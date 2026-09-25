@@ -16,9 +16,10 @@ import logging
 from typing import Any
 
 from app.core import messaging, task_registry
+from app.core.logging import log_exceptions
 from app.core.tracing import setup_tracing
 from app.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 
 logger = logging.getLogger("lkm.worker")
 
@@ -106,6 +107,7 @@ async def _consume(subscription_name: str) -> None:
 
     handlers = task_registry.handlers_for(subscription_name)
 
+    @log_exceptions
     async def _on_payload(
         payload: dict[str, Any], _meta: messaging.MessageMeta
     ) -> None:

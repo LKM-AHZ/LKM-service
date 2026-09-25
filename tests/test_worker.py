@@ -36,6 +36,7 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_CLEANUP,
         messaging.RKEY_RECONCILE,
         messaging.RKEY_ANALYTICS,
+        messaging.RKEY_OPS_DAILY,
         messaging.RKEY_CONTENT_PUBLISHED,
         messaging.RKEY_CONTENT_UPDATED,
         messaging.RKEY_CONTENT_DELETED,

@@ -26,7 +26,8 @@ from botocore.config import Config
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.db.session import dispose_engine, new_session
+from app.db.session import dispose_engine
+from app.db.session import new_worker_session as new_session
 from app.modules.files.models import LibraryFile
 
 LIST_LIMIT = 20  # 每类漂移最多列出的条数

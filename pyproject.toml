@@ -38,6 +38,7 @@ dependencies = [
     "clickhouse-connect[async]>=0.8",
     "meilisearch>=0.43.0",
     "opensearch-py>=3.2.0",
+    "pillow>=12.3.0",
 ]
 
 [tool.pytest.ini_options]
@@ -291,4 +292,6 @@ ignore_imports = [
     "auth.service -> app.modules.storage.factory",
     # 离线报表导出复用 analytics flow 的既有入口（惰性调用）
     "auth.tasks -> app.flows.analytics_body",
+    # 运营日报消费口复用其纯体层（同样惰性调用；二者同属 jobs cron 的回落直调路径）
+    "auth.tasks -> app.flows.ops_daily_body",
 ]

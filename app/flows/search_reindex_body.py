@@ -18,7 +18,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from app.core.config import settings
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.search.documents import build_doc
 from app.modules.search.engines.factory import get_engine
 from app.modules.search.repository import SearchRepository

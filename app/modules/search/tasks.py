@@ -8,6 +8,7 @@
 
 import logging
 
+from app.core.logging import log_exceptions
 from app.core.messaging import SUB_CONTENT_INDEX
 from app.core.metrics import content_index_events_total
 from app.core.task_registry import register_task
@@ -16,6 +17,7 @@ from app.modules.search import sync
 logger = logging.getLogger(__name__)
 
 
+@log_exceptions
 async def apply_content_event(item_id: str, action: str) -> None:
     """消费一次 ``content.*`` 事件：把内容项增量同步到外部索引。
 

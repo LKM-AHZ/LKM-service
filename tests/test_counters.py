@@ -11,7 +11,7 @@ cron 注册随模式变化（写穿下 flush 无事可做故不注册）。
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -22,6 +22,7 @@ import app.core.redis as redis_mod
 from app.core import counters
 from app.core.config import settings
 from app.core.messaging import SUB_JOBS
+from app.core.metrics import counts_reconcile_repeated_total
 from app.core.task_registry import cron_jobs, ensure_tasks_registered, handlers_for
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
@@ -29,6 +30,7 @@ from app.modules.content.counters import (
     bump_content_counter,
     flush_counters,
     reconcile_counts,
+    reset_reconcile_oscillation_state,
 )
 from app.modules.content.models import ContentComment, ContentItem, ContentLike
 from app.modules.content.schemas import ContentCommentCreate
@@ -293,6 +295,61 @@ async def test_reconcile_writes_reconciled_marker(db: AsyncSession) -> None:
 
     _, affected = await reconcile_counts(db)
     assert affected == 0
+
+
+# ---- 对账只扫未收敛 + 震荡检测（蓝图 §5.6）----
+
+
+@pytest.fixture(autouse=True)
+def _reset_oscillation_state() -> Iterator[None]:
+    """震荡检测是模块级跨轮状态，逐例复位避免测试间串味。"""
+    reset_reconcile_oscillation_state()
+    yield
+    reset_reconcile_oscillation_state()
+
+
+async def test_reconcile_skips_converged_rows_on_next_pass(db: AsyncSession) -> None:
+    """已收敛的行被标记后，下一拍增量对账不再扫它（否则对账自身空转）。"""
+    item = await _make_item(db, "cnt-scope1")  # 无明细、计数 0 → 本来就一致
+    await db.flush()
+
+    scanned_first, affected_first = await reconcile_counts(db)
+    assert affected_first == 0  # 本来就一致，无需修正
+    # 关键：**无偏差**的行也要被打上已收敛标记，否则每拍都要重扫它
+    marker = await db.scalar(
+        select(ContentItem.counts_reconciled_at).where(ContentItem.id == item.id)
+    )
+    assert marker is not None
+
+    scanned_second, _ = await reconcile_counts(db)
+    assert scanned_second == 0  # 已收敛 → 本拍跳过
+    assert scanned_second < scanned_first
+
+
+async def test_reconcile_full_scan_ignores_convergence(db: AsyncSession) -> None:
+    """日级全量兜底（only_unconverged=False）无视已收敛标记，照样全扫。"""
+    await _make_item(db, "cnt-scope2")
+    await db.flush()
+    await reconcile_counts(db)  # 打上已收敛标记
+
+    scanned, _ = await reconcile_counts(db, only_unconverged=False)
+    assert scanned >= 1
+
+
+async def test_reconcile_flags_oscillation_on_repeated_drift(db: AsyncSession) -> None:
+    """连续两轮修正同一个 key → 判定震荡并计入指标（蓝图 §5.6）。"""
+    item = await _make_item(db, "cnt-osc")
+    db.add(ContentLike(content_id=item.id, user_id=uuid.uuid4()))
+    item.like_count = 99  # 人为偏差
+    await db.flush()
+
+    # 两轮都用全量拍：增量拍第二轮会跳过已标记的行（那就测不到「重复修正」）
+    await reconcile_counts(db, only_unconverged=False)  # 第一轮修正
+    item.like_count = 99  # 再次制造**同一行**的偏差（模拟写方向被破坏）
+    await db.flush()
+    await reconcile_counts(db, only_unconverged=False)  # 第二轮又修正同一行 → 震荡
+
+    assert counts_reconcile_repeated_total._value.get() >= 1
 
 
 async def test_bump_rejects_unknown_field(db: AsyncSession) -> None:

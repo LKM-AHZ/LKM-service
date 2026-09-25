@@ -56,6 +56,15 @@ outbox_pending_count = Gauge(
     "outbox_pending_count",
     "outbox_events 中 status=pending 的积压事件数（relay 每轮末尾上报）",
 )
+# outbox relay 领导者选举事件（蓝图 §5.1 第 7 条：「无 leader 或选主抖动即告警」）。
+# event=acquired（本实例当选）/ contended（有他人在跑，正常）/ renew_failed（续约失败，
+# 失联/被接管前兆）/ stale_reclaimed（接管了陈旧锁）。renew_failed 持续增长或 acquired
+# 频繁交替 = 选主抖动，会让 relay 停摆或抢主风暴——故本指标是那条告警的取数点。
+outbox_leader_total = Counter(
+    "outbox_leader_total",
+    "outbox relay 领导者选举事件（event=acquired|contended|renew_failed|stale_reclaimed）",
+    ("event",),
+)
 # Pulsar 各订阅 lag（msgBacklog）：由 API 进程的 lag 上报器（app/core/pulsar_lag.py）
 # 周期从 Pulsar Admin REST 拉取后 set，供「某订阅故障/消费滞后」隔离看板。worker 进程
 # 不暴露 /metrics，故只在 API 进程上报。标签 = (subscription, topic)。
@@ -85,6 +94,16 @@ user_snap_singleflight_total = Counter(
     "user_snap_singleflight_total",
     "user:snap singleflight 请求合并（role=leader|shared）",
     ("role",),
+)
+
+
+# 计数对账震荡信号（蓝图 §5.6「同一批 key 多轮 diff 不降反升即判震荡」）：
+# 连续两轮对账都需要修正**同一个** content 计数 key，说明漂移正在被反复制造——典型原因是
+# 写方向被破坏（出现双向互写）或计数口径与明细不一致。本计数上升即需人工介入排查，
+# 而不是让对账在"改了又漂、漂了又改"里空转。
+counts_reconcile_repeated_total = Counter(
+    "counts_reconcile_repeated_total",
+    "连续两轮对账都需修正的计数 key 数（对账震荡信号，>0 需人工查写方向）",
 )
 
 

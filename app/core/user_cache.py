@@ -53,7 +53,7 @@ from redis.asyncio import Redis as _AsyncRedis
 import app.core.local_cache as local_cache
 import app.core.redis as redis_client
 import app.core.user_cache_events as user_cache_events
-from app.core.cache import TTL_ITEM_S, make_key
+from app.core.cache import TTL_ITEM_S, jitter_ttl, make_key
 from app.core.config import settings
 from app.core.metrics import user_snap_cache_total
 
@@ -63,6 +63,15 @@ logger = logging.getLogger("lkm.user_cache")
 _EPOCH_ABSENT = 0
 # 乐观锁（WATCH/MULTI CAS）重试上限：真并发竞态下的 WatchError 重试；超上限保守拒写（安全侧）。
 _MAX_CAS_RETRY = 8
+
+# —— 负值缓存（防穿透，蓝图 §5.6 标"硬性要求"）——
+# 对「上游权威已确认不存在」的 user_id 写入负值信封，短 TTL，避免不存在的 id 反复穿透到
+# AUTH/DB。**复用同一快照键**（不新增键空间）：负值 sv=0，任何真实正 sv 的回填都能覆盖它
+# （见 write_if_newer 的条件 1），且同受 epoch 守卫——被失效 bump 后，在途的负写也不会复活它。
+# 读侧据此区分「已确认不存在」与「压根没缓存过」（前者不必回退上游，后者必须）。
+_NEG_SV = 0
+_NEG_TTL_S = 30  # 短 TTL：真实用户随后被创建时，最多 30s 后即可见（远短于正常快照 TTL）
+_L1_TTL_LOWER_ONLY = True  # L1 的 TTL 是「丢广播时的陈旧窗口上界」，只可向下扰动（见 jitter_ttl）
 
 
 def _snap_key(user_id: uuid.UUID) -> str:
@@ -137,11 +146,17 @@ def _to_int(raw: Any) -> int:
         return _EPOCH_ABSENT
 
 
-async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
-    """读快照数据 dict（L1 本地 → L2 Redis）；未命中/Redis 故障 → None（miss 由 DB 兜底）。
+async def read_snap_state(
+    user_id: uuid.UUID,
+) -> tuple[bool, dict[str, Any] | None]:
+    """读快照并区分「未缓存」与「已确认不存在（负值缓存）」，返回 ``(negative, data)``。
+
+    ``negative=True`` 表示上游权威已判定该用户不存在、且仍在负值窗口内——调用方应**直接按
+    不存在处理**，不必再回退上游（这正是防穿透的收益）。
 
     L1 命中直接返回（免 L2 往返）；L1 miss 才查 L2，L2 命中后按 L1 TTL 回填本地。L1 条目
     仅作镜像，脏形态（非 dict）即删，不放大既有 ``_from_cache_dict`` 的脏缓存问题。
+    **负值不进 L1**（L1 是正向值镜像，短 TTL 的负值不必占本地内存）。
 
     **L1 回填不做 epoch 守卫（已知窗口，属设计取舍）**：本协程在 ``await redis.get(key)``
     期间若发生失效（另一实例 INCR epoch + DEL snap，本进程订阅任务删 L1 时 L1 尚为空），
@@ -153,7 +168,7 @@ async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
     """
     redis = await _get_redis()
     if redis is None:
-        return None
+        return False, None
     key = _snap_key(user_id)
     if _l1_on():
         entry = local_cache.l1_get(key)
@@ -161,54 +176,73 @@ async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
             data = entry.get("data")
             if isinstance(data, dict):
                 user_snap_cache_total.labels("l1", "hit").inc()
-                return _normalize_snap(data)
+                return False, _normalize_snap(data)
             local_cache.l1_delete(key)
         user_snap_cache_total.labels("l1", "miss").inc()
     try:
         raw = await redis.get(key)
     except Exception:
         logger.debug("user_cache get fail-open uid=%s", user_id)
-        return None
+        return False, None
     if raw is None:
         user_snap_cache_total.labels("l2", "miss").inc()
         logger.debug("user_cache miss uid=%s", user_id)
-        return None
+        return False, None
     user_snap_cache_total.labels("l2", "hit").inc()
     try:
         payload = json.loads(raw)
+        if payload.get("neg"):
+            # 负值缓存命中：上游已确认不存在，窗口内不再回退上游（防穿透）
+            return True, None
         data = payload.get("data")
         if not isinstance(data, dict):
-            return None
+            return False, None
         data = _normalize_snap(data)
         if _l1_on():
             sv = payload.get("sv")
             local_cache.l1_set(
                 key,
                 {"sv": _to_int(sv) if sv is not None else None, "data": data},
-                settings.user_snap_l1_ttl_s,
+                jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
             )
-        return data
+        return False, data
     except Exception:
         # 脏 L2 载荷（非 JSON / 非 dict）与「真 miss」在调用方看来都是 None，且此处已计过
         # l2 hit——不留日志的话，数据格式回归会表现为「命中率很高但一直回源」，无从排查
         logger.debug("user_cache payload 解析失败 uid=%s", user_id, exc_info=True)
-        return None
+        return False, None
 
 
-async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
-    """批量读快照（L1 逐个 → L2 一次 MGET，命中回填 L1）；未命中的 id 不在结果里。
+async def read_snap(user_id: uuid.UUID) -> dict[str, Any] | None:
+    """读快照数据 dict（L1 本地 → L2 Redis）；未命中/Redis 故障 → None（miss 由 DB 兜底）。
 
-    语义与逐 id 调 :func:`read_snap` 等价（同一套 L1/L2 与命中指标），差别只在把 N 次 L2
-    往返收成 1 次——M6.5 批量读（by-ids）的收益正是在此。Redis 不可用/异常 fail-open → 空
+    负值缓存命中同样返回 None——需区分「已确认不存在」与「未缓存」的调用方用
+    :func:`read_snap_state`（本函数是它的薄包装，保留既有调用方契约）。
+    """
+    _, data = await read_snap_state(user_id)
+    return data
+
+
+async def read_snaps_state(
+    user_ids: list[uuid.UUID],
+) -> tuple[set[uuid.UUID], dict[uuid.UUID, dict[str, Any]]]:
+    """批量读快照，返回 ``(negative_ids, data_map)``。
+
+    ``negative_ids`` = 命中负值缓存（上游已确认不存在，窗口内**不必回退上游**）的 id 集合；
+    ``data_map`` = 命中的字段 dict。**两者都不含**的 id 才是真 miss（需回退上游）。
+
+    语义与逐 id 调 :func:`read_snap_state` 等价（同一套 L1/L2 与命中指标），差别只在把 N 次
+    L2 往返收成 1 次——M6.5 批量读（by-ids）的收益正是在此。Redis 不可用/异常 fail-open → 空
     （调用方走上游拉取），绝不抛错。
     """
     if not user_ids:
-        return {}
+        return set(), {}
     redis = await _get_redis()
     if redis is None:
-        return {}
+        return set(), {}
     l1 = _l1_on()
     out: dict[uuid.UUID, dict[str, Any]] = {}
+    negative: set[uuid.UUID] = set()
     pending: list[uuid.UUID] = []
     for uid in user_ids:
         if l1:
@@ -222,12 +256,12 @@ async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any
             user_snap_cache_total.labels("l1", "miss").inc()
         pending.append(uid)
     if not pending:
-        return out
+        return negative, out
     try:
         raws = await redis.mget([_snap_key(uid) for uid in pending])
     except Exception:
         logger.debug("user_cache mget fail-open n=%s", len(pending))
-        return out
+        return negative, out
     for uid, raw in zip(pending, raws, strict=True):
         if raw is None:
             user_snap_cache_total.labels("l2", "miss").inc()
@@ -236,6 +270,9 @@ async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any
         try:
             payload = json.loads(raw)
         except Exception:
+            continue
+        if payload.get("neg"):
+            negative.add(uid)  # 负值命中：窗口内不再回退上游
             continue
         data = payload.get("data")
         if not isinstance(data, dict):
@@ -247,9 +284,19 @@ async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any
             local_cache.l1_set(
                 _snap_key(uid),
                 {"sv": _to_int(sv) if sv is not None else None, "data": data},
-                settings.user_snap_l1_ttl_s,
+                jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
             )
-    return out
+    return negative, out
+
+
+async def read_snaps(user_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
+    """批量读快照；未命中的 id（含负值命中）不在结果里。
+
+    需区分「上游已确认不存在」的调用方用 :func:`read_snaps_state`（本函数是其薄包装，
+    保留既有调用方契约）。
+    """
+    _, data_map = await read_snaps_state(user_ids)
+    return data_map
 
 
 async def read_snap_with_version(
@@ -285,7 +332,9 @@ async def read_snap_with_version(
             data = _normalize_snap(data)
         if _l1_on() and isinstance(data, dict):
             local_cache.l1_set(
-                key, {"sv": sv, "data": data}, settings.user_snap_l1_ttl_s
+                key,
+                {"sv": sv, "data": data},
+                jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
             )
         return sv, data
     except Exception:
@@ -294,15 +343,22 @@ async def read_snap_with_version(
 
 async def write_if_newer(
     user_id: uuid.UUID,
-    data: dict[str, Any],
+    data: dict[str, Any] | None,
     source_version: int,
     expected_epoch: int,
+    *,
+    ttl_seconds: int = TTL_ITEM_S,
+    negative: bool = False,
 ) -> bool:
     """CAS 回填：sv 胜过已存值**且** epoch 未被失效 bump 才写入；否则拒写返回 False。
 
     原子实现 = WATCH[snap, epoch] + MULTI 乐观锁（repo M1.2 同款，fakeredis 可跑、生产零外部
     脚本依赖；不用 Lua/eval——fakeredis 不支持 eval/lupa）。陈旧/已失效拒写是**确定性**结果，
     直接返回不重试；只有 WatchError 代表的真并发竞态才乐观重试。
+
+    ``negative=True``（配 ``data=None``）写的是**负值缓存**（上游确认不存在，见
+    :func:`write_negative`）：用短 ``ttl_seconds``、且**不进 L1**（L1 只镜像正向值）。
+    TTL 一律经 :func:`jitter_ttl` 扰动防雪崩（蓝图 §5.6）。
     """
     redis = await _get_redis()
     if redis is None:
@@ -313,9 +369,10 @@ async def write_if_newer(
     ekey = _epoch_key(user_id)
     # default=str：快照 data 内的 user_id 是 uuid.UUID（DB 直读路径），JSON 无原生 uuid；
     # 序列化成 str 后由读侧 _normalize_snap 还原，保证 L1/L2 与 DB 读路径类型一致。
-    value = json.dumps(
-        {"sv": source_version, "data": data}, ensure_ascii=False, default=str
-    )
+    payload: dict[str, Any] = {"sv": source_version, "data": data}
+    if negative:
+        payload["neg"] = True
+    value = json.dumps(payload, ensure_ascii=False, default=str)
     try:
         async with redis.pipeline(transaction=True) as pipe:
             for _ in range(_MAX_CAS_RETRY):
@@ -334,15 +391,18 @@ async def write_if_newer(
                         await pipe.reset()
                         return False
                     pipe.multi()
-                    pipe.set(key, value, ex=TTL_ITEM_S)
+                    pipe.set(key, value, ex=jitter_ttl(ttl_seconds))
                     await pipe.execute()
                     # L2 CAS 成功（权威已接受）才镜像进 L1；拒绝/异常一律不碰 L1，
-                    # 避免用陈旧值覆盖本地更新值。
-                    if _l1_on():
+                    # 避免用陈旧值覆盖本地更新值。负值不进 L1（L1 只镜像正向值）。
+                    if _l1_on() and not negative:
                         local_cache.l1_set(
                             key,
                             {"sv": source_version, "data": data},
-                            settings.user_snap_l1_ttl_s,
+                            jitter_ttl(
+                                settings.user_snap_l1_ttl_s,
+                                lower_only=_L1_TTL_LOWER_ONLY,
+                            ),
                         )
                     return True
                 except WatchError:
@@ -350,6 +410,23 @@ async def write_if_newer(
     except Exception:
         logger.exception("user_cache write CAS 异常，按未写入处理 uid=%s", user_id)
     return False
+
+
+async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
+    """把「上游权威确认不存在」记为负值缓存（短 TTL），防不存在 id 反复穿透上游（§5.6）。
+
+    与 :func:`write_if_newer` 同一套 CAS/epoch 守卫：负值 sv=0，任何真实正 sv 的回填都能
+    覆盖它（版本条件只拒「更旧」，0 不拒任何正 sv）；被失效 bump 后，在途的负写也会被代次
+    条件拒掉，不会把已删用户「复活」成不存在。写失败静默返回 False，不影响读语义。
+    """
+    return await write_if_newer(
+        user_id,
+        None,
+        _NEG_SV,
+        expected_epoch,
+        ttl_seconds=_NEG_TTL_S,
+        negative=True,
+    )
 
 
 def _extract_sv(raw_snap: str) -> int | None:

@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import messaging
 from app.core import redis as redis_client
 from app.core.config import settings
-from app.core.metrics import outbox_pending_count
+from app.core.metrics import outbox_leader_total, outbox_pending_count
 from app.db.event_failure import EventFailure
 from app.db.outbox import (
     _BACKOFF_CAP_S,
@@ -37,7 +37,7 @@ from app.db.outbox import (
     OutboxMessage,
 )
 from app.db.outbox_archive import OutboxArchived
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 
 logger = logging.getLogger("lkm.outbox")
 
@@ -135,6 +135,11 @@ async def relay_poll(
             .all()
         )
         if rows:
+            # 领取到的行里若有 locked_at 非空者，说明持有者已崩溃、本条是被超期接管的陈旧锁
+            # （见 _claimable 的 stale_before 条件）。蓝图 §5.1 第 7 条要求这类接管可观测。
+            stale = sum(1 for m in rows if m.locked_at is not None)
+            if stale:
+                outbox_leader_total.labels("stale_reclaimed").inc(stale)
             # 认领落库（先 commit 释放行锁）：后续其它 poller 会跳过这些行直到清标记/超时。
             claimed_at = datetime.now(UTC)
             for msg in rows:
@@ -331,10 +336,16 @@ async def _acquire_lease(redis: Any, ttl_s: float) -> str | None:
     token = uuid.uuid4().hex
     try:
         ok = await redis.set(_lease_key(), token, nx=True, ex=int(ttl_s))
-        return token if ok else None
     except Exception:
         logger.exception("outbox leader 租约抢占失败，按未取得处理")
+        # 抢占异常与争用同记 contended：运维关心的是「本实例没能当选」这一事实
+        outbox_leader_total.labels("contended").inc()
         return None
+    if ok:
+        outbox_leader_total.labels("acquired").inc()
+        return token
+    outbox_leader_total.labels("contended").inc()
+    return None
 
 
 async def _renew_lease(redis: Any, token: str, ttl_s: float) -> bool:
@@ -417,6 +428,7 @@ async def run_outbox_loop() -> None:
         if token is not None and not await _renew_lease(
             redis, token, settings.outbox_leader_ttl_s
         ):
+            outbox_leader_total.labels("renew_failed").inc()
             logger.warning("轮内租约续期失败，中止本轮后续投递并重抢")
             return False
         now = datetime.now(UTC)
@@ -448,6 +460,7 @@ async def run_outbox_loop() -> None:
             # 已是 leader → 续约；续不上（被接管/失联）回到未持有。
             if token is not None:
                 if not await _renew_lease(redis, token, settings.outbox_leader_ttl_s):
+                    outbox_leader_total.labels("renew_failed").inc()
                     logger.info("租约续约失败/已让出，回到外层重抢")
                     token = None
                 else:

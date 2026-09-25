@@ -62,6 +62,38 @@ class TestEnginePoolConfig:
         assert captured.get("max_overflow") == settings.db_pool_max_overflow
         assert captured.get("pool_pre_ping") is True
 
+    def should_configure_worker_pool_separately(self, monkeypatch):
+        """worker 池是**独立引擎**且用 worker 专用池参数（蓝图 §3.3「独立连接池」）。
+
+        分池的意义：outbox relay / 调度任务 / worker 的周期突发不再与 Web 请求争抢连接。
+        """
+        import app.db.session as session_mod
+        from app.core.config import settings
+        from app.db.session import get_async_engine, get_worker_engine
+
+        calls: list[dict[str, Any]] = []
+
+        def _fake_create(url: str, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+
+            class _Shell:
+                sync_engine: Any = None
+
+            return _Shell()
+
+        monkeypatch.setattr(session_mod, "create_async_engine", _fake_create)
+        monkeypatch.setattr(session_mod, "_async_engine", None)
+        monkeypatch.setattr(session_mod, "_AsyncSessionLocal", None)
+        monkeypatch.setattr(session_mod, "_worker_engine", None)
+        monkeypatch.setattr(session_mod, "_WorkerSessionLocal", None)
+
+        main_engine = get_async_engine()
+        worker_engine = get_worker_engine()
+        assert worker_engine is not main_engine  # 关键：不同实例才叫分池
+        assert calls[0]["pool_size"] == settings.db_pool_size
+        assert calls[1]["pool_size"] == settings.db_worker_pool_size
+        assert calls[1]["max_overflow"] == settings.db_worker_pool_max_overflow
+
 
 class TestReadSession:
     """读会话 exit 后不自动 commit（只读请求省空事务）。"""

@@ -278,7 +278,7 @@ async def _seed_base_data() -> None:
     独立会话执行并提交；seed 用 ``ON CONFLICT DO NOTHING`` 保证并发/重复执行安全
     （见 app/modules/rbac/seed.py）。依赖 role_permissions 表已由前置 schema 初始化建出。
     """
-    from app.db.session import new_session
+    from app.db.session import new_worker_session as new_session
     from app.modules.rbac.seed import seed_rbac
 
     db = await new_session()

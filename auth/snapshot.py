@@ -154,7 +154,12 @@ async def get_user_snapshot(
     - fail-open：seam 开启时若 AUTH 不可达/超时/畸形（client 抛 ``UserHttpUnavailable``），
       回退本进程 DB 直读一并返回（读永不 crash、不以 stale 当 truth）。
     """
-    cached = await user_cache.read_snap(user_id)
+    negative, cached = await user_cache.read_snap_state(user_id)
+    if negative:
+        # 负值缓存命中：上游权威已确认该用户不存在，且仍在短 TTL 窗口内 → 直接判不存在，
+        # **不再回退上游**（这正是 §5.6 防穿透的收益）。窗口过后自然回落拉一次，
+        # 故期间新建的同 id 用户不会被长期误判。
+        return None
     if cached is not None:
         # 缓存项存在但无法重建（如冻结字段新增后旧条目缺键）≠ 用户不存在：必须回落
         # 取回填源，否则脏缓存会让所有老用户被判为「查无此人」直到 TTL 过期。
@@ -178,7 +183,9 @@ async def _load_user_snapshot(
 
     二次检查确保被合并的等待方不重复回退上游；其余语义与直路逐字节一致。
     """
-    cached = await user_cache.read_snap(user_id)
+    negative, cached = await user_cache.read_snap_state(user_id)
+    if negative:
+        return None  # 负值命中：同 get_user_snapshot，不再回退上游
     if cached is not None:
         # 同 get_user_snapshot：脏缓存不可重建 → 继续走本 loader 回落取源。
         snap = _from_cache_dict(cached)
@@ -188,7 +195,10 @@ async def _load_user_snapshot(
 
     fields, version = await _retrieve_fields(user_id, db)
 
-    if fields is None:  # 权威不存在：不缓存缺行，直接 None（含 seam 关闭/离线沿直读路径同一语义）
+    if fields is None:
+        # 权威不存在：写负值缓存（短 TTL），避免同一不存在 id 反复穿透上游（§5.6 防穿透）。
+        # 随后照常返回 None；窗口过后会再拉一次，故窗口内的新建用户不会被长期判为不存在。
+        await user_cache.write_negative(user_id, expected_epoch)
         return None
 
     snap = _snap_from_fields(fields)

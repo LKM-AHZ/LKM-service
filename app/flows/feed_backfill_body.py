@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.db.session import new_session
+from app.db.session import new_worker_session as new_session
 from app.modules.feed import feed as feed_src
 from app.modules.feed.fanout import fanout_batch
 from app.modules.feed.models import FeedFanoutState

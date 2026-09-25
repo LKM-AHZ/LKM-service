@@ -26,6 +26,7 @@ from typing import Any
 
 from app.core.messaging import (
     RKEY_ANALYTICS,
+    RKEY_OPS_DAILY,
     RKEY_RECONCILE,
     SUB_JOBS,
     SUB_SEND,
@@ -160,11 +161,35 @@ async def export_analytics_clickhouse() -> None:
     await run_analytics_export()
 
 
+async def run_ops_daily() -> None:
+    """运营日报消费口（jobs worker 消费 cron.ops_daily）。
+
+    Prefect 开启且配了 ops-daily deployment 且触发成功 → 由 flow 执行（重试/UI 留痕）；
+    否则回落直调纯体层 ``app.flows.ops_daily_body.collect_daily_report``——该模块**不 import
+    prefect**，故默认关/触发失败路径零 Prefect 依赖。
+    """
+    from app.core.config import settings
+
+    if (
+        settings.prefect_enabled
+        and settings.prefect_ops_daily_deployment
+        and await _trigger_prefect_flow(
+            settings.prefect_ops_daily_deployment, {"days": 1}
+        )
+    ):
+        return
+
+    from app.flows.ops_daily_body import collect_daily_report
+
+    await collect_daily_report(days=1)
+
+
 register_task(SUB_SEND.name, "send_code", send_code)
 register_task(SUB_SEND.name, "send_magic_link", send_magic_link)
 register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_snap)
 register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
+register_task(SUB_JOBS.name, "run_ops_daily", run_ops_daily)
 # 低频 crash-safety 网：周期增量对账（非新鲜度主路；主路是上面的 user.* 事件）。每日 03:10
 # 由 scheduler 发布 cron.reconcile→jobs 订阅。routing/cron 复用既有 cron.reconcile 键/订阅。
 register_cron_job(
@@ -179,4 +204,11 @@ register_cron_job(
     cron="30 3 * * *",  # 每日 03:30
     routing_key=RKEY_ANALYTICS,
     fn="export_analytics_clickhouse",
+)
+# 运营日报：每日 03:40（排在 03:30 分析导出**之后**——日报读的正是那一步刚灌进 CH 的数据）
+register_cron_job(
+    job_id="ops_daily",
+    cron="40 3 * * *",  # 每日 03:40
+    routing_key=RKEY_OPS_DAILY,
+    fn="run_ops_daily",
 )

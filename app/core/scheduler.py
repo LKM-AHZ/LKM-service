@@ -17,10 +17,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core import messaging, task_registry
+from app.core.logging import log_exceptions
 
 logger = logging.getLogger("lkm.scheduler")
 
 
+@log_exceptions
 async def _fire(routing_key: str, fn: str) -> None:
     ok = await messaging.publish(routing_key, {"fn": fn})
     if not ok:

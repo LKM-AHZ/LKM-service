@@ -59,6 +59,7 @@ RKEY_USER_SESSION_REVOKE = "event.user.session_revoke"
 RKEY_CLEANUP = "cron.cleanup"
 RKEY_RECONCILE = "cron.reconcile"
 RKEY_ANALYTICS = "cron.analytics_export"
+RKEY_OPS_DAILY = "cron.ops_daily"
 # 内容域领域事件：外部检索引擎（Meilisearch/OpenSearch）增量同步的数据源
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
@@ -94,6 +95,7 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_CLEANUP: TOPIC_CRON,
     RKEY_RECONCILE: TOPIC_CRON,
     RKEY_ANALYTICS: TOPIC_CRON,
+    RKEY_OPS_DAILY: TOPIC_CRON,
 }
 
 
