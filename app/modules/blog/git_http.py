@@ -4,6 +4,7 @@ import binascii
 import contextlib
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -11,11 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.err import BizError
 from app.db.session import get_read_session, new_session
 from app.modules.blog import backfill, git_svc
 from app.modules.blog.models import BlogSeries
 from auth.entities import User
-from auth.seams import verifypwd
+from auth.seams import seam_enabled, verify_password_via_seam, verifypwd
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +97,50 @@ async def _resolve_series_id(db: AsyncSession, repo_name: str) -> int | None:
     return series.id if series is not None else None
 
 
+async def _authenticate_credentials(
+    db: AsyncSession, username: str, password: str
+) -> tuple[uuid.UUID, str] | None:
+    """校验一组 Basic 凭证，通过则返回 ``(user_id, username)``，否则 None。
+
+    **拆库形态（seam 开启）**：身份真值唯在 auth 库，凭证直读必须经 ``auth.seams`` 的
+    verify-password 缝打到 auth 进程。缝不可用/畸形时**按未认证收场（fail-closed）**，
+    绝不回落地业务库——拆库后那里没有 users 表，直查必 ``UndefinedTable``。
+    **融合形态（seam 关闭）**：就地查本库 User 行（单库/测试部署下合法）。
+    """
+    if seam_enabled():
+        try:
+            verified = await verify_password_via_seam(username, password)
+        except BizError as exc:
+            # 缝拿不到真值 = 无法证明身份，按未认证收场。日志保留根因（配置漏配 / auth 不可达
+            # 与「口令错」在此可区分），但不向外暴露。
+            logger.warning("git Basic Auth 凭证缝不可用，按未认证收场: %s", exc)
+            return None
+        if verified is None:
+            return None
+        return uuid.UUID(str(verified["user_id"])), str(verified["username"])
+
+    user = (
+        (await db.execute(select(User).where(User.username == username)))
+        .scalars()
+        .first()
+    )
+    if user is None or not user.hashed_password:
+        return None
+    if not await verifypwd(password, str(user.hashed_password)):
+        return None
+    return user.id, user.username
+
+
 async def _require_owner_for_push(
     db: AsyncSession, repo_name: str, request: Request
-) -> User:
+) -> str:
     """写路径(push)授权：校验 Basic Auth 身份，且该用户须为 repo 对应 blog_series 的属主。
 
     任一环节失败抛 HTTPException(401/403)，git http-backend 不会被调用，refs 不会被更新。
     - 无有效身份 → 401（git push 将其视为认证失败并提示）。
     - 仓库无归属（孤儿）或无属主匹配 → 403，防止越权写入他人/无人认领的仓库。
+
+    返回已认证用户名（供 http-backend 标 REMOTE_USER）。
     """
     auth = request.headers.get("Authorization", "")
     creds = _decode_basic_auth(auth)
@@ -114,25 +152,15 @@ async def _require_owner_for_push(
             headers={"WWW-Authenticate": 'Basic realm="lkm-git"'},
         )
     username, password = creds
-    # —— A5 凭证例外（合法直接认证，非展示）——
-    # 此处按 username 直查 auth.User 并校验 hashed_password，是 git HTTP-Basic 写路径
-    # 的**凭证直读**（须拿 auth 主模型 User 的 hashed_password 列交给 verifypwd 做口令
-    # 比对），无法改经展示只读缝 auth.snapshot——后者刻意不含凭证列。故判定为合法
-    # 直接认证例外，排除在缝迁移范围外；由 A5 在 import-linter 白名单把
-    # `blog.git_http -> auth.models` 记为凭证例外即可。勿重构此读取、勿改其 User/select
-    # 单行解析与 hashed_password 的 parse/serialize。
-    user = (
-        (await db.execute(select(User).where(User.username == username)))
-        .scalars()
-        .first()
-    )
-    if user is None or not await verifypwd(password, user.hashed_password):
+    identity = await _authenticate_credentials(db, username, password)
+    if identity is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    user_id, authed_username = identity
 
     series = await _resolve_series(db, repo_name)
-    if series is None or series.owner_id != user.id:
+    if series is None or series.owner_id != user_id:
         raise HTTPException(status_code=403, detail="Not repository owner")
-    return user
+    return authed_username
 
 
 async def maybe_backfill_after_push(repo_name: str, old_sha: str | None) -> None:
@@ -213,9 +241,9 @@ async def git_http_backend(
 
     # 写路径(push)必须先确认身份 + 属主，未通过直接 401/403，绝不让 git http-backend 处理。
     # 读路径维持原语义（Basic 通过即设 REMOTE_USER，匿名回退公开读）。
-    auth_user: User | None = None
+    remote_user: str | None = None
     if is_push:
-        auth_user = await _require_owner_for_push(db, repo_name, request)
+        remote_user = await _require_owner_for_push(db, repo_name, request)
     old_sha = None
     if is_push:
         old_sha = await asyncio.to_thread(git_svc.revparse_or_none, repo_name)
@@ -232,21 +260,20 @@ async def git_http_backend(
 
     # Basic Auth 校验（读权限门槛；会话由 FastAPI 依赖注入统一管理）
     if is_push:
-        # push 鉴权已在 _require_owner_for_push 完成，落库用户名供 http-backend 标记远程用户
-        assert auth_user is not None
-        env["REMOTE_USER"] = auth_user.username
+        # push 鉴权已在 _require_owner_for_push 完成，落已认证用户名供 http-backend 标记远程用户
+        assert remote_user is not None
+        env["REMOTE_USER"] = remote_user
     else:
         auth = request.headers.get("Authorization", "")
         creds = _decode_basic_auth(auth)
         if creds is not None:
             username, password = creds
-            user = (
-                (await db.execute(select(User).where(User.username == username)))
-                .scalars()
-                .first()
-            )
-            if user and await verifypwd(password, user.hashed_password):
-                env["REMOTE_USER"] = username
+            # 读路径本就允许匿名：验密不通过、或凭证缝不可用，一律按匿名读收场（不抛）。
+            # 与写路径的 fail-closed 401 不同——这里只是「少给身份」，不会放行任何受限操作。
+            identity = await _authenticate_credentials(db, username, password)
+            if identity is not None:
+                # 用缝回传的权威用户名（拆库形态下业务库已无该行可取）
+                env["REMOTE_USER"] = identity[1]
         elif auth.startswith("Basic "):
             # 仅格式错误（非 base64/缺冒号/非 UTF-8）回退匿名读；DB/内部错误不在此捕获，正常传播
             logger.warning("git Basic Auth 格式无效，回退为匿名（读公开）")

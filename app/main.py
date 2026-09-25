@@ -66,6 +66,31 @@ async def _shutdown_step(name: str, step: Callable[[], Awaitable[object]]) -> No
         request_logger.exception("shutdown step failed name=%s", name)
 
 
+# schema 初始化失败后的指数退避区间（秒）：由下面的后台 task 承担，见 _init_db_with_retry
+_INIT_DB_RETRY_MIN_S = 1.0
+_INIT_DB_RETRY_MAX_S = 30.0
+
+
+async def _init_db_with_retry() -> None:
+    """后台把业务库 schema 初始化到最新，失败按指数退避重试（启动不阻塞，§2 第 1 条）。
+
+    蓝图要求「进程启动不等待任何下游就绪」：DB 暂时不可用时进程照常起，liveness/readiness
+    照常应答（readiness 报未就绪 → 不入流），DB 恢复后自行续上、**无需重启进程**。成功即
+    返回；未成功前 ``is_db_initialized()`` 恒为 False，readiness 据此保持未就绪。
+    """
+    delay = _INIT_DB_RETRY_MIN_S
+    while True:
+        try:
+            await init_db()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            request_logger.exception("schema init failed; retry in %.0fs", delay)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, _INIT_DB_RETRY_MAX_S)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 可观测基座：结构化日志 + Sentry APM（均幂等；DSN 空则不加载）
@@ -75,7 +100,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # lifespan 请求时中间件栈已定型，此处再 instrument 不会生效，HTTP server span 采不到
     # （SQLAlchemy/httpx 埋点不依赖中间件栈，会照常工作而掩盖问题）。SQLAlchemy 埋点须等
     # 引擎建好，故仍留在此处。
-    await init_db()
+    # 启动不阻塞（§2 第 1 条）：schema 初始化放后台重试、不 await——DB 未就绪时进程仍要起来
+    # 并经 readiness 如实报「未就绪」，而不是起不来进 crashloop。就绪判定见 init_db 的完成标志。
+    init_db_task = asyncio.create_task(_init_db_with_retry())
     instrument_sqlalchemy(get_async_engine())
 
     # 启动即探测 Redis，便于日志暴露其状态（未配置/不可用时静默降级为 None）
@@ -99,6 +126,15 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     except Exception:
         # 非取消类异常不得打断收尾：它会使后续资源全部泄漏
         request_logger.exception("background cleanup task failed during shutdown")
+
+    # 收尾 schema 初始化重试 task：不取消的话它会继续访问下面已释放的引擎/连接池
+    init_db_task.cancel()
+    try:
+        await init_db_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        request_logger.exception("schema init task failed during shutdown")
 
     # 逐步骤兜底（顺序不变）：任一 close 抛错都不能跳过其余释放，否则连接泄漏
     # 收尾 WebSocket 事件的 Redis 订阅 task，避免泄漏连接

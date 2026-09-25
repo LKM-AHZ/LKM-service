@@ -18,6 +18,7 @@ admin 会话真值收进 auth 域后，签发/校验/清空后台 cookie 所需�
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 import jwt
@@ -60,6 +61,9 @@ def create_admin_access_token(
         "account_level": str(user.account_level),
         "type": "admin",
         "aud": _ADMIN_AUD,
+        # 单 token 标识：admin 登出按 jti 写黑名单即时失效该 cookie，而不 bump token_version
+        # （后者会把该 admin 的所有设备一并踢掉，见 auth.token_revocation 的分工说明）。
+        "jti": uuid.uuid4().hex,
         # APISIX jwt-auth 靠该 claim 查消费者（见 jwt_keys.GATEWAY_KEY）：
         "key": jwt_keys.GATEWAY_KEY,
         "token_version": int(user.token_version),

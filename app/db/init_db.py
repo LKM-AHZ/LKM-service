@@ -292,6 +292,18 @@ async def _seed_base_data() -> None:
         logger.info("seed_rbac inserted %d rows", n)
 
 
+# —— schema 初始化完成标志（进程内状态，供 readiness 如实上报）——
+# 启动不阻塞（本进程 lifespan 不再 await init_db）之后，进程可能在 schema 尚未就绪时就
+# 应答就绪探针。若 readiness 只探 `SELECT 1`，DB 可达但表/迁移未建时会误报 up，把流量放进
+# 一个查不了业务表的进程。故显式记录成败，readiness 并入该判定（见 health.router._probe_db）。
+_db_initialized: bool = False
+
+
+def is_db_initialized() -> bool:
+    """本进程的业务库 schema 是否已初始化成功（失败或仍在进行中均为 False）。"""
+    return _db_initialized
+
+
 async def init_db() -> None:
     """把数据库 schema 初始化到最新（多 worker 下用 Redis 锁串行化）。
 
@@ -302,7 +314,21 @@ async def init_db() -> None:
 
     schema 就绪后恒调用 :func:`_seed_base_data` 种入 RBAC 默认权限映射，消除新部署
     需人工跑 ``python -m app.modules.rbac.seed`` 才能用后台/写端点的依赖。
+
+    成败记入 ``_db_initialized``：失败必须显式回落为 False，否则「DB 可达但没建好表」会被
+    readiness 当成就绪。
     """
+    global _db_initialized
+    try:
+        await _init_db_schema()
+    except Exception:
+        _db_initialized = False
+        raise
+    _db_initialized = True
+
+
+async def _init_db_schema() -> None:
+    """:func:`init_db` 的实际建表/迁移体；成败由 init_db 记录进 ``_db_initialized``。"""
     from app.core.config import settings
 
     if not settings.use_alembic:

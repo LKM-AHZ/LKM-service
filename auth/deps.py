@@ -29,6 +29,7 @@ from auth.service_authz import (
     CAUSE_PASSWORD_CHANGED,
     CAUSE_SESSION_REVOKED,
 )
+from auth.token_revocation import is_jti_blocked
 
 _LEVEL_ORDER = {"local": 0, "normal": 1, "admin": 2}
 
@@ -73,6 +74,15 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         payload = decode_access_token(token)
     except (PyJWTError, ValueError) as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
+
+    # jti 撤销预检（§4.2/§5.6）：登出/单设备撤销后**立即**拒；放在 DB 查询之前正是「快速
+    # 预检」的意义。命中必拒；Redis 不可用时 is_jti_blocked 返回 False 跳过，由下面的 DB
+    # 判据（token_version / 改密撤销）兜底。无 jti 的旧 token 自动跳过（灰度零破坏）。
+    # 错误码与 token_version 拒绝保持同码同文案，不因撤销来源不同而改变客户端语义。
+    if await is_jti_blocked(payload.get("jti")):
+        raise BizError(
+            AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
+        )
 
     raw_user_id = payload.get("user_id")
     if not raw_user_id:

@@ -132,6 +132,25 @@ async def test_readiness_db_disabled_is_degraded(
     assert (await probe_client.get("/readiness")).status_code == 503
 
 
+async def test_probe_db_not_ready_before_schema_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 `_probe_db`：schema 未初始化时报 error——DB 可达但表未建 ≠ 就绪。
+
+    启动不阻塞（lifespan 不再 await init_db）后这个窗口真实存在；只探 `SELECT 1` 会误报
+    up，把流量放进一个查不了业务表的进程。故不应触达引擎，直接判未就绪。
+    """
+    monkeypatch.setattr(health_mod, "is_db_initialized", lambda: False)
+
+    def _boom() -> object:
+        raise AssertionError("schema 未就绪时不应触达引擎")
+
+    monkeypatch.setattr(health_mod, "get_async_engine", _boom)
+    status = await health_mod._probe_db()
+    assert status.status == "error"
+    assert status.detail == "schema not initialized"
+
+
 # ── Pulsar 探活（pulsar_lag.probe_health）───────────────────────────────────
 
 

@@ -9,7 +9,8 @@
 跨库语义在 Phase 4 接线：业务 → 内部 client → 打到 auth 内部端点，由 auth 进程落库并发 user 事件失效。
 
 写缝语义（Phase 4 消费）：升权只单向提升不降级、有改才 bump token_version；auth 自己的事务内 commit。
-返回内部信封（非 ApiResp）：grant → ``{"changed": 0|1}``；verify-password → ``{"ok": bool}``。
+返回内部信封（非 ApiResp）：grant → ``{"changed": 0|1}``；
+verify-password → ``{"ok": bool, "user_id": str|null, "username": str|null}``。
 """
 
 from __future__ import annotations
@@ -125,10 +126,12 @@ async def internal_verify_password(
     body: _VerifyPasswordIn,
     _auth: None = Depends(_require_internal_token),
     db: AsyncSession = Depends(get_auth_session),
-) -> dict[str, bool]:
-    """校验用户名+密码（凭证例外路径，如 blog/git_http）。返回 ``{"ok": bool}``。
+) -> dict[str, object]:
+    """校验用户名+密码（凭证例外路径，如 blog/git_http）。返回 ``{"ok", "user_id", "username"}``。
 
-    只读校验：不锁用户、不产生审计。仅当用户存在且凭据匹配返回 true。
+    只读校验：不锁用户、不产生审计。仅当用户存在且凭据匹配返回 true，并一并回身份
+    ``user_id``/``username``——调用方（blog git push 的属主判定）需拿 id 与 ``series.owner_id``
+    比对，而身份读缝 ``auth.snapshot`` 刻意不含凭证列、走不了那条路。``ok=false`` 时两者为 null。
     """
     user = (
         (await db.execute(select(User).where(User.username == body.username)))
@@ -139,7 +142,7 @@ async def internal_verify_password(
         # 用户不存在/无密码：跑一次等成本的虚拟哈希，否则本条“微秒返回、存在者数十毫秒”
         # 的耗时差可被调用方（如 blog git_http）当作用户名枚举 oracle。
         await dummy_verify()
-        return {"ok": False}
+        return {"ok": False, "user_id": None, "username": None}
     ok = True
     try:
         ok = await verifypwd(body.password, str(user.hashed_password))
@@ -150,4 +153,6 @@ async def internal_verify_password(
             "verifypwd raised exception for user_id=%s (possible corrupted hash)", user.id
         )
         ok = False
-    return {"ok": ok}
+    if not ok:
+        return {"ok": False, "user_id": None, "username": None}
+    return {"ok": True, "user_id": str(user.id), "username": user.username}

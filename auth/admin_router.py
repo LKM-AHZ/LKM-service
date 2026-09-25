@@ -51,6 +51,7 @@ from auth.security import dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
 from auth.service_auth import generate_refresh_token, hash_refresh_token
 from auth.service_verify import check_code_rate_limit
+from auth.token_revocation import block_payload_jti, is_jti_blocked
 
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
 
@@ -159,6 +160,10 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid") from None
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
+    # jti 撤销预检：admin 登出按 jti 写黑名单即时失效该 cookie（不 bump token_version——那会
+    # 把该 admin 的其他设备一并踢掉）。错误码与其余 admin 会话失效路径一致。
+    if await is_jti_blocked(payload.get("jti")):
+        raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
     sub = payload.get("sub")
     # sub 是 str(user.id)（UUID 串）；非法/缺失一律 FORBIDDEN，绝不 500。
     # 先 str() 再解析：拒绝把裸 int 当 128-bit UUID 接受。
@@ -346,6 +351,17 @@ async def admin_logout(
         if stored is not None and stored.revoked_at is None:
             stored.revoked_at = now_iso()
             await db.commit()
+    # 本枚 access cookie 按 jti 记入黑名单 → **立即**失效，而不必等 15min 自然过期。
+    # 这里刻意不 bump token_version：那会连带踢掉该 admin 的其他设备，jti 才是精准的。
+    raw_access = request.cookies.get(COOKIE_NAME)
+    if raw_access:
+        try:
+            payload = jwt_keys.decode(raw_access, audience=_ADMIN_AUD)
+        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, jwt.DecodeError):
+            # 已过期/伪造的 cookie 本就无需拉黑（预检之外也过不了校验）
+            payload = None
+        if payload is not None:
+            await block_payload_jti(payload)
     resp = resp_json(CommonErr.OK, data={"ok": True})
     _clear_cookies(resp)
     return resp

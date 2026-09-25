@@ -314,6 +314,55 @@ async def grant_via_seam(
         ) from None
 
 
+# —— 凭证校验缝（blog git HTTP-Basic 写/读路径）：凭证直读必须落在 auth 库内 ——
+#
+# 拆库后业务库不再有 users 表，git 的 Basic 认证不能再就地查 User（那是 UndefinedTable）。auth
+# 侧 ``/auth/internal/verify-password`` 已提供权威校验；本函数是该端点 client。与快照读缝的
+# **fail-open** 相反，本缝 **fail-closed**：调用方只在 ``enabled()``（url+token 都配齐）时进入，
+# 任一端不通/畸形 → 抛 ``UserHttpUnavailable``，由调用方按认证失败收场，绝不回落业务库。
+
+_VERIFY_FIELDS: tuple[str, ...] = ("ok", "user_id", "username")
+
+
+async def verify_password_via_seam(*, username: str, password: str) -> dict[str, object]:
+    """经 AUTH internal 端点校验 Basic 凭证，返回 ``{"ok", "user_id", "username"}``。
+
+    ``ok=False``（用户不存在／无密码／口令不匹配）是**权威否答**而非故障，照常返回；
+    ``user_id``/``username`` 仅在 ok=True 时有值，调用方据此做属主判定。
+    """
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/verify-password"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    body = {"username": username, "password": password}
+    try:
+        async with _build_client() as client:
+            resp = await client.post(url, headers=headers, json=body)
+    except httpx.HTTPError as exc:
+        raise UserHttpUnavailable(f"auth_http verify-password request failed: {exc}") from None
+
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http verify-password unexpected status {resp.status_code}"
+        )
+
+    payload = _coerce_json(resp)
+    for f in _VERIFY_FIELDS:
+        if f not in payload:
+            raise UserHttpUnavailable(f"auth_http verify-password missing field {f}")
+    # 与 authz 缝同纪律：只认真正的 JSON 布尔。{"ok": "false"}/{"ok": 1} 这类畸形体若被 bool()
+    # 强转成 truthy 就是放行，等于把一次服务端/网关抖动变成越权认证。
+    ok = payload.get("ok")
+    if not isinstance(ok, bool):
+        raise UserHttpUnavailable("auth_http verify-password malformed ok flag")
+    return {
+        "ok": ok,
+        "user_id": payload.get("user_id"),
+        "username": payload.get("username"),
+    }
+
+
 # —— bot 面板 SSO 铸票缝（面板并入社区后台）：票据签发原语在 auth 域（私钥只在此）——
 #
 # 社区后台进程（business）不持签发私钥，只能经本 client 把「代表某 admin 铸一张一次性票据」

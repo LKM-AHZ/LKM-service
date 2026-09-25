@@ -560,6 +560,8 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     - fetch_users_http_batch：单条替身的批量形态（等价 AUTH by-ids 端点，M6.5）。
     - grant_via_seam：升权写替身 → carrier 上 service_authz 原语。
     - mint_bot_sso_ticket：bot 面板 SSO 铸票替身 → 直接调 auth 域签发原语（等价 AUTH 内部端点）。
+    - verify_password_via_seam：凭证校验替身 → carrier 上 User + verifypwd（等价 AUTH 内部
+      /auth/internal/verify-password 端点），供 blog git HTTP-Basic 路径消费。
     """
     from app.core.config import settings as _cfg
     from auth import user_http as uh
@@ -653,11 +655,34 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         ticket, expires_in = mint_ticket(sub=str(user_id), account_level=account_level)
         return {"ticket": ticket, "expires_in": expires_in}
 
+    async def _verify_password(*, username: str, password: str) -> dict[str, object]:
+        """凭证校验替身（等价 AUTH 内部 /auth/internal/verify-password 端点）。
+
+        与端点同口径：用户不存在/无密码/口令不匹配 → ok=False 且身份置 null；命中才回
+        user_id/username。委托 auth 域 verifypwd 真原语，避免替身自简化凭证语义。
+        """
+        from sqlalchemy import select
+
+        from auth.models import User
+        from auth.security import verifypwd as _verify
+
+        u = (
+            (await carrier.execute(select(User).where(User.username == username)))
+            .scalars()
+            .first()
+        )
+        if u is None or not u.hashed_password:
+            return {"ok": False, "user_id": None, "username": None}
+        if not await _verify(password, str(u.hashed_password)):
+            return {"ok": False, "user_id": None, "username": None}
+        return {"ok": True, "user_id": str(u.id), "username": u.username}
+
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)
     monkeypatch.setattr(uh, "fetch_user_http_payload", _fetch)
     monkeypatch.setattr(uh, "fetch_users_http_batch", _fetch_batch)
     monkeypatch.setattr(uh, "grant_via_seam", _grant)
     monkeypatch.setattr(uh, "mint_bot_sso_ticket", _mint_bot_ticket)
+    monkeypatch.setattr(uh, "verify_password_via_seam", _verify_password)
 
 
 @pytest.fixture

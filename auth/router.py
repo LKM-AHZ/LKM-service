@@ -29,6 +29,7 @@ from auth.channels import (
 from auth.db.session import get_auth_session
 from auth.deps import (
     CurrentUser,
+    _parse_bearer,
     get_current_user,
     get_email_provider,
 )
@@ -55,6 +56,7 @@ from auth.schemas import (
     UserRegLocal,
     UserRegNormal,
 )
+from auth.security import decode_access_token
 from auth.service import (
     get_profile,
     get_profile_by_username,
@@ -67,6 +69,7 @@ from auth.service_auth import (
     store_pending_normal_registration,
 )
 from auth.service_verify import check_code_rate_limit
+from auth.token_revocation import block_payload_jti
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -343,9 +346,19 @@ async def refresh_access_token_route(
 @respond
 async def logout_route(
     cur: CurrentUser = Depends(get_current_user),
+    token: str = Depends(_parse_bearer),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     await service_auth.revoke_all_refresh_tokens(db, cur.id)
+    # 顺手把本枚 access token 记入 jti 黑名单：revoke_all 已靠 bump token_version 让全端失效，
+    # 这里让**本枚** token 在预检处即刻被拒——也是「单设备撤销」原语在登出路径的首个消费点。
+    # 取不到 jti（灰度期旧 token）或解码异常都不影响登出语义，故全程尽力而为。
+    try:
+        payload = decode_access_token(token)
+    except Exception:
+        payload = None
+    if payload is not None:
+        await block_payload_jti(payload)
     return {"message": "Logged out successfully"}
 
 

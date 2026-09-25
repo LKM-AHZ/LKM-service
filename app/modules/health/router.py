@@ -11,6 +11,7 @@ from app.core.common import ApiResp
 from app.core.config import settings
 from app.core.err import respond
 from app.core.pulsar_lag import probe_health as probe_pulsar_health
+from app.db.init_db import is_db_initialized
 from app.db.session import get_async_engine
 
 router = APIRouter(tags=["health"])
@@ -110,7 +111,14 @@ def _coerce_liveness(resp: httpx.Response) -> dict[str, object] | None:
 
 
 async def _probe_db() -> DependencyStatus:
-    """探测数据库：执行 SELECT 1，失败返回 error（detail 固定文案，细节只进日志）。"""
+    """探测数据库：**schema 已初始化** 且 SELECT 1 通过，才算 up。
+
+    只探连通性不够：DB 可达但表/迁移尚未建好时 `SELECT 1` 照样成功，readiness 会误报 up，
+    把流量放进一个查不了业务表的进程——启动不阻塞（lifespan 不再 await init_db）之后这个
+    窗口是真实存在的。故先看进程内的初始化完成标志（见 ``app.db.init_db.is_db_initialized``）。
+    """
+    if not is_db_initialized():
+        return DependencyStatus(status="error", detail="schema not initialized")
     engine = get_async_engine()
     if engine is None:
         return DependencyStatus(status="error", detail="engine not initialized")

@@ -24,7 +24,9 @@ from app.modules.blog.git_http import (
 )
 from app.modules.blog.models import BlogContent, BlogSeries
 from auth.models import User
+from auth.seams import seam_enabled
 from auth.security import hashpwd
+from auth.user_http import UserHttpUnavailable
 
 
 @pytest.fixture
@@ -264,10 +266,78 @@ class TestRequireOwnerForPush:
         repo = "blog-ok"
         owner, _ = _users
         await self._series(db, owner.id, repo)
-        user = await _require_owner_for_push(
+        authed_username = await _require_owner_for_push(
             db, repo, _push_auth_request(_auth_header("owner", "pw123456"))
         )
-        assert user.id == owner.id
+        assert authed_username == "owner"
+
+
+class TestRequireOwnerForPushViaSeam:
+    """拆库形态（凭证缝开启）：验密经 auth 缝；缝不可用时 fail-closed 401 且绝不回落业务库。
+
+    与 TestRequireOwnerForPush（融合态、缝关闭时就地查本库 users）互补。这里
+    ``auth_seam_fused`` 打开 ``seam_enabled()``，并把 ``auth.user_http.verify_password_via_seam``
+    替身到同一 fused schema 的 users 表——等价于拆库生产下打到 auth 进程内部端点。
+    """
+
+    @pytest.fixture
+    async def db(
+        self, fused_db_session: AsyncSession, auth_seam_fused
+    ) -> AsyncSession:
+        return fused_db_session
+
+    @pytest.fixture(autouse=True)
+    async def _users(self, db):
+        owner = User(username="seamowner", hashed_password=await hashpwd("pw123456"))
+        db.add(owner)
+        await db.flush()
+        return owner
+
+    async def _series(self, db, owner_id: uuid.UUID, repo_name: str) -> uuid.UUID:
+        series = BlogSeries(
+            owner_id=owner_id, title="t", repo_name=repo_name, description=None
+        )
+        db.add(series)
+        await db.flush()
+        return series.id
+
+    async def should_authenticate_via_seam(self, db, _users):
+        await self._series(db, _users.id, "blog-seam")
+        assert seam_enabled() is True
+        authed = await _require_owner_for_push(
+            db, "blog-seam", _push_auth_request(_auth_header("seamowner", "pw123456"))
+        )
+        assert authed == "seamowner"
+
+    async def should_reject_non_owner_via_seam(self, db, _users):
+        """属主判定用的是缝回传的 user_id，不是入参用户名。"""
+        other = User(username="seamother", hashed_password=await hashpwd("pw123456"))
+        db.add(other)
+        await db.flush()
+        await self._series(db, _users.id, "blog-seam-other")
+        with pytest.raises(HTTPException) as ei:
+            await _require_owner_for_push(
+                db, "blog-seam-other", _push_auth_request(_auth_header("seamother", "pw123456"))
+            )
+        assert ei.value.status_code == 403
+
+    async def should_fail_closed_when_seam_unavailable(
+        self, db, _users, monkeypatch: pytest.MonkeyPatch
+    ):
+        """缝不可用（auth 不可达/配置漏）→ 401，不回落业务库直查（拆库下那里没有 users 表）。"""
+        await self._series(db, _users.id, "blog-seam-down")
+
+        async def _unreachable(*, username: str, password: str):
+            raise UserHttpUnavailable("auth realm unreachable")
+
+        monkeypatch.setattr("auth.user_http.verify_password_via_seam", _unreachable)
+        with pytest.raises(HTTPException) as ei:
+            await _require_owner_for_push(
+                db,
+                "blog-seam-down",
+                _push_auth_request(_auth_header("seamowner", "pw123456")),
+            )
+        assert ei.value.status_code == 401
 
 
 class TestMaybeBackfillAfterPush:

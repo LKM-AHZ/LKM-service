@@ -206,9 +206,15 @@ async def test_verify_password_ok_and_mismatch(
         json={"username": "nobody", "password": "x"},
         headers=_auth_headers(),
     )
-    assert good.json() == {"ok": True}
-    assert bad.json() == {"ok": False}
-    assert missing.json() == {"ok": False}
+    good_body = good.json()
+    assert good_body["ok"] is True
+    # 校验通过时一并回身份：blog git push 的属主判定需拿 id 与 series.owner_id 比对，
+    # 而只读快照缝刻意不含凭证列、走不了那条路。
+    assert good_body["user_id"] == str(uid)
+    assert good_body["username"] == "erin"
+    # 否答时不透身份（不区分「不存在」与「口令错」）
+    assert bad.json() == {"ok": False, "user_id": None, "username": None}
+    assert missing.json() == {"ok": False, "user_id": None, "username": None}
     lvl, role, tv = await _level(db, uid)
     assert (lvl, role, tv) == ("normal", "member", 0)
 

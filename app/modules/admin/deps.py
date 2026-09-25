@@ -37,6 +37,7 @@ from auth.seams import (
     REFRESH_NAME,
     create_admin_access_token,  # 签发基元单一事实源（测试/同域复用）
     decode_admin_access,  # 解签/校验 audience+type（纯函数，无 DB 写）
+    is_jti_blocked,  # jti 撤销快速预检（登出即时失效）
 )
 
 # —— 后台 cookie 签发/校验纯基元与常量：单一事实源 auth.admin_session，此处原样 re-export，
@@ -90,6 +91,11 @@ async def get_current_admin(
         user_id = uuid.UUID(str(sub))
     except (AttributeError, TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
+
+    # jti 撤销预检：admin 登出后该 cookie **立即**失效（不等 15min 自然过期）。Redis 不可用
+    # 时 is_jti_blocked 返回 False 跳过，交由下面的 seam 权威裁决兜底；无 jti 的旧 token 亦然。
+    if await is_jti_blocked(payload.get("jti")):
+        raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
 
     # seam-only：未配置 authz seam → fail-closed（business 无本地 auth 真值可判，宁可拒）
     if not seam_enabled():

@@ -36,6 +36,7 @@ from auth.service_authz import (
     grant_incubation_from_business,
 )
 from auth.service_passkey import cleanup_expired_challenges
+from auth.token_revocation import block_payload_jti, is_jti_blocked
 from auth.user_dim_sync import (
     reconcile_user_dim_incremental,
     reconcile_user_dim_periodic,
@@ -49,6 +50,7 @@ __all__ = [
     "MFA_TRUST_SECONDS",
     "REFRESH_NAME",
     "_ADMIN_AUD",
+    "block_payload_jti",
     "cleanup_expired_challenges",
     "create_admin_access_token",
     "decode_admin_access",
@@ -60,6 +62,7 @@ __all__ = [
     "grant_exam_unlock_from_business",
     "grant_incubation_from_business",
     "hashpwd",
+    "is_jti_blocked",
     "log_audit",
     "mint_bot_sso_ticket",
     "new_auth_session",
@@ -74,6 +77,7 @@ __all__ = [
     "sync_dim_for_ids",
     "totp_code",
     "totp_now",
+    "verify_password_via_seam",
     "verifypwd",
 ]
 
@@ -129,3 +133,35 @@ async def mint_bot_sso_ticket(
         # **不是** httpx.HTTPError），惰性建 client 也可能抛别的。故这里兜底翻译，
         # 原始异常留在 __cause__ 里供排查，绝不让裸异常穿过这条缝。
         raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from exc
+
+
+async def verify_password_via_seam(
+    username: str, password: str
+) -> dict[str, Any] | None:
+    """校验一组 Basic 凭证，返回 ``{"user_id", "username"}``；**权威否答返回 None**。
+
+    拆库后业务库无 users 表，git HTTP-Basic 的验密只能经 auth 内部端点完成（blog git_http
+    消费）。None 表示「用户不存在／无密码／口令不匹配」这类权威否答，调用方按未认证收场；
+    **缝不可用/畸形则抛 ``BizError(UNAVAILABLE)``**（fail-closed）——凭证校验拿不到真值时
+    必须拒绝，绝不能回落业务库直查（那里没有该表）或放行。
+
+    惰性取内部实现，保持测试对 ``auth.user_http`` 的 monkeypatch 依然生效。
+    """
+    from auth.user_http import UserHttpUnavailable
+    from auth.user_http import verify_password_via_seam as _verify
+
+    try:
+        payload = await _verify(username=username, password=password)
+    except UserHttpUnavailable as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Credential verification unavailable: {exc}"
+        ) from None
+    except Exception as exc:
+        # 同 mint_bot_sso_ticket：InvalidURL 等非 HTTPError 异常也要收口在这条 fail-closed
+        # 承诺内，原始异常留在 __cause__ 供排查。
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Credential verification unavailable: {exc}"
+        ) from exc
+    if not payload.get("ok"):
+        return None
+    return {"user_id": payload["user_id"], "username": payload["username"]}

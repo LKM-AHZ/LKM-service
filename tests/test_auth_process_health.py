@@ -112,7 +112,26 @@ async def test_probe_db_uses_auth_engine(monkeypatch) -> None:
         calls += 1
         return _Engine()
 
+    # probe_db 现在还要求「schema 已初始化」（启动不阻塞后 DB 可达但表未建的窗口真实存在）
+    monkeypatch.setattr(health_auth, "is_auth_db_initialized", lambda: True)
     monkeypatch.setattr(health_auth, "get_auth_engine", _fake_get_auth_engine)
     status = await health_auth.probe_db()
     assert status.status == "up"
     assert calls == 1
+
+
+async def test_probe_db_not_ready_before_schema_init(monkeypatch) -> None:
+    """schema 未初始化时必须报 error，不能被 `SELECT 1` 骗成 up。
+
+    启动不阻塞（lifespan 不再 await init_auth_db）后，DB 可达但 auth 表还没建好的窗口
+    真实存在；此处若返回 up，编排会把流量放进一个查不了 users 表的 auth 进程。
+    """
+    monkeypatch.setattr(health_auth, "is_auth_db_initialized", lambda: False)
+
+    def _boom() -> object:
+        raise AssertionError("schema 未就绪时不应触达引擎")
+
+    monkeypatch.setattr(health_auth, "get_auth_engine", _boom)
+    status = await health_auth.probe_db()
+    assert status.status == "error"
+    assert status.detail == "schema not initialized"

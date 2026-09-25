@@ -80,6 +80,10 @@ def create_access_token(
         "trust_device": trust_device,
         "type": _ACCESS_TYPE,
         "token_version": token_version,
+        # 单 token 标识：登出时按 jti 写 L2 黑名单（auth.token_revocation），验签后先查黑名单
+        # 再回查 DB。token_version 是「踢该用户全部会话」的全局判据，jti 只废这一枚 token
+        # ——两者分工，jti 只加拒、不取代 DB 权威判据。
+        "jti": uuid.uuid4().hex,
         # 危险操作 step-up 2FA 标记 + 信任时刻（epoch 秒）：防前台删除等危险端点被未二次验证的会话滥用。
         # 1 小时窗口由 auth/deps.get_current_user_2fa 校验；刷新轮换经 refresh_tokens.mfa_at 继承原点，窗口不重置。
         "mfa": mfa_verified,

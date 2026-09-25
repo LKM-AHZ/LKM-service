@@ -64,11 +64,34 @@ async def _create_auth_all() -> None:
         await conn.run_sync(auth_metadata.create_all)
 
 
+# —— schema 初始化完成标志（进程内状态，供 auth readiness 如实上报）——
+# 与单体 app.db.init_db 的标志同因：启动不阻塞后，进程可能在 auth 库 schema 尚未就绪时
+# 应答探针；只看 `SELECT 1` 会误报 up（DB 可达但 users 表还没建）。
+_auth_db_initialized: bool = False
+
+
+def is_auth_db_initialized() -> bool:
+    """本进程的 auth 库 schema 是否已初始化成功（失败或仍在进行中均为 False）。"""
+    return _auth_db_initialized
+
+
 async def init_auth_db() -> None:
     """把 **auth 独立库** schema 初始化到最新（auth 进程启动时调用）。
 
     业务库 schema 由 backend 进程负责，auth 库由 auth 进程自持（「进程=库边界」）。
+    成败记入 ``_auth_db_initialized``，供 readiness 如实上报（见 ``auth.health.probe_db``）。
     """
+    global _auth_db_initialized
+    try:
+        await _init_auth_db_schema()
+    except Exception:
+        _auth_db_initialized = False
+        raise
+    _auth_db_initialized = True
+
+
+async def _init_auth_db_schema() -> None:
+    """:func:`init_auth_db` 的实际建表/迁移体；成败由 init_auth_db 记录进标志。"""
     if not settings.use_alembic:
         await _create_auth_all()
         logger.info("auth schema initialized via create_all (AuthBase)")

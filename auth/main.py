@@ -23,6 +23,8 @@ owner-leaf，其 router 只依赖 core + db.session + auth 内部，故可干净
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -58,6 +60,31 @@ from auth import (
 from auth.db.init import init_auth_db
 from auth.db.session import dispose_auth_engine
 
+logger = logging.getLogger(__name__)
+
+# auth 库 schema 初始化失败后的指数退避区间（秒）；见 _init_auth_db_with_retry
+_AUTH_INIT_DB_RETRY_MIN_S = 1.0
+_AUTH_INIT_DB_RETRY_MAX_S = 30.0
+
+
+async def _init_auth_db_with_retry() -> None:
+    """后台初始化 auth 独立库 schema，失败按指数退避重试（启动不阻塞，与单体 app.main 对齐）。
+
+    DB 暂时不可用时 auth 进程照常起、探针照常应答（readiness 报未就绪而非进程死掉），
+    恢复后自行续上、无需重启。
+    """
+    delay = _AUTH_INIT_DB_RETRY_MIN_S
+    while True:
+        try:
+            await init_auth_db()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("auth schema init failed; retry in %.0fs", delay)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, _AUTH_INIT_DB_RETRY_MAX_S)
+
 # 本进程装配的 auth 面（子集口径见模块 docstring）：独立于业务 registry，
 # 显式 import 各 auth router 聚合，不触发非 auth 模块副作用。
 _AUTH_ROUTERS = [
@@ -87,15 +114,21 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     init_sentry()
     # 链路追踪在 create_auth_app 装配期挂载（不能放 lifespan：中间件栈已定型，
     # instrument 不生效、HTTP span 采不到；详见 core.tracing.setup_tracing 说明）
+    # 启动不阻塞（§2 第 1 条）：auth 库 schema 初始化放后台重试、不 await——DB 未就绪时进程
+    # 仍要起来并经 readiness 报「未就绪」，而不是起不来。auth 表已迁出单体 Base.metadata，
+    # 无其他进程会建它们，故建它们仍是本进程的职责（业务库 schema 归 backend 进程）。
+    init_db_task = asyncio.create_task(_init_auth_db_with_retry())
     try:
-        # 启动：初始化本进程自持的 auth 独立库 schema（AuthBase）。auth 表已迁出单体
-        # Base.metadata，无其他进程会建它们，故是 auth 进程的职责；业务库 schema 仍由
-        # backend 进程的 init_db 负责，二者分库、各自的 Alembic 链与迁移锁互不干扰。
-        # 放进 try：schema 初始化失败时 finally 仍会跑清理（tracing/引擎/redis），
-        # 否则启动失败会连清理一起跳过。
-        await init_auth_db()
         yield
     finally:
+        # 收尾 schema 初始化 task：不取消它会继续访问下面已释放的引擎/连接池
+        init_db_task.cancel()
+        try:
+            await init_db_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("auth schema init task failed during shutdown")
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
         shutdown_tracing()
         await dispose_auth_engine()
