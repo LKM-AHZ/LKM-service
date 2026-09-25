@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from app.core.common import (
     ApiResp,
@@ -15,7 +16,9 @@ from app.core.common import (
     PaginateDep,
     PaginateParams,
 )
+from app.core.config import settings
 from app.core.err import respond
+from app.core.wire import msgspec_ok
 from app.db.session import get_read_session, get_session
 from app.modules.interaction.schemas import (
     FavoriteItem,
@@ -30,6 +33,7 @@ from app.modules.interaction.service import (
     record_view,
     remove_favorite,
 )
+from app.modules.interaction.wire import favorites_to_wire, history_to_wire
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from auth.deps import CurrentUser, get_current_user
@@ -76,8 +80,11 @@ async def my_favorites(
     cur: CurrentUser = Depends(get_current_user),
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
-) -> PageData[FavoriteItem]:
-    return await list_favorites(db, cur.id, page=pag.page, limit=pag.limit)
+) -> PageData[FavoriteItem] | Response:
+    page = await list_favorites(db, cur.id, page=pag.page, limit=pag.limit)
+    if settings.read_msgspec_enabled:
+        return msgspec_ok(favorites_to_wire(page))
+    return page
 
 
 @router.post("/views/{content_id}", response_model=ApiResp[ViewState])
@@ -96,5 +103,8 @@ async def my_history(
     cur: CurrentUser = Depends(get_current_user),
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
-) -> PageData[HistoryItem]:
-    return await list_history(db, cur.id, page=pag.page, limit=pag.limit)
+) -> PageData[HistoryItem] | Response:
+    page = await list_history(db, cur.id, page=pag.page, limit=pag.limit)
+    if settings.read_msgspec_enabled:
+        return msgspec_ok(history_to_wire(page))
+    return page

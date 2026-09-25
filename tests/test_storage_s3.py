@@ -144,3 +144,44 @@ async def test_save_multipart_aborts_and_raises_too_large():
     assert ei.value.errcode == StorageErr.TOO_LARGE
     client.abort_multipart_upload.assert_called_once()
     assert not client.complete_multipart_upload.called
+
+
+# ---- 寻址风格（B6a，蓝图 §6.3：S3/MinIO 用 path，OSS/COS 用 virtual-host）----
+
+
+def _presign_url(*, style: str) -> str:
+    """用自建 client（非注入）生成预签名 URL：只有这条路径会应用寻址配置。"""
+    with mock_aws():
+        storage = S3Storage(
+            bucket="lkm",
+            prefix="files",
+            endpoint_url="https://s3.example.com",
+            public_endpoint_url="https://s3.example.com",
+            region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+            public_addressing_style=style,
+        )
+        return storage.presign_download("ab/hash", expires=60)
+
+
+def test_presign_defaults_to_path_style() -> None:
+    """默认 path：bucket 在路径里（与既有 MinIO/S3 行为一致，不因本改造而变）。"""
+    url = _presign_url(style="path")
+    assert url.startswith("https://s3.example.com/lkm/")
+
+
+def test_presign_uses_virtual_host_when_configured() -> None:
+    """virtual：bucket 进 host（OSS/COS 常见），否则签名 host 与实际请求不符会 403。"""
+    url = _presign_url(style="virtual")
+    assert url.startswith("https://lkm.s3.example.com/")
+
+
+def test_addressing_style_rejects_unknown_value() -> None:
+    """非法寻址风格在配置层即拒（否则会一路以 boto3 默认 auto 静默跑）。"""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(storage_backend="s3", s3_addressing_style="bogus")

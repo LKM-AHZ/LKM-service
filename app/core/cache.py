@@ -16,6 +16,7 @@ from typing import Any
 import app.core.redis as redis_client
 from app.core import logging as lkm_logging
 from app.core import singleflight
+from app.core.cache_lock import l2_lock
 from app.core.config import settings
 
 logger = logging.getLogger("lkm.cache")
@@ -144,17 +145,23 @@ async def cached_read[T](
         return cached
 
     async def _load_and_fill() -> T:
-        # 拿到 flight 后先重读：可能前一个协程已回填；仍 miss 才执行 loader
-        cached2 = await cache_get(key)
-        if cached2 is not None:
-            if cached2 == _NULL_MARKER:
-                return None  # ty: ignore[invalid-return-type]  # 空值标记：业务上"不存在"
-            return cached2
-        value = await loader()
-        if value is not None:
-            await cache_set(key, value, ttl_seconds)
-        elif null_ttl is not None:
-            await cache_set(key, _NULL_MARKER, null_ttl)
-        return value
+        # 进程内已由 singleflight 收敛；这里再叠**跨进程** L2 锁（B4），使多副本部署下
+        # 也只有持锁实例回填 DB 结果（蓝图 §5.6 的 double-check）。锁不可用/等锁超时
+        # 一律 fail-open：照常回填，只是可能多回填一次。
+        async with l2_lock(key) as held:
+            # 等锁期间可能已有实例回填（或在无锁模式下并发回填）：先重读
+            cached2 = await cache_get(key)
+            if cached2 is not None:
+                if cached2 == _NULL_MARKER:
+                    return None  # ty: ignore[invalid-return-type]  # 空值标记：业务上"不存在"
+                return cached2
+            value = await loader()
+            if held:
+                # 仅持锁者回填：避免等锁超时者用（可能更旧的）结果覆盖持锁者的新值
+                if value is not None:
+                    await cache_set(key, value, ttl_seconds)
+                elif null_ttl is not None:
+                    await cache_set(key, _NULL_MARKER, null_ttl)
+            return value
 
     return await singleflight.run(key, _load_and_fill)

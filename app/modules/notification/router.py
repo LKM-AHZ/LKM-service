@@ -6,6 +6,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from app.core.common import (
     ApiResp,
@@ -14,7 +15,9 @@ from app.core.common import (
     PaginateDep,
     PaginateParams,
 )
+from app.core.config import settings
 from app.core.err import respond
+from app.core.wire import msgspec_ok
 from app.db.session import get_read_session, get_session
 from app.modules.notification.schemas import (
     MarkReadIn,
@@ -35,6 +38,7 @@ from app.modules.notification.service import (
     set_preferences,
     unread_count,
 )
+from app.modules.notification.wire import to_wire
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from auth.deps import CurrentUser
@@ -62,10 +66,13 @@ async def my_notifications(
     pag: PaginateParams = Depends(PaginateDep()),
     unread: bool = Query(False, description="只看未读"),
     db: AsyncSession = Depends(get_read_session),
-) -> PageData[NotificationOut]:
-    return await list_notifications(
+) -> PageData[NotificationOut] | Response:
+    page = await list_notifications(
         db, cur.id, page=pag.page, limit=pag.limit, unread_only=unread
     )
+    if settings.read_msgspec_enabled:
+        return msgspec_ok(to_wire(page))
+    return page
 
 
 @router.get("/me/unread-count", response_model=ApiResp[UnreadCountOut])

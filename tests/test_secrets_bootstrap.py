@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -87,3 +88,67 @@ def test_fetch_failure_failopen_vs_fastfail() -> None:
     required = dict(_BASE_ENV)
     required["LKM_INFISICAL_REQUIRED"] = "true"
     assert bootstrap(required, client_factory=factory) == 1  # 必需 → fail-fast
+
+
+# ---- B6b：引导密钥走文件（零明文路径）----
+
+
+def test_client_id_file_wins_over_env(tmp_path: Any) -> None:
+    """文件优先于 env：登录用的是挂载文件里的凭据。"""
+    cid_file = tmp_path / "cid"
+    cid_file.write_text("file-cid\n", encoding="utf-8")
+    seen: dict[str, str] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/universal-auth/login"):
+            seen["clientId"] = json.loads(request.content)["clientId"]
+            return httpx.Response(200, json={"accessToken": "tok"})
+        if request.url.path.endswith("/secrets/raw"):
+            return httpx.Response(200, json={"secrets": []})
+        return httpx.Response(404)
+
+    env = dict(_BASE_ENV)
+    env["LKM_INFISICAL_CLIENT_ID"] = "env-cid"  # 应被文件覆盖
+    env["LKM_INFISICAL_CLIENT_ID_FILE"] = str(cid_file)
+
+    assert bootstrap(env, client_factory=_factory(_handler)) == 0
+    assert seen["clientId"] == "file-cid"
+
+
+def test_missing_file_falls_back_to_env(tmp_path: Any) -> None:
+    """配了路径但文件不在（未挂卷/本地开发）→ 回落 env，照常注入。"""
+    env = dict(_BASE_ENV)
+    env["LKM_INFISICAL_CLIENT_ID_FILE"] = str(tmp_path / "does-not-exist")
+
+    assert bootstrap(env, client_factory=_factory(_ok_handler)) == 0
+    assert env["LKM_JWT_SECRET"] == "real-jwt"
+
+
+def test_empty_file_failopen_vs_fastfail(tmp_path: Any) -> None:
+    """空文件是配置错：非必需降级、必需 fail-fast（都不触网）。"""
+    empty = tmp_path / "empty"
+    empty.write_text("   \n", encoding="utf-8")
+
+    def _boom(_timeout: float) -> Any:
+        raise AssertionError("凭据取自文件，配置错时不应建 client")
+
+    env = dict(_BASE_ENV)
+    env["LKM_INFISICAL_CLIENT_SECRET_FILE"] = str(empty)
+    assert bootstrap(env, client_factory=_boom) == 0  # 非必需 → 降级
+
+    required = dict(env, LKM_INFISICAL_REQUIRED="true")
+    assert bootstrap(required, client_factory=_boom) == 1  # 必需 → fail-fast
+
+
+def test_unreadable_path_fails_when_required(tmp_path: Any) -> None:
+    """路径指向目录（读取必败）：按不可读处理，而不是静默回落 env。"""
+    env = dict(
+        _BASE_ENV,
+        LKM_INFISICAL_REQUIRED="true",
+        LKM_INFISICAL_CLIENT_SECRET_FILE=str(tmp_path),  # 目录
+    )
+
+    def _boom(_timeout: float) -> Any:
+        raise AssertionError("配置错不该触网")
+
+    assert bootstrap(env, client_factory=_boom) == 1

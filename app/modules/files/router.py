@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import Response
 
 from app.core.common import (
     ApiResp,
@@ -14,7 +15,9 @@ from app.core.common import (
     PaginateParams,
     parse_tags,
 )
+from app.core.config import settings
 from app.core.err import BizError, CommonErr, respond
+from app.core.wire import msgspec_ok
 from app.db.session import get_read_session, get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.files.models import FileStatus, LibraryFile
@@ -39,6 +42,7 @@ from app.modules.files.service import (
 from app.modules.files.service import (
     create_file as create_file_service,
 )
+from app.modules.files.wire import to_wire
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import check_owner, role_has_permission
@@ -65,8 +69,8 @@ async def get_files(
     status: str | None = Query(default=None, max_length=20),
     sort: str = Query(default="newest"),
     db: AsyncSession = Depends(get_read_session),
-) -> PageData[FileInfo]:
-    return await list_files(
+) -> PageData[FileInfo] | Response:
+    page = await list_files(
         db,
         page=pag.page,
         limit=pag.limit,
@@ -74,6 +78,9 @@ async def get_files(
         status=status,
         sort=sort,
     )
+    if settings.read_msgspec_enabled:
+        return msgspec_ok(to_wire(page))
+    return page
 
 
 @router.post("", response_model=ApiResp[FileInfo])

@@ -1,14 +1,19 @@
-"""内容互动计数的 Redis 链路落库与对账（M6.10）。
+"""内容互动计数：写穿为主、Redis 增量链路退居回退通道（B3 重构 M6.10）。
 
-三项计数的**真相源是明细表**，``content_items`` 上的计数列是派生缓存：
+三项计数的**真相源是明细表**，``content_items`` 上的计数列是派生值：
 
 - ``like_count``     ← ``content_likes`` 行数
 - ``comment_count``  ← ``content_comments`` 行数
 - ``bookmark_count`` ← ``interaction_favorites`` 行数
 
-写路径把差值记进 Redis（``core.counters``），``flush_counters`` 周期把差值落到计数列，
-``reconcile_counts`` 按明细行 ``COUNT(*)`` 重算并修正偏差（**可证伪**：连续两次对账，
-第二次 ``affected == 0``）。
+**写穿（默认，``LKM_COUNTERS_WRITE_THROUGH=true``）**：写路径与明细同事务原子 UPDATE 计数列，
+派生列与明细强一致——读数是真值，无 flush 窗口偏差，也不再需要「DB 值 + pending」的近似合成。
+
+**回退通道（开关关闭）**：M6.10 的 write-behind —— 差值记进 Redis（``core.counters``）、
+``flush_counters`` 周期落库。保留它只为可回滚，不是默认路径。
+
+``reconcile_counts`` 两条路径下都保留：按明细 ``COUNT(*)`` 重算并修正偏差（**可证伪**：
+连续两次对账，第二次 ``affected == 0``），作为历史脏值与异常路径的兜底收敛。
 
 **不纳入本链路的计数**：``view_count``（浏览数）。它没有可重算的真相源——浏览明细
 ``interaction_view_logs`` 是「每用户每内容一行」的 upsert，行数与累计浏览次数不可换算，
@@ -28,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import counters
+from app.core.config import settings
 from app.core.err import BizError
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentComment, ContentItem, ContentLike
@@ -50,10 +56,17 @@ _DETAIL_SOURCES: dict[str, sa.Column[uuid.UUID]] = {
 }
 
 
-async def _direct_bump(
+async def write_through_bump(
     db: AsyncSession, item_id: uuid.UUID, field: str, delta: int
 ) -> int:
-    """fail-open 通道：原子 UPDATE 直改 DB（限定下限 0），返回新值。"""
+    """**写穿主路径**：原子 UPDATE 直改 DB（下限 0），与业务明细同事务、返回新值。
+
+    计数列的真相源是明细表（见模块 docstring），写穿让派生列与明细强一致——读路径不再需要
+    「DB 值 + 未落库差值」的近似合成，也不存在 flush 窗口内的偏小读数。
+
+    行锁由 UPDATE 自身承担：并发对同一行的 +1/-1 串行化，不丢增量（``greatest(...,0)`` 兜底
+    下限）。行不存在（含已硬删）抛 ``CONTENT_NOT_FOUND``，使调用方事务整体回滚。
+    """
     col = _COLUMNS[field]
     result = await db.execute(
         sa.update(ContentItem)
@@ -70,14 +83,19 @@ async def _direct_bump(
 async def bump_content_counter(
     db: AsyncSession, item_id: uuid.UUID, field: str, delta: int
 ) -> int:
-    """记一次计数增减，返回**即时读数**（DB 值 + 未落库差值）。
+    """记一次计数增减，返回**权威读数**。
 
-    Redis 可用 → 只写增量（DB 计数列由 flush 收敛）；Redis 不可用 → 原路原子 UPDATE，
-    语义与引入本链路前完全一致。
+    - ``counters_write_through``（默认开）：与明细同事务原子 UPDATE，返回值为 DB 真值。
+    - 关：回退 M6.10 的 Redis 增量链路（Redis 可用则只记增量、由 flush 收敛；不可用则
+      原路原子 UPDATE）。
     """
     if field not in _COLUMNS:
         raise ValueError(f"unsupported counter field: {field!r}")
 
+    if settings.counters_write_through:
+        return await write_through_bump(db, item_id, field, delta)
+
+    # ---- 回退路径（M6.10 的 write-behind）----
     # 先确认内容行存在，**再**写 Redis：反过来（先 INCR 后校验）会在内容不存在/已删时
     # 留下无人认领的增量键——本调用抛 CONTENT_NOT_FOUND，但那个 +1 不会被回滚，
     # flush 时 UPDATE 命中 0 行而被静默丢弃，后续 id 复用还会继承这个陈旧值。
@@ -89,11 +107,11 @@ async def bump_content_counter(
     if await counters.bump_counter(field, item_id, delta):
         return int(base) + await counters.pending_delta(field, item_id)
 
-    return await _direct_bump(db, item_id, field, delta)
+    return await write_through_bump(db, item_id, field, delta)
 
 
 async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
-    """即时读数：DB 计数列 + 未落库差值（Redis 不可用时即 DB 值）。"""
+    """即时读数：写穿模式下即 DB 计数列；回退模式下是「DB 值 + 未落库差值」。"""
     # 与 bump_content_counter 同口径校验：否则未支持字段名会以裸 KeyError 冒成 500
     if field not in _COLUMNS:
         raise ValueError(f"unsupported counter field: {field!r}")
@@ -101,6 +119,8 @@ async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     base = await db.scalar(select(col).where(ContentItem.id == item_id))
     if base is None:
         raise BizError(ContentErr.CONTENT_NOT_FOUND)
+    if settings.counters_write_through:
+        return int(base)
     return int(base) + await counters.pending_delta(field, item_id)
 
 

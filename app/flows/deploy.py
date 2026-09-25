@@ -15,6 +15,8 @@ import os
 from typing import Any
 
 from app.flows.analytics import analytics_export_flow
+from app.flows.feed_backfill import feed_backfill_flow
+from app.flows.search_reindex import search_reindex_flow
 from app.flows.user_dim import user_dim_reconcile_flow
 
 logger = logging.getLogger("lkm.flows.deploy")
@@ -39,6 +41,22 @@ DEPLOYMENTS: list[tuple[Any, str, str]] = [
         os.getenv(
             "LKM_PREFECT_ANALYTICS_ENTRYPOINT",
             "app/flows/analytics.py:analytics_export_flow",
+        ),
+    ),
+    (
+        search_reindex_flow,
+        os.getenv("LKM_PREFECT_SEARCH_DEPLOYMENT_NAME", "search-reindex"),
+        os.getenv(
+            "LKM_PREFECT_SEARCH_ENTRYPOINT",
+            "app/flows/search_reindex.py:search_reindex_flow",
+        ),
+    ),
+    (
+        feed_backfill_flow,
+        os.getenv("LKM_PREFECT_FEED_BACKFILL_DEPLOYMENT_NAME", "feed-backfill"),
+        os.getenv(
+            "LKM_PREFECT_FEED_BACKFILL_ENTRYPOINT",
+            "app/flows/feed_backfill.py:feed_backfill_flow",
         ),
     ),
 ]

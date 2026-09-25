@@ -10,6 +10,11 @@
 - 已存在的进程环境变量**优先**（compose 显式下发/本地 override 胜），Infisical 只补缺。
 - 拉取失败：``LKM_INFISICAL_REQUIRED=true`` → exit 1（生产 fail-fast）；否则告警 exit 0
   回落 .env（fail-open，保持可启动）。
+- **引导密钥可走文件**（B6b）：``LKM_INFISICAL_CLIENT_ID_FILE`` / ``_CLIENT_SECRET_FILE``
+  指向挂载的 secret 文件（compose ``secrets:`` / k8s Secret 卷，如 ``/run/secrets/...``），
+  优先级 **文件 > env**；文件路径未配置或文件不存在回落 env（本地开发无需建文件），
+  文件存在但不可读/为空则按 ``_REQUIRED`` 处理（配置错不该被静默当成"没配"）。
+  这是「零明文」的关键一步：此前 client_id/secret 只能经 env 下发（鸡生蛋，无 Infisical 可依赖）。
 
 测试：``bootstrap(environ=..., client_factory=...)`` 注入假 ``httpx.Client``（MockTransport）。
 """
@@ -21,6 +26,7 @@ import math
 import os
 import sys
 from collections.abc import Callable, Mapping, MutableMapping
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("lkm.secrets")
@@ -40,6 +46,30 @@ def _default_client_factory(timeout: float) -> Any:
     import httpx
 
     return httpx.Client(timeout=timeout)
+
+
+def _value_from_file_or_env(
+    env: Mapping[str, str], direct_key: str, file_key: str
+) -> tuple[str, str | None]:
+    """取引导密钥：文件优先于 env。返回 ``(值, 错误信息)``。
+
+    - ``file_key`` 未配置 → 用 env（现状路径）；
+    - 文件不存在 → 回落 env（本地开发/未挂卷时不必造文件）；
+    - 文件不可读或为空 → **报错**（配了路径却读不到是配置错，静默回落会让「以为在用文件
+      密钥」与「实际还在用 env」不可区分）。
+    """
+    path = (env.get(file_key) or "").strip()
+    if not path:
+        return env.get(direct_key) or "", None
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return env.get(direct_key) or "", None
+    except OSError as exc:
+        return "", f"{file_key} 指向的文件不可读（{path}）：{exc}"
+    if not value:
+        return "", f"{file_key} 指向的文件为空（{path}）"
+    return value, None
 
 
 def _login(client: Any, site: str, client_id: str, client_secret: str) -> str:
@@ -99,8 +129,16 @@ def bootstrap(
     project = env.get("LKM_INFISICAL_PROJECT_ID") or ""
     environment = env.get("LKM_INFISICAL_ENVIRONMENT") or "prod"
     path = env.get("LKM_INFISICAL_SECRET_PATH") or "/"
-    client_id = env.get("LKM_INFISICAL_CLIENT_ID") or ""
-    client_secret = env.get("LKM_INFISICAL_CLIENT_SECRET") or ""
+    client_id, id_err = _value_from_file_or_env(
+        env, "LKM_INFISICAL_CLIENT_ID", "LKM_INFISICAL_CLIENT_ID_FILE"
+    )
+    if id_err:
+        return _fail(required, id_err)
+    client_secret, secret_err = _value_from_file_or_env(
+        env, "LKM_INFISICAL_CLIENT_SECRET", "LKM_INFISICAL_CLIENT_SECRET_FILE"
+    )
+    if secret_err:
+        return _fail(required, secret_err)
     if not all((site, project, client_id, client_secret)):
         return _fail(
             required,

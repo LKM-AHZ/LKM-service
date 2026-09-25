@@ -1,5 +1,5 @@
 import urllib.parse
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     user_snap_l1_maxsize: int = 10000
     # 单用户读请求合并（singleflight）：同进程并发 miss 只放一个真去调 AUTH/DB。
     user_snap_singleflight_enabled: bool = True
+    # ---- 跨进程缓存锁（B4，蓝图 §5.6 的 L2 double-check）----
+    # 多副本下让「仅持锁实例回填 L2」成立（singleflight 只收敛单进程）。全程 fail-open：
+    # 等锁超时即无锁直读，不阻塞请求；持锁者崩溃由 TTL 自解。
+    cache_lock_enabled: bool = True
+    cache_lock_ttl_s: float = 5.0
+    cache_lock_wait_ms: int = 200
 
     # ---- 读热路径序列化（msgspec，roadmap §6.5.2）----
     # timeline/feed 读热列表在 Pydantic 校验后改用 msgspec 出端口（降 CPU）。关闭即回退
@@ -199,6 +205,34 @@ class Settings(BaseSettings):
     # 关闭窗口（普通 PG 上无 chunk 收益，且极陈旧滞留行此时可被投递）。
     outbox_scan_window_s: float = 2592000.0
 
+    # ---- 内容域领域事件（content.*，外部检索引擎增量同步的单一数据源）----
+    # 关 = 内容落库不入 outbox（回退到「检索引擎无增量来源」的旧态）。只发可见性变化：
+    # published/updated/deleted；草稿态不发（未发布内容不对外可见，索引侧无需感知）。
+    content_events_enabled: bool = True
+
+    # ---- 检索（M6.9 的 P1 = PG FTS；B2 落地 P2/P3 外部引擎）----
+    # 引擎择一：pg（默认，零外部依赖）/ meilisearch（P2）/ opensearch（P3）。
+    # 非 pg 时读路径走外部引擎、调用失败 fail-open 回落 PG；写路径经 content.* 事件
+    # 增量同步（见 modules/search/sync.py），存量由 reindex flow 全量重建。
+    search_engine: Literal["pg", "meilisearch", "opensearch"] = "pg"
+    # 事件驱动索引同步开关：关 = 只记账不写索引（外部引擎维护期降噪用）
+    search_sync_enabled: bool = True
+    search_sync_batch_size: int = 200
+    # Meilisearch（P2）；api_key 为 master/search key，无鉴权实例留空
+    search_meili_url: str = ""
+    search_meili_api_key: SecretStr = SecretStr("")
+    search_meili_index: str = "content"
+    # OpenSearch（P3）；http_auth 仅在 user 非空时启用
+    search_opensearch_url: str = ""
+    search_opensearch_user: str = ""
+    search_opensearch_password: SecretStr = SecretStr("")
+    search_opensearch_index: str = "content"
+
+    # ---- 互动计数（B3）：写穿 vs M6.10 的 Redis write-behind ----
+    # true（默认）：点赞/收藏/评论与明细同事务原子改计数列，读数为真值。
+    # false：回退 Redis 增量 + 每分钟 flush（保留该路径仅为可回滚）。
+    counters_write_through: bool = True
+
     # ---- interaction 域（M6.6）----
     # 浏览记录保留期（天）：cron 每天删除超期行。view_logs 是高频写表，须有明确上界
     # （行数上界是「用户数 × 内容数」，但历史内容多的站点仍需按时间收敛）。
@@ -210,6 +244,10 @@ class Settings(BaseSettings):
     feed_fanout_max_followers: int = 2000
     # 新关注一位作者时回填其最近 N 条内容进该关注者的物化 feed（0 = 不回填）。
     feed_backfill_limit: int = 50
+    # ---- 时间线全量回填（B5，feed-backfill flow / CLI）----
+    # 每源每批处理条数（越大越快、单事务越长）；起始时间留空 = 自最早（全量）。
+    feed_backfill_batch_size: int = 500
+    feed_backfill_since: str = ""
 
     # ---- notification 域（M6.8）----
     # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为
@@ -321,6 +359,10 @@ class Settings(BaseSettings):
     s3_access_key: SecretStr = SecretStr("")
     s3_secret_key: SecretStr = SecretStr("")
     s3_prefix: str = "files"  # 桶内 key 前缀
+    # 寻址风格（蓝图 §6.3）：S3/MinIO 常用 path-style，OSS/COS 多用 virtual-host。
+    # 公网 client 单列一项——预签名 URL 的 host 形式由它决定（须与实际请求 host 一致）。
+    s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
+    s3_public_addressing_style: Literal["path", "virtual", "auto"] = "path"
 
     @field_validator("jwt_algorithm")
     @classmethod

@@ -83,7 +83,8 @@ def import_task_modules() -> None:
     import app.modules.files.tasks
     import app.modules.interaction.tasks
     import app.modules.notification.tasks
-    import app.modules.points.tasks  # noqa: F401
+    import app.modules.points.tasks
+    import app.modules.search.tasks  # noqa: F401
 
     _tasks_imported = True
 

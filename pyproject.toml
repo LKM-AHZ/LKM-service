@@ -36,6 +36,8 @@ dependencies = [
     "prefect>=3.8.5,<4",
     # [async] extra 必需：不加则 get_async_client 在运行期 ImportError（缺 aiohttp）
     "clickhouse-connect[async]>=0.8",
+    "meilisearch>=0.43.0",
+    "opensearch-py>=3.2.0",
 ]
 
 [tool.pytest.ini_options]
@@ -66,6 +68,10 @@ reportUnannotatedClassAttribute = true
 reportUnusedCallResult = false
 reportUnusedImport = true
 reportUnusedVariable = true
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [dependency-groups]
 dev = [
@@ -146,6 +152,7 @@ ignore_imports = [
     "app.core.task_registry -> app.modules.interaction.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.notification.tasks",  # 任务注册枢纽
     "app.core.task_registry -> app.modules.points.tasks",  # 任务注册枢纽
+    "app.core.task_registry -> app.modules.search.tasks",  # 任务注册枢纽（content.* 索引增量同步）
     # app.core.throttle -> auth.errors 已随 M3-peer 摘环移除(AuthErr 并 app.core.err)
     "app.core.worker_dlq -> app.modules.admin.models",  # worker 消费业务模型(DlqMessage)
 ]
@@ -215,6 +222,8 @@ ignore_imports = [
     "app.modules.interaction.repository -> app.modules.content.models",  # 收藏计数/摘要读内容表
     "app.modules.notification.tasks -> app.modules.content.models",  # 事件解析目标内容/评论作者
     "app.modules.search.repository -> app.modules.content.models",  # 检索只读内容表
+    "app.modules.search.documents -> app.modules.content.models",  # 内容行 → 索引文档（B2）
+    "app.modules.search.sync -> app.modules.content.models",  # content.* 事件回查行决定 upsert/delete（B2）
     "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
 ]
 

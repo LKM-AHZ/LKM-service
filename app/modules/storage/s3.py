@@ -95,6 +95,8 @@ class S3Storage:
         region_name: str = "",
         aws_access_key_id: str = "",
         aws_secret_access_key: str = "",
+        addressing_style: str = "path",
+        public_addressing_style: str = "path",
     ) -> None:
         self.bucket = bucket
         self.prefix = prefix
@@ -105,6 +107,8 @@ class S3Storage:
             region_name=region_name or None,
             aws_access_key_id=aws_access_key_id or None,
             aws_secret_access_key=aws_secret_access_key or None,
+            # 寻址风格可配（蓝图 §6.3）：OSS/COS 需 virtual-host，S3/MinIO 用 path。
+            config=Config(s3={"addressing_style": addressing_style}),
         )
         # 预签名 URL 对浏览器暴露的公网 endpoint。签名与请求 host 必须一致，故用
         # 独立 client（endpoint=公网）生成 preset 签名，否则 host 与签名不符会 403。
@@ -121,7 +125,7 @@ class S3Storage:
                 aws_secret_access_key=aws_secret_access_key or None,
                 config=Config(
                     signature_version="s3v4",
-                    s3={"addressing_style": "path"},
+                    s3={"addressing_style": public_addressing_style},
                 ),
             )
 

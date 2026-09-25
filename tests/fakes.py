@@ -116,6 +116,69 @@ class FakeClickHouseClient:
         return sum(len(data) for _, data, _ in self.inserts)
 
 
+class FakeSearchEngine:
+    """内存检索引擎替身（B2 测试用；结构匹配 ``search.engines.base.SearchEngine``）。
+
+    - ``docs`` 按 id 存文档：``upsert`` 覆盖、``delete`` 移除，据此断言同步动作；
+    - ``search_ids`` 只做 title/excerpt/content 的子串匹配——够验证「引擎命中 → DB 权威
+      回填」这条链路，不模拟真实相关度；
+    - ``fail_on=<方法名>`` 让该方法抛错，用于验证读路径 fail-open 回落 PG。
+    """
+
+    name = "fake"
+
+    def __init__(self, *, fail_on: str | None = None) -> None:
+        self.docs: dict[str, dict[str, Any]] = {}
+        self.ensured = 0
+        self.dropped = 0
+        self.fail_on = fail_on
+
+    def _maybe_fail(self, method: str) -> None:
+        if self.fail_on == method:
+            raise RuntimeError(f"fake engine failure at {method}")
+
+    async def ensure_index(self) -> None:
+        self._maybe_fail("ensure_index")
+        self.ensured += 1
+
+    async def drop_index(self) -> None:
+        self._maybe_fail("drop_index")
+        self.dropped += 1
+        self.docs.clear()
+
+    async def upsert(self, docs: list[Any]) -> int:
+        self._maybe_fail("upsert")
+        for doc in docs:
+            self.docs[str(doc["id"])] = dict(doc)
+        return len(docs)
+
+    async def delete(self, ids: list[str]) -> int:
+        self._maybe_fail("delete")
+        for item_id in ids:
+            self.docs.pop(str(item_id), None)
+        return len(ids)
+
+    async def search_ids(
+        self,
+        term: str,
+        *,
+        content_type: str | None = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[str], int]:
+        self._maybe_fail("search_ids")
+        hits: list[str] = []
+        for doc_id, doc in self.docs.items():
+            if content_type and doc.get("content_type") != content_type:
+                continue
+            haystack = " ".join(
+                str(doc.get(key, "")) for key in ("title", "excerpt", "content")
+            )
+            if term in haystack:
+                hits.append(doc_id)
+        return hits[offset : offset + limit], len(hits)
+
+
 class InMemoryTransport:
     """记录发布的内存 transport（结构匹配 messaging.Transport 协议）。
 

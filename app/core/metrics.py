@@ -30,6 +30,19 @@ post_created_total = Counter(
     "全内容产出：统一 content_items / 专栏原生发帖成功落库后 +1（label content_type）",
     ("content_type",),
 )
+# content.* 事件消费（content-index 订阅）：外部检索索引增量同步的动作计数。
+# label action=published|updated|deleted。消费失败重投超限进 DLQ 时不计入（由 DLQ 侧观测）。
+content_index_events_total = Counter(
+    "content_index_events_total",
+    "content.* 事件消费计数（外部检索索引增量同步，label action）",
+    ("action",),
+)
+# 外部检索失败回落 PG 的次数（label engine）：>0 表示索引面正在降级服务，检索仍可用。
+search_engine_fallback_total = Counter(
+    "search_engine_fallback_total",
+    "外部检索失败回落 PG 的次数（label engine=meilisearch|opensearch）",
+    ("engine",),
+)
 # 消息总线投递失败（publish 抛错 / 不可用），供错误率看板；未配置 broker 属 fail-open
 # 不计。由 messaging.publish 唯一计数：outbox relay 经同一 publish 投递，其抛出路径已
 # 被此处捕获，relay 不再重复 inc（防同一异常 double-count）。
@@ -58,6 +71,13 @@ user_snap_cache_total = Counter(
     "user_snap_cache_total",
     "user:snap 双级缓存命中/未命中（layer=l1|l2, result=hit|miss）",
     ("layer", "result"),
+)
+# 跨进程缓存锁（B4，蓝图 §5.6 的 L2 double-check）：result=acquired（拿到锁，负责回填）
+# / timeout（等锁超时后走无锁直读，fail-open）。timeout 上升说明回填耗时或实例数偏多。
+cache_lock_total = Counter(
+    "cache_lock_total",
+    "跨进程缓存锁结果（result=acquired|timeout）",
+    ("result",),
 )
 # user:snap 读请求合并（singleflight）：role=leader 为真正执行加载的请求，shared 为复用其结果者。
 # leader/shared 比值反映合并收益（趋近 1:1 表示热点击穿被有效收敛）。

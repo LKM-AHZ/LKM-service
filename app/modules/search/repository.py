@@ -12,6 +12,9 @@
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Sequence
+
 from sqlalchemy import func, or_
 
 from app.db.repository import AsyncRepository
@@ -65,6 +68,36 @@ class SearchRepository(AsyncRepository[ContentItem]):
     ) -> int:
         _, conditions = self._match(term, content_type)
         return await self.count(*conditions)
+
+    async def list_published_by_ids(
+        self, ids: Sequence[uuid.UUID]
+    ) -> list[ContentItem]:
+        """按 id 批量取**已发布**行（外部引擎命中后的权威回填）。
+
+        引擎索引可能滞后（行已软删/下架），故回填一律按 DB 口径再次过滤——出参与 PG 路径
+        同源，不因引擎陈旧而泄漏不可见内容。
+        """
+        if not ids:
+            return []
+        return await self.get_many(
+            ContentItem.id.in_(list(ids)),
+            ContentItem.status == ContentStatus.PUBLISHED,
+        )
+
+    async def list_published_batch(
+        self, *, after_id: uuid.UUID, limit: int
+    ) -> list[ContentItem]:
+        """按 id 升序取一窗已发布行（全量重建索引用）。
+
+        keyset 分页（``id > after_id``）：uuid7 主键有序，窗口间不重不漏；limit 窗口大小由
+        调用方给（配置 ``search_sync_batch_size``）。
+        """
+        return await self.get_many(
+            ContentItem.id > after_id,
+            ContentItem.status == ContentStatus.PUBLISHED,
+            order_by=ContentItem.id,
+            limit=limit,
+        )
 
     async def list_matching(
         self,

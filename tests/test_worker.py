@@ -36,6 +36,9 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_CLEANUP,
         messaging.RKEY_RECONCILE,
         messaging.RKEY_ANALYTICS,
+        messaging.RKEY_CONTENT_PUBLISHED,
+        messaging.RKEY_CONTENT_UPDATED,
+        messaging.RKEY_CONTENT_DELETED,
     }
     assert set(messaging.ROUTING_KEY_TOPICS) == expected
 
@@ -55,6 +58,12 @@ def test_subscription_definitions() -> None:
         messaging.RKEY_USER_BANNED,
         messaging.RKEY_USER_SESSION_REVOKE,
     } <= ui
+    # content.* 三事件归 content-index 订阅（外部检索索引增量同步，B1）
+    assert {
+        messaging.RKEY_CONTENT_PUBLISHED,
+        messaging.RKEY_CONTENT_UPDATED,
+        messaging.RKEY_CONTENT_DELETED,
+    } <= set(topo["content-index"])
 
 
 def test_registry_handlers_registered() -> None:

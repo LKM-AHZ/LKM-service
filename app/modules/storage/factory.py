@@ -33,6 +33,8 @@ def get_storage() -> StorageBackend:
             region_name=settings.s3_region,
             aws_access_key_id=reveal(settings.s3_access_key),
             aws_secret_access_key=reveal(settings.s3_secret_key),
+            addressing_style=settings.s3_addressing_style,
+            public_addressing_style=settings.s3_public_addressing_style,
         )
     raise ValueError(
         f"未知的 LKM_STORAGE_BACKEND={settings.storage_backend!r}（仅支持 local/s3）"

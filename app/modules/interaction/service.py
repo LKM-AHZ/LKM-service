@@ -17,6 +17,7 @@ import uuid
 
 from app.core import counters
 from app.core.common import PageData, paginate_offset, paginate_pages
+from app.core.config import settings
 from app.core.err import BizError
 from app.db.repository import DbSession
 from app.modules.interaction.errors import InteractionErr
@@ -42,28 +43,34 @@ async def _bookmark_count(db: DbSession, content_id: uuid.UUID) -> int:
 
 
 async def _current_bookmark_count(db: DbSession, content_id: uuid.UUID) -> int:
-    """即时收藏读数 = DB 计数列 + 未落库 Redis 增量，夹紧到 >= 0（不存在则 404）。
+    """即时收藏读数（内容不存在则 404）。
 
-    该读数是**近似值**：读 DB 与读 pending 之间若 flush 恰好 drain 并落库，会取到
-    「旧 base + 已清零 pending」而偏小。但下限必须夹紧——DB 回退路径用 greatest(...,0)，
-    这里不夹紧会在 flush 窗口/增量丢失时给前端负计数。
+    写穿模式（默认）：DB 计数列即真值。回退模式：DB 值 + 未落库 Redis 增量，是**近似值**
+    （读 DB 与读 pending 之间若 flush 恰好 drain 并落库，会取到「旧 base + 已清零 pending」
+    而偏小）；两种模式下都夹紧到 >= 0——不夹紧会在增量丢失时给前端负计数。
     """
     base = await _bookmark_count(db, content_id)
+    if settings.counters_write_through:
+        return max(0, base)
     pending = await counters.pending_delta("bookmark_count", content_id)
     return max(0, base + pending)
 
 
 async def _bump_bookmark(db: DbSession, content_id: uuid.UUID, delta: int) -> int:
-    """增减 ``bookmark_count`` 并返回即时读数（下限 0）。
+    """增减 ``bookmark_count`` 并返回权威读数（下限 0，行不存在/已软删则 404）。
 
-    M6.10：优先走 Redis 增量链路（收藏明细行是真相源，计数由 flush 收敛）；Redis
-    未启用/不可达时回退到原有原子 UPDATE，语义不变。
+    写穿（默认）：原子 ``UPDATE ... RETURNING``，与收藏明细同事务。回退：先试 M6.10 的
+    Redis 增量链路（收藏明细是真相源、计数由 flush 收敛），Redis 未启用/不可达时落到同一
+    原子 UPDATE。
     """
-    repo = InteractionContentItemRepository(db)
-    if await counters.bump_counter("bookmark_count", content_id, delta):
+    if not settings.counters_write_through and await counters.bump_counter(
+        "bookmark_count", content_id, delta
+    ):
         return await _current_bookmark_count(db, content_id)
 
-    new_count = await repo.bump_bookmark_count(content_id, delta)
+    new_count = await InteractionContentItemRepository(db).bump_bookmark_count(
+        content_id, delta
+    )
     if new_count is None:
         raise BizError(InteractionErr.CONTENT_NOT_FOUND)
     return new_count

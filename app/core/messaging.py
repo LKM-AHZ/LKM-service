@@ -59,6 +59,10 @@ RKEY_USER_SESSION_REVOKE = "event.user.session_revoke"
 RKEY_CLEANUP = "cron.cleanup"
 RKEY_RECONCILE = "cron.reconcile"
 RKEY_ANALYTICS = "cron.analytics_export"
+# 内容域领域事件：外部检索引擎（Meilisearch/OpenSearch）增量同步的数据源
+RKEY_CONTENT_PUBLISHED = "event.content.published"
+RKEY_CONTENT_UPDATED = "event.content.updated"
+RKEY_CONTENT_DELETED = "event.content.deleted"
 
 # ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
 
@@ -71,6 +75,7 @@ TOPIC_EMAIL = _topic("auth", "email")
 TOPIC_USER_EVENTS = _topic("auth", "user.events")
 TOPIC_NOTIFY = _topic("biz", "notify.upload")
 TOPIC_POINTS = _topic("biz", "points.apply")
+TOPIC_CONTENT = _topic("biz", "content.events")
 TOPIC_CRON = _topic("system", "cron")
 TOPIC_DLQ = _topic("system", "dlq")
 
@@ -83,6 +88,9 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_USER_SESSION_REVOKE: TOPIC_USER_EVENTS,
     RKEY_NOTIFY: TOPIC_NOTIFY,
     RKEY_POINTS: TOPIC_POINTS,
+    RKEY_CONTENT_PUBLISHED: TOPIC_CONTENT,
+    RKEY_CONTENT_UPDATED: TOPIC_CONTENT,
+    RKEY_CONTENT_DELETED: TOPIC_CONTENT,
     RKEY_CLEANUP: TOPIC_CRON,
     RKEY_RECONCILE: TOPIC_CRON,
     RKEY_ANALYTICS: TOPIC_CRON,
@@ -118,6 +126,12 @@ SUB_USER_INVALIDATE = Subscription(
 SUB_JOBS = Subscription(
     "jobs", TOPIC_CRON, (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS)
 )
+# 外部检索索引增量同步（search 模块消费；与 PG FTS 的 P1 路径并存，引擎由配置择一）
+SUB_CONTENT_INDEX = Subscription(
+    "content-index",
+    TOPIC_CONTENT,
+    (RKEY_CONTENT_PUBLISHED, RKEY_CONTENT_UPDATED, RKEY_CONTENT_DELETED),
+)
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
 
 SUBSCRIPTIONS: dict[str, Subscription] = {
@@ -131,6 +145,7 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
         SUB_NOTIFICATION,
         SUB_USER_INVALIDATE,
         SUB_JOBS,
+        SUB_CONTENT_INDEX,
         SUB_DLQ,
     )
 }

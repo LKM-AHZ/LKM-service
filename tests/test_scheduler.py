@@ -1,6 +1,8 @@
 import pytest
 
 from app.core import scheduler
+from app.core.config import settings
+from app.core.task_registry import cron_jobs
 
 
 def test_ensure_tasks_registered_survives_partial_import(
@@ -39,7 +41,8 @@ def test_import_task_modules_marks_import_complete(
 def test_scheduler_has_cron_jobs() -> None:
     s = scheduler.build_scheduler()
     jobs = s.get_jobs()
-    assert len(jobs) == 8
+    # 与注册表逐条对齐（不写死数量：写穿模式下 flush cron 不注册，见 content/tasks.py）
+    assert len(jobs) == len(cron_jobs())
     triggers = {(j.id, type(j.trigger).__name__) for j in jobs}
     assert ("cleanup_expired_uploads", "CronTrigger") in triggers
     assert ("reconcile_blog_repos", "CronTrigger") in triggers
@@ -49,10 +52,10 @@ def test_scheduler_has_cron_jobs() -> None:
         "purge_stale_view_logs",
         "CronTrigger",
     ) in triggers  # M6.6 浏览记录保留期清理(每天)
-    assert (
-        "flush_content_counters",
-        "CronTrigger",
-    ) in triggers  # M6.10 互动计数增量落库(每分钟)
+    # M6.10 互动计数增量落库(每分钟)——写穿模式下写路径已直接落库，该 cron 不注册
+    assert ("flush_content_counters", "CronTrigger") in triggers or (
+        settings.counters_write_through
+    )
     assert (
         "reconcile_content_counts",
         "CronTrigger",
@@ -75,10 +78,11 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "reconcile_user_dim",
         "export_analytics_clickhouse",  # M5 7.2.6
         "purge_stale_view_logs",  # M6.6
-        "flush_content_counters",  # M6.10
-        "reconcile_content_counts",  # M6.10
+        "reconcile_content_counts",  # M6.10（两种模式都注册）
         "fanout_feed_items",  # M6.11
     }
+    if not settings.counters_write_through:
+        expect_fns.add("flush_content_counters")  # 仅回退（write-behind）模式注册
     s = scheduler.build_scheduler()
     job_fns = {str(j.kwargs.get("fn")) for j in s.get_jobs()}
     assert job_fns == expect_fns

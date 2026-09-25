@@ -31,6 +31,7 @@ POINTS_TASKS_SUBSCRIPTION = messaging.SUB_POINTS_TASKS.name
 NOTIFICATION_SUBSCRIPTION = messaging.SUB_NOTIFICATION.name
 USER_INVALIDATE_SUBSCRIPTION = messaging.SUB_USER_INVALIDATE.name
 JOBS_SUBSCRIPTION = messaging.SUB_JOBS.name
+CONTENT_INDEX_SUBSCRIPTION = messaging.SUB_CONTENT_INDEX.name
 
 # 死信 topic（worker_dlq 消费）
 DLQ = messaging.TOPIC_DLQ
@@ -154,6 +155,11 @@ async def run_points_tasks_worker() -> None:
 
 async def run_notification_worker() -> None:
     await _consume(NOTIFICATION_SUBSCRIPTION)
+
+
+async def run_content_index_worker() -> None:
+    """content-index worker：消费 content.* 事件，增量同步外部检索索引。"""
+    await _consume(CONTENT_INDEX_SUBSCRIPTION)
 
 
 async def run_points_worker() -> None:

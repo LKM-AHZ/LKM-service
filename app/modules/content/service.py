@@ -43,6 +43,10 @@ from app.modules.content.columns.schemas import (
 )
 from app.modules.content.counters import bump_content_counter, read_count
 from app.modules.content.errors import ContentErr
+from app.modules.content.events import (
+    CONTENT_ACTION_DELETED,
+    enqueue_content_event,
+)
 from app.modules.content.models import (
     Board,
     BoardApplication,
@@ -320,6 +324,8 @@ async def create_item(
         published_at=None,
     )
     await ContentItemRepository(db).add(item)
+    # 索引失效通知（与业务同事务；草稿/待审态不发，见 content/events.py）
+    await enqueue_content_event(db, item)
 
     # 积分事件（异步计分，不阻塞 200）
     await enqueue_points_event(db, author_id, "post", f"item:{item.id}")
@@ -349,6 +355,8 @@ async def delete_item(
     item = await repo.get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
     author_id = item.author_id or uuid.UUID(int=0)
     await repo.soft_delete(item)
+    # 索引删除通知：软删时行仍在、status 未变，须显式传 deleted
+    await enqueue_content_event(db, item, CONTENT_ACTION_DELETED)
     # 懒 import：feed 域反向依赖 content.models（既有读缝），模块级导入会绕成环
     from app.modules.feed.fanout import remove_source_item
 
@@ -487,6 +495,7 @@ async def publish_blog_item(
         existing.status = ContentStatus.PUBLISHED
         existing.published_at = existing.published_at or _now()
         await repo.flush()
+        await enqueue_content_event(db, existing)
         return existing.id
 
     item = ContentItem(
@@ -506,6 +515,7 @@ async def publish_blog_item(
         published_at=_now(),
     )
     await repo.add(item)
+    await enqueue_content_event(db, item)
     # M0.5.2：仅“新建”分支记入博客发布产出；同 slug 重发（上面 existing 更新早退）不复计。
     post_created_total.labels(ContentType.BLOG_POST).inc()
     await enqueue_points_event(db, owner_id, "post", f"item:{item.id}")
@@ -992,6 +1002,7 @@ async def _sync_question_content_item(
         status="published",
     )
     await ContentItemRepository(db).add(item)
+    await enqueue_content_event(db, item)
     # M0.5.2：QA 提问同步为论坛可见的 content_items 条目，视作一次 qa 类产出。
     post_created_total.labels("qa").inc()
     # QA 提问同步落成 content_items 会增加统一内容列表的计数，需 bump content 集合版本
