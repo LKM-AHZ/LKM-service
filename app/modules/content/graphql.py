@@ -65,6 +65,7 @@ class GraphContentItem:
     readingTime: int
     createdAt: str
     publishedAt: str | None
+    version: int
 
 
 @strawberry.type
@@ -143,6 +144,7 @@ def _map_item(item: ContentItemInfo) -> GraphContentItem:
         readingTime=item.reading_time,
         createdAt=item.created_at.isoformat(),
         publishedAt=item.published_at.isoformat() if item.published_at else None,
+        version=item.version,
     )
 
 

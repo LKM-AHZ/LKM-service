@@ -4,11 +4,20 @@
 错误码数值是线上契约（前端/日志/告警按数值对账），不能因归属调整而重排。
 """
 
-from app.core.err import NS_FOLLOW, NS_INTERACTION, ErrCode, register
+from app.core.err import (
+    NS_FOLLOW,
+    NS_INTERACTION,
+    ErrCode,
+    register,
+    register_unique_constraint,
+)
 
 
 class InteractionErr(ErrCode):
     CONTENT_NOT_FOUND = NS_INTERACTION.err(1)
+    # 重复点赞（蓝图 §6.1 唯一约束语义化）：content_likes 复合主键保证「同一用户对同一
+    # 内容最多一条」，并发重复点赞撞主键时由 app/db/session.py 映射到本码。
+    DUPLICATE_LIKE = NS_INTERACTION.err(2)
 
 
 class FollowErr(ErrCode):
@@ -19,7 +28,12 @@ class FollowErr(ErrCode):
 register(
     {
         InteractionErr.CONTENT_NOT_FOUND: (404, "内容不存在"),
+        InteractionErr.DUPLICATE_LIKE: (409, "Duplicate like"),
         FollowErr.CANNOT_FOLLOW_SELF: (400, "不能关注自己"),
         FollowErr.TARGET_NOT_FOUND: (404, "关注目标不存在"),
     }
 )
+
+# 唯一约束语义化（蓝图 §6.1）：content_likes 的复合唯一键/主键撞键时由
+# app/db/session.py 映射到本码。片段取 ``like``（覆盖 content_likes_pkey 等隐式命名）。
+register_unique_constraint("like", InteractionErr.DUPLICATE_LIKE)

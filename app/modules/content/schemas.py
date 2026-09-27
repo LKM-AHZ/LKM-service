@@ -41,6 +41,8 @@ class ContentItemInfo(BaseModel):
     reading_time: int = 0
     created_at: datetime.datetime
     published_at: datetime.datetime | None = None
+    # 乐观锁版本号（蓝图 §6.1）：客户端可见，编辑时回带。
+    version: int = 1
 
     @field_validator("tags", "keywords", mode="before")
     @classmethod

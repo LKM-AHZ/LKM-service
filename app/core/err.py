@@ -62,6 +62,9 @@ class CommonErr(ErrCode):
     MFA_REQUIRED = NS_COMMON.err(4)  # 危险操作需重新完成 2FA（step-up）
     UNAVAILABLE = NS_COMMON.err(5)  # 依赖的后端未启用/不可达（如分析库 ClickHouse）
     TIMEOUT = NS_COMMON.err(6)  # 请求超出执行预算被硬中断（GraphQL 查询级超时）
+    # 乐观锁/版本冲突（蓝图 §6.1）：期望版本与库中现值不一致。供各业务模块的
+    # 并发更新路径复用，故定义在 common 命名空间。
+    VERSION_CONFLICT = NS_COMMON.err(7)
 
 
 ERRTABLE: dict[ErrCode, tuple[int, str]] = {}
@@ -76,6 +79,30 @@ def register(errors: dict[ErrCode, tuple[int, str]]) -> None:
     ERRTABLE.update(errors)
 
 
+# —— 唯一约束名 → 语义化错误码（蓝图 §6.1）——
+# db 层不反向 import 业务模块（import-linter 的「db 不依赖 modules」契约），故用**注册表**
+# 做依赖倒置：各模块在自己的 ``errors.py`` 里登记自己的约束名片段，``app/db/session.py``
+# 只查这张表。约束名**跨环境会变**（create_all 隐式命名如 ``content_likes_pkey`` vs
+# alembic 显式命名），故按**子串**匹配而非精确匹配。
+UNIQUE_CONSTRAINT_ERRORS: dict[str, ErrCode] = {}
+
+
+def register_unique_constraint(name_fragment: str, errcode: ErrCode) -> None:
+    """登记「约束名含该片段 → 该错误码」。先注册者优先，重复登记不覆盖。"""
+    UNIQUE_CONSTRAINT_ERRORS.setdefault(name_fragment.lower(), errcode)
+
+
+def unique_constraint_errcode(constraint_name: str | None) -> ErrCode | None:
+    """按约束名取语义化错误码；未命中/无名字返回 ``None``（调用方回落通用码）。"""
+    if not constraint_name:
+        return None
+    lowered = constraint_name.lower()
+    for fragment, code in UNIQUE_CONSTRAINT_ERRORS.items():
+        if fragment in lowered:
+            return code
+    return None
+
+
 register(
     {
         CommonErr.OK: (200, "OK"),
@@ -85,6 +112,7 @@ register(
         CommonErr.MFA_REQUIRED: (401, "MFA required"),
         CommonErr.UNAVAILABLE: (503, "Service unavailable"),
         CommonErr.TIMEOUT: (504, "Request timed out"),
+        CommonErr.VERSION_CONFLICT: (409, "Version conflict"),
     }
 )
 
@@ -138,6 +166,13 @@ def map_err(exc: Exception) -> tuple[int, ErrCode, str]:
     return status, CommonErr.INTERNAL_ERROR, msg
 
 
+# 429/503 的「带重试语义」（蓝图 §6.1「409 / 429 带重试语义」）：这两类状态表示
+# 「稍后重试可能成功」，用 Retry-After 给出可重试信号。取值用固定常量而非配置项——
+# 现有 429（验证码限流/板块日发帖上限）都是分钟级窗口，没有真实自由度，加配置只会多一个
+# 漂移点。调用方若显式传了 Retry-After（如上游更精确的窗口），以调用方为准。
+_RETRY_AFTER_SECONDS = 60
+
+
 def resp_json(
     errcode: ErrCode,
     *,
@@ -146,6 +181,13 @@ def resp_json(
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     status, msg = err_info(errcode)
+    out_headers = dict(headers) if headers else {}
+    # 大小写不敏感地看调用方是否已给：HTTP 头名不区分大小写，用 == 判断会对
+    # "retry-after" 误判为缺失，进而发出重复头
+    if status in (429, 503) and not any(
+        k.lower() == "retry-after" for k in out_headers
+    ):
+        out_headers["Retry-After"] = str(_RETRY_AFTER_SECONDS)
 
     return JSONResponse(
         status_code=status,
@@ -155,7 +197,7 @@ def resp_json(
             data=data,
             request_id=get_request_id(),
         ).model_dump(mode="json"),
-        headers=headers,
+        headers=out_headers or None,
     )
 
 
@@ -236,6 +278,10 @@ class AuthErr(ErrCode):
     OAUTH_EMAIL_ALREADY_REGISTERED = NS_AUTH.err(25)
     TOO_LARGE = NS_AUTH.err(26)
     AVATAR_NOT_FOUND = NS_AUTH.err(27)
+    # 唯一约束冲突的语义化细分（蓝图 §6.1）：注册/改资料撞 email / username 唯一键时
+    # 回一个能指明的码，而不是笼统的 ALREADY_REGISTERED（判定见 app/db/session.py）。
+    EMAIL_TAKEN = NS_AUTH.err(28)
+    USERNAME_TAKEN = NS_AUTH.err(29)
 
 
 register(
@@ -277,5 +323,12 @@ register(
         ),
         AuthErr.TOO_LARGE: (413, "Avatar exceeds upload size limit"),
         AuthErr.AVATAR_NOT_FOUND: (404, "Avatar not found"),
+        AuthErr.EMAIL_TAKEN: (409, "Email already taken"),
+        AuthErr.USERNAME_TAKEN: (409, "Username already taken"),
     }
 )
+
+# 用户域唯一约束的语义化（蓝图 §6.1）。在此登记（AuthErr 与本注册表同文件），
+# 使 db 层只查 core 注册表、不反向 import auth 包/业务模块。
+register_unique_constraint("email", AuthErr.EMAIL_TAKEN)
+register_unique_constraint("username", AuthErr.USERNAME_TAKEN)

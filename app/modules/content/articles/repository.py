@@ -61,6 +61,8 @@ def _fts_search_stmt(q: str) -> tuple[Any, Any]:
 
 class ArticleRepository(AsyncRepository[Article]):
     model = Article
+    # 版本冲突响应里带出可定位条目的关键字段（客户端据此提示「已被他人修改」）
+    version_snapshot_fields = ("slug", "title")
 
     async def get_by_slug(self, slug: str) -> Article | None:
         return await self.get_one(Article.slug == slug)

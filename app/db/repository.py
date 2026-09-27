@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import uuid
 from typing import Any
 
 from sqlalchemy import ColumnElement, Result, Select, delete, func, select
@@ -32,11 +33,30 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
-from app.core.err import BizError, ErrCode
+from app.core.err import BizError, CommonErr, ErrCode
 
 logger = logging.getLogger("lkm.db.repository")
 
 ValuesDict = dict[str, Any]
+
+#: 乐观锁列名。经变量（而非字面量）交给 getattr，与 pk_attr 同款运行期解析，
+#: 且避开 ruff B009「不要用常量字符串调 getattr」。
+_VERSION_ATTR = "version"
+
+
+class VersionConflictError(BizError):
+    """乐观锁 CAS 未命中（传入的期望版本与库中现值不符）。
+
+    本仓 ``BizError(errcode, detail)`` 只有两个字段，装不下「409 + 当前值」里的 **data**。
+    故本异常额外挂 ``current``（服务端当前快照），端点捕获后返回
+    ``(exc.errcode, exc.current)`` 元组，由 ``app.core.err._wrap_result`` 走
+    ``resp_json(..., data=current)`` 带出——见 content 的 articles/boards 更新端点。
+    """
+
+    def __init__(self, current: dict[str, Any], detail: str | None = None) -> None:
+        super().__init__(CommonErr.VERSION_CONFLICT, detail)
+        self.current = current
+
 
 #: 服务层的会话类型别名。service 层禁止 ``import sqlalchemy``（批 3 验收口径），
 #: 故签名里的 ``db: AsyncSession`` 统一改写为从本模块取的 ``DbSession``——同一个类，
@@ -67,6 +87,9 @@ class AsyncRepository[ModelT]:
     model: type[ModelT]
     #: 主键属性名。用属性名而非类型/列对象，兼容 UUID 与自增整数两种主键。
     pk_attr: str = "id"
+    #: CAS 冲突时「当前值」快照额外携带的关键字段名（子类按业务覆盖，如 ``("slug", "title")``）。
+    #: 基类只保证带 ``id`` 与 ``version``——那是契约要求的最小集。
+    version_snapshot_fields: tuple[str, ...] = ()
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -77,6 +100,15 @@ class AsyncRepository[ModelT]:
     def pk_column(self) -> InstrumentedAttribute[Any]:
         """主键列对象（``getattr`` 运行期解析，子类换主键名无需改基类）。"""
         return getattr(self.model, self.pk_attr)
+
+    @property
+    def version_column(self) -> InstrumentedAttribute[Any]:
+        """乐观锁 ``version`` 列对象（同 ``pk_column`` 的运行期解析）。
+
+        模型无该列时取属性即 AttributeError——:meth:`update_cas` 先 ``hasattr`` 守卫并抛出
+        更易定位的 TypeError，故本属性只服务带版本列的模型。
+        """
+        return getattr(self.model, _VERSION_ATTR)
 
     @property
     def soft_delete_column(self) -> InstrumentedAttribute[Any] | None:
@@ -243,6 +275,74 @@ class AsyncRepository[ModelT]:
         )
         await self.db.flush()
         return result.rowcount or 0
+
+    async def update_cas(
+        self, obj: ModelT, expected_version: int | None, **values: Any
+    ) -> ModelT:
+        """乐观锁 CAS 更新（蓝图 §6.1）：``UPDATE ... WHERE id = :id AND version = :expected``，
+        命中则 ``version = version + 1``；不命中抛 :class:`VersionConflictError`。
+
+        - ``expected_version is None``：**不做版本校验**（旧客户端不带 ``version`` 时完全
+          向后兼容），但仍把 ``version`` 递增——版本号须始终反映「该行被编辑过」，否则
+          一次不带版本的写入之后，带版本的客户端会拿旧版本号蒙混过关。
+        - 版本不符（rowcount == 0）：抛 :class:`VersionConflictError`，``current`` 是服务端
+          当前快照（至少含 ``id``/``version``，外加 :attr:`version_snapshot_fields`）。
+        - 与 :meth:`update_where` 一样**只 flush 不 commit**（事务归属见模块 docstring）。
+        - 原子的 ``WHERE version = expected`` 让并发写者由行锁串行化：后到者必然 rowcount=0。
+        """
+        if not hasattr(self.model, _VERSION_ATTR):
+            raise TypeError(
+                f"{type(self).__name__}.update_cas 需要模型带 {_VERSION_ATTR} 列；"
+                f"{self.model.__name__} 没有"
+            )
+        pk = getattr(obj, self.pk_attr)
+        stmt = (
+            sa_update(self.model)
+            .where(self.pk_column == pk)
+            .values(**values, version=self.version_column + 1)
+        )
+        if expected_version is not None:
+            stmt = stmt.where(self.version_column == expected_version)
+        result: Result[Any] = await self.db.execute(stmt)
+        await self.db.flush()
+        if (result.rowcount or 0) == 0:
+            raise VersionConflictError(await self._version_snapshot(pk))
+        # 核心 UPDATE 绕过了 ORM 的脏追踪，实例上的旧值仍是 UPDATE 前的；refresh 让调用方
+        # 拿到 version+1 后的真实行（响应里通常要回带 new version 供下次 CAS）。
+        await self.db.refresh(obj)
+        return obj
+
+    async def _version_snapshot(self, pk: Any) -> dict[str, Any]:
+        """冲突时重读该行，组装可 JSON 化的「当前值」快照。
+
+        ``populate_existing=True`` 强制绕过 identity map 的陈旧实例（UPDATE 由 Core 发出，
+        会话里的对象不会自动同步），确保拿到的是**别的事务刚提交的最新值**。
+        """
+        row = (
+            (
+                await self.db.execute(
+                    select(self.model)
+                    .where(self.pk_column == pk)
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            # 期望版本与行同时消失（如并发软/硬删）：仍返回合法快照，让端点回 409 而非 500。
+            return {"id": str(pk), "version": None}
+        snapshot: dict[str, Any] = {
+            "id": str(pk),
+            "version": getattr(row, "version", None),
+        }
+        for name in self.version_snapshot_fields:
+            value = getattr(row, name, None)
+            # UUID / datetime 不能直接进 JSON 响应体，统一转 str（cache/响应两侧一致）
+            if isinstance(value, (uuid.UUID, datetime.datetime)):
+                value = str(value)
+            snapshot[name] = value
+        return snapshot
 
     async def delete(self, obj: ModelT) -> None:
         """硬删一个实例并 flush（模型有 ``deleted_at`` 时优先用 :meth:`soft_delete`）。"""

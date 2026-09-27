@@ -20,11 +20,12 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
-from app.core.err import (
-    AuthErr,  # M3 peer: 并入共享 shared err
-    BizError,
+from app.core.err import BizError
+from app.db.session import (
+    _is_unique_violation,
+    create_realm_async_engine,
+    unique_violation_errcode,
 )
-from app.db.session import _is_unique_violation, create_realm_async_engine
 
 _auth_async_engine: AsyncEngine | None = None
 _auth_AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
@@ -81,11 +82,12 @@ async def get_auth_session() -> AsyncIterator[AsyncSession]:
     except IntegrityError as exc:
         await db.rollback()
         if _is_unique_violation(exc):
-            # 用 from exc 保留原始 IntegrityError：_is_unique_violation 对 auth 库**任意**唯一
-            # 约束都为真（passkeys/user_dim 等撞键也算），映射成 ALREADY_REGISTERED 只是给
-            # 客户端的统一话术；真正破了哪条约束，只有保留 cause 才能在日志里看出来。
+            # 用 from exc 保留原始 IntegrityError：真正破了哪条约束，只有保留 cause 才能在
+            # 日志里看出来。错误码按约束名**语义化**（蓝图 §6.1，注册表在 core.err：
+            # users_email → EMAIL_TAKEN、users_username → USERNAME_TAKEN）；未注册的约束
+            # （passkeys/user_dim 等）回落通用 ALREADY_REGISTERED，与既往行为一致。
             raise BizError(
-                AuthErr.ALREADY_REGISTERED, "Resource already exists"
+                unique_violation_errcode(exc), "Resource already exists"
             ) from exc
         raise
     except Exception:

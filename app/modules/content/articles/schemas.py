@@ -36,6 +36,8 @@ class ArticleDetail(ArticleListItem):
     reading_time: int = 0
     keywords: list[str] = []
     tags: list[str] = []
+    # 乐观锁版本号：客户端编辑时原样回带，服务端据 CAS 判冲突（蓝图 §6.1）。
+    version: int = 1
 
     @field_validator("keywords", mode="before")
     @classmethod
@@ -96,6 +98,9 @@ class ArticleUpdate(BaseModel):
         default=None, pattern="^(draft|pending|published|rejected)$"
     )
     tags: list[str] | None = None
+    # 乐观锁（蓝图 §6.1）：**可选**。不传 = 不校验，完全向后兼容；传了且与库中现值不符
+    # → 409 + 服务端当前值（见 update_article_ex / patch_article）。
+    version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _reject_null_for_not_null_columns(self) -> "ArticleUpdate":

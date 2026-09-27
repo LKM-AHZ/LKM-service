@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     # 双验签灰度：RS256 生效后是否仍接受 HS256 旧 token。存量 token 清空后置 false 关闭。
     # 本仓因批 1 重建库、token 全失效，可直接置 false（偏离蓝图灰度时序，登记 §8）。
     jwt_hs_fallback: bool = True
+    # 缓存防穿透的布隆过滤器（蓝图 §5.6「非法/不可枚举 key 用布隆过滤器挡非法形态」）：
+    # 与空值缓存互补——空值缓存挡「合法但查无」，布隆挡「形态非法/不可能存在」的 id。
+    # capacity/error_rate 决定位数组大小与哈希轮数；容量估算偏小会推高误判率。
+    bloom_filter_enabled: bool = True
+    bloom_filter_capacity: int = 100_000
+    bloom_filter_error_rate: float = 0.01
+    # 帖详情读缓存 TTL（蓝图 §5.6 缓存对象表 `cache:content:{id}`，秒级短 TTL + 事件失效）。
+    content_detail_cache_ttl_s: int = 60
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
@@ -317,6 +325,14 @@ class Settings(BaseSettings):
     auth_http_url: str = ""
     auth_http_token: SecretStr = SecretStr("")
     auth_http_timeout_s: float = 3.0
+    # 蓝图 §5.4「HTTP 客户端(httpx)设超时/重试/熔断」——上项是超时，下面是重试与熔断。
+    # 重试只在**连接层**（httpx transport retries，安全幂等：GET/被拒连接），不重试 5xx/4xx
+    # ——业务性失败重试会放大副作用，且鉴权缝（fail-closed）重试会拖长拒绝时延。
+    auth_http_retries: int = 2
+    # 熔断：连续失败达阈即打开，冷却期内直接短路（fail-open 缝回退本地、fail-closed 缝拒绝），
+    # 避免 AUTH 进程宕机时每次请求都白等一个超时。冷却后半开试探一次。
+    auth_http_circuit_failures: int = 5
+    auth_http_circuit_reset_s: float = 30.0
 
     # AUTH 独立库：auth 自持数据在专属第二个 PostgreSQL（独立 schema/engine）。
     # auth_* 键与 monolith 的 db_* 正交，统一标准只用 PostgreSQL(asyncpg)。
@@ -476,6 +492,19 @@ class Settings(BaseSettings):
         ):
             insecure.append(
                 "jwt_hs_fallback=false without jwt_public_key/jwt_private_key"
+            )
+        # 蓝图 §4.2：RS256 生效后须在一个 refresh 周期内关闭 HS 回落。本仓批 1 已重建库、
+        # HS token 全失效，灰度期本可立即结束——故生产一旦配了 RSA 私钥（即已在走 RS256
+        # 签发）却仍开着 HS 回落，就是"配了私钥忘了关"的静默降级：旧 HS token 仍被接受，
+        # 非对称签名的收益让回去一半。装配期直接拦下，而不是靠注释提醒。
+        _private_key_set = bool(self.jwt_private_key_file) or (
+            self.jwt_private_key is not None
+            and bool(reveal(self.jwt_private_key).strip())
+        )
+        if self.jwt_hs_fallback and _private_key_set:
+            insecure.append(
+                "jwt_hs_fallback=true while RS256 private key set "
+                "(set LKM_JWT_HS_FALLBACK=false)"
             )
 
         if insecure:

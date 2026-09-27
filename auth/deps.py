@@ -29,7 +29,7 @@ from auth.service_authz import (
     CAUSE_PASSWORD_CHANGED,
     CAUSE_SESSION_REVOKED,
 )
-from auth.token_revocation import is_jti_blocked
+from auth.token_revocation import is_jti_blocked, token_version_is_stale
 
 _LEVEL_ORDER = {"local": 0, "normal": 1, "admin": 2}
 
@@ -92,6 +92,15 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         user_id = uuid.UUID(str(raw_user_id))
     except ValueError as exc:
         raise BizError(AuthErr.TOKEN_INVALID, "Token user_id malformed") from exc
+
+    # token_version 撤销预检（§4.2）：改密/封号/全端登出 bump 版本后，缓存里的新版本高于
+    # token 携带版本即直接拒，避免旧 access 在有效期内持续打主服务。仍只是「加拒」——未命中/
+    # 版本相等都不放行，下面 DB/seam 权威判据照走（DB 为最终判据）。错误码/文案与下面
+    # token_version 拒绝路径完全一致，不因撤销来源不同改变客户端语义。
+    if await token_version_is_stale(user_id, payload.get("token_version")):
+        raise BizError(
+            AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
+        )
 
     # —— M3.B S3 seam：鉴权缝开启时把“锁定/token_version/改密撤销/权威角色档”判给 auth ——
     if seam_enabled():

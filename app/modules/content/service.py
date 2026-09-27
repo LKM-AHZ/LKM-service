@@ -8,11 +8,13 @@ from app.core.cache import (
     TTL_ITEM_S,
     TTL_LIST_S,
     bump_collection_version,
+    cache_invalidate,
     cached_read,
     collection_version,
     make_key,
 )
 from app.core.common import PageData, paginate_offset, paginate_pages
+from app.core.config import settings
 from app.core.err import BizError
 from app.core.metrics import post_created_total
 from app.db.base import now_iso
@@ -216,43 +218,100 @@ async def bump_item_view(item_id: uuid.UUID) -> None:
         await dbw.close()
 
 
+# ── 帖详情缓存（蓝图 §5.6 `cache:content:{id}`）─────────────────────────────
+# 缓存**只含稳定字段**的详情快照，5 个高频互动计数刻意排除：它们的变更不经 content.*
+# 事件（走 counters 写穿 / 浏览上报），若一并缓存，一次点赞/评论后详情页数字会在 TTL 内
+# 「跳回去」——陈旧窗口被放大到整个 TTL（默认 60s，蓝图口径「秒级短 TTL」实为 60s）。
+# 计数改由缓存命中后一次**窄列** SELECT 叠加实时值（正文是大 TOAST 列，窄列读不触
+# detoast，缓存真正省下的是正文传输 + 作者快照 + 栏目名查询）。
+_DETAIL_VOLATILE_COUNTERS: tuple[str, ...] = (
+    "view_count",
+    "like_count",
+    "comment_count",
+    "bookmark_count",
+    "forward_count",
+)
+
+
+def _detail_cache_key(item_id: uuid.UUID) -> str:
+    """帖详情缓存键。读/失效两侧共用本函数，防键前缀漂移导致「写了不失效」。"""
+    return make_key("content:item", item_id)
+
+
+def _detail_snapshot(
+    item: ContentItem, author_name: str, column_title: str | None
+) -> dict[str, Any]:
+    """可 JSON 化的详情快照（cache_set 走 json.dumps，故需 JSON 原生类型），**不含互动计数**。"""
+    data = _item_to_schema(item, author_name, column_title).model_dump(mode="json")
+    for field in _DETAIL_VOLATILE_COUNTERS:
+        data.pop(field, None)
+    return data
+
+
+async def clear_item_detail_cache(item_id: uuid.UUID) -> None:
+    """失效某条内容的详情缓存（内容变更/删除后调用；Redis 不可用时静默跳过）。
+
+    ``cache:content:{id}`` 的失效口径是「事件刷新」——内容本体/状态变更或软删时删除该键；
+    **计数变更不失效**（计数本就不入缓存，见上方说明），避免高频点赞把详情缓存打穿。
+    """
+    await cache_invalidate(_detail_cache_key(item_id))
+
+
+async def _item_detail_context(
+    db: DbSession, item: ContentItem
+) -> tuple[str, str | None]:
+    """详情展示所需的作者名与栏目名（get_item/get_item_by_slug 的公共取数）。"""
+    if item.author_id:
+        names = await _author_map(db, [item.author_id])
+        author_name = names.get(item.author_id, "")
+    else:
+        author_name = item.publisher or ""
+    column_title = ""
+    if item.column_id:
+        cols = await _column_title_map(db, [item.column_id])
+        column_title = cols.get(item.column_id, "")
+    return author_name, column_title or None
+
+
 async def get_item(
     db: DbSession, item_id: uuid.UUID, bump_view: bool = False
 ) -> ContentItemInfo:
     repo = ContentItemRepository(db)
-    item = await repo.get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
     if bump_view:
-        item.view_count += 1
-        await repo.flush()
+        # 原子 +1（原先 read-modify-write 并发会丢计数）；置于读缓存前，使下面的实时叠加
+        # 能看到本次自增。
+        await repo.bump_view_count(item_id)
 
-    author_name = ""
-    if item.author_id:
-        names = await _author_map(db, [item.author_id])
-        author_name = names.get(item.author_id, "")
-    else:
-        author_name = item.publisher or ""
-    column_title = ""
-    if item.column_id:
-        cols = await _column_title_map(db, [item.column_id])
-        column_title = cols.get(item.column_id, "")
-    return _item_to_schema(item, author_name, column_title or None)
+    async def _load() -> dict[str, Any]:
+        item = await repo.get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
+        author_name, column_title = await _item_detail_context(db, item)
+        return _detail_snapshot(item, author_name, column_title)
+
+    payload = await cached_read(
+        _detail_cache_key(item_id),
+        settings.content_detail_cache_ttl_s,
+        _load,
+    )
+    info = ContentItemInfo.model_validate(payload)
+    # 命中缓存也叠加实时计数：计数不入缓存（见上方说明），每次读取一次窄列值。
+    counters = await repo.read_counter_snapshot(item_id)
+    if counters is None:
+        # 缓存命中但行已删（删除路径会失效缓存，此处兜并发窗口）：按「不存在」处理
+        raise BizError(ContentErr.CONTENT_NOT_FOUND)
+    return info.model_copy(
+        update=dict(zip(_DETAIL_VOLATILE_COUNTERS, counters, strict=True))
+    )
 
 
 async def get_item_by_slug(db: DbSession, slug: str) -> ContentItemInfo:
-    item = await ContentItemRepository(db).get_one_or_raise(
-        ContentErr.CONTENT_NOT_FOUND, ContentItem.slug == slug
-    )
-    author_name = ""
-    if item.author_id:
-        names = await _author_map(db, [item.author_id])
-        author_name = names.get(item.author_id, "")
-    else:
-        author_name = item.publisher or ""
-    column_title = ""
-    if item.column_id:
-        cols = await _column_title_map(db, [item.column_id])
-        column_title = cols.get(item.column_id, "")
-    return _item_to_schema(item, author_name, column_title or None)
+    """按 slug 读详情：先窄列解析出 id，再复用 :func:`get_item` 的同一份缓存。
+
+    与 get_item 共用一个键，避免「同一条内容按 id/按 slug 打开各缓存一份、失效要删两处」。
+    """
+    item_id = await ContentItemRepository(db).id_by_slug(slug)
+    if item_id is None:
+        raise BizError(ContentErr.CONTENT_NOT_FOUND)
+    return await get_item(db, item_id)
 
 
 async def _require_unique_slug(db: DbSession, slug: str | None) -> None:
@@ -355,6 +414,8 @@ async def delete_item(
     item = await repo.get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
     author_id = item.author_id or uuid.UUID(int=0)
     await repo.soft_delete(item)
+    # 帖详情缓存失效（§5.6「事件刷新」）：软删后详情不得再从缓存命中旧快照
+    await clear_item_detail_cache(item_id)
     # 索引删除通知：软删时行仍在、status 未变，须显式传 deleted
     await enqueue_content_event(db, item, CONTENT_ACTION_DELETED)
     # 懒 import：feed 域反向依赖 content.models（既有读缝），模块级导入会绕成环
@@ -495,6 +556,8 @@ async def publish_blog_item(
         existing.status = ContentStatus.PUBLISHED
         existing.published_at = existing.published_at or _now()
         await repo.flush()
+        # 同 slug 重发 = 更新既有行 → 详情缓存须失效（内容/标题已变）
+        await clear_item_detail_cache(existing.id)
         await enqueue_content_event(db, existing)
         return existing.id
 
@@ -789,9 +852,17 @@ async def update_board_ex(
     *,
     is_admin: bool = False,
 ) -> BoardOut:
+    """更新板块。``patch.version`` 可选（蓝图 §6.1 乐观锁）：传了走 CAS，不符抛
+    :class:`VersionConflictError`（端点转 409 + 当前值）；不传跳过校验但仍递增版本。"""
     board = await get_board_ex(db, board_id)
     _assert_owner(board, owner_id, is_admin)
-    await BoardRepository(db).update(board, **patch.model_dump(exclude_unset=True))
+    data = patch.model_dump(exclude_unset=True)
+    expected_version = data.pop("version", None)
+    repo = BoardRepository(db)
+    if expected_version is not None or data:
+        await repo.update_cas(board, expected_version, **data)
+    else:
+        await repo.flush()
     return _board_to_schema(board)
 
 

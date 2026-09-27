@@ -13,9 +13,12 @@
 """
 
 import logging
+from collections.abc import Iterable
 
 from fastapi import FastAPI
 from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client.core import GaugeMetricFamily
+from prometheus_client.registry import REGISTRY, Collector
 
 from app.core.config import settings
 
@@ -131,6 +134,86 @@ graphql_query_rejected_total = Counter(
     "GraphQL 查询被防护拒绝次数（reason=depth|complexity|timeout；M6.4）",
     ("reason",),
 )
+
+
+# ---- 连接池水位（蓝图 §3.3 第 3 条，标"关键"）----
+# Web 主池与 worker 批处理池各自独立（见 app/db/session.py）。size/checkedout/overflow 是
+# **瞬时量**，普通 Gauge 需要有人周期 set，会把「实时」退化成「上次任务跑时」；故用
+# Collector 在**抓取时刻**读池对象。未创建的惰性引擎不得被唤醒（走访问器会凭空建池并
+# 开连接），所以直接读 session 模块的全局单例，None 即跳过。指标命名与告警见
+# deploy/prometheus/rules/lkm-pool.yml。
+class DBPoolCollector(Collector):
+    """把两个 asyncpg 连接池的水位暴露为 ``db_pool_connections{pool,state}``。"""
+
+    _METRIC = "db_pool_connections"
+    _HELP = (
+        "数据库连接池水位（pool=web|worker，state=size|checked_out|overflow|checked_in）"
+    )
+
+    def describe(self) -> Iterable[GaugeMetricFamily]:
+        # 显式给名字：注册期 REGISTRY 会调 describe() 取指标名，若省掉这步它会用
+        # collect() 反推——那会在 import/注册时就去碰（可能尚未创建的）引擎。
+        yield GaugeMetricFamily(self._METRIC, self._HELP, labels=["pool", "state"])
+
+    def collect(self) -> Iterable[GaugeMetricFamily]:
+        from app.db import session as session_mod
+
+        gauge = GaugeMetricFamily(self._METRIC, self._HELP, labels=["pool", "state"])
+        for pool_name, engine in (
+            ("web", session_mod._async_engine),
+            ("worker", session_mod._worker_engine),
+        ):
+            if engine is None:
+                continue  # 惰性池未创建：跳过，绝不在抓取路径上建池
+            pool = getattr(engine, "pool", None)
+            if pool is None:
+                continue  # 测试/替身引擎可能没有 pool，不影响其余池导出
+            try:
+                states = {
+                    # SQLAlchemy QueuePool 语义：size() 是配置的 pool_size（恒为上限），
+                    # checked_in() 是空闲连接数，checked_out() 已借出，overflow() 当前溢出量。
+                    # checked_out / (size + overflow) 即「当前已开连接里的占用比例」。
+                    "size": pool.size(),
+                    "checked_out": pool.checkedout(),
+                    "overflow": pool.overflow(),
+                    "checked_in": pool.checkedin(),
+                }
+            except Exception:
+                # 池实现可能不支持这些方法：抓取路径绝不能因单池失败而整体 500
+                logger.exception("读取 %s 连接池水位失败，本池本次不导出", pool_name)
+                continue
+            for state, value in states.items():
+                gauge.add_metric([pool_name, state], float(value))
+        yield gauge
+
+
+# 模块级单例：重复调用 register_* 或重复 create_app 都只注册一次
+# （prometheus_client 对同名指标/同一 collector 二次注册抛 ValueError）。
+_pool_collector: DBPoolCollector | None = None
+
+
+def register_pool_metrics_collector() -> DBPoolCollector:
+    """幂等注册连接池水位 Collector，返回已注册实例。"""
+    global _pool_collector
+    if _pool_collector is not None:
+        return _pool_collector
+    collector = DBPoolCollector()
+    try:
+        REGISTRY.register(collector)
+    except ValueError:
+        # 已在 REGISTRY 里（典型：importlib.reload 把上面的模块级单例重置了）。复用既有
+        # 实例而不是抛错，否则 reload 后每个请求都可能因重复注册炸掉；找不到同类型实例
+        # 说明是别的命名冲突，原样上抛。
+        for existing in REGISTRY._collector_to_names:  # type: ignore[attr-defined]
+            if isinstance(existing, DBPoolCollector):
+                _pool_collector = existing
+                return existing
+        raise
+    _pool_collector = collector
+    return collector
+
+
+register_pool_metrics_collector()
 
 
 def setup_metrics(app: FastAPI) -> None:

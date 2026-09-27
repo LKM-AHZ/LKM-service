@@ -31,6 +31,8 @@ class BoardOut(BaseModel):
     daily_post_limit: int
     is_public: bool
     created_at: datetime.datetime
+    # 乐观锁版本号：前端编辑板块时原样回带（蓝图 §6.1）。
+    version: int = 1
 
 
 class BoardUpdate(BaseModel):
@@ -40,6 +42,8 @@ class BoardUpdate(BaseModel):
     require_certified: bool | None = None
     daily_post_limit: int | None = Field(default=None, ge=0)
     is_public: bool | None = None
+    # 乐观锁（蓝图 §6.1）：**可选**。不传 = 不校验，完全向后兼容；传了且不符 → 409 + 当前值。
+    version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _reject_explicit_null(self) -> BoardUpdate:

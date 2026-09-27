@@ -1,4 +1,4 @@
-from app.core.err import NS_CONTENT, ErrCode, register
+from app.core.err import NS_CONTENT, ErrCode, register, register_unique_constraint
 
 
 class ContentErr(ErrCode):
@@ -20,3 +20,6 @@ register(
         ContentErr.SLUG_TAKEN: (409, "Slug already taken"),
     }
 )
+
+# 唯一约束语义化（蓝图 §6.1）：slug 撞唯一索引时由 app/db/session.py 映射到本码。
+register_unique_constraint("slug", ContentErr.SLUG_TAKEN)

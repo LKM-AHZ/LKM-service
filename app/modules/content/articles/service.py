@@ -465,27 +465,38 @@ async def create_article_ex(db: DbSession, info: ArticleCreate) -> ArticleDetail
 async def update_article_ex(
     db: DbSession, slug: str, patch: ArticleUpdate, is_super: bool
 ) -> ArticleDetail:
-    """更新文章（仅更新传入字段）。is_super 预留审核/越权语义（当前未用，接口契约保留）。"""
+    """更新文章（仅更新传入字段）。is_super 预留审核/越权语义（当前未用，接口契约保留）。
+
+    乐观锁（蓝图 §6.1）：``patch.version`` **可选**。传了就走 CAS——版本不符抛
+    :class:`VersionConflictError`（端点转 409 + 当前值）；不传则跳过版本校验（向后兼容），
+    但仍递增 version，使版本号始终反映「该行被编辑过」。
+    """
     article = await _get_article(db, slug)
     data = patch.model_dump(exclude_unset=True)
+    expected_version = data.pop("version", None)
     if data.get("category_id") is not None:
         await _require_category(db, data["category_id"])
+    # 收敛成单个 writes 字典：统一经 CAS 落库，避免「先 setattr 再 CAS」在冲突时留下
+    # 未回滚的脏改动（冲突抛错后端点回 409，若已 setattr，同会话提交会把半成品写进去）。
+    writes: dict[str, Any] = {}
     if "status" in data:
-        article.status = str(data["status"])
-        if data["status"] == "published" and article.published is None:
-            article.published = now_iso()
-        data.pop("status")
+        status = str(data.pop("status"))
+        writes["status"] = status
+        if status == "published" and article.published is None:
+            writes["published"] = now_iso()
     if "keyword_str" in data:
-        article.keywords = str(data["keyword_str"])
-        data.pop("keyword_str")
+        writes["keywords"] = str(data.pop("keyword_str"))
     # tags 不能走通用 setattr：Article.tags 是 list[Tag] 关系列，赋 list[str] 会污染
     # 关系状态并在 flush 时炸；标签只由下面的 _sync_article_tags 走仓储维护
     data.pop("tags", None)
-    for k, v in data.items():
-        setattr(article, k, v)
+    writes.update(data)
+    repo = ArticleRepository(db)
+    # 空 patch 且未带版本时不发 UPDATE（避免仅刷新 updated_at/version 的空写）
+    if expected_version is not None or writes or patch.tags is not None:
+        await repo.update_cas(article, expected_version, **writes)
     if patch.tags is not None:
         await _sync_article_tags(db, article.id, patch.tags)
-    await ArticleRepository(db).flush()
+    await repo.flush()
     await _invalidate_article_cache(db, slug)
     return await _article_to_detail(db, article)
 

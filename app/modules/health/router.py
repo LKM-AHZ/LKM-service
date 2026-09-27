@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -36,8 +37,19 @@ class LiveData(BaseModel):
     service: str
 
 
+class SoftDependencies(BaseModel):
+    """软依赖状态（蓝图 §2 第 3 条）：**缺失可降级，只告知不阻塞入流**。
+
+    与硬依赖的关键区别：这些字段**绝不参与** readiness 的 200/503 判定，只是把
+    「检索/对象存储当前是否可用」的信息随就绪响应一并告知，供运维观测与客户端降级决策。
+    """
+
+    search: DependencyStatus
+    storage: DependencyStatus
+
+
 class ReadyData(BaseModel):
-    """readiness 响应：复合硬依赖（DB/Redis/Pulsar/AUTH）状态。"""
+    """readiness 响应：复合硬依赖（DB/Redis/Pulsar/AUTH）状态 + 软依赖告知。"""
 
     status: str
     service: str
@@ -45,12 +57,21 @@ class ReadyData(BaseModel):
     redis: DependencyStatus
     pulsar: DependencyStatus
     auth: DependencyStatus
+    soft: SoftDependencies
 
 
 # AUTH 活性的可注入出站 client 工厂（monolith 就绪探针用）：默认 None → 按配置超时新建
 # httpx client 打 AUTH 进程 /liveness；测试经 monkeypatch 换成返回假 transport 的 client
 # 即可离线端到端驱动（与 auth.user_http._client_factory 同款范式）。
 _auth_liveness_factory: Any = None
+
+# 软依赖探测的出站 client 工厂（可注入，测试离线驱动用；语义同 _auth_liveness_factory）。
+# 软依赖只告知不阻塞，故**不**引入配置项，超时用模块常量。
+_soft_probe_factory: Any = None
+
+# 软依赖探测超时（秒）：readiness 可能被编排高频调用，探测必须是「轻量 + 短超时」，绝不能
+# 让一个不可达的 OpenSearch/MinIO 把就绪探针拖住（即便不改变判定，也会拖慢响应）。
+_SOFT_PROBE_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +178,67 @@ async def _probe_pulsar() -> DependencyStatus:
     return DependencyStatus(status=status, detail=detail)
 
 
+def _build_soft_client() -> httpx.AsyncClient:
+    """软探测的轻量 client：可注入工厂（测试离线驱动），默认按模块常量超时新建。"""
+    if _soft_probe_factory is not None:
+        return _soft_probe_factory()
+    timeout = httpx.Timeout(
+        connect=_SOFT_PROBE_TIMEOUT_S,
+        read=_SOFT_PROBE_TIMEOUT_S,
+        write=_SOFT_PROBE_TIMEOUT_S,
+        pool=_SOFT_PROBE_TIMEOUT_S,
+    )
+    return httpx.AsyncClient(timeout=timeout)
+
+
+async def _probe_search() -> DependencyStatus:
+    """软依赖：检索后端（可降级，只告知不阻塞）。
+
+    - 内置 ``pg`` 检索（默认）/ 其它未接出的引擎 → ``disabled``：无外部依赖。
+    - ``opensearch`` 且配了 URL：轻量 ``GET /_cluster/health``（短超时）→ ``up``/``error``。
+    结果**不参与** readiness 判定，异常只记日志、不冒泡。
+    """
+    engine = settings.search_engine
+    base = (settings.search_opensearch_url or "").strip().rstrip("/")
+    if engine != "opensearch":
+        return DependencyStatus(status="disabled", detail=f"search_engine={engine}")
+    if not base:
+        return DependencyStatus(status="disabled", detail="opensearch url 未配置")
+    try:
+        async with _build_soft_client() as client:
+            resp = await client.get(f"{base}/_cluster/health")
+    except httpx.HTTPError as exc:
+        logger.warning("health probe search failed: %s", exc)
+        return DependencyStatus(status="error", detail="search unreachable")
+    if resp.status_code >= 500:
+        return DependencyStatus(status="error", detail=f"search http {resp.status_code}")
+    return DependencyStatus(status="up")
+
+
+async def _probe_storage() -> DependencyStatus:
+    """软依赖：对象存储（可降级，只告知不阻塞）。
+
+    - ``local`` 后端（默认）→ ``disabled``：文件落本地，无外部依赖。
+    - ``s3`` 且配了显式 endpoint（MinIO 本地）：轻量 ``GET <endpoint>/`` 探可达；
+      S3 对匿名/根路径常回 403/404，**只要拿到 HTTP 响应即视为可达**（``up``）。
+    - ``s3`` 但未配 endpoint（云 S3 默认 endpoint）：不主动探测，报 ``disabled``，避免为
+      readiness 引入一个隐式外部调用。结果同样**不参与** readiness 判定。
+    """
+    backend = (settings.storage_backend or "local").strip()
+    if backend != "s3":
+        return DependencyStatus(status="disabled", detail=f"storage_backend={backend}")
+    base = (settings.s3_endpoint_url or "").strip().rstrip("/")
+    if not base:
+        return DependencyStatus(status="disabled", detail="s3 默认 endpoint 未探测")
+    try:
+        async with _build_soft_client() as client:
+            resp = await client.get(base)
+    except httpx.HTTPError as exc:
+        logger.warning("health probe storage failed: %s", exc)
+        return DependencyStatus(status="error", detail="storage unreachable")
+    return DependencyStatus(status="up", detail=f"http {resp.status_code}")
+
+
 @router.get("/liveness", response_model=LiveData)
 async def liveness() -> LiveData:
     """存活探针：**零外部依赖**，进程能应答即 ok。
@@ -173,6 +255,8 @@ async def readiness(response: Response) -> ReadyData:
 
     - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``。
     - ``disabled``（未配置，如单机无总线/未接 AUTH 进程）不降就绪——是部署取向而非故障。
+    - **软依赖**（检索/对象存储，蓝图 §2 第 3 条）：仅作 ``soft`` 字段告知，**不参与**下述
+      ``ready`` 判定——它们缺失时可降级，绝不能把进程挡在入流之外。
     - 状态码语义：就绪 200 / 未就绪 503（供 compose depends_on、K8s readinessProbe、
       负载均衡摘流直接消费；M3.4 已把语义定在 AUTH 进程侧，此处对齐到单体）。
     """
@@ -180,6 +264,10 @@ async def readiness(response: Response) -> ReadyData:
     redis = await _probe_redis()
     pulsar = await _probe_pulsar()
     auth = await _probe_auth()
+    # 软依赖：探测失败只体现在字段值，绝不改变下面 ready 的 AND 判定（一字不动）。
+    # 并发探测把最坏延迟收敛到单个超时（~2s），而非两者串行叠加。
+    search, storage = await asyncio.gather(_probe_search(), _probe_storage())
+    soft = SoftDependencies(search=search, storage=storage)
     ready = (
         db.status == "up"
         and redis.status == "up"
@@ -195,6 +283,7 @@ async def readiness(response: Response) -> ReadyData:
         redis=redis,
         pulsar=pulsar,
         auth=auth,
+        soft=soft,
     )
 
 

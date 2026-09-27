@@ -45,6 +45,7 @@ from auth.models import (
     User,
     UserOAuth,
 )
+from auth.token_revocation import set_token_version
 
 
 def is_integrity_error(exc: BaseException) -> bool:
@@ -166,10 +167,23 @@ class UserRepository(AsyncRepository[User]):
         return await self.update_where({"account_level": level}, User.id == user_id)
 
     async def bump_token_version(self, user_id: uuid.UUID) -> int:
-        """递增 ``token_version``，使该用户已签发的访问令牌全部失效。"""
-        return await self.update_where(
-            {"token_version": User.token_version + 1}, User.id == user_id
+        """递增 ``token_version``，使该用户已签发的访问令牌全部失效；返回**新版本号**（无行 0）。
+
+        同步把新版本写入撤销预检缓存（§4.2）：改密/封号/全端登出后，旧 access 在 L2 预检即被
+        拒，不必等到落库回查主服务。缓存只加速拒绝、DB 仍是唯一放行判据（写不进由
+        ``set_token_version`` 静默跳过）。用 ``UPDATE ... RETURNING`` 取新值，省一次回查。
+        """
+        new_version = await self.db.scalar(
+            sa_update(User)
+            .where(User.id == user_id)
+            .values(token_version=User.token_version + 1)
+            .returning(User.token_version)
         )
+        await self.db.flush()
+        if new_version is None:
+            return 0
+        await set_token_version(user_id, int(new_version))
+        return int(new_version)
 
     def failed_login_stmt(
         self, user_id: uuid.UUID, *, threshold: int, lock_minutes: int

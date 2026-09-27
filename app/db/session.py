@@ -14,6 +14,8 @@ from app.core.config import settings
 from app.core.err import (
     AuthErr,  # M3 peer: 并入共享 shared err
     BizError,
+    ErrCode,
+    unique_constraint_errcode,
 )
 
 # —— 主库（monolith，realm="default"）的惰性单例。M3.B 物理拆目标：monolith 主进程
@@ -112,9 +114,10 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     except IntegrityError as exc:
         await db.rollback()
         if _is_unique_violation(exc):
-            raise BizError(
-                AuthErr.ALREADY_REGISTERED, "Resource already exists"
-            ) from None
+            errcode = unique_violation_errcode(exc)
+            if errcode is AuthErr.ALREADY_REGISTERED:
+                raise BizError(errcode, "Resource already exists") from None
+            raise BizError(errcode) from None
         raise
     except Exception:
         await db.rollback()
@@ -238,3 +241,48 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     if sqlstate is not None:
         return str(sqlstate) == _UNIQUE_VIOLATION_SQLSTATE
     return "UniqueViolation" in type(orig).__name__
+
+
+def _unique_constraint_name(exc: IntegrityError) -> str | None:
+    """取唯一约束名，取不到返回 None（蓝图 §6.1 语义化映射的输入）。
+
+    坑在「谁身上才有约束名」：SQLAlchemy 的 asyncpg 方言把自己的
+    ``sqlalchemy.dialects.postgresql.asyncpg.UniqueViolationError`` 放在 ``exc.orig``，
+    它**只透出 sqlstate/pgcode**，约束名在它包的驱动异常上（``.driver_exception`` /
+    ``.orig`` / ``__cause__``，实测三者同一对象）。故按「先直接、再解包」的顺序找；
+    psycopg 则在 ``.diag.constraint_name``。都取不到就回落，交给调用方走现状兜底码。
+    """
+    orig = exc.orig
+    if orig is None:
+        return None
+    candidates = (
+        orig,
+        getattr(orig, "driver_exception", None),
+        getattr(orig, "orig", None),
+        getattr(orig, "__cause__", None),
+    )
+    for cand in candidates:
+        if cand is None:
+            continue
+        name = getattr(cand, "constraint_name", None)
+        if name:
+            return str(name)
+        diag = getattr(cand, "diag", None)
+        name = getattr(diag, "constraint_name", None) if diag is not None else None
+        if name:
+            return str(name)
+    return None
+
+
+def unique_violation_errcode(exc: IntegrityError) -> ErrCode:
+    """按约束名给唯一冲突选语义化错误码；未命中回落 ``ALREADY_REGISTERED``（保持现状）。
+
+    映射**不在此硬编码**：约束名跨环境会变（create_all 隐式命名如 ``content_likes_pkey``
+    vs alembic 显式命名），故由各模块在自身 ``errors.py`` 用
+    :func:`app.core.err.register_unique_constraint` 登记片段，本函数只查 core 的注册表
+    ——db 层不反向 import 业务模块（import-linter 的「db 不依赖 modules」契约）。
+    未注册的冲突保持既有通用码，行为零变化。
+    """
+    return unique_constraint_errcode(_unique_constraint_name(exc)) or (
+        AuthErr.ALREADY_REGISTERED
+    )

@@ -1,11 +1,12 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common import ApiResp, ModuleStatus
-from app.core.err import BizError, CommonErr, respond
+from app.core.err import BizError, CommonErr, ErrCode, respond
+from app.db.repository import VersionConflictError
 from app.db.session import get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.content.boards.errors import (
@@ -113,14 +114,18 @@ async def owner_update_board(
     patch: BoardUpdate,
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
-) -> BoardOut:
+) -> BoardOut | tuple[ErrCode, dict[str, Any]]:
     # 对象级权限：板块属主放行，或拥有 board_owner_manage（super_admin 代管）放行。
     await check_owner(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
-    return await update_board_ex(
-        db, board_id, cur.id, patch, is_admin=(cur.role == "super_admin")
-    )
+    # 乐观锁冲突（蓝图 §6.1）：同 patch_article，转 (errcode, 当前值) 元组带出 409 + data。
+    try:
+        return await update_board_ex(
+            db, board_id, cur.id, patch, is_admin=(cur.role == "super_admin")
+        )
+    except VersionConflictError as exc:
+        return (exc.errcode, exc.current)
 
 
 @router.post("/{board_id}/bans", response_model=ApiResp[dict[str, bool]])

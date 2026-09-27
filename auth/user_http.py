@@ -30,6 +30,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.secrets import reveal
+from auth.circuit_breaker import auth_http_breaker
 
 # 冻结只读字段（与 auth.snapshot.UserSnapshot 完全一致）；缺任一字段即判畸形 → fail-open。
 # raw nickname 已加入快照缝冻结字段（M3.A 残项），HTTP OFF/ON 两侧 `_SNAP_FIELDS` 须同源，
@@ -65,10 +66,50 @@ def _endpoint_path(user_id: uuid.UUID) -> str:
 
 
 def _build_client() -> httpx.AsyncClient:
-    """每请求级 client + 配置超时（与 github.py 同款 httpx 出站风格）；测试可注入假 transport。"""
+    """每请求级 client + 配置超时/**连接层**重试；测试可注入假 transport（注入缝不变）。
+
+    重试只走 ``AsyncHTTPTransport(retries=)``：httpx 仅在**连接建立失败**时重试，已发出的
+    请求不重试。刻意不重试 5xx/4xx——业务性失败重试会放大副作用，fail-closed 缝重试只会把
+    每次拒绝的时延拉长。
+    """
     if _client_factory is not None:
         return _client_factory()
-    return httpx.AsyncClient(timeout=httpx.Timeout(settings.auth_http_timeout_s))
+    return httpx.AsyncClient(
+        transport=httpx.AsyncHTTPTransport(
+            retries=max(0, int(settings.auth_http_retries))
+        ),
+        timeout=httpx.Timeout(settings.auth_http_timeout_s),
+    )
+
+
+async def _request(
+    method: str,
+    url: str,
+    *,
+    label: str,
+    headers: dict[str, str],
+    **kwargs: Any,
+) -> httpx.Response:
+    """发一次出站 HTTP 并把结果喂给熔断器；网络/超时 → 抛 ``UserHttpUnavailable``。
+
+    统一各地请求的出站语义（原各端点各自 try/except，现收口到一处，避免漏喂熔断器）：
+    - 熔断 open：**不发请求**直接抛 ``UserHttpUnavailable``——熔断只让失败更快，调用方仍按
+      fail-open/fail-closed 各自契约处理，绝不因此变成成功。
+    - 网络错误/超时/5xx 记失败；其余（含权威 404）视为 AUTH 可达并给出答案，记成功。
+    """
+    if not auth_http_breaker.allow():
+        raise UserHttpUnavailable(f"{label} circuit open")
+    try:
+        async with _build_client() as client:
+            resp = await client.request(method, url, headers=headers, **kwargs)
+    except httpx.HTTPError as exc:
+        auth_http_breaker.record_failure()
+        raise UserHttpUnavailable(f"{label} failed: {exc}") from None
+    if resp.status_code >= 500:
+        auth_http_breaker.record_failure()
+    else:
+        auth_http_breaker.record_success()
+    return resp
 
 
 async def fetch_user_http_payload(
@@ -86,11 +127,7 @@ async def fetch_user_http_payload(
         "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
         "Accept": "application/json",
     }
-    try:
-        async with _build_client() as client:
-            resp = await client.get(url, headers=headers)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http request failed: {exc}") from None
+    resp = await _request("GET", url, label="auth_http request", headers=headers)
 
     if resp.status_code == 404:
         # 权威不存在：调用方以 None 语义返回，不 fail-open、不缓存缺行。
@@ -129,11 +166,9 @@ async def fetch_users_http_batch(
         "Accept": "application/json",
     }
     params = {"ids": ",".join(str(i) for i in user_ids)}
-    try:
-        async with _build_client() as client:
-            resp = await client.get(url, headers=headers, params=params)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http batch request failed: {exc}") from None
+    resp = await _request(
+        "GET", url, label="auth_http batch request", headers=headers, params=params
+    )
 
     if resp.status_code != 200:
         raise UserHttpUnavailable(
@@ -227,11 +262,9 @@ async def authorize_via_seam(
         "iat_ts": iat_ts,
         "require_admin": require_admin,
     }
-    try:
-        async with _build_client() as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http authz request failed: {exc}") from None
+    resp = await _request(
+        "POST", url, label="auth_http authz request", headers=headers, json=body
+    )
 
     if resp.status_code != 200:
         raise UserHttpUnavailable(
@@ -291,11 +324,9 @@ async def grant_via_seam(
         body["unlock_level"] = unlock_level
     if unlock_role is not None:
         body["unlock_role"] = unlock_role
-    try:
-        async with _build_client() as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http grant request failed: {exc}") from None
+    resp = await _request(
+        "POST", url, label="auth_http grant request", headers=headers, json=body
+    )
 
     if resp.status_code != 200:
         raise UserHttpUnavailable(
@@ -336,11 +367,13 @@ async def verify_password_via_seam(*, username: str, password: str) -> dict[str,
         "Accept": "application/json",
     }
     body = {"username": username, "password": password}
-    try:
-        async with _build_client() as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http verify-password request failed: {exc}") from None
+    resp = await _request(
+        "POST",
+        url,
+        label="auth_http verify-password request",
+        headers=headers,
+        json=body,
+    )
 
     if resp.status_code != 200:
         raise UserHttpUnavailable(
@@ -385,11 +418,9 @@ async def mint_bot_sso_ticket(
         "Accept": "application/json",
     }
     body = {"user_id": str(user_id), "account_level": account_level}
-    try:
-        async with _build_client() as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        raise UserHttpUnavailable(f"auth_http bot-ticket request failed: {exc}") from None
+    resp = await _request(
+        "POST", url, label="auth_http bot-ticket request", headers=headers, json=body
+    )
 
     if resp.status_code != 200:
         # 403 理论上不可达（调用方持 seam 裁决过的 admin），若出现说明两进程口径漂移，

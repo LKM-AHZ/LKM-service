@@ -50,6 +50,7 @@ from typing import Any
 from redis import WatchError
 from redis.asyncio import Redis as _AsyncRedis
 
+import app.core.bloom as bloom
 import app.core.local_cache as local_cache
 import app.core.redis as redis_client
 import app.core.user_cache_events as user_cache_events
@@ -419,7 +420,7 @@ async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
     覆盖它（版本条件只拒「更旧」，0 不拒任何正 sv）；被失效 bump 后，在途的负写也会被代次
     条件拒掉，不会把已删用户「复活」成不存在。写失败静默返回 False，不影响读语义。
     """
-    return await write_if_newer(
+    ok = await write_if_newer(
         user_id,
         None,
         _NEG_SV,
@@ -427,6 +428,14 @@ async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
         ttl_seconds=_NEG_TTL_S,
         negative=True,
     )
+    if ok:
+        # 蓝图 §5.6 的布隆面接入点：负值缓存落定（上游权威确认该 id 不存在）时顺手记一笔。
+        # **只 add、不做 might_contain 拦截**——布隆不可删，若某 id 先判不存在、后又被创建，
+        # 按缺失拦截会永久误拒合法用户；「白名单式拦截非法形态」需以权威存量 id 建过滤器，
+        # 当前无此接入点（非法形态在 pydantic 边界已被 422 挡下，到不了这里），故不强行拦截。
+        # add 自身 fail-open，写失败不影响负值缓存语义。
+        await bloom.add(str(user_id))
+    return ok
 
 
 def _extract_sv(raw_snap: str) -> int | None:

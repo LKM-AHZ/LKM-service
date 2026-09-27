@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.common import ApiResp
-from app.core.err import respond
+from app.core.err import ErrCode, respond
+from app.db.repository import VersionConflictError
 from app.db.session import get_session
 from app.modules.content.articles.models import ArticleComment
 from app.modules.content.articles.schemas import (
@@ -108,8 +109,15 @@ async def patch_article(
     patch: ArticleUpdate,
     cur: CurrentUser = RequirePermission(Permission.articles_publish),
     db: AsyncSession = Depends(get_session),
-) -> ArticleDetail:
-    return await update_article_ex(db, slug, patch, is_super=True)
+) -> ArticleDetail | tuple[ErrCode, dict[str, Any]]:
+    # 乐观锁冲突（蓝图 §6.1）：转成 (errcode, payload) 元组，由 @respond 经
+    # resp_json(..., data=payload) 带出 409 + 服务端当前值（BizError 本身装不下 data）。
+    try:
+        return await update_article_ex(db, slug, patch, is_super=True)
+    except VersionConflictError as exc:
+        # CAS 是 service 内的首个写操作（此前只有读/校验），冲突时无半成品需回滚；
+        # 直接带出哨兵异常里的当前值即可。
+        return (exc.errcode, exc.current)
 
 
 @router.delete("/{slug}", response_model=ApiResp[dict[str, bool]])

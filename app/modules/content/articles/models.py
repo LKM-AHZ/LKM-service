@@ -57,6 +57,11 @@ class Article(UUIDPrimaryKeyMixin, Base):
     likes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     comments: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     bookmarks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 乐观锁版本号（蓝图 §6.1）：文章编辑用（PATCH /articles/{slug}）。
+    # server_default 必须有：create_all 通道的加性同步只兜「可空/带默认」的加列（§8 #38）。
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     category: Mapped[ArticleCategory | None] = relationship(back_populates="articles")
     tags: Mapped[list[Tag]] = relationship(
         secondary="article_tag", back_populates="articles", lazy="selectin"

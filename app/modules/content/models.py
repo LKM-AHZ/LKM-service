@@ -290,6 +290,15 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     counts_reconciled_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
+    # 乐观锁版本号（蓝图 §6.1）：经 ``AsyncRepository.update_cas`` 的成功更新 +1。
+    # ⚠️ 边界：未经 update_cas 的就地 ORM 写（如 publish_blog_item 的「同 slug 重发」）
+    # 不递增本列——ContentItem 目前无公开更新端点，接入时须一并改走 CAS。
+    # ``server_default="1"`` 必须有——create_all 通道的 ``_sync_additive_schema`` 只兜
+    # 「可空/带默认」的加列，NOT NULL 且无默认的会被跳过，既有部署上就会 UndefinedColumn
+    # （登记 §8 #38）。
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
@@ -460,6 +469,10 @@ class Board(UUIDPrimaryKeyMixin, Base):
         Integer, nullable=False, default=0
     )  # 0=不限
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 乐观锁版本号（蓝图 §6.1）：板块编辑用；语义与 ContentItem.version 一致。
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )

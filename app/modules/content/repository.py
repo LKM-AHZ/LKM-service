@@ -76,6 +76,39 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
         """按 slug 取活跃条目（软删条目不返回）。"""
         return await self.get_one(ContentItem.slug == slug)
 
+    async def id_by_slug(self, slug: str) -> uuid.UUID | None:
+        """按 slug 只取 id（窄列，不拉正文）：详情缓存按 id 建键，slug 读路径先解析 id 再复用缓存。"""
+        return await self.db.scalar(
+            select(ContentItem.id).where(
+                ContentItem.slug == slug, ContentItem.deleted_at.is_(None)
+            )
+        )
+
+    async def read_counter_snapshot(
+        self, item_id: uuid.UUID
+    ) -> tuple[int, int, int, int, int] | None:
+        """窄列读 5 个互动计数（不含正文/其它大列），供详情缓存命中时叠加**实时**计数。
+
+        只 SELECT 计数列：正文是大 TOAST 列，不取即免去行外读与 detoast，这是详情缓存
+        真正省下的开销。行不存在（含已软删）返回 ``None``。
+        """
+        row = (
+            await self.db.execute(
+                select(
+                    ContentItem.view_count,
+                    ContentItem.like_count,
+                    ContentItem.comment_count,
+                    ContentItem.bookmark_count,
+                    ContentItem.forward_count,
+                ).where(
+                    ContentItem.id == item_id, ContentItem.deleted_at.is_(None)
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        return (int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4]))
+
     async def slug_taken(self, slug: str) -> bool:
         """slug 是否已被占用——**含**已软删行：墓碑占位，防删除后同 slug 复活歧义。"""
         return await self.exists(ContentItem.slug == slug, include_deleted=True)
@@ -204,6 +237,7 @@ class ColumnPostRepository(AsyncRepository[ColumnPost]):
 
 class BoardRepository(AsyncRepository[Board]):
     model = Board
+    version_snapshot_fields = ("slug", "title")
 
     async def get_by_slug(self, slug: str) -> Board | None:
         return await self.get_one(Board.slug == slug)
