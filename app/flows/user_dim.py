@@ -21,16 +21,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from prefect import flow, task
 
+from app.core.config import settings
+
 logger = logging.getLogger("lkm.flows.user_dim")
 
 # reconcile 模式最多拍数，防「每拍都恰好满窗口」时无界循环；默认 200 拍 × 500 = 10 万人。
-_DEFAULT_MAX_ROUNDS = int(os.getenv("LKM_USER_DIM_RECONCILE_MAX_ROUNDS", "200"))
+# 单一来源是 Settings（§6.5.1「不散落 os.getenv」），env 名
+# LKM_USER_DIM_RECONCILE_MAX_ROUNDS 不变。
+_DEFAULT_MAX_ROUNDS = settings.user_dim_reconcile_max_rounds
 _DEFAULT_WINDOW = 500
 
 # reconcile 模式的收敛判据要用 periodic 入口真实批大小，而它是 auth 侧固定的

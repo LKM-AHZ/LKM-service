@@ -15,6 +15,7 @@ from app.core.err import (
     NS_COMMON,
     NS_INTERACTION,
     AuthErr,
+    BizError,
     CommonErr,
     err_info,
     resp_json,
@@ -24,9 +25,12 @@ from app.db.session import (
     _unique_constraint_name,
     unique_violation_errcode,
 )
+from app.modules.content.blog.errors import BlogErr
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.errors import ContentErr
-from app.modules.interaction.errors import InteractionErr
+from app.modules.interaction.errors import FollowErr, InteractionErr
+from app.modules.notification.errors import NotificationErr
+from app.modules.projects.errors import ProjectErr
 
 
 class _AsyncpgUniqueViolation(Exception):
@@ -82,6 +86,13 @@ class TestNewErrorCodes:
         assert NS_INTERACTION.err(2) == InteractionErr.DUPLICATE_LIKE
         assert err_info(InteractionErr.DUPLICATE_LIKE) == (409, "Duplicate like")
 
+    def should_expose_protocol_and_conflict_codes(self) -> None:
+        """协议型端点与唯一冲突兜底的通用码（蓝图 §6.1：所有端点走统一信封、冲突 409）。"""
+        assert err_info(CommonErr.UNAUTHORIZED) == (401, "Unauthorized")
+        assert err_info(CommonErr.NOT_FOUND) == (404, "Not found")
+        assert err_info(CommonErr.BAD_REQUEST) == (400, "Bad request")
+        assert err_info(CommonErr.CONFLICT) == (409, "Resource conflict")
+
 
 class TestConstraintNameExtraction:
     def should_read_name_from_sqlalchemy_asyncpg_wrapper(self) -> None:
@@ -119,12 +130,61 @@ class TestUniqueViolationErrcode:
         exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("ix_content_slug")))
         assert unique_violation_errcode(exc) == ContentErr.SLUG_TAKEN
 
-    def should_fall_back_to_already_registered(self) -> None:
+    def should_map_follow_pairs(self) -> None:
+        """关注两表的复合唯一键 → 「已关注」，而不是笼统的注册冲突。"""
+        for name in ("uq_user_follows_pair", "uq_board_follows_pair"):
+            exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation(name)))
+            assert unique_violation_errcode(exc) == FollowErr.DUPLICATE_FOLLOW
+        assert err_info(FollowErr.DUPLICATE_FOLLOW)[0] == 409
+
+    def should_map_notification_token(self) -> None:
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_notification_token"))
+        )
+        assert unique_violation_errcode(exc) == NotificationErr.DUPLICATE_TOKEN
+
+    def should_map_pending_project_application(self) -> None:
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(
+                _AsyncpgUniqueViolation("uq_project_applications_pending")
+            )
+        )
+        assert unique_violation_errcode(exc) == ProjectErr.DUPLICATE_APPLICATION
+
+    def should_map_blog_repo_name(self) -> None:
+        exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("repo_name")))
+        assert unique_violation_errcode(exc) == BlogErr.REPO_NAME_TAKEN
+
+    def should_fall_back_to_neutral_conflict(self) -> None:
+        """未登记的业务约束回落**中性** 409，而不是 auth 域的「用户名或邮箱已注册」。"""
         exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_unknown_thing")))
-        assert unique_violation_errcode(exc) == AuthErr.ALREADY_REGISTERED
+        assert unique_violation_errcode(exc) == CommonErr.CONFLICT
 
     def should_fall_back_when_name_missing(self) -> None:
-        assert unique_violation_errcode(_ie(None)) == AuthErr.ALREADY_REGISTERED
+        assert unique_violation_errcode(_ie(None)) == CommonErr.CONFLICT
+
+
+class TestBizErrorHeaders:
+    """``BizError`` 可携带响应头（协议端点的挑战头，如 git smart-HTTP 的 WWW-Authenticate）。"""
+
+    def should_keep_headers_on_error_origin(self) -> None:
+        err = BizError(
+            CommonErr.UNAUTHORIZED,
+            "Authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="lkm-git"'},
+        )
+        assert err.headers == {"WWW-Authenticate": 'Basic realm="lkm-git"'}
+
+    def should_default_headers_to_none(self) -> None:
+        assert BizError(CommonErr.FORBIDDEN, "nope").headers is None
+
+    def should_forward_headers_through_resp_json(self) -> None:
+        """全局 handler 的落点：``resp_json`` 必须把调用方给的头带出去。"""
+        resp = resp_json(
+            CommonErr.UNAUTHORIZED, headers={"WWW-Authenticate": 'Basic realm="x"'}
+        )
+        assert resp.status_code == 401
+        assert resp.headers["www-authenticate"] == 'Basic realm="x"'
 
 
 class TestRetryAfterHeader:

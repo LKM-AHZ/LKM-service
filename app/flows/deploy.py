@@ -11,9 +11,9 @@ deployment 会更新而非报错，故该服务可安全重跑。process 型 wor
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
+from app.core.config import settings
 from app.flows.analytics import analytics_export_flow
 from app.flows.feed_backfill import feed_backfill_flow
 from app.flows.ops_daily import ops_daily_flow
@@ -22,51 +22,42 @@ from app.flows.user_dim import user_dim_reconcile_flow
 
 logger = logging.getLogger("lkm.flows.deploy")
 
-WORK_POOL = os.getenv("LKM_PREFECT_WORK_POOL", "lkm")
+# 注册参数收口于 Settings（蓝图 §6.5.1「不散落 os.getenv」）：env 名
+# （LKM_PREFECT_WORK_POOL / LKM_PREFECT_SOURCE / LKM_PREFECT_FLOW_DEPLOYMENT_NAME）与部署侧
+# 下发的完全一致，故 compose/k8s 无需改动。
+WORK_POOL = settings.prefect_work_pool
 # process 型 pool 不支持自定义镜像：deployment 用**本地源码路径**注册，worker 容器内
 # 直接以该路径执行（镜像即 lkm-service:latest，无需构建/推送）。
-SOURCE = os.getenv("LKM_PREFECT_SOURCE", "/app")
+SOURCE = settings.prefect_source
 
 # (flow 对象, deployment 名, entrypoint)
+# entrypoint 与 user_dim 以外的 deployment 名**刻意作为常量**：部署侧从未下发过对应 env，
+# 做成可配置只会多出没有真实自由度的配置项（与「无自由度不加配置」的既有取向一致）。
 DEPLOYMENTS: list[tuple[Any, str, str]] = [
     (
         user_dim_reconcile_flow,
-        os.getenv("LKM_PREFECT_FLOW_DEPLOYMENT_NAME", "reconcile"),
-        os.getenv(
-            "LKM_PREFECT_ENTRYPOINT", "app/flows/user_dim.py:user_dim_reconcile_flow"
-        ),
+        settings.prefect_flow_deployment_name,
+        "app/flows/user_dim.py:user_dim_reconcile_flow",
     ),
     (
         analytics_export_flow,
-        os.getenv("LKM_PREFECT_ANALYTICS_DEPLOYMENT_NAME", "analytics-export"),
-        os.getenv(
-            "LKM_PREFECT_ANALYTICS_ENTRYPOINT",
-            "app/flows/analytics.py:analytics_export_flow",
-        ),
+        "analytics-export",
+        "app/flows/analytics.py:analytics_export_flow",
     ),
     (
         search_reindex_flow,
-        os.getenv("LKM_PREFECT_SEARCH_DEPLOYMENT_NAME", "search-reindex"),
-        os.getenv(
-            "LKM_PREFECT_SEARCH_ENTRYPOINT",
-            "app/flows/search_reindex.py:search_reindex_flow",
-        ),
+        "search-reindex",
+        "app/flows/search_reindex.py:search_reindex_flow",
     ),
     (
         feed_backfill_flow,
-        os.getenv("LKM_PREFECT_FEED_BACKFILL_DEPLOYMENT_NAME", "feed-backfill"),
-        os.getenv(
-            "LKM_PREFECT_FEED_BACKFILL_ENTRYPOINT",
-            "app/flows/feed_backfill.py:feed_backfill_flow",
-        ),
+        "feed-backfill",
+        "app/flows/feed_backfill.py:feed_backfill_flow",
     ),
     (
         ops_daily_flow,
-        os.getenv("LKM_PREFECT_OPS_DAILY_DEPLOYMENT_NAME", "ops-daily"),
-        os.getenv(
-            "LKM_PREFECT_OPS_DAILY_ENTRYPOINT",
-            "app/flows/ops_daily.py:ops_daily_flow",
-        ),
+        "ops-daily",
+        "app/flows/ops_daily.py:ops_daily_flow",
     ),
 ]
 

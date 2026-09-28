@@ -1,4 +1,4 @@
-from app.core.err import NS_PROJECTS, ErrCode, register
+from app.core.err import NS_PROJECTS, ErrCode, register, register_unique_constraint
 
 
 class ProjectErr(ErrCode):
@@ -17,4 +17,10 @@ register(
         ProjectErr.DUPLICATE_APPLICATION: (409, "你对本项目已有待审申请"),
         ProjectErr.MEMBER_USER_NOT_FOUND: (404, "申请中的成员账号不存在"),
     }
+)
+
+# 唯一约束语义化（蓝图 §6.1）：uq_project_applications_pending（部分唯一索引：同一项目下
+# 同一申请人至多一条待审申请）撞键即「重复申请」——服务层已先查后拒，这里兜住并发竞态。
+register_unique_constraint(
+    "project_applications_pending", ProjectErr.DUPLICATE_APPLICATION
 )

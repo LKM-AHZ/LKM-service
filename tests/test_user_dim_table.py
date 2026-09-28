@@ -129,7 +129,7 @@ def test_user_dim_migration_chained_to_single_head():
         mods[module.revision] = {"module": module, "down_revision": module.down_revision}
 
     # (b1) user_dim 的建表在迁移链里有落点。**迁移链已压平**（2026-09-18，见路线图 §8 #39）：
-    # 18 条历史迁移 → 1 条 UUID baseline（`72a6bdf65538`），原独立迁移文件
+    # 18 条历史迁移 → 1 条 UUID baseline（`0001_uuid_baseline`），原独立迁移文件
     # `f1a2e3d4c5b6a7f8_add_user_dim.py` 已并入其中。故此处不再要求「单独文件存在」，
     # 改为在链上源码里断言该表的 create_table 存在（少一条迁移也不等于表丢了）。
     assert len(mods) == len(set(mods)), "每个 revision 必须全局唯一"

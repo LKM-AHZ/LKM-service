@@ -94,6 +94,39 @@ class TestEnginePoolConfig:
         assert calls[1]["pool_size"] == settings.db_worker_pool_size
         assert calls[1]["max_overflow"] == settings.db_worker_pool_max_overflow
 
+    def should_recycle_and_timeout_both_pools(self, monkeypatch):
+        """蓝图 §3.3 明列 ``pool_recycle``：两池都要有回收与取连接等待上限。
+
+        recycle 主动轮换陈旧连接（区别于 pre_ping 的取用时探活）；timeout 是池满后的等待上限
+        （拒绝崩溃，不做无限等待）。两者是**池形态**参数，故两池共用同一组配置。
+        """
+        import app.db.session as session_mod
+        from app.core.config import settings
+
+        captured: dict[str, Any] = {}
+
+        def _fake_create(url: str, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+
+            class _Shell:
+                sync_engine: Any = None
+
+            return _Shell()
+
+        monkeypatch.setattr(session_mod, "create_async_engine", _fake_create)
+        monkeypatch.setattr(session_mod, "_async_engine", None)
+        monkeypatch.setattr(session_mod, "_AsyncSessionLocal", None)
+        monkeypatch.setattr(session_mod, "_worker_engine", None)
+        monkeypatch.setattr(session_mod, "_WorkerSessionLocal", None)
+
+        session_mod.get_async_engine()
+        assert captured["pool_recycle"] == settings.db_pool_recycle_s
+        assert captured["pool_timeout"] == settings.db_pool_timeout_s
+        captured.clear()
+        session_mod.get_worker_engine()
+        assert captured["pool_recycle"] == settings.db_pool_recycle_s
+        assert captured["pool_timeout"] == settings.db_pool_timeout_s
+
 
 class TestReadSession:
     """读会话 exit 后不自动 commit（只读请求省空事务）。"""

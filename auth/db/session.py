@@ -40,6 +40,9 @@ def get_auth_engine() -> AsyncEngine:
             pool_size=settings.auth_db_pool_size,
             pool_max_overflow=settings.auth_db_pool_max_overflow,
             pool_pre_ping=settings.auth_db_pool_pre_ping,
+            # 池形态（回收/等待上限）与两库共用，尺寸按 realm 分列（见 config 注释）。
+            pool_recycle=settings.db_pool_recycle_s,
+            pool_timeout=settings.db_pool_timeout_s,
         )
     return _auth_async_engine
 
@@ -85,10 +88,10 @@ async def get_auth_session() -> AsyncIterator[AsyncSession]:
             # 用 from exc 保留原始 IntegrityError：真正破了哪条约束，只有保留 cause 才能在
             # 日志里看出来。错误码按约束名**语义化**（蓝图 §6.1，注册表在 core.err：
             # users_email → EMAIL_TAKEN、users_username → USERNAME_TAKEN）；未注册的约束
-            # （passkeys/user_dim 等）回落通用 ALREADY_REGISTERED，与既往行为一致。
-            raise BizError(
-                unique_violation_errcode(exc), "Resource already exists"
-            ) from exc
+            # （passkeys/user_dim 等）回落中性的 CommonErr.CONFLICT(409)。
+            # 不再覆盖 detail："Resource already exists" 曾把 EMAIL_TAKEN 这类语义文案也一并
+            # 抹掉（错误码已能指明，文案应随它走）。
+            raise BizError(unique_violation_errcode(exc)) from exc
         raise
     except Exception:
         await db.rollback()

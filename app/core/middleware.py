@@ -121,6 +121,11 @@ class SecurityHeadersMiddleware:
         self.app = app
         self._headers: list[tuple[bytes, bytes]] = [
             (b"x-content-type-options", b"nosniff"),
+            # 蓝图 §4.5 点名 `nosniff / frame-ancestors`：CSP 的 frame-ancestors 是
+            # X-Frame-Options 的现代替代/补充（老浏览器只认后者，故两条并存、不互删）。
+            # 本仓 API 全是 JSON、从无被第三方嵌套的文档面，故 none 不构成功能回归；个别
+            # 端点若需自定 CSP，可显式设同名头覆盖（本中间件用 setdefault）。
+            (b"content-security-policy", b"frame-ancestors 'none'"),
             (b"x-frame-options", b"DENY"),
             (b"referrer-policy", b"strict-origin-when-cross-origin"),
             (b"permissions-policy", b"geolocation=(), microphone=(), camera=()"),

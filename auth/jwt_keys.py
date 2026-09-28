@@ -5,7 +5,9 @@
 
 **密钥来源**：``LKM_JWT_PRIVATE_KEY`` / ``LKM_JWT_PUBLIC_KEY``（PEM，经 Infisical/Secret
 注入）。两者都留空则维持既有 HS256 行为（本地开发与测试的默认路径）；只给公钥可做
-「只验不签」的验签方部署。
+「只验不签」的验签方部署。**本地来源为空时**，验签方可让进程从 AUTH 的
+``/.well-known/jwks.json`` **运行期拉取并缓存**公钥（蓝图 §2 第 2 条，见
+:func:`refresh_public_key_from_jwks` / :func:`verification_status`），从而不必带密钥文件上线。
 
 **双验签灰度**（蓝图给的时序：HS+RS 并存 → 灰度 ≥7 天 → 关 HS）：``LKM_JWT_HS_FALLBACK``
 默认 true，RS256 生效后仍接受 HS256 旧 token；存量 token 清空后置 false 即关闭。
@@ -17,10 +19,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import functools
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +34,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.core.config import settings
 from app.core.secrets import reveal
+
+logger = logging.getLogger("lkm.auth.jwt_keys")
 
 RS256 = "RS256"
 HS256 = "HS256"
@@ -90,14 +96,27 @@ def signing_algorithm() -> str:
     return settings.jwt_algorithm
 
 
+def _local_public_pem() -> str | None:
+    """本地可得的公钥 PEM：显式公钥优先，其次私钥（可推导公钥）；都没有则 ``None``。"""
+    pem = _pem(settings.jwt_public_key, settings.jwt_public_key_file)
+    if pem is not None:
+        return pem
+    return _pem(settings.jwt_private_key, settings.jwt_private_key_file)
+
+
 def public_key() -> rsa.RSAPublicKey | None:
-    """验签公钥：优先用显式配置的 ``jwt_public_key``，否则由私钥推导；都没有则 ``None``。"""
+    """验签公钥：显式配置的 ``jwt_public_key`` → 私钥推导 → **运行期从 JWKS 拉到的**；都无则 ``None``。
+
+    第三档见 :func:`refresh_public_key_from_jwks`（蓝图 §2 第 2 条：本地没有时可从 AUTH 拉取并缓存）。
+    """
     pem = _pem(settings.jwt_public_key, settings.jwt_public_key_file)
     if pem is not None:
         return _load_public(pem)
     private_pem = _pem(settings.jwt_private_key, settings.jwt_private_key_file)
     if private_pem is not None:
         return _load_private(private_pem).public_key()
+    if _fetched_public_pem is not None:
+        return _load_public(_fetched_public_pem)
     return None
 
 
@@ -166,3 +185,146 @@ def jwks_document() -> dict[str, Any]:
     jwk.pop("key_ops", None)
     jwk.update({"use": "sig", "alg": RS256, "kid": _thumbprint(jwk)})
     return {"keys": [jwk]}
+
+
+# ─────────── 运行期公钥获取：JWKS 客户端（蓝图 §2 第 2 条）───────────
+# 本地注入（env / ``*_file``）是**首选**来源；都为空时若配了 ``auth_http_url``，则从 AUTH 的
+# ``/.well-known/jwks.json`` 拉取并缓存——「只验签不签发」的进程因此可以完全不带密钥文件上线。
+# 拉取失败一律 **fail-open**：进程照常活，readiness 如实报「验签不可用」（见 verification_status），
+# 绝不因取不到公钥而崩溃或阻止启动。
+
+#: 运行期从 JWKS 拉到的公钥 PEM（本地有钥时不会被使用/写入）。
+_fetched_public_pem: str | None = None
+#: 后台刷新 task（幂等启动，见 start_public_key_refresh）。
+_refresh_task: asyncio.Task[None] | None = None
+#: 出站 client 工厂（可注入：测试用 httpx.MockTransport 离线驱动）——与
+#: ``auth.user_http._client_factory``、health 探针的 ``_*_factory`` 同款缝。
+_jwks_client_factory: Any = None
+
+
+def _build_jwks_client() -> Any:
+    """每次拉取一个 client（配置超时）；注入工厂优先（测试离线驱动用）。"""
+    if _jwks_client_factory is not None:
+        return _jwks_client_factory()
+    import httpx  # 惰性：签发侧/本地有钥时不必引入 httpx 的导入开销
+
+    return httpx.AsyncClient(timeout=settings.auth_http_timeout_s)
+
+
+def _b64u_to_int(value: str) -> int:
+    """base64url（无填充）→ int。JWK 的 ``n``/``e`` 都是这种编码。"""
+    return int.from_bytes(
+        base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big"
+    )
+
+
+def _jwk_to_pem(jwk: dict[str, Any]) -> str:
+    """RSA JWK（``n``/``e``）→ SubjectPublicKeyInfo PEM 文本。
+
+    自行转换而不引第三方 JWKS 客户端：本仓已依赖 ``cryptography``（RS256 签发/验签都在用），
+    这条只有 ~5 行，不值得为此多一个依赖与一条供应链面。
+    """
+    numbers = rsa.RSAPublicNumbers(
+        _b64u_to_int(str(jwk["e"])), _b64u_to_int(str(jwk["n"]))
+    )
+    pem = numbers.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return pem.decode("ascii")
+
+
+def rsa_expected() -> bool:
+    """是否**必须**拿到非对称公钥才能验签（决定 readiness 是否把公钥计入硬依赖）。
+
+    纯 HS256 部署（未配任何 RSA 密钥、alg 仍 HS256、且未关 HS 回落）不需要公钥——验签走共享
+    密钥，公钥缺失不是故障。只要出现任一 RS256 迹象（显式 ``alg=RS256`` / 配了私钥 / 配了公钥
+    / 已关 HS 回落），公钥就成了验签的**前置条件**。
+    """
+    if settings.jwt_algorithm == RS256 or not settings.jwt_hs_fallback:
+        return True
+    return _local_public_pem() is not None
+
+
+def verification_status() -> str:
+    """验签能力状态：``"ok"``（可用）或 ``"unavailable"``（RS256 需要公钥但拿不到）。
+
+    readiness 据此**如实上报**（§2 第 2 条）。本函数**绝不抛**——它被探针调用，密钥配置异常
+    不能让探针 500（那会把「配置错」伪装成「探针坏」）。
+    """
+    try:
+        if public_key() is not None:
+            return "ok"
+        return "unavailable" if rsa_expected() else "ok"
+    except Exception:
+        logger.warning("验签状态判定失败", exc_info=True)
+        return "unavailable"
+
+
+async def refresh_public_key_from_jwks() -> bool:
+    """从 AUTH ``/.well-known/jwks.json`` 拉公钥并缓存；返回是否**现在**有公钥可用。
+
+    三种返回 True 的情形：①本地已有公钥（不发请求，本地优先）；②拉取成功并解析出 RSA 公钥。
+    失败（未配 ``auth_http_url``／网络／非 200／无 RSA 成员／解析异常）一律返回 False 并记日志，
+    **不抛**——调用方（后台刷新 task / readiness）按「验签暂不可用」处理。
+    """
+    global _fetched_public_pem
+    try:
+        if _local_public_pem() is not None:
+            return True
+        base = (settings.auth_http_url or "").strip().rstrip("/")
+        if not base:
+            return False
+        # JWKS 挂在站点根（不经 api_prefix，见 auth/router_jwks.py），故这里不拼 api_prefix。
+        url = f"{base}/.well-known/jwks.json"
+        async with _build_jwks_client() as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            logger.warning("JWKS 拉取失败 http=%s", resp.status_code)
+            return False
+        body = resp.json()
+        keys = body.get("keys") if isinstance(body, dict) else None
+        for jwk in keys or []:
+            if isinstance(jwk, dict) and jwk.get("kty") == "RSA":
+                _fetched_public_pem = _jwk_to_pem(jwk)
+                return True
+        logger.warning("JWKS 未含 RSA 公钥（keys=%d）", len(keys or []))
+        return False
+    except Exception:
+        logger.warning("JWKS 拉取异常", exc_info=True)
+        return False
+
+
+async def _refresh_loop() -> None:
+    """周期性尝试拉取公钥（本地有钥时 ``refresh_public_key_from_jwks`` 立即返回，近乎空转）。"""
+    interval = max(1, settings.jwks_refresh_s)
+    while True:
+        await refresh_public_key_from_jwks()
+        await asyncio.sleep(interval)
+
+
+async def start_public_key_refresh() -> None:
+    """启动后台刷新 task（幂等）。app 侧经 ``auth.seams.start_verify_key_refresh`` 调用。
+
+    与 lifespan 绑定（§2 第 1 条「启动不阻塞」）：本函数只 create_task，不 await 任何网络调用。
+    """
+    global _refresh_task
+    if _refresh_task is not None and not _refresh_task.done():
+        return
+    _refresh_task = asyncio.create_task(_refresh_loop())
+
+
+async def stop_public_key_refresh() -> None:
+    """收尾刷新 task（取消防抖：task 在 sleep 中即被取消）。"""
+    global _refresh_task
+    task, _refresh_task = _refresh_task, None
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # 非取消类异常不得冒泡打断 lifespan 收尾（同 app.main 的收尾纪律）
+        logger.warning("公钥刷新 task 收尾异常", exc_info=True)

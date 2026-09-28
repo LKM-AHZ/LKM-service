@@ -45,7 +45,11 @@ from app.db.session import (
 from app.modules import registry
 from app.ws.manager import manager
 from auth.deps import CurrentUser, get_optional_user
-from auth.seams import cleanup_expired_challenges
+from auth.seams import (
+    cleanup_expired_challenges,
+    start_verify_key_refresh,
+    stop_verify_key_refresh,
+)
 
 
 @dataclass
@@ -116,6 +120,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # L1 本地缓存失效广播订阅（Redis 未配置则空转退避，不阻塞启动）
     await user_cache_events.start()
 
+    # 验签公钥（§2 第 2 条）：本地没有时从 AUTH `/jwks` 拉取并周期刷新。只起后台 task，
+    # 不 await 网络（启动不阻塞）；拿不到就由 readiness 如实报「验签不可用」，进程照活。
+    await start_verify_key_refresh()
+
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
 
     # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
@@ -146,6 +154,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     await _shutdown_step("ws_manager", manager.close)
     # 收尾 L1 失效广播订阅 task（须在 close_redis 前，避免关连接竞态）
     await _shutdown_step("user_cache_events", user_cache_events.stop)
+    # 收尾验签公钥刷新 task（唯一在途的出站请求在此被取消）
+    await _shutdown_step("verify_key_refresh", stop_verify_key_refresh)
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
     await _shutdown_step("messaging", messaging.shutdown)
@@ -276,7 +286,9 @@ def create_app() -> FastAPI:
 
 async def _on_err(_request: Request, exc: Exception) -> JSONResponse:
     _, errcode, detail = map_err(exc)
-    return resp_json(errcode, detail=detail)
+    # BizError 可携带响应头（如 git smart-HTTP 401 的 WWW-Authenticate 挑战头）；其它异常
+    # 类型没有该属性 → None，resp_json 自会按状态码补 Retry-After。
+    return resp_json(errcode, detail=detail, headers=getattr(exc, "headers", None))
 
 
 app = create_app()

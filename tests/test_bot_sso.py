@@ -10,8 +10,11 @@
   seam 故障（内部读缝不可用）→ 503，绝不返回空票让前端以为「已免登」。
 """
 
+import contextlib
 import importlib
 import uuid
+from collections.abc import Iterator
+from typing import Any
 
 import jwt
 import pytest
@@ -37,15 +40,8 @@ from tests.conftest import DB, Client, auth_user_uid
 
 _INTERNAL_PATH = "/api/v1/auth/internal/bot-ticket"
 _ADMIN_PATH = "/api/v1/admin/bot/sso-ticket"
-
-#: 协议值的环境变量名（与 LKM-bot 消费侧、compose 的 x-bot-sso-env 锚点同名）。
-_SSO_ENV_VARS = (
-    "LKM_BOT_SSO_AUDIENCE",
-    "LKM_BOT_SSO_TYPE",
-    "LKM_BOT_SSO_ISSUER",
-    "LKM_BOT_SSO_ACCOUNT_LEVEL",
-    "LKM_BOT_SSO_TTL_SECONDS",
-)
+# 协议值的 env 名映射（LKM_BOT_SSO_* ↔ Settings 字段）由
+# ``tests/test_env_single_source.py::test_bot_sso_env_names_map_to_settings`` 钉住。
 
 
 def _internal_headers(token: str) -> dict[str, str]:
@@ -116,19 +112,45 @@ def test_protocol_defaults_are_pinned() -> None:
     assert BOT_SSO_TTL_SECONDS == 60
 
 
-def test_protocol_values_follow_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """五个协议值都可由同名环境变量覆盖，且签发票据随之变化（部署层注入的就是这组名字）。"""
-    overrides = {
-        "LKM_BOT_SSO_AUDIENCE": "lkm:bot-x",
-        "LKM_BOT_SSO_TYPE": "bot_sso_x",
-        "LKM_BOT_SSO_ISSUER": "auth-x",
-        "LKM_BOT_SSO_ACCOUNT_LEVEL": "superadmin",
-        "LKM_BOT_SSO_TTL_SECONDS": "30",
-    }
-    for name, value in overrides.items():
-        monkeypatch.setenv(name, value)
-    reloaded = importlib.reload(bot_sso)
+@contextlib.contextmanager
+def _sso_settings(**overrides: object) -> Iterator[Any]:
+    """临时改协议相关 Settings 字段，退出时**先复位再 reload 模块**。
+
+    顺序要紧：``auth.bot_sso`` 的常量是**模块级**、在 import 时从 Settings 取值，故若在
+    Settings 还带着改值时就 reload，模块会长期停在改后的值（monkeypatch 事后复原 Settings
+    也救不回来）——按文件内测试共享同一进程，后续用例就会看到脏常量。
+    """
+    fields = (
+        "bot_sso_audience",
+        "bot_sso_type",
+        "bot_sso_issuer",
+        "bot_sso_account_level",
+        "bot_sso_ttl_seconds",
+    )
+    originals = {f: getattr(settings, f) for f in fields}
     try:
+        for field, value in overrides.items():
+            setattr(settings, field, value)
+        yield importlib.reload(bot_sso)
+    finally:
+        for field, value in originals.items():
+            setattr(settings, field, value)
+        importlib.reload(bot_sso)
+
+
+def test_protocol_values_follow_settings() -> None:
+    """五个协议值都跟随 ``Settings``（部署层注入同名 env，§6.5.1 收口后才到达这里）。
+
+    ``Settings`` 的 env 名映射由 ``tests/test_env_single_source.py`` 单独钉住；本测试只验证
+    「常量 = Settings 值，且签发票据随之变化」这条链路。
+    """
+    with _sso_settings(
+        bot_sso_audience="lkm:bot-x",
+        bot_sso_type="bot_sso_x",
+        bot_sso_issuer="auth-x",
+        bot_sso_account_level="superadmin",
+        bot_sso_ttl_seconds=30,
+    ) as reloaded:
         assert reloaded.BOT_SSO_AUD == "lkm:bot-x"
         assert reloaded.BOT_SSO_TYPE == "bot_sso_x"
         assert reloaded.BOT_SSO_ISSUER == "auth-x"
@@ -146,45 +168,32 @@ def test_protocol_values_follow_env_override(monkeypatch: pytest.MonkeyPatch) ->
         assert payload["iss"] == "auth-x"
         assert payload["type"] == "bot_sso_x"
         assert payload["account_level"] == "superadmin"
-    finally:
-        for name in _SSO_ENV_VARS:
-            monkeypatch.delenv(name, raising=False)
-        importlib.reload(bot_sso)
 
 
-def test_ttl_env_invalid_falls_back_to_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """TTL 配了非数字/非正值 → 回落默认 60s（宁可默认，也不签出荒谬有效期）。"""
-    for raw in ("abc", "0", "-5"):
-        monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", raw)
-        try:
-            assert importlib.reload(bot_sso).BOT_SSO_TTL_SECONDS == 60, raw
-        finally:
-            monkeypatch.delenv("LKM_BOT_SSO_TTL_SECONDS", raising=False)
-            importlib.reload(bot_sso)
+def test_ttl_non_positive_falls_back_to_default() -> None:
+    """TTL 配了非正值 → 回落默认 60s（宁可默认，也不签出荒谬有效期）。
+
+    非数字的 env 现在由 ``Settings`` 在装配期直接拒绝（fail-fast）；能走到模块里做钳制的
+    只剩数值边界，故这里只驱动数值。
+    """
+    for raw in (0, -5):
+        with _sso_settings(bot_sso_ttl_seconds=raw) as reloaded:
+            assert reloaded.BOT_SSO_TTL_SECONDS == 60, raw
 
 
-def test_ttl_env_is_clamped_to_upper_bound(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_ttl_is_clamped_to_upper_bound() -> None:
     """TTL 配得再大也被上界钳住。
 
     票据在 iframe URL query 里明文传递、会进浏览器历史与代理日志，「配错了也不会长期可重放」
-    是硬约束——只钳下界挡不住 ``LKM_BOT_SSO_TTL_SECONDS=86400`` 这种误配。
+    是硬约束——只钳下界挡不住 ``bot_sso_ttl_seconds = 86400`` 这种误配。
     """
     from auth.bot_sso import _TTL_MAX_SECONDS
 
-    monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", str(_TTL_MAX_SECONDS + 86400))
-    try:
-        reloaded = importlib.reload(bot_sso)
+    with _sso_settings(bot_sso_ttl_seconds=_TTL_MAX_SECONDS + 86400) as reloaded:
         assert reloaded.BOT_SSO_TTL_SECONDS == _TTL_MAX_SECONDS
         # 上界内的值原样生效，不被误钳
-        monkeypatch.setenv("LKM_BOT_SSO_TTL_SECONDS", str(_TTL_MAX_SECONDS))
+        settings.bot_sso_ttl_seconds = _TTL_MAX_SECONDS
         assert importlib.reload(bot_sso).BOT_SSO_TTL_SECONDS == _TTL_MAX_SECONDS
-    finally:
-        monkeypatch.delenv("LKM_BOT_SSO_TTL_SECONDS", raising=False)
-        importlib.reload(bot_sso)
 
 
 async def test_mint_ticket_rejects_non_admin() -> None:

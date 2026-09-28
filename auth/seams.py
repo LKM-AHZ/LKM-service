@@ -26,6 +26,18 @@ from auth.db.session import get_auth_session, new_auth_session
 from auth.deps import _resolve_current_user as resolve_current_user
 from auth.deps import _resolve_via_seam as resolve_via_seam
 from auth.deps import get_email_provider, get_sms_provider, seam_enabled
+from auth.jwt_keys import (
+    refresh_public_key_from_jwks as refresh_verify_key,
+)
+from auth.jwt_keys import (
+    start_public_key_refresh as start_verify_key_refresh,
+)
+from auth.jwt_keys import (
+    stop_public_key_refresh as stop_verify_key_refresh,
+)
+from auth.jwt_keys import (
+    verification_status as verify_key_status,
+)
 from auth.security import _totp_code as totp_code
 from auth.security import _totp_now as totp_now
 from auth.security import hashpwd, verifypwd
@@ -69,14 +81,18 @@ __all__ = [
     "open_session_pair",
     "reconcile_user_dim_incremental",
     "reconcile_user_dim_periodic",
+    "refresh_verify_key",
     "resolve_current_user",
     "resolve_via_seam",
     "seam_enabled",
     "setup_2fa_begin",
     "setup_2fa_complete",
+    "start_verify_key_refresh",
+    "stop_verify_key_refresh",
     "sync_dim_for_ids",
     "totp_code",
     "totp_now",
+    "verify_key_status",
     "verify_password_via_seam",
     "verifypwd",
 ]

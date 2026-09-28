@@ -134,6 +134,15 @@ graphql_query_rejected_total = Counter(
     "GraphQL 查询被防护拒绝次数（reason=depth|complexity|timeout；M6.4）",
     ("reason",),
 )
+# GraphQL 文档的**声明深度分布**（蓝图 §2 第 5 条「执行时间 / 深度分布 / 被拒查询数」三件套
+# 之一，此前只有前两者）。深度值直接取自 ``QueryDepthLimiter`` 的校验回调，故与
+# ``LKM_GRAPHQL_MAX_DEPTH`` **同一口径**（strawberry 侧计数：叶字段计 0、非叶字段自 1 起，
+# introspection 字段不计）——分布右移即「客户端查询正在变深」的先行信号，无需等被拒才可见。
+graphql_query_depth = Histogram(
+    "graphql_query_depth",
+    "GraphQL 单次操作的声明深度分布（与 graphql_max_depth 同口径；§2 第 5 条）",
+    buckets=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16),
+)
 
 
 # ---- 连接池水位（蓝图 §3.3 第 3 条，标"关键"）----

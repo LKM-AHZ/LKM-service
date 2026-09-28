@@ -10,10 +10,10 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.err import BizError, err_info
 from app.modules.content.blog import backfill
 from app.modules.content.blog.git_http import (
     _decode_basic_auth,
@@ -33,6 +33,15 @@ from auth.user_http import UserHttpUnavailable
 async def db(fused_db_session: AsyncSession) -> AsyncSession:
     """git-http owner 判定需 auth(user)+biz(blog/series) 单 schema（融合）。"""
     return fused_db_session
+
+
+def _status(exc: BizError) -> int:
+    """``BizError`` → 它映射到的 HTTP 状态码。
+
+    git_http 已从裸 ``HTTPException`` 收口到统一信封（蓝图 §6.1），故断言改读错误码映射；
+    状态码本身与改动前逐字相同（401/403/404/504/500）。
+    """
+    return err_info(exc.errcode)[0]
 
 
 class TestDecodeBasicAuth:
@@ -229,38 +238,38 @@ class TestRequireOwnerForPush:
         repo = "blog-anon"
         owner, _ = _users
         await self._series(db, owner.id, repo)
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(db, repo, _push_auth_request({}))
-        assert ei.value.status_code == 401
+        assert _status(ei.value) == 401
 
     async def should_reject_wrong_password(self, db, _users):
         repo = "blog-badpw"
         owner, _ = _users
         await self._series(db, owner.id, repo)
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
                 db, repo, _push_auth_request(_auth_header("owner", "wrong-pass"))
             )
-        assert ei.value.status_code == 401
+        assert _status(ei.value) == 401
 
     async def should_reject_non_owner(self, db, _users):
         repo = "blog-nonowner"
         owner, _ = _users
         await self._series(db, owner.id, repo)
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
                 db, repo, _push_auth_request(_auth_header("other", "pw123456"))
             )
-        assert ei.value.status_code == 403
+        assert _status(ei.value) == 403
 
     async def should_reject_orphan_repo_even_for_owner(self, db, _users):
         """孤儿仓库(无 blog_series)无属主可言，属主身份也不能写入。"""
         del _users
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
                 db, "blog-orphan", _push_auth_request(_auth_header("other", "pw123456"))
             )
-        assert ei.value.status_code in (401, 403)
+        assert _status(ei.value) in (401, 403)
 
     async def should_allow_owner(self, db, _users):
         repo = "blog-ok"
@@ -315,11 +324,11 @@ class TestRequireOwnerForPushViaSeam:
         db.add(other)
         await db.flush()
         await self._series(db, _users.id, "blog-seam-other")
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
                 db, "blog-seam-other", _push_auth_request(_auth_header("seamother", "pw123456"))
             )
-        assert ei.value.status_code == 403
+        assert _status(ei.value) == 403
 
     async def should_fail_closed_when_seam_unavailable(
         self, db, _users, monkeypatch: pytest.MonkeyPatch
@@ -331,13 +340,13 @@ class TestRequireOwnerForPushViaSeam:
             raise UserHttpUnavailable("auth realm unreachable")
 
         monkeypatch.setattr("auth.user_http.verify_password_via_seam", _unreachable)
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
                 db,
                 "blog-seam-down",
                 _push_auth_request(_auth_header("seamowner", "pw123456")),
             )
-        assert ei.value.status_code == 401
+        assert _status(ei.value) == 401
 
 
 class TestMaybeBackfillAfterPush:

@@ -366,6 +366,8 @@ def test_counts_cron_matches_mode() -> None:
     ensure_tasks_registered()
     job_ids = {j["id"] for j in cron_jobs()}
     assert "reconcile_content_counts" in job_ids
+    # 日级全量拍（蓝图 §5.6 第 5 条）与增量拍并列注册，与写穿/回退模式无关
+    assert "reconcile_content_counts_full" in job_ids
     assert ("flush_content_counters" in job_ids) is (
         not settings.counters_write_through
     )
@@ -373,3 +375,4 @@ def test_counts_cron_matches_mode() -> None:
     handlers = handlers_for(SUB_JOBS.name)
     assert "flush_content_counters" in handlers
     assert "reconcile_content_counts" in handlers
+    assert "reconcile_content_counts_full" in handlers

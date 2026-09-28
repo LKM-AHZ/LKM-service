@@ -27,10 +27,11 @@ import secrets
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.err import BizError, CommonErr
 from app.core.secrets import reveal
 from auth import snapshot as snap_mod
 from auth.db.session import get_auth_session
@@ -41,12 +42,17 @@ router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 def _require_internal_token(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> None:
-    """内部共享令牌鉴权：未配置/缺/错 都 401（fail-closed，此缝不成为公网面）。"""
+    """内部共享令牌鉴权：未配置/缺/错 都 401（fail-closed，此缝不成为公网面）。
+
+    抛 ``BizError`` 而非裸 ``HTTPException``：蓝图 §6.1 要求所有端点经同一全局 handler
+    收敛到统一信封（状态码不变；内部调用方只按状态码判成败，不解析 body，见
+    ``auth/user_http.py`` 的 ``UserHttpUnavailable`` 契约）。
+    """
     token = reveal(settings.auth_http_token)
     if not token:
-        raise HTTPException(status_code=401, detail="internal read not configured")
+        raise BizError(CommonErr.UNAUTHORIZED, "internal read not configured")
     if not authorization:
-        raise HTTPException(status_code=401, detail="missing Authorization")
+        raise BizError(CommonErr.UNAUTHORIZED, "missing Authorization")
     scheme, _, value = authorization.partition(" ")
     # 比字节而非 str：Authorization 头由 uvicorn 按 latin-1 解码，攻击者带 >=0x80 的字节
     # 会让 str 版 compare_digest 抛 TypeError（"non-ASCII characters is not supported"）
@@ -54,7 +60,7 @@ def _require_internal_token(
     if scheme.lower() != "bearer" or not secrets.compare_digest(
         value.encode("utf-8"), token.encode("utf-8")
     ):
-        raise HTTPException(status_code=401, detail="bad internal token")
+        raise BizError(CommonErr.UNAUTHORIZED, "bad internal token")
 
 
 @router.get("/users/{user_id}/snapshot")
@@ -83,9 +89,9 @@ def _parse_ids(ids: str) -> list[uuid.UUID]:
     # 开销原本只受 ASGI 请求行长度限制。本端点文档承诺 fail-closed，故显式给出上界，
     # 不依赖前置服务器/代理的限额。每个 id 最长 36 字符（UUID 文本）+ 1 个分隔符。
     if len(ids) > (36 + 1) * snap_mod.BATCH_IDS_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=f"too many ids: raw length {len(ids)} exceeds limit",
+        raise BizError(
+            CommonErr.BAD_REQUEST,
+            f"too many ids: raw length {len(ids)} exceeds limit",
         )
     raw = [p.strip() for p in ids.split(",")]
     parsed: list[uuid.UUID] = []
@@ -96,16 +102,16 @@ def _parse_ids(ids: str) -> list[uuid.UUID]:
         try:
             uid = uuid.UUID(p)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"bad user id: {p!r}") from None
+            raise BizError(CommonErr.BAD_REQUEST, f"bad user id: {p!r}") from None
         if uid not in seen:
             seen.add(uid)
             parsed.append(uid)
     if not parsed:
-        raise HTTPException(status_code=400, detail="ids is empty")
+        raise BizError(CommonErr.BAD_REQUEST, "ids is empty")
     if len(parsed) > snap_mod.BATCH_IDS_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=f"too many ids: {len(parsed)} > {snap_mod.BATCH_IDS_MAX}",
+        raise BizError(
+            CommonErr.BAD_REQUEST,
+            f"too many ids: {len(parsed)} > {snap_mod.BATCH_IDS_MAX}",
         )
     return parsed
 

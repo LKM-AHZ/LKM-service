@@ -19,11 +19,12 @@ import logging
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.err import BizError, CommonErr
 from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
@@ -99,18 +100,18 @@ async def internal_grant(
         # incubation 只按 user_id 升权：带了 unlock_* 说明调用方拼错了 payload，
         # 静默丢弃会让它拿到「成功」的 changed 却什么都没升
         if body.unlock_level is not None or body.unlock_role is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="unlock_level/unlock_role not allowed for incubation",
+            raise BizError(
+                CommonErr.INVALID_INPUT,
+                "unlock_level/unlock_role not allowed for incubation",
             )
         changed = await grant_incubation(db, body.user_id)
     else:  # kind == "exam_unlock"
         # 两个目标都没给 → grant_exam_unlock 只会返回 0，与「本来就已经解锁」无法区分；
         # 业务侧 _apply_unlock 已保证不会这么发，故这里显式拒绝而不是静默 no-op
         if body.unlock_level is None and body.unlock_role is None:
-            raise HTTPException(
-                status_code=422,
-                detail="exam_unlock requires unlock_level and/or unlock_role",
+            raise BizError(
+                CommonErr.INVALID_INPUT,
+                "exam_unlock requires unlock_level and/or unlock_role",
             )
         changed = await grant_exam_unlock(
             db,

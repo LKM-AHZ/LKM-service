@@ -21,7 +21,8 @@ bot 用**公钥**验签后自建面板会话。
 协议常量（audience/type/issuer/ttl/account_level）是**签发侧唯一副本**，消费侧（LKM-bot 的
 ``astrbot/lkm/sso.py``）同名同默认值，两侧用注释互指。跨部署单元无法共享 import，故真正的
 单一来源落在**部署层**：``.env``/``docker-compose.yml`` 的 ``LKM_BOT_SSO_*`` 只写一次默认值，
-经 YAML 锚点同时注入 auth 与 lkmbot 两个服务（两侧读同名变量）。
+经 YAML 锚点同时注入 auth 与 lkmbot 两个服务（两侧读同名变量）。**进程内**这些值的唯一读点
+是 ``Settings``（§6.5.1「不散落 os.getenv」）——env 名与下发方式不变，本模块只做模块级别名。
 
 本模块是 auth 包内部件；app 侧**不得**直接 import，只能经 ``auth.seams.mint_bot_sso_ticket``。
 """
@@ -29,65 +30,48 @@ bot 用**公钥**验签后自建面板会话。
 from __future__ import annotations
 
 import datetime
-import os
 import uuid
 
+from app.core.config import settings
 from auth import jwt_keys
-
-
-def _protocol_value(env_name: str, default: str) -> str:
-    """协议值：同名环境变量可覆盖（未配置/空白 → 代码默认值）。
-
-    模块级求值 = 进程启动时定值（与 settings 同口径）；两侧默认值必须逐字相同，否则票据
-    会被对面拒收。改这里的默认值，必须同步 LKM-bot ``astrbot/lkm/sso.py`` 的同名默认值
-    与 ``.env.example`` 的说明。
-    """
-    return os.environ.get(env_name, "").strip() or default
-
 
 #: bot 面板 SSO 专属 audience（与 lkm:admin / 前台会话隔离）。部署层暴露为
 #: LKM_BOT_SSO_AUDIENCE（见 x-bot-sso-env）：这是票据的**隔离边界**，多面板部署可能要区分。
-BOT_SSO_AUD = _protocol_value("LKM_BOT_SSO_AUDIENCE", "lkm:bot")
+BOT_SSO_AUD = settings.bot_sso_audience
 #: 票据类型，bot 侧显式校验。部署层暴露为 LKM_BOT_SSO_TYPE——签发/消费两侧是唯一配对，
 #: 改它必须两侧同值，否则票据被对面拒收（type 不符即拒）。
-BOT_SSO_TYPE = _protocol_value("LKM_BOT_SSO_TYPE", "bot_sso")
+BOT_SSO_TYPE = settings.bot_sso_type
 #: 签发方标识：bot 侧验签时校验 ``iss``（本次补齐的漏洞）。部署层暴露为 LKM_BOT_SSO_ISSUER
 #: ——签发方身份随环境而变的可能性最大（多租户/多套 auth），且必须两侧同值。
-BOT_SSO_ISSUER = _protocol_value("LKM_BOT_SSO_ISSUER", "lkm-auth")
+BOT_SSO_ISSUER = settings.bot_sso_issuer
 #: 票据只换**管理员**面板会话，故 account_level 是协议的一部分（bot 侧同样校验）。
 #: 部署层暴露为 LKM_BOT_SSO_ACCOUNT_LEVEL——但注意**这个值就是铸票门禁本身**：
 #: :func:`mint_ticket` 与 ``router_bot_sso`` 都拿它做相等比较，调低它等于把门禁降级
 #: （设成普通用户等级，普通用户即可持票换管理员面板会话）。两侧必须同值。
-BOT_SSO_ACCOUNT_LEVEL = _protocol_value("LKM_BOT_SSO_ACCOUNT_LEVEL", "admin")
+BOT_SSO_ACCOUNT_LEVEL = settings.bot_sso_account_level
 
 
 #: TTL 上界（秒）。票据在 iframe URL query 里明文传递，会进浏览器历史/代理日志，
 #: 故上界的意义是「即使配错也不会长期可重放」——60s 默认够一次重定向往返，5 分钟已很宽裕。
 _TTL_MAX_SECONDS = 300
+#: TTL 下界/兜底：宁可 60s，也不让签发出一个荒谬的有效期。
+_TTL_DEFAULT_SECONDS = 60
 
 
-def _ttl_seconds(env_name: str, default: int) -> int:
-    """TTL 秒数：环境变量可覆盖，非法值回落默认，超上界则钳到上界。
+def _clamp_ttl(value: int) -> int:
+    """TTL 钳制：非正 → 兜底默认；超上界 → 钳到上界（见 :data:`_TTL_MAX_SECONDS`）。
 
-    下界同样钳制（非正值/非数字 → 默认）：宁可 60s，也不让签发出一个荒谬的有效期；
-    上界钳制见 :data:`_TTL_MAX_SECONDS`。
+    非数字/空白由 ``Settings`` 在装配期拦下（fail-fast），故这里只需处理数值边界。
     """
-    raw = os.environ.get(env_name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return default
     if value <= 0:
-        return default
+        return _TTL_DEFAULT_SECONDS
     return min(value, _TTL_MAX_SECONDS)
 
 
 #: 票据有效期（秒）。票据经 iframe URL query 传递，必须短到「来不及被日志/历史二次利用」，
 #: 又要容得下浏览器一次重定向的往返。部署层暴露为 LKM_BOT_SSO_TTL_SECONDS——仅签发侧消费
 #: （消费侧由 PyJWT 按 ``exp`` 自行判定），故调整不影响对面；配大了也会被上界钳住。
-BOT_SSO_TTL_SECONDS = _ttl_seconds("LKM_BOT_SSO_TTL_SECONDS", 60)
+BOT_SSO_TTL_SECONDS = _clamp_ttl(settings.bot_sso_ttl_seconds)
 
 
 def mint_ticket(*, sub: str, account_level: str) -> tuple[str, int]:

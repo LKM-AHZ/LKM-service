@@ -7,8 +7,8 @@
 ``create_all`` 通道的 ``_sync_additive_schema``（§8 #38）只兜「可空或带 server_default」
 的加列——NOT NULL 且无默认的缺列会被跳过并告警，既有部署上就会 UndefinedColumn。
 
-Revision ID: a1b2c3d4e5f6
-Revises: 72a6bdf65538
+Revision ID: 0002_optimistic_lock_version
+Revises: 0001_uuid_baseline
 Create Date: 2026-09-27 00:00:00.000000
 
 """
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = 'a1b2c3d4e5f6'
-down_revision: str | Sequence[str] | None = '72a6bdf65538'
+revision: str = '0002_optimistic_lock_version'
+down_revision: str | Sequence[str] | None = '0001_uuid_baseline'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

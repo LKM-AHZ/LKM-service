@@ -94,6 +94,20 @@ async def test_block_then_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await is_jti_blocked("j2") is False  # 只废被拉黑的那一枚
 
 
+async def test_block_ttl_is_jittered_downward_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """防雪崩（蓝图 §5.6「所有带 TTL 的缓存对象」）：黑名单 TTL 经随机扰动。
+
+    取 **lower_only**：TTL 同时是「不得久于 token 剩余寿命」的上界，向上放大就破坏该保证。
+    故断言实际 TTL 落在 ``[0.7×, 1.0×]`` 区间内（jitter 幅度 30%）。
+    """
+    fake = _enable_fake_redis(monkeypatch)
+    assert await block_jti("jitter1", 100) is True
+    ttl = await fake.ttl("jti:block:jitter1")
+    assert 70 <= ttl <= 100
+
+
 async def test_fail_open_when_redis_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,6 +1,6 @@
 """uuid baseline
 
-Revision ID: 72a6bdf65538
+Revision ID: 0001_uuid_baseline
 Revises: 
 Create Date: 2026-09-18 23:40:21.559710
 
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 # 在全新库上以 ImportError 直接打断 alembic upgrade head，且只能靠改历史 revision 才能修。
 
 # revision identifiers, used by Alembic.
-revision: str = '72a6bdf65538'
+revision: str = '0001_uuid_baseline'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

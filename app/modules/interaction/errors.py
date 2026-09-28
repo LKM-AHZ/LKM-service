@@ -23,6 +23,9 @@ class InteractionErr(ErrCode):
 class FollowErr(ErrCode):
     CANNOT_FOLLOW_SELF = NS_FOLLOW.err(1)
     TARGET_NOT_FOUND = NS_FOLLOW.err(2)
+    # 重复关注（蓝图 §6.1）：uq_user_follows_pair / uq_board_follows_pair 撞键时由
+    # app/db/session.py 映射到本码（并发双击关注、或服务层「先查后插」的竞态窗口）。
+    DUPLICATE_FOLLOW = NS_FOLLOW.err(3)
 
 
 register(
@@ -31,9 +34,13 @@ register(
         InteractionErr.DUPLICATE_LIKE: (409, "Duplicate like"),
         FollowErr.CANNOT_FOLLOW_SELF: (400, "不能关注自己"),
         FollowErr.TARGET_NOT_FOUND: (404, "关注目标不存在"),
+        FollowErr.DUPLICATE_FOLLOW: (409, "已关注该目标"),
     }
 )
 
 # 唯一约束语义化（蓝图 §6.1）：content_likes 的复合唯一键/主键撞键时由
 # app/db/session.py 映射到本码。片段取 ``like``（覆盖 content_likes_pkey 等隐式命名）。
 register_unique_constraint("like", InteractionErr.DUPLICATE_LIKE)
+# 关注关系两表（用户关注 / 板块关注）各一条复合唯一键，撞键即「已关注」。
+register_unique_constraint("user_follows", FollowErr.DUPLICATE_FOLLOW)
+register_unique_constraint("board_follows", FollowErr.DUPLICATE_FOLLOW)

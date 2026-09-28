@@ -474,7 +474,11 @@ class TestBatchEndpoint:
         )
         resp = await self._get(client, three)
         assert resp.status_code == 400
-        assert "too many ids" in resp.json()["detail"]
+        # 内部缝已收口到统一信封（蓝图 §6.1：不再走 Starlette 默认的 {"detail": ...}），
+        # 故文案落在 message；400 的语义与文案一字不变。
+        body = resp.json()
+        assert "too many ids" in body["message"]
+        assert body["code"] != 0
 
     async def test_duplicate_ids_deduped(
         self, client: Client, db: DB, monkeypatch: pytest.MonkeyPatch

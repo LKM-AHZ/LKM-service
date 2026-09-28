@@ -12,6 +12,11 @@
 键 ``jti:block:{jti}``，TTL = token 剩余有效期；``tv:min:{user_id}`` TTL = access 上限
 （15min，条目因此自洁，且 DB 提交前的乐观写入至多误拒到 TTL 到期）。auth 进程与业务进程连
 同一个 L2（同一 ``settings.redis_url``），键空间共享、写一侧两侧可见。
+
+**TTL 随机扰动**（蓝图 §5.6「防雪崩」标"必须"，要求覆盖**所有**带 TTL 的缓存对象）：两处
+TTL 都经 ``cache.jitter_ttl(lower_only=True)`` 摊开，避免整批登出/升权写入的条目同刻集体
+过期。取 **lower_only** 是因为这两个 TTL 同时是**上界**语义——``jti:block`` 不得久于 token
+剩余寿命、``tv:min`` 的乐观误拒窗口不得超出 access 上限（见上段）；向上放大就破坏该保证。
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import time
 import uuid
 from typing import Any
 
+from app.core.cache import jitter_ttl
 from app.core.redis import get_redis
 
 logger = logging.getLogger("lkm.auth.token_revocation")
@@ -64,7 +70,8 @@ async def block_jti(jti: str | None, ttl_seconds: int) -> bool:
             return False
         # 用 set(..., ex=) 而非 setex：后者在 redis-py 新版已弃用，本仓 filterwarnings=error
         # 下会直接抛 DeprecationWarning（被下面的兜底吞掉 → 黑名单静默写不进去）。
-        await client.set(_key(jti), "1", ex=ttl)
+        # TTL 经防雪崩抖动（lower_only：不得久于 token 剩余寿命，见模块 docstring）。
+        await client.set(_key(jti), "1", ex=jitter_ttl(ttl, lower_only=True))
         return True
     except Exception:
         logger.warning("jti 黑名单写入失败 jti=%s", jti, exc_info=True)
@@ -111,7 +118,12 @@ async def set_token_version(user_id: uuid.UUID | str, version: int) -> bool:
         client = await get_redis()
         if client is None:
             return False
-        await client.set(_tv_key(user_id), str(int(version)), ex=_MAX_TTL_S)
+        await client.set(
+            _tv_key(user_id),
+            str(int(version)),
+            # 同 jti 黑名单：TTL 是「乐观误拒窗口」的上界，只向下抖动（防雪崩，见 docstring）。
+            ex=jitter_ttl(_MAX_TTL_S, lower_only=True),
+        )
         return True
     except Exception:
         logger.warning(

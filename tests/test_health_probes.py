@@ -61,12 +61,18 @@ def _stub_probes(
 async def test_liveness_ok_without_external_deps(
     probe_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """零外部依赖：四个探子全改为必炸，liveness 仍 200。"""
+    """零外部依赖：各硬依赖探子全改为必炸，liveness 仍 200。"""
 
     async def _boom() -> DependencyStatus:
         raise AssertionError("liveness 不应触碰任何外部依赖")
 
-    for name in ("_probe_db", "_probe_redis", "_probe_pulsar", "_probe_auth"):
+    for name in (
+        "_probe_db",
+        "_probe_redis",
+        "_probe_pulsar",
+        "_probe_auth",
+        "_probe_verify_key",
+    ):
         monkeypatch.setattr(health_mod, name, _boom)
     resp = await probe_client.get("/liveness")
     assert resp.status_code == 200

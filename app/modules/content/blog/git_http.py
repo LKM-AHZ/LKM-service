@@ -7,12 +7,12 @@ import os
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.err import BizError
+from app.core.err import BizError, CommonErr
 from app.db.session import get_read_session, new_session
 from app.modules.content.blog import backfill, git_svc
 from app.modules.content.blog.models import BlogSeries
@@ -136,7 +136,10 @@ async def _require_owner_for_push(
 ) -> str:
     """写路径(push)授权：校验 Basic Auth 身份，且该用户须为 repo 对应 blog_series 的属主。
 
-    任一环节失败抛 HTTPException(401/403)，git http-backend 不会被调用，refs 不会被更新。
+    任一环节失败抛 ``BizError``(401/403，经全局 handler 统一信封)，git http-backend 不会被
+    调用，refs 不会被更新。**HTTP 状态码与挑战头一字不变**——git 只认状态码与
+    ``WWW-Authenticate``、不解析 body，故收进统一信封对协议无影响（蓝图 §6.1 要求所有
+    端点经同一 handler 收敛，故这里不再用裸 ``HTTPException`` 走 Starlette 默认 handler）。
     - 无有效身份 → 401（git push 将其视为认证失败并提示）。
     - 仓库无归属（孤儿）或无属主匹配 → 403，防止越权写入他人/无人认领的仓库。
 
@@ -145,21 +148,22 @@ async def _require_owner_for_push(
     auth = request.headers.get("Authorization", "")
     creds = _decode_basic_auth(auth)
     if creds is None:
-        # 缺失或格式非法的 Basic 凭据都算未认证
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
+        # 缺失或格式非法的 Basic 凭据都算未认证。挑战头是**协议必需**：少了它 git 不会
+        # 提示输入凭据（BizError.headers 会原样下发，见 core.err）。
+        raise BizError(
+            CommonErr.UNAUTHORIZED,
+            "Authentication required",
             headers={"WWW-Authenticate": 'Basic realm="lkm-git"'},
         )
     username, password = creds
     identity = await _authenticate_credentials(db, username, password)
     if identity is None:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise BizError(CommonErr.UNAUTHORIZED, "Invalid credentials")
     user_id, authed_username = identity
 
     series = await _resolve_series(db, repo_name)
     if series is None or series.owner_id != user_id:
-        raise HTTPException(status_code=403, detail="Not repository owner")
+        raise BizError(CommonErr.FORBIDDEN, "Not repository owner")
     return authed_username
 
 
@@ -235,7 +239,7 @@ async def git_http_backend(
     repo_path = os.path.join(root, f"{repo_name}.git")
 
     if not await asyncio.to_thread(os.path.isdir, repo_path):
-        raise HTTPException(status_code=404, detail="Repository not found")
+        raise BizError(CommonErr.NOT_FOUND, "Repository not found")
 
     is_push = _is_receive_pack(request)
 
@@ -289,9 +293,7 @@ async def git_http_backend(
             env=env,
         )
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=500, detail="git executable not found"
-        ) from None
+        raise BizError(CommonErr.INTERNAL_ERROR, "git executable not found") from None
 
     # stdout/stderr 必须与写 stdin 并发抽干：子进程（receive-pack 经 sideband 发的进度、
     # 或大批量 refs 的响应）可能在还没读完请求体前就写出超过管道缓冲的数据，此时若本端
@@ -307,7 +309,7 @@ async def git_http_backend(
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        raise HTTPException(status_code=504, detail="Git operation timed out") from None
+        raise BizError(CommonErr.TIMEOUT, "Git operation timed out") from None
     except BaseException:
         # 其它退出路径（客户端中断的 ClientDisconnect、communicate 类错误）同样要杀掉并
         # 回收子进程，否则每个中断请求都漏一个仍占着仓库目录的 git 进程

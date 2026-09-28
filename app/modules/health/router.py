@@ -14,6 +14,7 @@ from app.core.err import respond
 from app.core.pulsar_lag import probe_health as probe_pulsar_health
 from app.db.init_db import is_db_initialized
 from app.db.session import get_async_engine
+from auth.seams import refresh_verify_key, verify_key_status
 
 router = APIRouter(tags=["health"])
 
@@ -49,7 +50,7 @@ class SoftDependencies(BaseModel):
 
 
 class ReadyData(BaseModel):
-    """readiness 响应：复合硬依赖（DB/Redis/Pulsar/AUTH）状态 + 软依赖告知。"""
+    """readiness 响应：复合硬依赖（DB/Redis/Pulsar/AUTH/验签公钥）状态 + 软依赖告知。"""
 
     status: str
     service: str
@@ -57,6 +58,8 @@ class ReadyData(BaseModel):
     redis: DependencyStatus
     pulsar: DependencyStatus
     auth: DependencyStatus
+    # 验签公钥（蓝图 §2 第 2 条）：RS256 部署下这是承接带 token 流量的前置条件，须如实上报。
+    verify_key: DependencyStatus
     soft: SoftDependencies
 
 
@@ -168,6 +171,21 @@ async def _probe_redis() -> DependencyStatus:
     return DependencyStatus(status="up")
 
 
+async def _probe_verify_key() -> DependencyStatus:
+    """硬依赖（§2 第 2 条）：JWT 验签公钥是否可用。
+
+    - 本地有公钥（env / ``*_file``）、或运行期已从 AUTH JWKS 拉到、或本部署是纯 HS256
+      （验签走共享密钥，公钥非必需）→ ``up``；
+    - 需要公钥却拿不到 → **就地尝试一次** JWKS 拉取（自愈：AUTH 晚于本进程起来也能接上），
+      仍失败才 ``error``。detail 刻意不含内网信息（本端点是匿名可读的）。
+    """
+    if verify_key_status() == "ok":
+        return DependencyStatus(status="up")
+    if await refresh_verify_key():
+        return DependencyStatus(status="up")
+    return DependencyStatus(status="error", detail="verify key unavailable")
+
+
 async def _probe_pulsar() -> DependencyStatus:
     """探消息总线：复用 lag 上报的 Admin REST 通道（短超时 + up 结果短缓存）。
 
@@ -251,9 +269,10 @@ async def liveness() -> LiveData:
 
 @router.get("/readiness", response_model=ReadyData)
 async def readiness(response: Response) -> ReadyData:
-    """就绪探针：DB + Redis + Pulsar + AUTH 复合（AND 语义），未就绪返回 **503**。
+    """就绪探针：DB + Redis + Pulsar + AUTH + **验签公钥** 复合（AND 语义），未就绪返回 **503**。
 
-    - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``。
+    - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``；**验签公钥**必须可用
+      （纯 HS256 部署天然可用，见 ``_probe_verify_key``）。
     - ``disabled``（未配置，如单机无总线/未接 AUTH 进程）不降就绪——是部署取向而非故障。
     - **软依赖**（检索/对象存储，蓝图 §2 第 3 条）：仅作 ``soft`` 字段告知，**不参与**下述
       ``ready`` 判定——它们缺失时可降级，绝不能把进程挡在入流之外。
@@ -264,6 +283,7 @@ async def readiness(response: Response) -> ReadyData:
     redis = await _probe_redis()
     pulsar = await _probe_pulsar()
     auth = await _probe_auth()
+    verify_key = await _probe_verify_key()
     # 软依赖：探测失败只体现在字段值，绝不改变下面 ready 的 AND 判定（一字不动）。
     # 并发探测把最坏延迟收敛到单个超时（~2s），而非两者串行叠加。
     search, storage = await asyncio.gather(_probe_search(), _probe_storage())
@@ -273,6 +293,7 @@ async def readiness(response: Response) -> ReadyData:
         and redis.status == "up"
         and pulsar.status in ("up", "disabled")
         and auth.status in ("up", "disabled")
+        and verify_key.status == "up"
     )
     if not ready:
         response.status_code = 503
@@ -283,6 +304,7 @@ async def readiness(response: Response) -> ReadyData:
         redis=redis,
         pulsar=pulsar,
         auth=auth,
+        verify_key=verify_key,
         soft=soft,
     )
 

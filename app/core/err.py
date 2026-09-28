@@ -65,6 +65,19 @@ class CommonErr(ErrCode):
     # 乐观锁/版本冲突（蓝图 §6.1）：期望版本与库中现值不一致。供各业务模块的
     # 并发更新路径复用，故定义在 common 命名空间。
     VERSION_CONFLICT = NS_COMMON.err(7)
+    # 协议型/内部缝端点的通用状态码。蓝图 §6.1 要求**所有** service/API 抛业务异常由全局
+    # handler 收敛；此前 git smart-HTTP（客户端是 ``git(1)``）与 ``/auth/internal/*`` 直接用
+    # ``HTTPException``，走的是 Starlette 默认 handler，返回 ``{"detail": ...}`` 而非统一信封。
+    # 这三个码用于把这些端点收进同一信封，同时**保持原 HTTP 状态码不变**（git 只认状态码与
+    # ``WWW-Authenticate``，不解析 body）。
+    UNAUTHORIZED = NS_COMMON.err(8)
+    NOT_FOUND = NS_COMMON.err(9)
+    BAD_REQUEST = NS_COMMON.err(10)
+    # 唯一约束冲突的**中性兜底**（蓝图 §6.1：冲突一律 409）。此前未登记的业务约束回落到
+    # ``AuthErr.ALREADY_REGISTERED``，于是「重复收藏/重复申请」会被报成
+    # "Username or email already registered" ——状态码对、文案完全跑偏。各模块应尽量把
+    # 自己的约束名片段登记到本域语义码（见 register_unique_constraint），未登记的走这个。
+    CONFLICT = NS_COMMON.err(11)
 
 
 ERRTABLE: dict[ErrCode, tuple[int, str]] = {}
@@ -113,6 +126,10 @@ register(
         CommonErr.UNAVAILABLE: (503, "Service unavailable"),
         CommonErr.TIMEOUT: (504, "Request timed out"),
         CommonErr.VERSION_CONFLICT: (409, "Version conflict"),
+        CommonErr.UNAUTHORIZED: (401, "Unauthorized"),
+        CommonErr.NOT_FOUND: (404, "Not found"),
+        CommonErr.BAD_REQUEST: (400, "Bad request"),
+        CommonErr.CONFLICT: (409, "Resource conflict"),
     }
 )
 
@@ -139,9 +156,18 @@ class BizError(Exception):
     errcode: ErrCode
     detail: str
 
-    def __init__(self, errcode: ErrCode, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        errcode: ErrCode,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.errcode = errcode
         self.detail = detail or err_info(errcode)[1]
+        # 随错误一并下发的响应头（如 git smart-HTTP 401 的 ``WWW-Authenticate`` 挑战头——
+        # 少了它 ``git`` 不会提示输入凭据，属协议必需）。全局 handler 会把它交给 resp_json。
+        self.headers = headers
         # 不调 super().__init__ 会让 exc.args 为空、str(exc) 变成空串：
         # logger.exception / 错误上报器这类按异常文本格式化的地方会丢掉消息与错误码
         super().__init__(self.detail)

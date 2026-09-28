@@ -277,7 +277,7 @@ def test_auth_alembic_chain_baseline_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "a0b1c2d3e4f5"
+    assert script.get_current_head() == "0001_auth_baseline"
 
 
 async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:

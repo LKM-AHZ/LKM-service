@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.core.err import BizError, CommonErr
 from auth.bot_sso import BOT_SSO_ACCOUNT_LEVEL, mint_ticket
 from auth.router_read import _require_internal_token
 
@@ -41,9 +42,7 @@ async def internal_bot_ticket(
     403 文案从该常量派生，避免它被部署配置改掉后报错信息仍写着 admin。
     """
     if body.account_level != BOT_SSO_ACCOUNT_LEVEL:
-        raise HTTPException(
-            status_code=403, detail=f"{BOT_SSO_ACCOUNT_LEVEL} required"
-        )
+        raise BizError(CommonErr.FORBIDDEN, f"{BOT_SSO_ACCOUNT_LEVEL} required")
     ticket, expires_in = mint_ticket(
         sub=str(body.user_id), account_level=body.account_level
     )

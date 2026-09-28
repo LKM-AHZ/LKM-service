@@ -2,7 +2,6 @@
 
 import datetime as _dt
 import logging
-import os
 import time as _time
 import uuid
 from typing import Any
@@ -14,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import is_test_env
 from app.core.err import BizError, CommonErr
 from app.db.base import now_iso
 from auth.db.session import get_auth_session
@@ -310,7 +310,7 @@ def get_sms_provider() -> SmsProvider:
     实现，也没有读取 ``LKM_SMS_PROVIDER`` 的装配代码（该名字此前只出现在下面的报错文本里）。
     故非测试环境一律 fail-closed：绝不退回 console（那等于把验证码写进生产日志）。
     """
-    if os.environ.get("LKM_ENV") == "test" or os.environ.get("PYTEST_RUNNING"):
+    if is_test_env():
         return ConsoleSmsProvider()
     raise RuntimeError(
         "No SMS provider available: only the test-only ConsoleSmsProvider is implemented and "
@@ -325,7 +325,7 @@ def get_email_provider() -> EmailProvider:
     与 :func:`get_sms_provider` 同：只有测试用 ConsoleEmailProvider，非测试环境 fail-closed，
     报错文本不再指向一个无人读取的环境变量。
     """
-    if os.environ.get("LKM_ENV") == "test" or os.environ.get("PYTEST_RUNNING"):
+    if is_test_env():
         return ConsoleEmailProvider()
     raise RuntimeError(
         "No Email provider available: only the test-only ConsoleEmailProvider is implemented "

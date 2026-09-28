@@ -4,6 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # 手动触发：`deploy` job 只在此事件下运行（见该 job 的 if）。
+  workflow_dispatch:
 
 # 最小权限：本工作流只读代码（不推代码、不建 release、不评论 PR）。
 # 不声明则继承仓库/组织默认 token 权限（历史上可能是读写）。
@@ -138,3 +140,72 @@ jobs:
           tags: lkm-service:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    # 蓝图 §6.4 的 CI/CD 链路末段（…→ 构建镜像 → 部署）。**只在手动触发时运行**：
+    # 集群滚动更新的时机属人工决策，push/PR 绝不自动上线。
+    #
+    # 边界（刻意）：本仓库是应用子仓库，**部署清单在父仓库**（`deploy/k8s/` 的 Kustomize
+    # 与 `docker-compose.yml`），本 CI 的工作目录看不到它们，也没有集群凭证约定，
+    # 故这里只做「**产出版本化镜像并推到镜像仓**」这一半——它正是本仓库的交付物；
+    # 集群侧 `kubectl apply -k deploy/k8s/overlays/prod` 仍按 DEPLOYMENT.md 由运维执行
+    # （何时上线是运维决策，不是 CI 能猜的）。未配 registry 时该 job 会显式失败并说明原因，
+    # 而不是静默跳过（静默跳过会让人以为「跑过了」）。
+    name: deploy（手动：推送版本化镜像）
+    if: github.event_name == 'workflow_dispatch'
+    needs: [lint, migrations, test, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: 校验镜像仓配置
+        env:
+          REGISTRY_IMAGE: ${{ vars.REGISTRY_IMAGE }}
+        run: |
+          if [ -z "$REGISTRY_IMAGE" ]; then
+            echo "::error::未配置仓库变量 REGISTRY_IMAGE（如 ghcr.io/<owner>/lkm-service）。"
+            echo "deploy 需要它作为镜像名与推送目标；未配置即失败，避免「静默跳过」被误读成已部署。"
+            exit 1
+          fi
+      - name: 登录镜像仓
+        # 用 docker CLI 而非第三方 login action：本工作流其余动作都按 SHA 钉死，
+        # 不引入一个无法钉版本的新action（少一条供应链面）。
+        env:
+          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$REGISTRY_TOKEN" | docker login "${REGISTRY_HOST:-ghcr.io}" \
+            -u "$REGISTRY_USER" --password-stdin
+      - name: 构建并推送
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          # 双标签：不可变（commit SHA，回滚可定位）+ 可变（分支名，便于运维取最新）
+          tags: |
+            ${{ vars.REGISTRY_IMAGE }}:${{ github.sha }}
+            ${{ vars.REGISTRY_IMAGE }}:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: 输出后续运维步骤
+        run: |
+          {
+            echo "### 镜像已推送"
+            echo ""
+            echo '```'
+            echo "${{ vars.REGISTRY_IMAGE }}:${{ github.sha }}"
+            echo '```'
+            echo ""
+            echo "集群侧上线（在父仓库执行，清单不在本仓库）："
+            echo ""
+            echo '```sh'
+            echo "kubectl -n lkm set image deploy/backend backend=${{ vars.REGISTRY_IMAGE }}:${{ github.sha }}"
+            echo "# 或整体重放清单：kubectl apply -k deploy/k8s/overlays/prod"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

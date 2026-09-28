@@ -17,31 +17,27 @@ import argparse
 import asyncio
 import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from prefect import flow, task
 
+from app.core.config import settings
+
 logger = logging.getLogger("lkm.flows.analytics")
 
 def _resolve_default_window() -> int:
-    """解析 ``LKM_CLICKHOUSE_EXPORT_WINDOW``；非法/非正数回退 1000 并告警。
+    """导出窗口（行）：单一来源是 ``settings.clickhouse_export_window``。
 
-    原先写法是 import 期的 ``int(os.getenv(...))``：环境变量写成 "1e3"/"1000 " 之类
-    会让本模块（乃至 flow 加载）直接抛 ValueError 起不来，而 0/负数又会一路传到
-    exporter 变成 ``LIMIT 0`` 空跑或非法 SQL。
+    此前本模块**自己直接解析同名环境变量**（而不是取 Settings 字段），两者构成**第二个真相源**，
+    且行为不一致（Settings 严校验、这里宽松回退）——同一个环境变量写成 "1e3" 时，Settings 早在
+    装配期就抛了，本模块的宽松分支根本救不了谁。现统一取 Settings（env 名不变）；仍保留
+    「非正数回退默认」的防御，免得运行期被改坏的值一路传到 exporter 变成 ``LIMIT 0`` 空跑或
+    非法 SQL。
     """
-    raw = os.getenv("LKM_CLICKHOUSE_EXPORT_WINDOW")
-    if raw is None:
-        return 1000
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning("LKM_CLICKHOUSE_EXPORT_WINDOW=%r 非法，回退默认 1000", raw)
-        return 1000
-    if value <= 0:
-        logger.warning("LKM_CLICKHOUSE_EXPORT_WINDOW=%d 需为正数，回退默认 1000", value)
+    value = settings.clickhouse_export_window
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        logger.warning("clickhouse_export_window=%r 非法，回退默认 1000", value)
         return 1000
     return value
 

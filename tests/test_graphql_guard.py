@@ -56,6 +56,12 @@ def _duration_count() -> float:
     return val if val is not None else 0.0
 
 
+def _depth_count() -> float:
+    """深度分布直方图的观测总次数（蓝图 §2 第 5 条「深度分布」）。"""
+    val = REGISTRY.get_sample_value("graphql_query_depth_count")
+    return val if val is not None else 0.0
+
+
 @strawberry.type
 class _Item:
     id: str
@@ -140,6 +146,36 @@ async def test_depth_limit_rejects_and_counts(client: Client, monkeypatch) -> No
     msgs = [e["message"] for e in body["errors"]]
     assert any("depth" in m.lower() for m in msgs), msgs
     assert _rejected("depth") == before + 1
+
+
+async def test_depth_metric_covers_rejected_queries(
+    client: Client, monkeypatch
+) -> None:
+    """深度分布（§2 第 5 条）必须**把被深度拒的查询也记进去**。
+
+    这正是「回调挂在 strawberry 的 QueryDepthLimiter 上」而非另起一次 AST 遍历的价值：
+    若观测挂在会因超限提前抛错的位置之后，最该被看到的深层查询反而一次都不计数。
+    """
+    monkeypatch.setattr(settings, "graphql_max_depth", 1)
+    before = _depth_count()
+
+    body = await _post(client, _SHALLOW_QUERY)
+
+    assert body.get("errors") is None, body  # depth=1 未超限，正常返回
+    assert _depth_count() == before + 1
+
+    monkeypatch.setattr(settings, "graphql_max_depth", 0)
+    await _post(client, _SHALLOW_QUERY)  # 这一发被拒，但仍须计入深度分布
+    assert _depth_count() == before + 2
+
+
+def test_depth_observer_records_each_operation() -> None:
+    """``_observe_depths``：逐个 operation 各观测一次（匿名与命名 operation 都算）。"""
+    from app.api.graphql import _observe_depths
+
+    before = _depth_count()
+    _observe_depths({"q1": 3, "q2": 0})
+    assert _depth_count() == before + 2
 
 
 async def test_cost_limit_rejects_and_counts(client: Client, monkeypatch) -> None:

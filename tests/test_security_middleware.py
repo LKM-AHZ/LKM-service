@@ -20,6 +20,8 @@ from app.core.middleware import _HSTS_VALUE, install_security_middleware
 _SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
+    # 蓝图 §4.5 点名的 frame-ancestors（CSP 形态），与 X-Frame-Options 并存
+    "content-security-policy": "frame-ancestors 'none'",
     "referrer-policy": "strict-origin-when-cross-origin",
 }
 _PERMISSIONS_POLICY = "geolocation=(), microphone=(), camera=()"

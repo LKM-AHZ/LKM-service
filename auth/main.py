@@ -168,7 +168,8 @@ def create_auth_app() -> FastAPI:
 
 async def _on_err(_request: Request, exc: Exception) -> JSONResponse:
     _, errcode, detail = map_err(exc)
-    return resp_json(errcode, detail=detail)
+    # 同 app.main：BizError 可携带响应头（如协议端点的挑战头），其它异常类型无该属性。
+    return resp_json(errcode, detail=detail, headers=getattr(exc, "headers", None))
 
 
 app = create_auth_app()

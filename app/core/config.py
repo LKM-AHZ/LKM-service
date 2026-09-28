@@ -1,3 +1,4 @@
+import os
 import urllib.parse
 from typing import ClassVar, Literal
 
@@ -63,6 +64,12 @@ class Settings(BaseSettings):
     db_pool_max_overflow: int = 20
     # 取连接前 ping 探活，剔除坏连接，避免陈旧连接 0 连接时的短暂出错
     db_pool_pre_ping: bool = True
+    # 连接回收与取连接等待（蓝图 §3.3 明确列出 ``pool_recycle``；池满时按「等待 + 超时」
+    # 处理而非无上限开池）。recycle 是**主动轮换**：连接存活超期即回收重建，避免被中间网络
+    # 设备静默掐断的陈旧连接被复用——与 pre_ping（取用时才探活）互补。timeout 是池满后
+    # 等待空闲连接的**上限**，超时即抛（拒绝崩溃，不做无限等待）。
+    db_pool_recycle_s: int = 1800
+    db_pool_timeout_s: float = 30.0
     # worker / 后台批处理的**独立**池（蓝图 §3.3「不同组件独立连接池」标"关键"）：
     # outbox relay、APScheduler 任务、各 worker 的周期突发走这里的池，不与 Web 请求争抢——
     # 否则一次全量 ETL/对账就能把在线请求的连接挤干。尺寸刻意小于 Web 池（批处理并发有限，
@@ -85,6 +92,10 @@ class Settings(BaseSettings):
     # 双验签灰度：RS256 生效后是否仍接受 HS256 旧 token。存量 token 清空后置 false 关闭。
     # 本仓因批 1 重建库、token 全失效，可直接置 false（偏离蓝图灰度时序，登记 §8）。
     jwt_hs_fallback: bool = True
+    # 运行期从 AUTH ``/.well-known/jwks.json`` 拉取验签公钥的**刷新间隔**（秒）。
+    # 蓝图 §2 第 2 条：本地无公钥时可从 JWKS 拉取并缓存。仅在「本地没有公钥」时才真正发请求；
+    # 拉到后仍按此间隔重拉，以便 AUTH 换钥后（重启换文件）无需重启验签方。
+    jwks_refresh_s: int = 300
     # 缓存防穿透的布隆过滤器（蓝图 §5.6「非法/不可枚举 key 用布隆过滤器挡非法形态」）：
     # 与空值缓存互补——空值缓存挡「合法但查无」，布隆挡「形态非法/不可能存在」的 id。
     # capacity/error_rate 决定位数组大小与哈希轮数；容量估算偏小会推高误判率。
@@ -294,6 +305,27 @@ class Settings(BaseSettings):
     # 运营日报 flow 的目标名，形如 "ops-daily-report/ops-daily"；留空则不触发 flow（回落直调
     # 纯体层 collect_daily_report）。
     prefect_ops_daily_deployment: str = ""
+    # deployment **注册**参数（``app/flows/deploy.py`` 由 prefect-init 一次性调用）：此前
+    # 该模块直接 ``os.getenv`` 读同名变量，蓝图 §6.5.1「不散落 os.getenv」要求收口到 Settings。
+    # 名字与部署侧下发的一字不差（env_prefix=LKM_），故部署契约零变化。
+    prefect_work_pool: str = "lkm"
+    prefect_source: str = "/app"
+    prefect_flow_deployment_name: str = "reconcile"
+    # 用户维表全量对账的最大拍数（防「每拍都恰好满窗口」时无界循环）。
+    user_dim_reconcile_max_rounds: int = 200
+
+    # ---- bot 面板 SSO 协议（LKM-bot 并轨，§8 #48）----
+    # 票据的跨系统协议值：签发侧（auth）与消费侧（bot 面板）必须逐字相同，默认值不得单边改。
+    # 此前在 auth/bot_sso.py 里用 ``os.environ.get`` 直接读同名变量，现收口于此（§6.5.1）；
+    # env 名不变，compose/k8s 的下发无需改动。
+    bot_sso_audience: str = "lkm:bot"
+    bot_sso_type: str = "bot_sso"
+    bot_sso_issuer: str = "lkm-auth"
+    #: 注意这个值就是**铸票门禁本身**：调低它等于把门禁降级（普通用户等级即可持票换管理员
+    #: 面板会话）。两侧必须同值。
+    bot_sso_account_level: str = "admin"
+    #: 票据 TTL（秒）；签发侧消费，配大了会被 bot_sso._TTL_MAX_SECONDS 钳住。
+    bot_sso_ttl_seconds: int = 60
 
     # ---- ClickHouse 分析管道（M5 7.2.6，日志/失败事件/审计分析）----
     # 默认关：不建连接、导出 no-op、admin 查询端点返回 503（不返回空数据造成假绿）。
@@ -584,3 +616,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def is_test_env() -> bool:
+    """是否处于测试运行：``LKM_ENV=test`` 或 pytest 注入的 ``PYTEST_RUNNING``。
+
+    集中一处，避免各模块各自 ``os.environ.get(...)`` 拼同一判据（蓝图 §6.5.1「不散落
+    os.getenv」）。``PYTEST_RUNNING`` 是 pytest 运行时注入的探针而非应用配置，故不放进
+    Settings；``LKM_ENV`` 走 ``settings.env``（已经是它的唯一读点）。
+    """
+    return settings.env == "test" or bool(os.environ.get("PYTEST_RUNNING"))

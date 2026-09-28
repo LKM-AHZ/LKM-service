@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.core.err import (
-    AuthErr,  # M3 peer: 并入共享 shared err
     BizError,
+    CommonErr,
     ErrCode,
     unique_constraint_errcode,
 )
@@ -40,11 +40,17 @@ def create_realm_async_engine(
     pool_size: int | None = None,
     pool_max_overflow: int | None = None,
     pool_pre_ping: bool | None = None,
+    pool_recycle: int | None = None,
+    pool_timeout: float | None = None,
 ) -> AsyncEngine:
     """按池参数建立 PostgreSQL(asyncpg) async 引擎。
 
     供主库（:func:`get_async_engine`）与 auth 独立库（auth/db/session.py）共用的唯一
     建池逻辑，避免两处策略漂移。
+
+    ``pool_recycle``/``pool_timeout`` 见 ``settings.db_pool_recycle_s``/``db_pool_timeout_s``
+    的注释（蓝图 §3.3：连接回收 + 池满等待超时）。两者是**池形态**参数，各 realm 共用；
+    只有尺寸（size/overflow）按 realm 分列。
     """
     connect_args: dict[str, object] = {}
     engine_kwargs: dict[str, object] = {"echo": False, "connect_args": connect_args}
@@ -54,6 +60,10 @@ def create_realm_async_engine(
         engine_kwargs["max_overflow"] = pool_max_overflow
     if pool_pre_ping is not None:
         engine_kwargs["pool_pre_ping"] = pool_pre_ping
+    if pool_recycle is not None:
+        engine_kwargs["pool_recycle"] = pool_recycle
+    if pool_timeout is not None:
+        engine_kwargs["pool_timeout"] = pool_timeout
     return create_async_engine(url, **engine_kwargs)
 
 
@@ -76,6 +86,8 @@ def _ensure_engine_locked() -> AsyncEngine:
             pool_size=settings.db_pool_size,
             pool_max_overflow=settings.db_pool_max_overflow,
             pool_pre_ping=settings.db_pool_pre_ping,
+            pool_recycle=settings.db_pool_recycle_s,
+            pool_timeout=settings.db_pool_timeout_s,
         )
     return _async_engine
 
@@ -114,10 +126,9 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     except IntegrityError as exc:
         await db.rollback()
         if _is_unique_violation(exc):
-            errcode = unique_violation_errcode(exc)
-            if errcode is AuthErr.ALREADY_REGISTERED:
-                raise BizError(errcode, "Resource already exists") from None
-            raise BizError(errcode) from None
+            # 冲突一律 409；具体文案随登记的语义码，未登记的回落到中性的 CommonErr.CONFLICT
+            # （不再是 auth 域的 "Username or email already registered"，见该码注释）。
+            raise BizError(unique_violation_errcode(exc)) from None
         raise
     except Exception:
         await db.rollback()
@@ -177,6 +188,8 @@ def _ensure_worker_engine_locked() -> AsyncEngine:
             pool_size=settings.db_worker_pool_size,
             pool_max_overflow=settings.db_worker_pool_max_overflow,
             pool_pre_ping=settings.db_pool_pre_ping,
+            pool_recycle=settings.db_pool_recycle_s,
+            pool_timeout=settings.db_pool_timeout_s,
         )
     return _worker_engine
 
@@ -275,14 +288,14 @@ def _unique_constraint_name(exc: IntegrityError) -> str | None:
 
 
 def unique_violation_errcode(exc: IntegrityError) -> ErrCode:
-    """按约束名给唯一冲突选语义化错误码；未命中回落 ``ALREADY_REGISTERED``（保持现状）。
+    """按约束名给唯一冲突选语义化错误码；未命中回落中性的 ``CommonErr.CONFLICT``(409)。
 
     映射**不在此硬编码**：约束名跨环境会变（create_all 隐式命名如 ``content_likes_pkey``
     vs alembic 显式命名），故由各模块在自身 ``errors.py`` 用
     :func:`app.core.err.register_unique_constraint` 登记片段，本函数只查 core 的注册表
     ——db 层不反向 import 业务模块（import-linter 的「db 不依赖 modules」契约）。
-    未注册的冲突保持既有通用码，行为零变化。
+
+    兜底刻意**不用** ``AuthErr.ALREADY_REGISTERED``：那是注册入口的语义码，用在业务表冲突上
+    会把「重复收藏/重复申请」说成「用户名或邮箱已注册」（状态码对、文案误导）。
     """
-    return unique_constraint_errcode(_unique_constraint_name(exc)) or (
-        AuthErr.ALREADY_REGISTERED
-    )
+    return unique_constraint_errcode(_unique_constraint_name(exc)) or CommonErr.CONFLICT

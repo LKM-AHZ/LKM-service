@@ -59,7 +59,11 @@ def test_scheduler_has_cron_jobs() -> None:
     assert (
         "reconcile_content_counts",
         "CronTrigger",
-    ) in triggers  # M6.10 互动计数对账(每 15 分钟)
+    ) in triggers  # M6.10 互动计数对账(每 15 分钟，增量拍)
+    assert (
+        "reconcile_content_counts_full",
+        "CronTrigger",
+    ) in triggers  # 蓝图 §5.6 第 5 条:日级全量兜底(每天 04:00)
     assert ("fanout_feed_items", "CronTrigger") in triggers  # M6.11 时间线写扩散(每 2 分钟)
 
 
@@ -79,6 +83,7 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "export_analytics_clickhouse",  # M5 7.2.6
         "purge_stale_view_logs",  # M6.6
         "reconcile_content_counts",  # M6.10（两种模式都注册）
+        "reconcile_content_counts_full",  # 蓝图 §5.6 第 5 条：日级全量兜底
         "fanout_feed_items",  # M6.11
         "run_ops_daily",  # 运营日报（蓝图 §5.5/§6.4）
     }

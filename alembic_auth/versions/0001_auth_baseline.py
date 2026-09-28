@@ -1,6 +1,6 @@
 """auth independent DB baseline
 
-Revision ID: a0b1c2d3e4f5
+Revision ID: 0001_auth_baseline
 Revises:
 Create Date: 2026-09-13
 
@@ -22,7 +22,7 @@ from auth.db.base import auth_metadata
 from auth.register import register_models
 
 # revision identifiers, used by Alembic.
-revision: str = "a0b1c2d3e4f5"
+revision: str = "0001_auth_baseline"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

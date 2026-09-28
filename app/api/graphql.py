@@ -25,7 +25,9 @@
 （``asyncio.wait_for`` + 504）兜底。
 
 被拒计数与耗时观测：耗时为 ``GraphQLGuard`` 的 per-request 观测；**被拒分类统一在 HTTP 层**
-（``GuardedGraphQLRouter.process_result``）按错误消息归类，避免两处统计同一拒绝。
+（``GuardedGraphQLRouter.process_result``）按错误消息归类，避免两处统计同一拒绝。**深度分布**
+（§2 第 5 条与耗时/被拒并列的第三项）由 ``QueryDepthLimiter`` 的校验回调直接产出，见
+``_observe_depths``。
 
 **关于 DataLoader（§2 第 4 条「列表字段必须走 DataLoader/批查询」）**：本仓走的是该条并列的
 **批查询**这一支——author / column 的富集在 service 层一次性批量完成（``content.service``
@@ -68,6 +70,7 @@ from strawberry.utils.await_maybe import await_maybe
 
 from app.core.config import settings
 from app.core.metrics import (
+    graphql_query_depth,
     graphql_query_duration_seconds,
     graphql_query_rejected_total,
 )
@@ -87,6 +90,16 @@ _REASON_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     ((COST_MESSAGE,), "complexity"),
     ((TIMEOUT_MESSAGE,), "timeout"),
 )
+
+
+def _observe_depths(depths: dict[str, int]) -> None:
+    """``QueryDepthLimiter`` 的校验回调：把每个 operation 的深度写进 ``graphql_query_depth``。
+
+    直接复用 strawberry 算出的深度值（见 ``extensions`` 处注释）：口径与 ``max_depth``
+    完全一致，且超限报错路径也会回调，故「被深度拒的深层查询」不会在分布里缺席。
+    """
+    for value in depths.values():
+        graphql_query_depth.observe(value)
 
 # ---- 成本模型常数（§2 第 2 条：field cost 而非词法代理）----
 # 每个被选中字段的基础分。
@@ -426,7 +439,12 @@ def build_schema(version: str = GRAPHQL_DEFAULT_VERSION) -> strawberry.Schema:
         )
     merged_query = merge_types("Query", classes)  # type: ignore[arg-type]
     extensions: list[Any] = [
-        lambda: QueryDepthLimiter(max_depth=settings.graphql_max_depth),
+        # 深度上限 + 深度分布：直接吃 ``QueryDepthLimiter`` 的校验回调，拿到的是**它自己
+        # 算出的深度**（与 max_depth 逐字同口径），故无需再遍历一次 AST，也不会出现
+        # 「指标口径与阈值口径打架」——回调在超限报错路径上同样触发，深层被拒的查询也计数。
+        lambda: QueryDepthLimiter(
+            max_depth=settings.graphql_max_depth, callback=_observe_depths
+        ),
     ]
     # ``graphql_max_cost <= 0`` = 不注册成本限制（逃生口：需要完全免限时用）。默认 1000 的
     # 余量经本文件校准确认：拿变量 pageSize 的真实前端查询约 140 分，7× 余量充足。
