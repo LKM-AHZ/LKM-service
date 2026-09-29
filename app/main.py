@@ -26,6 +26,8 @@ from app.core.apm import init_sentry
 from app.core.config import settings
 from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
+from app.core.metrics_relay import start_reporter as start_metrics_relay_reporter
+from app.core.metrics_relay import stop_reporter as stop_metrics_relay_reporter
 from app.core.middleware import GraphQLHTTPMiddleware, install_security_middleware
 from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
 from app.core.scheduler_state import start_reporter as start_scheduler_reporter
@@ -133,6 +135,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 可观测（§5.5-6）：调度器运行态上报——调度器在独立进程、不暴露 /metrics，
     # 故由本进程读它的 Redis 心跳并 set gauge（同 lag 上报范式）
     start_scheduler_reporter()
+    # 可观测（跨进程指标中继，选项③）：worker/scheduler/auth 进程的业务指标经 Redis 快照
+    # 由本进程（唯一被 Prometheus 抓取的进程）聚合后落到同名指标上——见 metrics_relay。
+    # 本进程**只消费不生产**：它自己的写入已直接进本地指标，再发布会被重复计一遍。
+    start_metrics_relay_reporter()
 
     yield
 
@@ -164,6 +170,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
     await _shutdown_step("scheduler_state", stop_scheduler_reporter)
+    # 收尾跨进程指标中继上报 task（须在 close_redis 前，避免关连接竞态）
+    await _shutdown_step("metrics_relay", stop_metrics_relay_reporter)
     await _shutdown_step("messaging", messaging.shutdown)
     # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）
     await _shutdown_step("clickhouse", clickhouse.close)

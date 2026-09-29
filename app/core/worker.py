@@ -15,7 +15,7 @@ import asyncio
 import logging
 from typing import Any
 
-from app.core import messaging, task_registry
+from app.core import messaging, metrics_relay, task_registry
 from app.core.logging import log_exceptions
 from app.core.tracing import setup_tracing
 from app.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
@@ -106,6 +106,10 @@ async def _consume(subscription_name: str) -> None:
     # worker 进程不是 ASGI app：初始化 provider + httpx，让消费 span（含从消息属性
     # extract 出的上游 trace 上下文）能真正导出；不配 LKM_OTEL_ENABLED 时是 no-op。
     setup_tracing(service_suffix="-worker")
+    # 跨进程指标中继（选项③）：本进程不暴露 /metrics，故把业务指标快照写进 Redis 交给 API
+    # 进程代报。放在这里可一处覆盖全部 worker（send/notify/points×3/notification/
+    # content-index/default）；幂等——run_default_worker 的 4 个并发 _consume 只起一个发布 task。
+    metrics_relay.start_publisher()
 
     handlers = task_registry.handlers_for(subscription_name)
 

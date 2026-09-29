@@ -170,6 +170,21 @@ scheduler_pending_jobs = Gauge(
 )
 
 
+# ---- 跨进程指标中继的自观测（app/core/metrics_relay.py）----
+# 非 API 进程（worker/scheduler/auth）的业务指标经 Redis 快照由 API 进程代报——这两条就是
+# 那条链路的自检：instances=0 表示一个生产者的快照都读不到（进程全没 / 前缀配错 / Redis 断），
+# up=0 表示本轮没读到任何有效快照。没有它们，"中继悄悄断链 → 指标冻结在旧值"又是一层假保护。
+# 实现与聚合口径见 metrics_relay 的模块 docstring。
+metrics_relay_instances = Gauge(
+    "metrics_relay_instances",
+    "本轮读到的有效指标快照数（非 API 进程生产者数；0=中继无来源）",
+)
+metrics_relay_up = Gauge(
+    "metrics_relay_up",
+    "跨进程指标中继是否在取到数：1=本轮读到 ≥1 份快照，0=无来源/Redis 不可读",
+)
+
+
 # ---- 连接池水位（蓝图 §3.3 第 3 条，标"关键"）----
 # Web 主池与 worker 批处理池各自独立（见 app/db/session.py）。size/checkedout/overflow 是
 # **瞬时量**，普通 Gauge 需要有人周期 set，会把「实时」退化成「上次任务跑时」；故用

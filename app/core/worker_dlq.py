@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.core import messaging
+from app.core import messaging, metrics_relay
 from app.core.tracing import setup_tracing
 from app.db.base import now_iso
 from app.db.session import new_worker_session as new_session
@@ -105,6 +105,9 @@ async def consume_dlq() -> None:
     """DLQ 消费者主循环（compose worker-dlq 入口）。"""
     # 非 ASGI 进程：初始化 provider 才能导出消费 span（默认关时 no-op）
     setup_tracing(service_suffix="-dlq")
+    # 跨进程指标中继（选项③）：人工重投走的 messaging.publish 会写 notify_failed_total，
+    # 而本进程不暴露 /metrics——快照交给 API 进程代报。
+    metrics_relay.start_publisher()
     await messaging.run_subscription(messaging.SUB_DLQ.name, _on_dlq)
 
 

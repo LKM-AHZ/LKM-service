@@ -7,7 +7,7 @@ from contextlib import suppress
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.core import scheduler_state
+from app.core import metrics_relay, scheduler_state
 from app.core.scheduler import build_scheduler
 from app.core.tracing import setup_tracing, shutdown_tracing
 
@@ -97,6 +97,9 @@ async def _main() -> None:
     # 运行态心跳（§5.5-6）：本进程不暴露 /metrics，故把状态写进 Redis 交给 API 进程的
     # reporter 上报；TTL 到期即意味着本进程已亡，API 侧 scheduler_up 转 0。
     heartbeat = asyncio.create_task(scheduler_state.run_heartbeat())
+    # 跨进程指标中继（选项③）：本进程写 notify_failed_total（cron 发布失败路径）且不暴露
+    # /metrics，快照同样交给 API 进程代报。
+    metrics_relay.start_publisher()
     logger.info("scheduler started")
     try:
         await _wait_for_shutdown()
@@ -108,6 +111,8 @@ async def _main() -> None:
         heartbeat.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat
+        # 指标发布 task 显式收尾（键有 TTL，即便不 cancel 也能收敛，这里只为不留悬挂 task）
+        await metrics_relay.stop_publisher()
         # setup_tracing 装的是 BatchSpanProcessor，不显式 flush 会丢掉最后一批 span
         # （cron 触发的 publish 与 httpx 埋点都在内）；幂等，异常仅记日志
         shutdown_tracing()

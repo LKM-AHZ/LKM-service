@@ -404,6 +404,10 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     # /metrics 暴露根路径（不经 api_prefix，供 Prometheus 探抓）
     metrics_endpoint: str = "/metrics"
+    # 跨进程指标中继周期（秒）：非 API 进程多久把本进程指标快照写进一次 Redis，也是 API 进程
+    # 的读取周期。默认与父仓 prometheus.yml 的 scrape_interval(15s) 对齐——比抓取更密没有收益
+    # （中间几拍读者看不到），更疏则指标在抓取点上的新鲜度变差。
+    metrics_relay_interval_s: float = 15.0
 
     # ---- 链路追踪（OpenTelemetry，M5 7.2.2）----
     # 默认关：dev/test 不埋点、不依赖 collector；生产置 true 且给 OTLP endpoint 才生效。

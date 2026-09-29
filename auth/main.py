@@ -33,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core import logging as app_logging
+from app.core import metrics_relay
 from app.core import redis as redis_client
 from app.core.apm import init_sentry
 from app.core.config import settings
@@ -138,6 +139,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 无其他进程会建它们，故建它们仍是本进程的职责（业务库 schema 归 backend 进程）。
     # 建库成功后接着预热 user id 白名单位图（同一后台 task 内串行，故顺序天然有保证）
     init_db_task = asyncio.create_task(_startup_preheat_bloom())
+    # 跨进程指标中继（选项③）：本进程写 user_snap_cache_total / user_snap_singleflight_total /
+    # notify_failed_total，且刻意不挂 /metrics（见 create_auth_app 说明）——快照交给 API 进程代报。
+    metrics_relay.start_publisher()
     try:
         yield
     finally:
@@ -149,6 +153,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             pass
         except Exception:
             logger.exception("auth schema init task failed during shutdown")
+        # 指标发布 task 须在 close_redis 前收尾（键有 TTL，不 cancel 也能收敛，这里只为不留悬挂 task）
+        await metrics_relay.stop_publisher()
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
         shutdown_tracing()
         await dispose_auth_engine()
