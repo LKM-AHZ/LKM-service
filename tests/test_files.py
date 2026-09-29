@@ -964,17 +964,19 @@ class TestFilesPhase2AEndpoints:
 # ---- Phase 2-B: upload-init / confirm（预签名直传） ----
 
 
-class _FakeRedis:
-    """极简 dict 版 Redis，仅覆盖 upload-init/confirm 用到的 set/getdel。"""
+async def _get_session(db: AsyncSession, upload_id: str):
+    """取直传会话行（会话现落 ``upload_sessions`` 表，不再依赖 Redis）。"""
+    from app.modules.files.models import UploadSession
 
-    def __init__(self) -> None:
-        self._data: dict[str, str] = {}
-
-    async def set(self, key: str, value: str, *, ex: int | None = None) -> None:
-        self._data[key] = value
-
-    async def getdel(self, key: str) -> str | None:
-        return self._data.pop(key, None)
+    return (
+        (
+            await db.execute(
+                select(UploadSession).where(UploadSession.upload_id == upload_id)
+            )
+        )
+        .scalars()
+        .first()
+    )
 
 
 def _moto_s3_storage():
@@ -1054,7 +1056,7 @@ class TestFilesPhase2BUploadInit:
         with mock_aws():
             stor, _client = _moto_s3_storage()
             monkeypatch.setattr(svc, "_get_storage", lambda: stor)
-            # S3 直传需 Redis 标记；未注入时 get_redis 返回 None 也对（标记可选）
+            # 直传会话落 upload_sessions 表，不再依赖 Redis
             uploader = await self._authed(db, auth_db)
 
             resp = await client.post(
@@ -1069,15 +1071,15 @@ class TestFilesPhase2BUploadInit:
         assert data["upload_id"]
         assert data["presigned_url"].startswith("https")
 
-    async def test_upload_init_marker_includes_uploader_id(
+    async def test_upload_init_session_includes_uploader_id(
         self,
         db: AsyncSession,
         auth_db: AsyncSession,
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """S3 直传初始化写下的 Redis 标记必须含 uploader_id（Phase 2-C 事件回调无用户上下文，
-        登记归属靠标记携带的 uploader_id）。"""
+        """S3 直传初始化写下的会话 meta 必须含 uploader_id（Phase 2-C 事件回调无用户上下文，
+        登记归属靠会话携带的 uploader_id）。"""
         from moto import mock_aws
 
         import app.modules.files.service as svc
@@ -1086,12 +1088,6 @@ class TestFilesPhase2BUploadInit:
         with mock_aws():
             stor, _client = _moto_s3_storage()
             monkeypatch.setattr(svc, "_get_storage", lambda: stor)
-            fake = _FakeRedis()
-
-            async def _fake_redis() -> object:
-                return fake
-
-            monkeypatch.setattr(svc, "get_redis", _fake_redis)
             uploader = await _au(auth_db)
             from app.modules.files.schemas import FileCreate
             from auth.deps import CurrentUser
@@ -1111,18 +1107,19 @@ class TestFilesPhase2BUploadInit:
 
             assert init.mode == "direct"
             assert init.upload_id is not None
-            meta_raw = fake._data[svc._upload_key(init.upload_id)]
-            meta = json.loads(meta_raw)
+            session = await _get_session(db, init.upload_id)
+            assert session is not None
+            meta = json.loads(session.meta)
             assert meta["uploader_id"] == str(uploader.id)
 
-    async def test_confirm_missing_marker_raises_expired(
+    async def test_confirm_missing_session_raises_expired(
         self,
         db: AsyncSession,
         auth_db: AsyncSession,
         tmp_path: pathlib.Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Redis 标记缺失（或 Redis 未启用）→ UPLOAD_EXPIRED。"""
+        """直传会话缺失（不存在/已被认领）→ UPLOAD_EXPIRED。"""
         from moto import mock_aws
 
         monkeypatch.setattr(settings, "storage_backend", "s3")
@@ -1151,7 +1148,7 @@ class TestFilesPhase2BUploadInit:
     ) -> None:
         """完整 S3 直传确认：读随机 key→SHA3→copy 到内容寻址→登记 PENDING。
 
-        用假 Redis 提供 getdel 标记，moto 提供 put/copy/exists 对象层。
+        会话由 upload_init 落到 upload_sessions 表，moto 提供 put/copy/exists 对象层。
         confirm_upload 尾经 _uploader_map 跨 realm 解析展示名 → 须 seam ON。
         """
         from botocore.exceptions import ClientError
@@ -1163,12 +1160,6 @@ class TestFilesPhase2BUploadInit:
         with mock_aws():
             stor, client = _moto_s3_storage()
             monkeypatch.setattr(svc, "_get_storage", lambda: stor)
-            fake = _FakeRedis()
-
-            async def _fake_redis() -> object:
-                return fake
-
-            monkeypatch.setattr(svc, "get_redis", _fake_redis)
             uploader = await _au(auth_db)
             from app.modules.files.schemas import FileCreate
             from auth.deps import CurrentUser

@@ -21,7 +21,10 @@ from app.db.repo import get_or_raise
 from app.db.repository import DbSession
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FILES_TABLE_PLAN, FileStatus, LibraryFile
-from app.modules.files.repository import LibraryFileRepository
+from app.modules.files.repository import (
+    LibraryFileRepository,
+    UploadSessionRepository,
+)
 from app.modules.files.schemas import (
     DownloadUrlInfo,
     FileCreate,
@@ -209,7 +212,7 @@ return 0
 
 async def _acquire_hash_lock(content_hash: str) -> str | None:
     """尝试获取 content_hash 级互斥锁；拿到返回持有者 token（释放时须回传），否则 None。"""
-    redis = await get_redis()
+    redis = await get_redis(f"files:hash:{content_hash}")
     if redis is None:
         lock = _hash_locks_inproc.setdefault(content_hash, asyncio.Lock())
         return _INPROC_LOCK_TOKEN if await lock.acquire() else None
@@ -221,7 +224,7 @@ async def _acquire_hash_lock(content_hash: str) -> str | None:
 
 
 async def _release_hash_lock(content_hash: str, token: str) -> None:
-    redis = await get_redis()
+    redis = await get_redis(f"files:hash:{content_hash}")
     if redis is None:
         lock = _hash_locks_inproc.get(content_hash)
         if lock is not None:
@@ -570,13 +573,8 @@ async def serve_content(
 
 # ---- Phase 2-B: 预签名直传（upload-init / confirm，Redis 标记 + 回读哈希去重） ----
 
-_UPLOAD_TTL = 3600  # 标记"年龄窗口"1h：清扫按 created_at 年龄判断（标记本身持久化）
+_UPLOAD_TTL = 3600  # 会话"年龄窗口"1h：清扫按 upload_sessions.created_at 判龄
 _PRESIGN_EXPIRES = 900  # presigned PUT 15min
-_UPLOAD_PREFIX = "upload:"
-
-
-def _upload_key(upload_id: str) -> str:
-    return f"{_UPLOAD_PREFIX}{upload_id}"
 
 
 async def upload_init(
@@ -585,9 +583,11 @@ async def upload_init(
     """预签名直传初始化。
 
     Local→``mode=sync``（前端回退 multipart POST /files，无 upload_id/URL）；
-    S3→``mode=direct``，生成独立随机 key（``up/<uuid>``）+ 预签名 PUT URL，并把元数据
-    随 Redis 标记存下（供 confirm 登记用）。Redis 不可用则只返回 URL（不落标记，
-    confirm 会因拿不到标记而失败——fail-open 只作用于限流，这里显式 410 语义）。
+    S3→``mode=direct``，生成独立随机 key（``up/<uuid>``）+ 预签名 PUT URL，并把元数据落到
+    ``upload_sessions``（供 confirm 登记用）。
+
+    **元数据落 DB 而非 Redis**：原先存无 TTL 的 Redis 键，关掉 Redis 持久化后重启会让在途
+    会话蒸发、``up/<uid>`` 孤儿对象无从回收。落表后确认与清扫都不再依赖 Redis 存活。
     """
     if settings.storage_backend != "s3":
         return UploadInitResp(mode="sync")
@@ -595,26 +595,26 @@ async def upload_init(
     key = f"up/{uid}"
     storage = _get_storage()
     url = storage.presign_upload(key, expires=_PRESIGN_EXPIRES)
-    redis = await get_redis()
-    if redis is not None:
-        # 元数据随标记存，供 confirm 登记 LibraryFile 用（tags 以 JSON 数组形态落标记）。
-        # 标记持久化（不带 ex/ttl）：Redis 会随 TTL 到期自动删除标记，导致清扫 scan 永远看不到
-        # "已过期"的标记、up/<uid> 孤儿无法回收（R1）。改由 created_at 记录写入时刻，孤儿清扫
-        # 按年龄(_UPLOAD_TTL 窗口)判断是否过期。
-        meta = json.dumps(
-            {
-                "key": key,
-                "uploader_id": str(cur.id),
-                "original_name": info.original_name,
-                "mime_type": info.mime_type,
-                "category_id": info.category_id,
-                "description": info.description,
-                "tags": info.tags,
-                "created_at": datetime.now(UTC).isoformat(),
-            },
-            ensure_ascii=False,
-        )
-        await redis.set(_upload_key(uid), meta)
+    # tags 以 JSON 数组形态落 meta（与 confirm 侧解析口径一致）；created_at 供清扫判龄。
+    meta = json.dumps(
+        {
+            "key": key,
+            "uploader_id": str(cur.id),
+            "original_name": info.original_name,
+            "mime_type": info.mime_type,
+            "category_id": info.category_id,
+            "description": info.description,
+            "tags": info.tags,
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+        ensure_ascii=False,
+    )
+    await UploadSessionRepository(db).create(
+        upload_id=uid,
+        uploader_id=cur.id,
+        storage_key=key,
+        meta=meta,
+    )
     return UploadInitResp(mode="direct", upload_id=uid, presigned_url=url)
 
 
@@ -707,19 +707,16 @@ async def _register_from_upload(
 async def confirm_upload(db: DbSession, upload_id: str, cur: CurrentUser) -> FileInfo:
     """确认预签名直传：回读对象→SHA3→去重/copy 到内容寻址 key→登记 PENDING。
 
-    Redis GETDEL 标记（原子 + 幂等：同 upload_id 仅可确认一次）。标记缺失/已用/Redis
-    未启用 → ``UPLOAD_EXPIRED``；随机 key 对象不存在 → ``UPLOAD_NOT_FOUND``。
+    认领 ``upload_sessions`` 中的一行（删行即原子消费，幂等：同 upload_id 仅可确认一次）。
+    会话缺失/已用 → ``UPLOAD_EXPIRED``；随机 key 对象不存在 → ``UPLOAD_NOT_FOUND``。
 
-    薄封装：读标记→解析 meta→调用 ``_register_from_upload``（登记核心已抽出复用）。
+    薄封装：认领→解析 meta→调用 ``_register_from_upload``（登记核心已抽出复用）。
     """
-    redis = await get_redis()
-    meta_raw = None
-    if redis is not None:
-        meta_raw = await redis.getdel(_upload_key(upload_id))
-    if not meta_raw:
+    session = await UploadSessionRepository(db).claim(upload_id)
+    if session is None:
         raise BizError(FileErr.UPLOAD_EXPIRED, detail="Upload session expired/used")
     try:
-        meta = json.loads(meta_raw)
+        meta = json.loads(session.meta)
     except json.JSONDecodeError:
         raise BizError(FileErr.UPLOAD_EXPIRED) from None
     storage = _get_storage()

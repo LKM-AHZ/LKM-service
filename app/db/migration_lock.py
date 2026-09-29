@@ -120,7 +120,7 @@ async def acquire_migration_lock(key: str) -> bool:
     """
     from app.core import redis as redis_client
 
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     if client is None:
         return False
     token = uuid.uuid4().hex
@@ -154,7 +154,7 @@ async def release_migration_lock(held: bool, key: str) -> None:
 
     # 先停续期再删锁：否则续期可能在删除之后又把 key 续上（留下永不释放的锁）
     await _stop_renewer(key)
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     token = _tokens.pop(key, None)
     if client is None or token is None:
         return

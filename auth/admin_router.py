@@ -46,6 +46,7 @@ from auth.admin_session import (
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
+from auth.repository import RevokedAccessTokenRepository
 from auth.schemas import Password
 from auth.security import dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
@@ -141,6 +142,41 @@ def _admin_user_dict(user: User) -> dict[str, Any]:
 
 
 # -- 2FA step-up 需先确认当前会话是合法 admin（复用 admin_session 基元，本地裁决于 auth 库）--
+
+async def _revoke_jti_persistently(db: AsyncSession, payload: dict[str, Any]) -> None:
+    """把 jti 落 DB 撤销表（Redis 预检之外的**权威**面）。
+
+    关掉 Redis 持久化后 ``jti:block:`` 重启即空，而 admin 单设备登出刻意不 bump
+    ``token_version``，jti 是唯一撤销判据 —— 故必须同时落库，否则重启后已登出的 admin
+    access cookie 会在剩余 15min 内复活。
+
+    载荷缺 jti/sub/exp 时静默跳过（与 ``block_payload_jti`` 的宽松处理一致：灰度期无 jti
+    的旧 token 视为无需处理，ex 缺失无法界定 TTL 也不落库——预检仍会挡）。
+    """
+    jti = payload.get("jti")
+    if not isinstance(jti, str) or not jti:
+        return
+    try:
+        user_id = uuid.UUID(str(payload.get("sub")))
+    except (AttributeError, TypeError, ValueError):
+        return
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+        return
+    await RevokedAccessTokenRepository(db).revoke(
+        jti=jti,
+        user_id=user_id,
+        expires_at=datetime.datetime.fromtimestamp(float(exp), tz=datetime.UTC),
+    )
+
+
+async def _jti_revoked_in_db(db: AsyncSession, jti: Any) -> bool:
+    """DB 撤销表兜底查询（Redis 未命中/不可用时才走到这里）。命中即拒。"""
+    if not isinstance(jti, str) or not jti:
+        return False
+    return await RevokedAccessTokenRepository(db).is_revoked(jti)
+
+
 async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User:
     """按 admin access cookie 识别当前登录管理员（auth 库自足复刻 get_current_admin 语义）。
 
@@ -160,9 +196,12 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid") from None
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
-    # jti 撤销预检：admin 登出按 jti 写黑名单即时失效该 cookie（不 bump token_version——那会
-    # 把该 admin 的其他设备一并踢掉）。错误码与其余 admin 会话失效路径一致。
-    if await is_jti_blocked(payload.get("jti")):
+    # jti 撤销判定：admin 登出按 jti 记撤销，即时失效该 cookie（不 bump token_version——那会
+    # 把该 admin 的其他设备一并踢掉）。Redis 预检命中即短路；**未命中/不可用再回查 DB 撤销表**
+    # ——关掉 Redis 持久化后 jti 黑名单不再跨重启存活，DB 才是权威（见 _revoke_jti_persistently）。
+    # 错误码与其余 admin 会话失效路径一致。
+    jti = payload.get("jti")
+    if await is_jti_blocked(jti) or await _jti_revoked_in_db(db, jti):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
     sub = payload.get("sub")
     # sub 是 str(user.id)（UUID 串）；非法/缺失一律 FORBIDDEN，绝不 500。
@@ -362,6 +401,8 @@ async def admin_logout(
             payload = None
         if payload is not None:
             await block_payload_jti(payload)
+            # 同时落 DB 权威：Redis 预检关掉持久化后不跨重启存活（见 _revoke_jti_persistently）
+            await _revoke_jti_persistently(db, payload)
     resp = resp_json(CommonErr.OK, data={"ok": True})
     _clear_cookies(resp)
     return resp

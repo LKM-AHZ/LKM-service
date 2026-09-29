@@ -8,6 +8,7 @@
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -16,10 +17,45 @@ from moto import mock_aws
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.files.models import FileStatus, LibraryFile
+from app.modules.files.models import FileStatus, LibraryFile, UploadSession
 
 # 直传标记里的 uploader_id（uuid 字符串）；register 会以 uuid.UUID(...) 解析。
 _UPLOADER_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
+
+
+def _meta(key: str) -> dict[str, Any]:
+    """直传会话的 meta（与 upload_init 落库形态同构）。"""
+    return {
+        "key": key,
+        "uploader_id": str(_UPLOADER_ID),
+        "original_name": "讲座.pdf",
+        "mime_type": "application/pdf",
+        "category_id": "math",
+        "description": "事件登记",
+        "tags": ["数学"],
+        "created_at": "2026-08-19T00:00:00+00:00",
+    }
+
+
+async def _add_session(db: AsyncSession, upload_id: str, key: str) -> None:
+    """写入一条直传会话（等价 upload_init 落库），供 notify_upload 认领。"""
+    db.add(
+        UploadSession(
+            upload_id=upload_id,
+            uploader_id=_UPLOADER_ID,
+            storage_key=key,
+            meta=json.dumps(_meta(key), ensure_ascii=False),
+            created_at=datetime.now(UTC),
+        )
+    )
+    await db.flush()
+
+
+async def _session_exists(db: AsyncSession, upload_id: str) -> bool:
+    row = await db.execute(
+        select(UploadSession).where(UploadSession.upload_id == upload_id)
+    )
+    return row.scalars().first() is not None
 
 
 @pytest.fixture
@@ -220,12 +256,6 @@ class TestNotifyTask:
         with mock_aws():
             stor, client = self._moto_s3_storage()
             monkeypatch.setattr("app.modules.files.service._get_storage", lambda: stor)
-            fake = _FakeRedis()
-
-            async def _fake_redis() -> object:
-                return fake
-
-            monkeypatch.setattr(notify_task, "get_redis", _fake_redis)
             monkeypatch.setattr(notify_task, "new_session", _new_session_for(db))
 
             upload_id = "someupload"
@@ -233,23 +263,8 @@ class TestNotifyTask:
             content = b"%PDF-1.4 notify bytes"
             # 直传对象已落桶：S3 key = prefix/up/<uid>
             client.put_object(Bucket="lkm", Key=f"files/{key}", Body=content)
-            # 标记随直传初始化写入（与 upload_init 同构）
-            await fake.set(
-                notify_task._upload_key(upload_id),
-                json.dumps(
-                    {
-                        "key": key,
-                        "uploader_id": str(_UPLOADER_ID),
-                        "original_name": "讲座.pdf",
-                        "mime_type": "application/pdf",
-                        "category_id": "math",
-                        "description": "事件登记",
-                        "tags": ["数学"],
-                        "created_at": "2026-08-19T00:00:00+00:00",
-                    },
-                    ensure_ascii=False,
-                ),
-            )
+            # 会话随直传初始化写入（与 upload_init 同构）
+            await _add_session(db, upload_id, key)
 
             # register 的 LibraryFile.uploader_id 必须指向真实 user；用固定 uuid 建对应行。
             from auth.models import User
@@ -266,38 +281,20 @@ class TestNotifyTask:
             assert row.uploader_id == _UPLOADER_ID
             assert row.original_name == "讲座.pdf"
             assert row.sha3_hash == hashlib.sha3_256(content).hexdigest()
-            # 随机 key 已删，标记已被 GETDEL 取走
+            # 随机 key 已删，会话行已被认领（删行）
             import botocore.exceptions
 
             with pytest.raises(botocore.exceptions.ClientError):
                 client.head_object(Bucket="lkm", Key=f"files/up/{upload_id}")
-            assert upload_id not in fake._data
+            assert not await _session_exists(db, upload_id)
 
-    async def test_notify_upload_restores_marker_on_failure(
+    async def test_notify_upload_restores_session_on_failure(
         self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """登记失败 → 恢复原标记（保 created_at）并抛异常；重试时可重新登记。"""
+        """登记失败 → 写回会话行（保 created_at）并抛异常；重试时可重新登记。"""
         import app.modules.files.tasks as notify_task
 
-        fake = _FakeRedis()
-        key = notify_task._upload_key("retry")
-        meta_raw = json.dumps(
-            {
-                "key": "up/retry",
-                "uploader_id": str(_UPLOADER_ID),
-                "original_name": "讲座.pdf",
-                "mime_type": "application/pdf",
-                "category_id": "math",
-                "description": "事件登记",
-                "tags": ["数学"],
-                "created_at": "2026-08-19T00:00:00+00:00",
-            },
-            ensure_ascii=False,
-        )
-        await fake.set(key, meta_raw)
-
-        async def _fake_redis() -> object:
-            return fake
+        await _add_session(db, "retry", "up/retry")
 
         state = {"call": 0}
 
@@ -306,65 +303,37 @@ class TestNotifyTask:
             if state["call"] == 1:
                 raise RuntimeError("storage boom")
 
-        monkeypatch.setattr(notify_task, "get_redis", _fake_redis)
         monkeypatch.setattr(notify_task, "new_session", _new_session_for(db))
         monkeypatch.setattr(notify_task, "_register_from_upload", _register)
 
-        # 首次调用：登记抛出 → 异常上抛，且标记被恢复（保留原始 meta 与 created_at）。
+        # 首次调用：登记抛出 → 异常上抛，且会话行被写回（保留原始 meta 与 created_at）。
         with pytest.raises(RuntimeError, match="storage boom"):
             await notify_task.notify_upload("retry")
-        assert fake._data[key] == meta_raw
+        assert await _session_exists(db, "retry")
 
-        # 第二次调用（模拟重试）：登记成功 → 标记被 GETDEL 取走，不再恢复。
+        # 第二次调用（模拟重试）：登记成功 → 行被认领删掉，不再恢复。
         await notify_task.notify_upload("retry")
         assert state["call"] == 2
-        assert key not in fake._data
+        assert not await _session_exists(db, "retry")
 
-    async def test_notify_upload_idempotent_when_marker_gone(
+    async def test_notify_upload_idempotent_when_session_gone(
         self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import app.modules.files.tasks as notify_task
 
-        fake = _FakeRedis()  # 空：标记已消失
-
-        async def _fake_redis() -> object:
-            return fake
-
+        # 空表：会话已消失（已被登记或清扫）
         called = False
 
         async def _register(*a: Any, **k: Any) -> None:
             nonlocal called
             called = True
 
-        monkeypatch.setattr(notify_task, "get_redis", _fake_redis)
         monkeypatch.setattr(notify_task, "new_session", _new_session_for(db))
         monkeypatch.setattr(notify_task, "_register_from_upload", _register)
 
         await notify_task.notify_upload("gone")
 
-        assert called is False  # 标记缺失 → 幂等 no-op，未触发登记
-
-    async def test_notify_upload_redis_none_noop(
-        self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import app.modules.files.tasks as notify_task
-
-        async def _none() -> None:
-            return None
-
-        called = False
-
-        async def _register(*a: Any, **k: Any) -> None:
-            nonlocal called
-            called = True
-
-        monkeypatch.setattr(notify_task, "get_redis", _none)
-        monkeypatch.setattr(notify_task, "new_session", _new_session_for(db))
-        monkeypatch.setattr(notify_task, "_register_from_upload", _register)
-
-        await notify_task.notify_upload("no-redis")
-
-        assert called is False
+        assert called is False  # 会话缺失 → 幂等 no-op，未触发登记
 
 
 def _new_session_for(

@@ -243,6 +243,7 @@ async def authorize_via_seam(
     expect_token_version: int,
     iat_ts: float | int | None,
     require_admin: bool = False,
+    jti: str | None = None,
 ) -> dict[str, object]:
     """经 AUTH internal authz 端点裁决一次会话：返回 ``{"ok","cause","account_level","role"}``。
 
@@ -261,6 +262,7 @@ async def authorize_via_seam(
         "expect_token_version": expect_token_version,
         "iat_ts": iat_ts,
         "require_admin": require_admin,
+        "jti": jti,
     }
     resp = await _request(
         "POST", url, label="auth_http authz request", headers=headers, json=body

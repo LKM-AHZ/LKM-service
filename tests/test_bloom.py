@@ -101,7 +101,7 @@ class TestFailOpen:
     async def test_redis_unavailable_add_false_and_no_block(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def _no_redis() -> None:
+        async def _no_redis(*_: Any, **__: Any) -> None:
             return None
 
         monkeypatch.setattr(bloom.redis_client, "get_redis", _no_redis)
@@ -116,7 +116,7 @@ class TestFailOpen:
             def pipeline(self, *_: Any, **__: Any) -> Any:
                 raise ConnectionError("redis down")
 
-        async def _broken_redis() -> Any:
+        async def _broken_redis(*_: Any, **__: Any) -> Any:
             return _Broken()
 
         monkeypatch.setattr(bloom.redis_client, "get_redis", _broken_redis)

@@ -68,7 +68,7 @@ async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
     # 键构造（含白名单校验）必须在 try 之外：字段名非法是调用方错误，不能与
     # 「Redis 不可用」共用同一条 False 出口，否则会被静默导到 DB 回退路径
     key = counter_key(field, obj_id)
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     if client is None:
         return False
     try:
@@ -82,7 +82,7 @@ async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
 async def pending_delta(field: str, obj_id: uuid.UUID) -> int:
     """当前未落库差值（Redis 不可用/无键 → 0）。用于返回「DB 值 + 增量」的即时读数。"""
     key = counter_key(field, obj_id)  # 同 bump_counter：校验失败必须外抛，不吞成 0
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     if client is None:
         return 0
     try:
@@ -103,12 +103,13 @@ async def drain_counters() -> dict[tuple[str, uuid.UUID], int]:
     并发新增的键会被下一轮 SCAN 扫到（最坏是晚一轮落库，且对账兜底）。
     取走即清零——若随后 DB 写入失败，差值丢失（宁少不重），由对账收敛回真值。
     """
-    client = await redis_client.get_redis()
+    pattern = make_key("count", "*")
+    # SCAN 的 pattern 落在 count 前缀内 → 该前缀整体属于同一后端，无需跨后端合并
+    client = await redis_client.get_redis(pattern)
     if client is None:
         return {}
 
     drained: dict[tuple[str, uuid.UUID], int] = {}
-    pattern = make_key("count", "*")
     try:
         async for key in client.scan_iter(match=pattern, count=500):
             parsed = parse_counter_key(key)

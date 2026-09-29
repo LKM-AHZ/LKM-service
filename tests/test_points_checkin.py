@@ -170,7 +170,7 @@ async def test_checkin_fail_open_when_redis_unavailable(
 
     # redis_client.get_redis() 本身从不抛错（内部已兜底），但返回后的实际操作可能失败；
     # cache 各函数对 operation 都有 try/except → 抛错也应被吞掉，打卡不中断。
-    async def _down_redis():
+    async def _down_redis(*_a, **_k):
         return _DownRedis()
 
     monkeypatch.setattr(cache.redis_client, "get_redis", _down_redis)

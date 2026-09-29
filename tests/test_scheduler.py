@@ -86,8 +86,9 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "reconcile_content_counts_full",  # 蓝图 §5.6 第 5 条：日级全量兜底
         "fanout_feed_items",  # M6.11
         "run_ops_daily",  # 运营日报（蓝图 §5.5/§6.4）
-        "seed_user_id_bloom",  # §5.6 user id 白名单位图预热
-    }
+            "seed_user_id_bloom",  # §5.6 user id 白名单位图预热
+            "purge_revoked_access_tokens",  # 关 Redis 持久化后 jti 撤销表过期清理
+        }
     if not settings.counters_write_through:
         expect_fns.add("flush_content_counters")  # 仅回退（write-behind）模式注册
     s = scheduler.build_scheduler()

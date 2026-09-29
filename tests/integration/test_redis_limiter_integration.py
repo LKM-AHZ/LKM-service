@@ -54,7 +54,7 @@ _orig_get_redis = redis_core.get_redis
 
 
 def _patch_get_redis(client: Redis) -> None:
-    async def _get() -> Redis:
+    async def _get(*_a: object, **_k: object) -> Redis:
         return client
 
     redis_core.get_redis = _get  # ty: ignore[invalid-assignment]  # runtime monkeypatch
@@ -121,3 +121,19 @@ class TestRedisRateLimiterIntegration:
         with pytest.raises(BizError) as exc:
             await ccrl(_key("code-limited"), max_count=5, window=3600)
         assert exc.value.errcode == AuthErr.VERIFICATION_CODE_RATE_LIMIT
+
+    async def should_recover_after_script_cache_flush(self, real_redis: Redis) -> None:
+        """脚本缓存被清（Redis 重启 / SCRIPT FLUSH / 切到新实例）后限流须自愈重载。
+
+        回归保护：redis-py 8.x 起 ``str(ResponseError)`` 只剩消息体
+        （``'No matching script. Please use EVAL.'``），不含 ``NOSCRIPT`` 码；只查码会让
+        重载分支永不触发、限流在 fail_open 下**静默失效**。故此处用 ``fail_open=False``
+        把「静默失效」暴露成显式拒绝（False）而不是伪装成放行。
+        """
+        k = _key("noscript")
+        limiter = RedisRateLimiter()
+        assert await limiter.check(k, max_count=5, window_seconds=10) is True
+        await real_redis.script_flush()  # 令已缓存的 SHA 失效
+        assert (
+            await limiter.check(k, max_count=5, window_seconds=10, fail_open=False) is True
+        )

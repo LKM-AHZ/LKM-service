@@ -29,6 +29,7 @@ from app.core.messaging import (
     RKEY_AUDIT_LOGIN_FAIL,
     RKEY_AUDIT_PERMISSION_CHANGE,
     RKEY_BLOOM_SEED,
+    RKEY_CLEANUP,
     RKEY_OPS_DAILY,
     RKEY_RECONCILE,
     SUB_AUDIT,
@@ -234,6 +235,24 @@ async def seed_user_id_bloom() -> None:
     await backfill_user_ids()
 
 
+async def purge_revoked_access_tokens() -> None:
+    """清理已过期的 jti 撤销行（jobs worker 消费 cron.cleanup）。
+
+    ``revoked_access_tokens``（auth 库）是关掉 Redis 持久化后 jti 撤销的**权威**面。Redis 侧
+    靠 ``ex`` 自洁，本表没有 TTL —— 过期行不删会无界累积，故按 ``expires_at`` 周期清理。
+    函数级 import，避免 worker 冷启动拉整棵 auth/db 树。
+    """
+    from app.db.base import now_iso
+    from auth.db.session import new_auth_session
+    from auth.repository import RevokedAccessTokenRepository
+
+    async with await new_auth_session() as db:
+        removed = await RevokedAccessTokenRepository(db).purge_expired(now=now_iso())
+        await db.commit()
+    if removed:
+        logger.info("revoked_access_tokens 清理 %d 行", removed)
+
+
 register_task(SUB_SEND.name, "send_code", send_code)
 register_task(SUB_SEND.name, "send_magic_link", send_magic_link)
 register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_snap)
@@ -241,6 +260,9 @@ register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
 register_task(SUB_JOBS.name, "run_ops_daily", run_ops_daily)
 register_task(SUB_JOBS.name, "seed_user_id_bloom", seed_user_id_bloom)
+register_task(
+    SUB_JOBS.name, "purge_revoked_access_tokens", purge_revoked_access_tokens
+)
 # 审计事件：两个 topic 各自的订阅绑同一 handler（action 由路由键区分）
 register_task(SUB_AUDIT.name, "record_audit_event", record_audit_event)
 register_task(SUB_AUDIT_PERMISSION.name, "record_audit_event", record_audit_event)
@@ -273,4 +295,12 @@ register_cron_job(
     cron="50 3 * * *",  # 每日 03:50
     routing_key=RKEY_BLOOM_SEED,
     fn="seed_user_id_bloom",
+)
+# jti 撤销表过期清理：每日 04:00（排在以上各步之后）。关掉 Redis 持久化后撤销记录的 TTL
+# 从 Redis 键的 ex 迁到本表的 expires_at，需主动清理，否则无界累积。
+register_cron_job(
+    job_id="purge_revoked_access_tokens",
+    cron="0 4 * * *",  # 每日 04:00
+    routing_key=RKEY_CLEANUP,
+    fn="purge_revoked_access_tokens",
 )

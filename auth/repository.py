@@ -26,7 +26,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import selectinload
 
 from app.core.err import ErrCode
-from app.db.base import expires_at
+from app.db.base import expires_at, now_iso
 from app.db.repository import AsyncRepository, DbSession
 from auth.models import (
     TOTP,
@@ -41,6 +41,7 @@ from auth.models import (
     RecoveryCode,
     RecoveryTransaction,
     RefreshToken,
+    RevokedAccessToken,
     TempTokenUsage,
     User,
     UserOAuth,
@@ -253,6 +254,46 @@ class RefreshTokenRepository(AsyncRepository[RefreshToken]):
             RefreshToken.user_id == user_id,
             RefreshToken.revoked_at.is_(None),
         )
+
+
+class RevokedAccessTokenRepository(AsyncRepository[RevokedAccessToken]):
+    """已撤销 access token（按 ``jti``）的持久面。
+
+    Redis 关掉持久化后 ``jti:block:{jti}`` 不再跨重启存活，本仓储即撤销的**权威**依据
+    （见 ``auth/models.py::RevokedAccessToken``）。前台登出另有 ``token_version`` 兜底；
+    本表主要承载 **admin 单设备登出**——它刻意不 bump ``token_version``，jti 是唯一判据。
+    """
+
+    model = RevokedAccessToken
+    # 主键是 jti 而非 id
+    pk_attr = "jti"
+
+    async def revoke(
+        self, *, jti: str, user_id: uuid.UUID, expires_at: datetime.datetime
+    ) -> None:
+        """幂等写入一条撤销记录（同 jti 重复登出静默跳过，保留首次撤销时间）。"""
+        await self.pg_upsert(
+            {
+                "jti": jti,
+                "user_id": user_id,
+                "expires_at": expires_at,
+                "revoked_at": now_iso(),
+            },
+            index_elements=["jti"],
+            do_nothing=True,
+        )
+
+    async def is_revoked(self, jti: str) -> bool:
+        """该 jti 是否在持久撤销表里（**命中必拒**）。"""
+        return await self.exists(RevokedAccessToken.jti == jti)
+
+    async def purge_expired(self, *, now: datetime.datetime) -> int:
+        """删除已过期的撤销行。
+
+        Redis 侧靠 ``ex`` 自洁；本表没有 TTL，须由定时任务按 ``expires_at`` 主动清理，
+        否则撤销记录无界累积。返回删除行数。
+        """
+        return await self.hard_delete_where(RevokedAccessToken.expires_at < now)
 
 
 class MagicLinkRepository(AsyncRepository[MagicLink]):

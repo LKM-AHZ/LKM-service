@@ -338,6 +338,15 @@ async def list_follower_ids(
     return await UserFollowRepository(db).list_follower_ids(following_id, limit=limit)
 
 
+async def list_bigv_author_ids(db: DbSession, *, threshold: int) -> list[uuid.UUID]:
+    """关注者数超过 ``threshold`` 的作者 id（feed fanout 的大 V 判定，读时现算）。
+
+    供 feed 读路径的实时补拉使用 —— 原先读的是一份 Redis SET 标记，关闭 Redis 持久化后
+    该标记不可靠（重启即空且不会自动重建），故改由本表重放判据。
+    """
+    return await UserFollowRepository(db).list_bigv_author_ids(threshold)
+
+
 async def list_board_follower_ids(
     db: DbSession, board_id: uuid.UUID, *, limit: int | None = None
 ) -> list[uuid.UUID]:

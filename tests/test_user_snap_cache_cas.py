@@ -118,7 +118,10 @@ class TestReadPopulateAndKeyShape:
             (await uc.read_snap_with_version(uid)) == (None, None)
         )  # miss with-version 也为空
         epoch0 = await uc.current_epoch(uid)
-        assert epoch0 == 0  # 从未失效 → epoch 0
+        # 从未失效 → 一个**非 0** 的初始代次（关 AOF 后用以区分「键从未存在」与「被重启抹掉」，
+        # 见 current_epoch docstring）；同一用户重复读稳定返回同一值（SET NX 只初始化一次）。
+        assert epoch0 != 0
+        assert await uc.current_epoch(uid) == epoch0
         snap = {"user_id": uid, "username": "bob", "display_name": "Bob",
                 "avatar": None, "role": None,
                 "account_level": "local", "banned": False}

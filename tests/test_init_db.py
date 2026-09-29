@@ -247,7 +247,7 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
                     {"s": schema},
                 )
             ).scalar_one()
-        assert n == len(auth_metadata.tables) == 18
+        assert n == len(auth_metadata.tables) == 19
     finally:
         await engine.dispose()
         clean = create_async_engine(settings.auth_database_url)
@@ -277,7 +277,7 @@ def test_auth_alembic_chain_baseline_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0001_auth_baseline"
+    assert script.get_current_head() == "0002_revoked_access_tokens"
 
 
 async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:

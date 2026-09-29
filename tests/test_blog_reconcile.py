@@ -22,7 +22,7 @@ def repo_dir(monkeypatch, tmp_path):
     return p
 
 
-async def _no_redis():
+async def _no_redis(*_a, **_k):
     """fake get_redis：返回 None，跳过 Redis 锁（与生产同为 awaitable 契约）。"""
     return None
 

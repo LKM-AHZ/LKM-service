@@ -251,7 +251,7 @@ class TestCheckCodeRateLimit:
 
         original = redis_core.get_redis
 
-        async def _none() -> Any:
+        async def _none(*_a: Any, **_k: Any) -> Any:
             return None
 
         monkeypatch.setattr(settings, "redis_url", "redis://localhost:6379/0")

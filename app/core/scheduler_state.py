@@ -79,7 +79,7 @@ async def write_heartbeat(
     from app.core.config import settings
 
     period = settings.scheduler_heartbeat_interval_s if interval_s is None else interval_s
-    client = redis if redis is not None else await get_redis()
+    client = redis if redis is not None else await get_redis(HEARTBEAT_KEY)
     if client is None:
         return False
     try:
@@ -112,7 +112,7 @@ async def run_heartbeat(interval_s: float | None = None) -> None:
 
 async def collect_once(redis: Any | None = None) -> None:
     """读一次心跳并更新 gauge（API 进程调用）。"""
-    client = redis if redis is not None else await get_redis()
+    client = redis if redis is not None else await get_redis(HEARTBEAT_KEY)
     raw: Any = None
     if client is not None:
         try:

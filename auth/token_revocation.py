@@ -65,7 +65,7 @@ async def block_jti(jti: str | None, ttl_seconds: int) -> bool:
         return False
     ttl = max(1, min(int(ttl_seconds), _MAX_TTL_S))
     try:
-        client = await get_redis()
+        client = await get_redis(_key(jti))
         if client is None:
             return False
         # 用 set(..., ex=) 而非 setex：后者在 redis-py 新版已弃用，本仓 filterwarnings=error
@@ -98,7 +98,7 @@ async def is_jti_blocked(jti: str | None) -> bool:
     if not jti:
         return False
     try:
-        client = await get_redis()
+        client = await get_redis(_key(jti))
         if client is None:
             return False
         return bool(await client.exists(_key(jti)))
@@ -115,7 +115,7 @@ async def set_token_version(user_id: uuid.UUID | str, version: int) -> bool:
     写不进绝不能让 bump（改密/封号/登出）报错。
     """
     try:
-        client = await get_redis()
+        client = await get_redis(_tv_key(user_id))
         if client is None:
             return False
         await client.set(
@@ -147,7 +147,7 @@ async def token_version_is_stale(user_id: uuid.UUID | str, token_version: Any) -
     except (TypeError, ValueError):
         return False
     try:
-        client = await get_redis()
+        client = await get_redis(_tv_key(user_id))
         if client is None:
             return False
         raw = await client.get(_tv_key(user_id))

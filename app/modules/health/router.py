@@ -157,17 +157,27 @@ async def _probe_db() -> DependencyStatus:
 
 
 async def _probe_redis() -> DependencyStatus:
-    """探测 Redis：get_redis 未配置/不可用返回 None → disabled；可用则 up。"""
-    client = await redis_client.get_redis()
-    if client is None:
+    """探测**所有已配置的** Redis 后端：一个都没配 → disabled；任一不可用 → error；全通 → up。
+
+    双后端并行时任一后端不可用都算降级——它承载的那部分域会退到 fail-open。
+    ``all_clients()`` 只返回「可用」的后端，故必须与「已配置数量」比对才能发现掉线。
+    """
+    expected = 1 + (1 if redis_client.secondary_configured() else 0)
+    clients = await redis_client.all_clients()
+    if not clients:
         return DependencyStatus(status="disabled", detail="redis_url 未配置或不可用")
-    try:
-        ok = await client.ping()
-    except Exception as exc:
-        logger.warning("health probe redis failed: %s", exc)
-        return DependencyStatus(status="error", detail="redis ping failed")
-    if not ok:
-        return DependencyStatus(status="error", detail="ping failed")
+    if len(clients) < expected:
+        return DependencyStatus(
+            status="error", detail=f"redis 后端不可用（{len(clients)}/{expected}）"
+        )
+    for _label, client in clients:
+        try:
+            ok = await client.ping()
+        except Exception as exc:
+            logger.warning("health probe redis failed: %s", exc)
+            return DependencyStatus(status="error", detail="redis ping failed")
+        if not ok:
+            return DependencyStatus(status="error", detail="ping failed")
     return DependencyStatus(status="up")
 
 

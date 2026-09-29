@@ -8,6 +8,9 @@
 ``LKM_REDIS_URL``/``LKM_PULSAR_URL``（避免本地跑 ``-m integration`` 时无谓拉起 Pulsar
 ——那是分钟级启动）。未启用时既有 skip 逻辑照旧（env 为空 → skip 而非红）。
 
+L2 后端可换：``LKM_IT_REDIS_IMAGE`` 指到别的 RESP 兼容实现（如 Dragonfly）即切，
+默认 ``redis:7-alpine``。见 ``test_redis_backend_compat.py``。
+
 本 fixture 是 **autouse**，因此环境不可用时**只打印警告、绝不 skip**——否则会把
 「docker 不可用」放大成整套测试静默跳过。用例仍按原有「env 为空 → skip」判定。
 """
@@ -25,6 +28,32 @@ import pytest
 
 def _enabled() -> bool:
     return os.environ.get("LKM_IT_USE_TESTCONTAINERS") == "1"
+
+
+def _is_vanilla_redis(image: str) -> bool:
+    """镜像是否官方 redis（决定用哪种等待策略）。Dragonfly 等 RESP 兼容实现返回 False。"""
+    return image.split("/")[-1].split(":")[0] == "redis"
+
+
+def _wait_tcp(host: str, port: int, timeout: float = 60.0) -> None:
+    """轮询到端口可连为止。
+
+    非 redis 后端（Dragonfly）没有可依赖的启动日志串，故用 TCP 可达性判定就绪；
+    Dragonfly 冷启动 + 建线程池比 redis 慢，超时给足。
+    """
+    import socket
+    import time
+
+    deadline = time.monotonic() + timeout
+    last: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.5)
+    raise RuntimeError(f"Redis 后端 {host}:{port} 未在 {timeout}s 内就绪：{last}")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -55,7 +84,15 @@ def _integration_containers() -> Iterator[None]:
             password="postgres",
             dbname="lkm",
         )
-        redis = RedisContainer("redis:7-alpine")
+        # 后端可换：默认 redis:7-alpine；把 LKM_IT_REDIS_IMAGE 指到别的 RESP 兼容实现
+        # （如 Dragonfly）即切。RedisContainer 的就绪判定绑死 redis 的启动日志，换镜像会
+        # 一直等不到而超时——非 redis 镜像改用裸 DockerContainer，就绪由下面的 TCP 轮询判定。
+        redis_image = os.environ.get("LKM_IT_REDIS_IMAGE", "redis:7-alpine")
+        redis = (
+            RedisContainer(redis_image)
+            if _is_vanilla_redis(redis_image)
+            else DockerContainer(redis_image).with_exposed_ports(6379)
+        )
         pulsar = (
             DockerContainer("apachepulsar/pulsar:3.3.0")  # 与 compose/k8s 同版本
             .with_exposed_ports(6650)
@@ -94,8 +131,12 @@ def _integration_containers() -> Iterator[None]:
         ):
             _pulsar_admin(*args)
 
+        # 非 redis 后端没有 wait strategy（见上），这里等端口可连再继续。
         host = redis.get_container_host_ip()
-        redis_url = f"redis://{host}:{redis.get_exposed_port(6379)}/0"
+        redis_port = int(redis.get_exposed_port(6379))
+        if not _is_vanilla_redis(redis_image):
+            _wait_tcp(host, redis_port, timeout=60.0)
+        redis_url = f"redis://{host}:{redis_port}/0"
         phost = pulsar.get_container_host_ip()
         pulsar_url = f"pulsar://{phost}:{pulsar.get_exposed_port(6650)}"
         os.environ["LKM_REDIS_URL"] = redis_url

@@ -36,14 +36,17 @@ def _channel() -> str:
 
 
 async def publish_invalidate(key: str) -> None:
-    """广播「某 L2 key 已失效」；Redis 不可用/发布失败静默（靠 L1 TTL 自愈）。"""
-    redis = await redis_client.get_redis()
-    if redis is None:
-        return
-    try:
-        await redis.publish(_channel(), key)
-    except Exception:
-        logger.debug("l1 invalidate publish skip key=%s", key)
+    """广播「某 L2 key 已失效」；Redis 不可用/发布失败静默（靠 L1 TTL 自愈）。
+
+    **双发到所有已配置后端**：被失效的 key 可能落在任一后端（按前缀路由），而订阅方无从
+    判断它属于哪个，故每个后端都发一份。订阅侧仍只订阅主后端 —— 双发已含主后端那一份，
+    照常收到；重复投递对幂等的 L1 删除无害。
+    """
+    for _label, client in await redis_client.all_clients():
+        try:
+            await client.publish(_channel(), key)
+        except Exception:
+            logger.debug("l1 invalidate publish skip key=%s", key)
 
 
 async def start() -> None:

@@ -109,6 +109,7 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
             int(payload.get("token_version", 0)),
             payload.get("iat"),
             require_admin=False,
+            jti=payload.get("jti"),
         )
 
     result = await db.execute(
@@ -186,6 +187,7 @@ async def _resolve_via_seam(
     iat_ts: object,
     *,
     require_admin: bool,
+    jti: str | None = None,
 ) -> CurrentUser:
     """经 auth internal authz 裁决一次会话并重建 CurrentUser。
 
@@ -210,6 +212,7 @@ async def _resolve_via_seam(
             expect_token_version=expect_token_version,
             iat_ts=iat_secs,
             require_admin=require_admin,
+            jti=jti,
         )
     except auth_user_http.UserHttpUnavailable as exc:
         raise BizError(

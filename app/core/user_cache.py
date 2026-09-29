@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -107,8 +108,9 @@ def version_of_updated_at(updated_at: datetime) -> int:
     return int(utc.timestamp()) * 1_000_000 + utc.microsecond
 
 
-async def _get_redis() -> _AsyncRedis | None:
-    return await redis_client.get_redis()
+async def _get_redis(key: str | None = None) -> _AsyncRedis | None:
+    """取 Redis 客户端；``key`` 用于按前缀路由到对应后端（见 core.redis）。"""
+    return await redis_client.get_redis(key)
 
 
 def _normalize_snap(data: dict[str, Any]) -> dict[str, Any]:
@@ -129,12 +131,26 @@ def _normalize_snap(data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def current_epoch(user_id: uuid.UUID) -> int:
-    """读当前失效代次（快照读缝 DB 回填前调用、作为写时 expected_epoch）。fail-open→0。"""
-    redis = await _get_redis()
+    """读当前失效代次（快照读缝 DB 回填前调用、作为写时 expected_epoch）。fail-open→0。
+
+    首次访问会**初始化一个非 0 且不重复的起始代次**（微秒时间戳，``SET NX`` 并发安全）。
+    这是关掉 Redis 持久化后的关键一环：epoch 键重启即丢，而「键从未存在」与「键被重启抹掉」
+    都会表现为读不到——若两者都记作 0，一个在重启前捕获 ``expected_epoch=0`` 的在途回填，
+    在重启后会看到当前值仍是 0，被误判为「期间未失效」而把**陈旧快照写回**（:func:`write_if_newer`
+    的两道守卫都失效）。改用不重复的起始值后，「重启前捕获」与「重启后重读」必然对不上 →
+    陈旧回填被拒，缓存保持空、下个读拉回 DB 实况。
+    """
+    redis = await _get_redis(_epoch_key(user_id))
     if redis is None:
         return _EPOCH_ABSENT
+    ekey = _epoch_key(user_id)
     try:
-        raw = await redis.get(_epoch_key(user_id))
+        raw = await redis.get(ekey)
+        if raw is None:
+            # 非 0 起始值：让「初始化」与「重启后重新初始化」都不会与重启前的捕获值相同。
+            # NX：并发下只有一方写入生效，其余读到同一个值。
+            await redis.set(ekey, str(time.time_ns() // 1000), nx=True)
+            raw = await redis.get(ekey)
     except Exception:
         return _EPOCH_ABSENT
     return _EPOCH_ABSENT if raw is None else _to_int(raw)
@@ -167,7 +183,7 @@ async def read_snap_state(
     只读镜像、不具权威」（见模块 docstring）且默认 TTL 仅 10s，此处保留窗口并在此明示。
     同一模式亦见 :func:`read_snap_with_version` 与 :func:`read_snaps`。
     """
-    redis = await _get_redis()
+    redis = await _get_redis(_snap_key(user_id))
     if redis is None:
         return False, None
     key = _snap_key(user_id)
@@ -243,7 +259,8 @@ async def read_snaps_state(
     """
     if not user_ids:
         return set(), {}
-    redis = await _get_redis()
+    # 批量键同属 user:snap 前缀 → 取首键路由即可（同前缀恒定同后端）
+    redis = await _get_redis(_snap_key(user_ids[0]))
     if redis is None:
         return set(), {}
     l1 = _l1_on()
@@ -318,7 +335,7 @@ async def read_snap_with_version(
 
     同 :func:`read_snap` 走 L1 → L2，L2 命中回填 L1（信封含 sv，供版本断言）。
     """
-    redis = await _get_redis()
+    redis = await _get_redis(_snap_key(user_id))
     if redis is None:
         return None, None
     key = _snap_key(user_id)
@@ -372,13 +389,13 @@ async def write_if_newer(
     :func:`write_negative`）：用短 ``ttl_seconds``、且**不进 L1**（L1 只镜像正向值）。
     TTL 一律经 :func:`jitter_ttl` 扰动防雪崩（蓝图 §5.6）。
     """
-    redis = await _get_redis()
+    key = _snap_key(user_id)
+    ekey = _epoch_key(user_id)
+    # snap 与 epoch 必须同后端（WATCH 跨后端无意义）——两者同前缀，按 snap 键路由即可
+    redis = await _get_redis(key)
     if redis is None:
         # fail-open：缓存不可用即「未写入」，调用方照常返回刚读到的 DB 值。
         return False
-
-    key = _snap_key(user_id)
-    ekey = _epoch_key(user_id)
     # default=str：快照 data 内的 user_id 是 uuid.UUID（DB 直读路径），JSON 无原生 uuid；
     # 序列化成 str 后由读侧 _normalize_snap 还原，保证 L1/L2 与 DB 读路径类型一致。
     payload: dict[str, Any] = {"sv": source_version, "data": data}
@@ -459,7 +476,7 @@ async def invalidate_user_snap(user_id: uuid.UUID) -> None:
     L1（本地内存）无法被 L2 DEL 波及，故 L2 提交成功后**先删本地 L1，再广播**让其他实例
     删各自 L1（订阅方只删 L1、不 DEL L2，避免误删他实例刚回填的新值）。
     """
-    redis = await _get_redis()
+    redis = await _get_redis(_snap_key(user_id))
     if redis is None:
         return
     key = _snap_key(user_id)

@@ -443,7 +443,7 @@ async def run_outbox_loop() -> None:
 
     while True:
         try:
-            redis = await redis_client.get_redis()
+            redis = await redis_client.get_redis(_lease_key())
             if redis is None:
                 # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll，等同 M1.1。
                 # 「已配置但暂时不可用」走同一分支：这里刻意继续投递（fail-open 保可用性），
@@ -478,7 +478,7 @@ async def run_outbox_loop() -> None:
             logger.info("本副本当选 outbox relay leader")
         except asyncio.CancelledError:
             if token is not None:
-                r = await redis_client.get_redis()
+                r = await redis_client.get_redis(_lease_key())
                 if r is not None:
                     await _release_lease(r, token)
             raise

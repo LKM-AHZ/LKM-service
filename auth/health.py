@@ -92,22 +92,31 @@ async def probe_db() -> AuthDepStatus:
 
 
 async def probe_redis() -> AuthDepStatus:
-    """探 Redis：get_redis 未配置/不可用返回 None→disabled；可用则 ping。"""
+    """探**所有已配置的** Redis 后端：一个都没配 → disabled；任一不可用 → error；全通 → up。
+
+    双后端并行时任一后端掉线都算降级（它承载的那部分域会 fail-open）。
+    """
     try:
         # 与 probe_db 对称：get_redis 自身的降级路径（关连接池）也可能抛，不该让探针 500
-        client = await redis_client.get_redis()
+        expected = 1 + (1 if redis_client.secondary_configured() else 0)
+        clients = await redis_client.all_clients()
     except Exception as exc:
         logger.warning("auth readiness: redis 客户端获取失败", exc_info=True)
         return AuthDepStatus(status="error", detail=type(exc).__name__)
-    if client is None:
+    if not clients:
         return AuthDepStatus(status="disabled", detail="redis_url 未配置或不可用")
-    try:
-        ok = await client.ping()
-    except Exception as exc:
-        logger.warning("auth readiness: redis ping 失败", exc_info=True)
-        return AuthDepStatus(status="error", detail=type(exc).__name__)
-    if not ok:
-        return AuthDepStatus(status="error", detail="ping failed")
+    if len(clients) < expected:
+        return AuthDepStatus(
+            status="error", detail=f"redis 后端不可用（{len(clients)}/{expected}）"
+        )
+    for _label, client in clients:
+        try:
+            ok = await client.ping()
+        except Exception as exc:
+            logger.warning("auth readiness: redis ping 失败", exc_info=True)
+            return AuthDepStatus(status="error", detail=type(exc).__name__)
+        if not ok:
+            return AuthDepStatus(status="error", detail="ping failed")
     return AuthDepStatus(status="up")
 
 

@@ -45,7 +45,7 @@ class TestHeartbeatWrite:
         scheduler_state.note_job_finished()
 
     async def test_returns_false_without_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def _none() -> None:
+        async def _none(*_a, **_k) -> None:
             return None
 
         monkeypatch.setattr(scheduler_state, "get_redis", _none)
@@ -101,7 +101,7 @@ class TestReporter:
     ) -> None:
         """Redis 不可用 → 不知道调度器状态，按不可认为在跑处置（宁可吵不可沉默）。"""
 
-        async def _none() -> None:
+        async def _none(*_a, **_k) -> None:
             return None
 
         monkeypatch.setattr(scheduler_state, "get_redis", _none)

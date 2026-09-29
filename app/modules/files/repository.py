@@ -9,12 +9,55 @@ SQLAlchemy 表达式里，此处统一收口；service 只保留存储后端与 
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
 from sqlalchemy import select
 
 from app.db.repository import AsyncRepository
-from app.modules.files.models import FileStatus, LibraryFile
+from app.modules.files.models import FileStatus, LibraryFile, UploadSession
+
+
+class UploadSessionRepository(AsyncRepository[UploadSession]):
+    """预签名直传会话（``upload_sessions``）的读写面。
+
+    认领用「DELETE 影响行数」判定归属 —— 等价原先 Redis ``GETDEL`` 的原子消费：并发下只有
+    一方拿到行，另一方拿到 0 行即视为已过期/已用。会话不再依赖 Redis 存活。
+    """
+
+    model = UploadSession
+    pk_attr = "upload_id"
+
+    async def claim(self, upload_id: str) -> UploadSession | None:
+        """原子认领一个会话：返回被删掉的行（含 meta）；不存在/已被认领 → None。"""
+        row = await self.get(upload_id)
+        if row is None:
+            return None
+        deleted = await self.hard_delete_where(UploadSession.upload_id == upload_id)
+        if deleted == 0:
+            return None
+        return row
+
+    async def restore(self, row: UploadSession) -> None:
+        """把已认领但登记失败的行写回（保留原 ``created_at``，不被立即判龄清扫）。"""
+        await self.pg_upsert(
+            {
+                "upload_id": row.upload_id,
+                "uploader_id": row.uploader_id,
+                "storage_key": row.storage_key,
+                "meta": row.meta,
+                "created_at": row.created_at,
+            },
+            index_elements=["upload_id"],
+            update_columns=["uploader_id", "storage_key", "meta", "created_at"],
+        )
+
+    async def list_expired(self, *, before: datetime.datetime) -> list[UploadSession]:
+        """``created_at`` 早于 ``before`` 的会话（供孤儿清扫）。"""
+        result = await self.db.execute(
+            select(UploadSession).where(UploadSession.created_at < before)
+        )
+        return list(result.scalars().all())
 
 
 class LibraryFileRepository(AsyncRepository[LibraryFile]):

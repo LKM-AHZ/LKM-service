@@ -281,7 +281,7 @@ async def reconcile_user_dim_periodic() -> int:
     """
     from app.core.redis import get_redis as _get_redis
 
-    redis = await _get_redis()
+    redis = await _get_redis(_RECONCILE_LOCK)
     token: str | None = None
     if redis is not None:
         # 锁值用本次运行的唯一 token（而非常量 "1"），释放时才能确认「还是我们那枚」。

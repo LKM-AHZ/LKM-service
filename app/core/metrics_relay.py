@@ -164,7 +164,7 @@ def snapshot() -> list[list[Any]]:
 
 async def publish_snapshot(redis: Any | None = None) -> bool:
     """把本进程快照写进 Redis（带 TTL）；返回是否写成功。Redis 不可用 → False（fail-open）。"""
-    client = redis if redis is not None else await redis_client.get_redis()
+    client = redis if redis is not None else await redis_client.get_redis(relay_key())
     if client is None:
         return False
     ttl = max(1, int(settings.metrics_relay_interval_s * _TTL_MULTIPLIER))
@@ -304,7 +304,12 @@ def _apply_gauge(name: str, labels: tuple[str, ...], value: float) -> None:
 
 async def collect_once(redis: Any | None = None) -> None:
     """扫一遍全部实例快照并落到本地指标（API 进程调用）。"""
-    client = redis if redis is not None else await redis_client.get_redis()
+    # SCAN 的 pattern 落在 metrics:relay 前缀内 → 该前缀整体属于同一后端
+    client = (
+        redis
+        if redis is not None
+        else await redis_client.get_redis(relay_key_pattern())
+    )
     if client is None:
         # 读不到远端状态：按"不可认为中继在跑"处置，但不改动任何业务指标的上次值
         metrics_relay_up.set(0)

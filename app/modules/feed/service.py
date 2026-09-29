@@ -170,7 +170,7 @@ async def _materialized_timeline(
     if not following_ids and not board_ids:
         return FeedResponse(items=[], next_cursor=None)
 
-    bigv = (await fanout.bigv_authors()) & following_ids
+    bigv = (await fanout.bigv_authors(db)) & following_ids
 
     async def _load() -> dict[str, Any]:
         # 多取一条以判定「是否还有下一页」（两路各自 +1，合并后仍能判出）

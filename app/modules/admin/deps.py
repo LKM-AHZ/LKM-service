@@ -108,11 +108,17 @@ async def get_current_admin(
     except (TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session token version invalid") from None
 
-    return await _resolve_admin_via_seam(user_id, expect_tv, payload.get("iat"))
+    return await _resolve_admin_via_seam(
+        user_id, expect_tv, payload.get("iat"), jti=payload.get("jti")
+    )
 
 
 async def _resolve_admin_via_seam(
-    user_id: uuid.UUID, expect_token_version: int, iat_ts: object
+    user_id: uuid.UUID,
+    expect_token_version: int,
+    iat_ts: object,
+    *,
+    jti: str | None = None,
 ) -> CurrentUser:
     """后台 seam 判定：复用 auth 的 seam 解析（require_admin=True），并把失败统一为 FORBIDDEN。
 
@@ -122,7 +128,7 @@ async def _resolve_admin_via_seam(
 
     try:
         return await resolve_via_seam(
-            user_id, expect_token_version, iat_ts, require_admin=True
+            user_id, expect_token_version, iat_ts, require_admin=True, jti=jti
         )
     except BizError:
         raise BizError(

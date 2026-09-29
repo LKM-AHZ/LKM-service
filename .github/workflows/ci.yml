@@ -105,11 +105,21 @@ jobs:
         run: uv run pytest -q
 
   integration:
-    name: integration（Testcontainers 起 PG/Redis/Pulsar）
+    # 两个 L2 后端各跑一遍同套集成测试：换成 Dragonfly 时靠这条 matrix 保证 RESP 兼容
+    # 行为不回退。fail-fast: false —— 任一后端失败不影响另一个出结果，看到完整对照。
+    # 版本须与 deploy/k8s/components/redis-dragonfly/patch-redis.yaml 一致。
+    name: "integration（Redis=${{ matrix.redis_image }}）"
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        redis_image:
+          - redis:7-alpine
+          - docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
     env:
       LKM_IT_USE_TESTCONTAINERS: "1"
+      LKM_IT_REDIS_IMAGE: ${{ matrix.redis_image }}
       LKM_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
       LKM_AUTH_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
     steps:

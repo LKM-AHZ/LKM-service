@@ -275,6 +275,21 @@ class UserFollowRepository(AsyncRepository[UserFollow]):
             stmt = stmt.limit(limit)
         return list((await self.db.execute(stmt)).scalars().all())
 
+    async def list_bigv_author_ids(self, threshold: int) -> list[uuid.UUID]:
+        """关注者数 **超过** ``threshold`` 的作者 id（fanout 大 V 判定，读时现算）。
+
+        判据与 fanout 的入选线一致（``len(follower_ids) > cap``，均只计未软删的关注行）。
+        原先大 V 是维护在 Redis SET 里的标记，关掉 Redis 持久化后该集合重启即空且**不会自动
+        重建**，已标记作者的内容会从时间线消失 —— 判据本身可从本表重放，故改为读时现算。
+        """
+        stmt = (
+            select(UserFollow.following_id)
+            .where(UserFollow.deleted_at.is_(None))
+            .group_by(UserFollow.following_id)
+            .having(func.count() > threshold)
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
     async def is_following(
         self, follower_id: uuid.UUID, following_id: uuid.UUID
     ) -> bool:

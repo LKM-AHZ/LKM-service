@@ -181,7 +181,7 @@ async def test_superfan_skipped_but_reader_still_sees_content(
 
     await fanout.fanout_batch(db)
     assert await _count_rows(db, reader.id) == 0  # 写扩散被跳过
-    assert author.id in await fanout.bigv_authors()  # 已标记为大 V
+    assert author.id in await fanout.bigv_authors(db)  # DB 现算判定为大 V
 
     resp = await get_timeline(
         db, user_id=reader.id, mode="follow", cursor=None, limit=20

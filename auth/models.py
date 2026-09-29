@@ -47,6 +47,35 @@ class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
 
 
+class RevokedAccessToken(AuthBase):
+    """已撤销的 access token（按 ``jti``）——**关闭 Redis 持久化后的撤销权威面**。
+
+    背景：``jti:block:{jti}``（``app.core.redis``）只是**快速预检**，Redis 重启即空。对前台
+    会话这不是问题（登出会 bump ``token_version``，DB 里有兜底判据）；但 **admin 单设备登出
+    刻意不 bump token_version**（那会连带踢掉该管理员的其他设备），jti 是它**唯一**的撤销依据
+    ——Redis 一旦无持久化，重启后已登出的 admin token 会在剩余 15min 内复活。
+
+    故这里落一张持久表：写入与 Redis 预检同时进行，读取在 Redis 未命中时兜底。是
+    ``token_revocation`` 模块 docstring 所声明「撤销状态权威在 DB」的落地。
+
+    主键取 ``jti`` 本身（查询即按 jti 命中，无需额外唯一索引）；``expires_at`` 建索引供
+    过期清理扫描（TTL 语义从 Redis 的 ``ex`` 移交到这里）。
+    """
+
+    __tablename__: str = "revoked_access_tokens"
+    __table_args__: tuple[Any, ...] = (
+        Index("ix_revoked_access_tokens_expires", "expires_at"),
+    )
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    # 原 token 的 exp：到期后本行无意义，由清理任务按此列删除
+    expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
 class EmailVerification(UUIDPrimaryKeyMixin, AuthBase):
     __tablename__: str = "email_verifications"
     __table_args__: tuple[Any, ...] = (

@@ -22,7 +22,11 @@ from app.db.base import now_iso
 from app.db.repository import DbSession
 from auth import events, user_http
 from auth.models import User
-from auth.repository import ProfileRepository, UserRepository
+from auth.repository import (
+    ProfileRepository,
+    RevokedAccessTokenRepository,
+    UserRepository,
+)
 
 # account_level / Profile.role 的“单向提升”单调序。auth 是身份词表 owner，故把 exam/service、
 # projects/service 各自硬编码的 rank 语义集中到这里（Phase 4 由 auth 侧以此裁决是否真升）。
@@ -61,6 +65,7 @@ async def authorize_user(
     expect_token_version: int,
     iat_ts: float | int | None,
     require_admin: bool,
+    jti: str | None = None,
 ) -> dict[str, object]:
     """在 auth 库内裁决一个由 `{user_id, token_version, iat(sec)}` 描述的会话是否仍存活。
 
@@ -72,6 +77,16 @@ async def authorize_user(
       ok=False → cause 给出拒绝原因（not_found/locked/session_revoked/password_changed/not_admin）。
     只读判定（不落库改动、不发事件）；调用方（内部端点）负责 commit/close。
     """
+    # jti 单枚 token 撤销（admin 单设备登出走这条）：关掉 Redis 持久化后 jti 黑名单不再跨重启
+    # 存活，本表是权威判据。放最前——不依赖用户是否存在，撤销即拒。
+    if jti and await RevokedAccessTokenRepository(db).is_revoked(jti):
+        return {
+            "ok": False,
+            "cause": CAUSE_SESSION_REVOKED,
+            "account_level": None,
+            "role": None,
+        }
+
     user = await UserRepository(db).get_with_profile(user_id)
     if user is None:
         return {

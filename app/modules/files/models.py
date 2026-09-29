@@ -3,8 +3,9 @@ from __future__ import annotations
 import datetime
 import uuid
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import Integer, String, Text, Uuid
+from sqlalchemy import Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
@@ -65,6 +66,35 @@ class LibraryFile(UUIDPrimaryKeyMixin, Base):
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     download_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
+class UploadSession(Base):
+    """预签名直传会话（S3 直传的元数据载体）。
+
+    **为什么落 DB**：这段元数据原存在 Redis 键 ``upload:{uid}``（无 TTL）。关掉 Redis
+    持久化后重启会让在途会话全部蒸发——``confirm_upload`` 报 ``UPLOAD_EXPIRED``，且孤儿
+    清扫原本靠 SCAN 这些键，键没了则 ``up/<uid>`` 对象**永久泄漏**（无记录可回溯）。落表
+    后这两件事都不再依赖 Redis 存活。
+
+    会话在 ``confirm_upload`` / ``notify_upload`` 认领时**删行**（等价原 ``GETDEL`` 的原子
+    消费，以 DELETE 影响行数判定归属）；未被认领的行由 ``cleanup_expired_uploads`` 按
+    ``created_at`` 判龄回收。
+    """
+
+    __tablename__: str = "upload_sessions"
+    __table_args__: tuple[Any, ...] = (
+        Index("ix_upload_sessions_created", "created_at"),
+    )
+
+    upload_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    uploader_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    # 直传落地的随机对象 key（``up/<uid>``）：清扫据此删对象
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    # 登记所需的完整元数据（JSON），与原先 Redis 标记的值逐字相同
+    meta: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )

@@ -144,7 +144,7 @@ async def test_publish_snapshot_writes_key_with_ttl() -> None:
 async def test_publish_snapshot_fail_open_without_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _none() -> None:
+    async def _none(*_a, **_k) -> None:
         return None
 
     monkeypatch.setattr("app.core.redis.get_redis", _none)
@@ -275,7 +275,7 @@ async def test_collect_once_keeps_last_gauge_when_no_source() -> None:
 async def test_collect_once_fail_open_without_redis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _none() -> None:
+    async def _none(*_a, **_k) -> None:
         return None
 
     monkeypatch.setattr("app.core.redis.get_redis", _none)

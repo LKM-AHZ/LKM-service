@@ -91,7 +91,7 @@ async def add(key: str) -> bool:
     """
     if not _enabled():
         return False
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_bitmap_key())
     if client is None:
         return False
     m, k = _params(settings.bloom_filter_capacity, settings.bloom_filter_error_rate)
@@ -114,7 +114,7 @@ async def add_many(keys: Sequence[str]) -> int:
     """
     if not keys or not _enabled():
         return 0
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_bitmap_key())
     if client is None:
         return 0
     m, k = _params(settings.bloom_filter_capacity, settings.bloom_filter_error_rate)
@@ -145,7 +145,7 @@ async def might_contain(key: str) -> bool:
     """
     if not _enabled():
         return True
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_bitmap_key())
     if client is None:
         return True
     m, k = _params(settings.bloom_filter_capacity, settings.bloom_filter_error_rate)
@@ -168,7 +168,7 @@ async def mark_seeded() -> bool:
     """
     if not _enabled():
         return False
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_seeded_key())
     if client is None:
         return False
     try:
@@ -180,7 +180,7 @@ async def mark_seeded() -> bool:
 
 async def unmark_seeded() -> bool:
     """清除门禁标记（运维/测试用）：清除后立即退回「不拦」。fail-open。"""
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_seeded_key())
     if client is None:
         return False
     try:
@@ -198,7 +198,7 @@ async def definitely_absent_many(keys: Sequence[str]) -> set[str]:
     """
     if not keys or not _enabled():
         return set()
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(_bitmap_key())
     if client is None:
         return set()
     m, k = _params(settings.bloom_filter_capacity, settings.bloom_filter_error_rate)

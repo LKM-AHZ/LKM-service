@@ -25,7 +25,7 @@ class TestRedisRateLimiter:
     async def should_fail_open_when_redis_unavailable(self) -> None:
         """get_redis 返回 None（URL 未配置）时一律放行。"""
 
-        async def _none() -> Any:
+        async def _none(*_a: Any, **_k: Any) -> Any:
             return None
 
         redis_core.get_redis = _none  # ty: ignore[invalid-assignment]  # runtime monkeypatch 临时替换签名
@@ -39,7 +39,7 @@ class TestRedisRateLimiter:
             async def evalsha(self, *args: Any, **kwargs: Any) -> Any:
                 raise RuntimeError("lua executor down")
 
-        async def _broken() -> Any:
+        async def _broken(*_a: Any, **_k: Any) -> Any:
             return _BrokenGetRedis()
 
         redis_core.get_redis = _broken  # ty: ignore[invalid-assignment]  # runtime monkeypatch 临时替换签名
@@ -49,7 +49,7 @@ class TestRedisRateLimiter:
     async def should_reset_be_noop_when_redis_unavailable(self) -> None:
         """get_redis 返回 None 时 reset 静默无操作、不抛异常。"""
 
-        async def _none() -> Any:
+        async def _none(*_a: Any, **_k: Any) -> Any:
             return None
 
         redis_core.get_redis = _none  # ty: ignore[invalid-assignment]  # runtime monkeypatch 临时替换签名

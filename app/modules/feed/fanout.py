@@ -25,8 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import redis as redis_client
-from app.core.cache import make_key
+from app.core.cache import cache_get, cache_set, make_key
 from app.core.config import settings
 from app.modules.feed import feed as feed_src
 from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
@@ -39,38 +38,39 @@ def _bigv_key() -> str:
     return make_key("feed", "bigv")
 
 
-async def bigv_authors() -> set[uuid.UUID]:
-    """当前被标记为「大 V」的作者 id 集合（Redis 不可用 → 空集，读路径退化为纯物化）。"""
-    client = await redis_client.get_redis()
-    if client is None:
-        return set()
-    try:
-        members = await client.smembers(_bigv_key())
-    except Exception:
-        # 返回空集 = 读路径关闭大 V 实时补拉（这些作者的内容会「凭空消失」），
-        # 排障时必须能看出是这里降级，不能静默吞掉
-        logger.warning("read bigv authors failed", exc_info=True)
-        return set()
-    out: set[uuid.UUID] = set()
-    for m in members or ():
-        try:
-            out.add(uuid.UUID(m))
-        except (TypeError, ValueError):
-            continue
-    return out
+# 大 V 集合的缓存 TTL（秒）：判据来自 DB（读时现算），缓存只为省掉每次时间线读的聚合查询。
+# 缓存丢失只是多算一次，属「丢了无碍」——这正是关掉 Redis 持久化后仍正确的原因。
+_BIGV_CACHE_TTL_S = 60
 
 
-async def _mark_bigv(author_id: uuid.UUID) -> bool:
-    """把作者记入大 V 集合；返回是否标记成功（读路径据此决定能否实时补拉）。"""
-    client = await redis_client.get_redis()
-    if client is None:
-        return False
-    try:
-        await client.sadd(_bigv_key(), str(author_id))
-    except Exception:
-        logger.warning("mark bigv failed for author %s", author_id, exc_info=True)
-        return False
-    return True
+async def bigv_authors(db: AsyncSession) -> set[uuid.UUID]:
+    """当前「大 V」作者 id 集合（关注者数超过 fanout 上限），带短 TTL 缓存。
+
+    **改由 DB 现算，不再读 Redis SET**：关掉 Redis 持久化后，原先那份「标记集合」重启即空
+    且**不会自动重建**——已标记作者的内容会从时间线消失。判据本身可从 ``user_follows`` 重放
+    （与 ``_fanout_item`` 的 ``len(followers) > cap`` 同源），故改为读时现算；Redis 只作缓存，
+    丢掉只是多算一次聚合。
+    """
+    cached = await cache_get(_bigv_key())
+    if isinstance(cached, list):
+        out: set[uuid.UUID] = set()
+        for m in cached:
+            try:
+                out.add(uuid.UUID(str(m)))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    # 惰性 import 破环（同 _audience：interaction.service 在模块级引用本模块）
+    from app.modules.interaction import service as interaction_service
+
+    ids = set(
+        await interaction_service.list_bigv_author_ids(
+            db, threshold=settings.feed_fanout_max_followers
+        )
+    )
+    await cache_set(_bigv_key(), [str(x) for x in sorted(ids)], _BIGV_CACHE_TTL_S)
+    return ids
 
 
 async def _audience(
@@ -119,17 +119,10 @@ async def _fanout_item(db: AsyncSession, item: FeedItem) -> int:
         db, item.author_id, item.board_id
     )
     if len(author_followers) > cap:
-        # 大 V：标记后由读路径实时补齐（避免 O(关注者) 写入突刺）。标记失败则**不能**跳过
-        # 写扩散——读路径的 bigv_authors() 同样读 Redis，拿不到标记就不会补拉，跳过等于
-        # 永久丢内容（此时回退为照常写，行数已被上面的 limit 钉在 cap+1 量级）。
-        if item.author_id is not None and await _mark_bigv(item.author_id):
-            author_followers = set()
-        else:
-            logger.warning(
-                "bigv 标记失败，回退写扩散以免内容丢失: %s#%s",
-                item.item_type,
-                item.id,
-            )
+        # 大 V：不写扩散，改由读路径实时补齐（避免 O(关注者) 写入突刺）。读路径的
+        # bigv_authors() 现在**按 DB 现算**，与这里的判据同源（count > cap），故无需任何标记、
+        # 也不再有「标记失败就得回退写扩散以免丢内容」的老顾虑——跳过必然能被读路径补上。
+        author_followers = set()
     if len(board_followers) > cap:
         # 版块维超限：读路径暂无版块级补拉通道，只能跳过（已知缺口，登记于路线图 §8）
         logger.warning(
@@ -224,7 +217,7 @@ async def backfill_author(
     「物化行 + 实时结果」直接拼接、不做 (item_type, id) 去重，回填会让同一条内容
     在时间线上出现两次。
     """
-    if author_id in await bigv_authors():
+    if author_id in await bigv_authors(db):
         return 0
     values: list[dict[str, object]] = []
     for name in feed_src.FOLLOW_SOURCES:

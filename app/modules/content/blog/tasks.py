@@ -59,7 +59,7 @@ async def _should_lock() -> bool:
     收尾的无条件 delete 会删掉**别人**的锁，互斥就此失效。
     """
     global _lock_token
-    redis = await get_redis()
+    redis = await get_redis(_LOCK_KEY)
     if redis is None:
         return True  # 无 Redis 简化为放行(测试场景)
     token = uuid.uuid4().hex
@@ -73,7 +73,7 @@ async def _release_lock() -> None:
     """compare-and-delete：只删自己那把锁（Lua 保证比对与删除原子）。"""
     global _lock_token
     token, _lock_token = _lock_token, None
-    redis = await get_redis()
+    redis = await get_redis(_LOCK_KEY)
     if redis is None or token is None:
         return
     with suppress(Exception):

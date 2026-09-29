@@ -5,8 +5,9 @@
 
 import logging
 import uuid
+import weakref
 from collections.abc import Awaitable
-from typing import cast
+from typing import Any, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
@@ -33,15 +34,19 @@ redis.call('EXPIRE', KEYS[1], math.ceil(window))
 return 1
 """
 
-_script_sha_local: str | None = None
+# 每个后端（client 实例）各自缓存自己的脚本 SHA。**不能共用一个全局值**——双后端并行时
+# 两个后端的脚本缓存互相独立，把 A 的 SHA 拿去 B 做 EVALSHA 必然 NOSCRIPT。弱引用字典
+# 随 client 回收自动清理。
+_script_shas: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
 async def _ensure_script(redis: Redis) -> str:
-    """在连接上注册脚本并缓存 SHA（每个进程首次调用一次，并发下幂等）。"""
-    global _script_sha_local
-    if _script_sha_local is None:
-        _script_sha_local = await redis.script_load(_LUA_ALLOW_SCRIPT)
-    return _script_sha_local
+    """在连接上注册脚本并缓存 SHA（**按 client 实例**各自缓存，首次调用一次、并发幂等）。"""
+    sha = _script_shas.get(redis)
+    if sha is None:
+        sha = await redis.script_load(_LUA_ALLOW_SCRIPT)
+        _script_shas[redis] = sha
+    return sha
 
 
 class RedisRateLimiter:
@@ -61,7 +66,7 @@ class RedisRateLimiter:
         fail_open: bool = True,
     ) -> bool:
         """允许继续则 True；否则 False。失败时按 *fail_open* 决定放行或拒绝。"""
-        redis = await _redis_core.get_redis()
+        redis = await _redis_core.get_redis(key)
         if redis is None:
             return fail_open
 
@@ -84,12 +89,16 @@ class RedisRateLimiter:
                 )
                 return await awaitable == 1
             except ResponseError as exc:
-                if attempt == 0 and "NOSCRIPT" in str(exc).upper():
-                    # 缓存的 SHA 在本进程外失效（Redis 重启 / SCRIPT FLUSH / 主从切换 /
-                    # 改指其它实例）：丢弃本地缓存重载脚本再试一次，否则会被下面的兜底
-                    # 当成普通异常，限流在 fail_open 下静默失效直到进程重启。
-                    global _script_sha_local
-                    _script_sha_local = None
+                # 缓存的 SHA 在本进程外失效（Redis 重启 / SCRIPT FLUSH / 主从切换 /
+                # 改指其它实例）：丢弃本地缓存重载脚本再试一次，否则会被下面的兜底
+                # 当成普通异常，限流在 fail_open 下静默失效直到进程重启。
+                #
+                # 判定须同时认错误码与消息体：redis-py 8.x 起 ``str(exc)`` 只剩消息体
+                # （``'No matching script. Please use EVAL.'``），不再带 ``NOSCRIPT`` 前缀——
+                # 只查码会让本分支永不触发（2026-09-29 对真 Redis 实测发现）。
+                detail = str(exc).upper()
+                if attempt == 0 and ("NOSCRIPT" in detail or "NO MATCHING SCRIPT" in detail):
+                    _script_shas.pop(redis, None)
                     return await _eval(1)
                 raise
 
@@ -106,7 +115,7 @@ class RedisRateLimiter:
 
     async def reset(self, key: str) -> None:
         """清除 *key*。Redis 不可用或 key 不存在时静默无操作。"""
-        redis = await _redis_core.get_redis()
+        redis = await _redis_core.get_redis(key)
         if redis is None:
             return
         try:

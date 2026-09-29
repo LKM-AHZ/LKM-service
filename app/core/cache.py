@@ -75,7 +75,7 @@ def make_key(prefix: str, *parts: Any) -> str:
 
 async def cache_get(key: str) -> Any | None:
     """读缓存；Redis 不可用/未配置 → None（fail-open 直查库）。"""
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     if client is None:
         return None
     request_id = lkm_logging.get_request_id()
@@ -100,7 +100,7 @@ async def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     入参 ``ttl_seconds`` 是**基准**值：实际 `ex` 经 :func:`jitter_ttl` 加随机扰动后再落盘
     （防雪崩，见该函数说明）。故本函数是所有 ``cached_read`` 类缓存 TTL 的公共收口点。
     """
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(key)
     if client is None:
         return
     try:
@@ -113,7 +113,8 @@ async def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
 
 async def cache_invalidate(*keys: str) -> None:
     """显式失效一个或多个键；Redis 不可用静默跳过。"""
-    client = await redis_client.get_redis()
+    # 多键同属一个业务集合（同前缀），取首键路由即可；空列表无键可路由 → 主后端
+    client = await redis_client.get_redis(keys[0] if keys else None)
     if client is None:
         return
     try:
@@ -128,7 +129,8 @@ async def collection_version(name: str) -> str:
 
     未启用 Redis → 返回固定 "v0"，此时缓存键退化但 fail-open 直接落库也成立。
     """
-    client = await redis_client.get_redis()
+    # 版本号与其集合的列表键**必须同后端**，故按 ver 键自身路由（同集合前缀 → 同后端）
+    client = await redis_client.get_redis(make_key("ver", name))
     if client is None:
         return "v0"
     try:
@@ -140,7 +142,7 @@ async def collection_version(name: str) -> str:
 
 async def bump_collection_version(name: str) -> None:
     """写操作后递增集合版本号，使该集合所有旧列表键失效（原子，免 SCAN）。"""
-    client = await redis_client.get_redis()
+    client = await redis_client.get_redis(make_key("ver", name))
     if client is None:
         return
     try:

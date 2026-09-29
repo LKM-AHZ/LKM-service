@@ -153,6 +153,16 @@ class Settings(BaseSettings):
         ""  # 空串 = 未启用 Redis；非空走 redis://[user:pass@]host:port[/db]
     )
 
+    # ---- 双 L2 后端并行 / 灰度（按 key 前缀路由）----
+    # 第二后端 URL（如 Dragonfly）。**空 = 不启用并行**，行为与单后端完全一致。
+    redis_url_secondary: SecretStr = SecretStr("")
+    # 逗号分隔的路由前缀：命中的 key 走 secondary，其余走 redis_url。
+    # 前缀是相对于 ``make_key`` 产物 ``lkm:{env}:`` 之后的部分（如 ``user:snap``、``feed``），
+    # 裸键用其字面前缀（如 ``upload:``、``jti:block:``、``ip:``；须显式列出，避免 ``ip`` 误配
+    # ``ipfoo``）。灰度 = 把某域前缀加进来（或移出去）。**同一前缀恒定落同一后端**，故缓存/锁/
+    # 版本号/epoch 的一致性天然成立，SCAN/MGET/WATCH 多键也不必跨后端合并。
+    redis_secondary_prefixes: str = ""
+
     # ---- 双级缓存 L1（本地进程内，roadmap §5.6）----
     # user:snap 热读的进程内首级缓存：短 TTL、有界，仅加速不具权威（L2/DB 仍是权威）。
     # 失效经 Redis pub/sub 广播到各实例（见 core/user_cache_events.py）；Redis 未启用时
