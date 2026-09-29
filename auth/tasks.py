@@ -28,6 +28,7 @@ from app.core.messaging import (
     RKEY_ANALYTICS,
     RKEY_AUDIT_LOGIN_FAIL,
     RKEY_AUDIT_PERMISSION_CHANGE,
+    RKEY_BLOOM_SEED,
     RKEY_OPS_DAILY,
     RKEY_RECONCILE,
     SUB_AUDIT,
@@ -222,12 +223,24 @@ async def run_ops_daily() -> None:
     await collect_daily_report(days=1)
 
 
+async def seed_user_id_bloom() -> None:
+    """user id 白名单位图的全量预热消费口（jobs worker 消费 cron.bloom_seed）。
+
+    每日重跑，既是首次预热（打出 ``seeded`` 门禁标记后拦截才生效），也是自愈网——兜住绕过
+    ``create_user_with_profile`` 的运维脚本建的号。函数级 import，避免 worker 冷启动拉整棵树。
+    """
+    from auth.bloom_seed import backfill_user_ids
+
+    await backfill_user_ids()
+
+
 register_task(SUB_SEND.name, "send_code", send_code)
 register_task(SUB_SEND.name, "send_magic_link", send_magic_link)
 register_task(SUB_USER_INVALIDATE.name, "invalidate_user_snap", invalidate_user_snap)
 register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
 register_task(SUB_JOBS.name, "run_ops_daily", run_ops_daily)
+register_task(SUB_JOBS.name, "seed_user_id_bloom", seed_user_id_bloom)
 # 审计事件：两个 topic 各自的订阅绑同一 handler（action 由路由键区分）
 register_task(SUB_AUDIT.name, "record_audit_event", record_audit_event)
 register_task(SUB_AUDIT_PERMISSION.name, "record_audit_event", record_audit_event)
@@ -252,4 +265,12 @@ register_cron_job(
     cron="40 3 * * *",  # 每日 03:40
     routing_key=RKEY_OPS_DAILY,
     fn="run_ops_daily",
+)
+# user id 白名单位图预热（§5.6）：每日 03:50。首次跑成功即打出 seeded 门禁标记，拦截才生效；
+# 之后每日重跑兜住运维脚本绕过建号原语的情况。放在最后，不与前面几步抢资源。
+register_cron_job(
+    job_id="seed_user_id_bloom",
+    cron="50 3 * * *",  # 每日 03:50
+    routing_key=RKEY_BLOOM_SEED,
+    fn="seed_user_id_bloom",
 )

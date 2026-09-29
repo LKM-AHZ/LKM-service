@@ -37,6 +37,7 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_RECONCILE,
         messaging.RKEY_ANALYTICS,
         messaging.RKEY_OPS_DAILY,
+        messaging.RKEY_BLOOM_SEED,  # §5.6 user id 白名单位图预热
         messaging.RKEY_CONTENT_PUBLISHED,
         messaging.RKEY_CONTENT_UPDATED,
         messaging.RKEY_CONTENT_DELETED,

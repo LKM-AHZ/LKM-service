@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import bloom
 from auth.db.session import new_auth_session
 from auth.models import Profile, User
 
@@ -79,6 +80,9 @@ async def ensure_demo_user(
         if profile is None:
             db.add(Profile(user_id=user_id, nickname=nickname))
         await db.commit()
+        # 演示用户的 id 会被业务行引用、并可能经 follow 等读路径查快照 → 同样要入白名单位图，
+        # 否则 follow 演示作者会被布隆误判为「从未存在」。fail-open。
+        await bloom.add(str(user_id))
         return user_id
     except Exception:
         await db.rollback()

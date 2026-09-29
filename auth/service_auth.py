@@ -7,7 +7,7 @@ import secrets
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
-from app.core import jobs
+from app.core import bloom, jobs
 from app.core.config import settings
 from app.core.err import BizError, CommonErr
 from app.core.throttle import check_password_login_rate_limit
@@ -224,6 +224,10 @@ async def create_user_with_profile(db: DbSession, **fields: Any) -> User:
         handle_duplicate_user_error(exc)
     db.add(Profile(user_id=user.id, role="member"))
     await ProfileRepository(db).flush()
+    # 建号即入白名单位图（§5.6）：新 id 必须当场可见，否则紧随其后的快照读（如 follow 该新用户）
+    # 会被布隆误判为「从未存在」。放在 flush 之后（id 已生成）、commit 之前——若事务回滚，多一个
+    # 「可能在场」的位只是漏拦，不会误拒任何人。fail-open，写失败不影响建号。
+    await bloom.add(str(user.id))
     return user
 
 

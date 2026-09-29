@@ -60,6 +60,7 @@ RKEY_CLEANUP = "cron.cleanup"
 RKEY_RECONCILE = "cron.reconcile"
 RKEY_ANALYTICS = "cron.analytics_export"
 RKEY_OPS_DAILY = "cron.ops_daily"
+RKEY_BLOOM_SEED = "cron.bloom_seed"
 # 内容域领域事件：外部检索引擎（Meilisearch/OpenSearch）增量同步的数据源
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
@@ -155,6 +156,7 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_RECONCILE: TOPIC_CRON,
     RKEY_ANALYTICS: TOPIC_CRON,
     RKEY_OPS_DAILY: TOPIC_CRON,
+    RKEY_BLOOM_SEED: TOPIC_CRON,
 }
 
 
@@ -185,7 +187,9 @@ SUB_USER_INVALIDATE = Subscription(
     (RKEY_USER_UPDATED, RKEY_USER_BANNED, RKEY_USER_SESSION_REVOKE),
 )
 SUB_JOBS = Subscription(
-    "jobs", TOPIC_CRON, (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS)
+    "jobs",
+    TOPIC_CRON,
+    (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS, RKEY_OPS_DAILY, RKEY_BLOOM_SEED),
 )
 # 外部检索索引增量同步（search 模块消费；与 PG FTS 的 P1 路径并存，引擎由配置择一）
 SUB_CONTENT_INDEX = Subscription(

@@ -132,16 +132,16 @@ class TestFailOpen:
 
 
 class TestUserCacheIntegration:
-    async def test_write_negative_records_id_in_bloom(
+    async def test_write_negative_does_not_touch_bloom(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """负值缓存落定时把「上游确认不存在」的 id 记入布隆（§5.6 接入点）。"""
+        """负值缓存**不再**写布隆——位图是「全部合法 id」的白名单，把「已确认不存在」的 id 塞进去
+        是反语义（会与白名单混用、误导后续维护）。负值缓存的职责仍是防「同一不存在 id 反复穿透」。
+        """
         _enable_fake_redis(monkeypatch)
         import uuid
 
         uid = uuid.UUID("00000000-0000-7000-8000-0000000000aa")
-        other = uuid.UUID("00000000-0000-7000-8000-0000000000bb")
 
         assert await uc.write_negative(uid, 0) is True
-        assert await bloom.might_contain(str(uid)) is True
-        assert await bloom.might_contain(str(other)) is False
+        assert await bloom.might_contain(str(uid)) is False

@@ -47,6 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import app.core.bloom as bloom
 import app.core.singleflight as singleflight
 import app.core.user_cache as user_cache
 from app.core.config import settings
@@ -369,6 +370,15 @@ async def _retrieve_fields_batch(
       纪律=缺行跳过 ≠ 故障。）
     - seam 关闭（默认）：就地 **SQL 单查询批量**读本进程 db（既有 A6 原路径、非 N+1）。
     """
+    # 白名单布隆拦截（§5.6）：本函数**不经** ``read_snaps_state``（自带一次缓存读 + 分块 HTTP），
+    # 故在此统一过滤——两条分支（seam 开/关）都覆盖。确定不存在的 id 直接按「缺行」跳过，
+    # 不再进 SQL/HTTP（缺行跳过本就是本函数的语义，故行为一致）。
+    absent = await bloom.definitely_absent_many([str(uid) for uid in set(user_ids)])
+    if absent:
+        user_ids = [uid for uid in user_ids if str(uid) not in absent]
+        if not user_ids:
+            return {}
+
     if not user_http.enabled():
         rows = await _fetch_fields_batch_from_db(user_ids, db)
         return {uid: fields for uid, (fields, _sv) in rows.items()}

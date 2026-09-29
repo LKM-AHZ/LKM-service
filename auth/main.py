@@ -85,6 +85,25 @@ async def _init_auth_db_with_retry() -> None:
         await asyncio.sleep(delay)
         delay = min(delay * 2, _AUTH_INIT_DB_RETRY_MAX_S)
 
+
+async def _startup_preheat_bloom() -> None:
+    """建库后预热 user id 白名单位图（§5.6）。
+
+    必须**在 auth schema 就绪之后**跑（否则 users 表还不存在）。预热成功才打出 ``seeded``
+    门禁标记、拦截才生效——故这是独立 AUTH 部署不必等每日 cron 的一次性兜底；多副本重复跑
+    幂等。整体 fail-open：预热失败只记日志，绝不让它拖垮进程或让拦截在半成品位图上生效。
+    """
+    await _init_auth_db_with_retry()
+    try:
+        from auth.bloom_seed import backfill_user_ids
+
+        await backfill_user_ids()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("bloom seed at startup failed (忽略；拦截整段不生效)")
+
+
 # 本进程装配的 auth 面（子集口径见模块 docstring）：独立于业务 registry，
 # 显式 import 各 auth router 聚合，不触发非 auth 模块副作用。
 _AUTH_ROUTERS = [
@@ -117,7 +136,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 启动不阻塞（§2 第 1 条）：auth 库 schema 初始化放后台重试、不 await——DB 未就绪时进程
     # 仍要起来并经 readiness 报「未就绪」，而不是起不来。auth 表已迁出单体 Base.metadata，
     # 无其他进程会建它们，故建它们仍是本进程的职责（业务库 schema 归 backend 进程）。
-    init_db_task = asyncio.create_task(_init_auth_db_with_retry())
+    # 建库成功后接着预热 user id 白名单位图（同一后台 task 内串行，故顺序天然有保证）
+    init_db_task = asyncio.create_task(_startup_preheat_bloom())
     try:
         yield
     finally:

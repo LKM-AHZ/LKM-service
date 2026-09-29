@@ -97,11 +97,14 @@ class Settings(BaseSettings):
     # 拉到后仍按此间隔重拉，以便 AUTH 换钥后（重启换文件）无需重启验签方。
     jwks_refresh_s: int = 300
     # 缓存防穿透的布隆过滤器（蓝图 §5.6「非法/不可枚举 key 用布隆过滤器挡非法形态」）：
-    # 与空值缓存互补——空值缓存挡「合法但查无」，布隆挡「形态非法/不可能存在」的 id。
-    # capacity/error_rate 决定位数组大小与哈希轮数；容量估算偏小会推高误判率。
+    # 与空值缓存互补——空值缓存挡「合法但查无」，布隆挡「不可能存在」的 id。
+    # capacity/error_rate 决定位数组大小与哈希轮数；容量偏小只会推高误判率（→ 多漏拦，仍正确）。
     bloom_filter_enabled: bool = True
     bloom_filter_capacity: int = 100_000
-    bloom_filter_error_rate: float = 0.01
+    bloom_filter_error_rate: float = 0.001
+    # 白名单「已预热」标记的存活秒数：**门禁**——标记在才允许据布隆拒绝，过期即自动退回
+    # 「不拦」（fail-open）。预热任务每日重跑，取 7 天容错窗口；任务长期停摆则自动失效。
+    bloom_filter_seed_ttl_s: int = 7 * 24 * 3600
     # 帖详情读缓存 TTL（蓝图 §5.6 缓存对象表 `cache:content:{id}`，秒级短 TTL + 事件失效）。
     content_detail_cache_ttl_s: int = 60
     access_token_expire_minutes: int = 15

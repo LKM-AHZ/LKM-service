@@ -187,6 +187,11 @@ async def read_snap_state(
         return False, None
     if raw is None:
         user_snap_cache_total.labels("l2", "miss").inc()
+        # 白名单布隆拦截（§5.6）：位图未预热/Redis 不可用/开关关时 definitely_absent 恒 False，
+        # 退回普通 miss（不拦）。命中即返「已确认不存在」，调用方据此不再回退上游。
+        if await bloom.definitely_absent(str(user_id)):
+            logger.debug("user_cache bloom-reject uid=%s", user_id)
+            return True, None
         logger.debug("user_cache miss uid=%s", user_id)
         return False, None
     user_snap_cache_total.labels("l2", "hit").inc()
@@ -256,6 +261,12 @@ async def read_snaps_state(
                 local_cache.l1_delete(_snap_key(uid))  # 脏形态即删，不放大问题
             user_snap_cache_total.labels("l1", "miss").inc()
         pending.append(uid)
+    if pending:
+        # 白名单布隆拦截（§5.6）：确定不存在的 id 直接并入 negative，省掉后面的 mget 与上游回退。
+        absent = await bloom.definitely_absent_many([str(uid) for uid in pending])
+        if absent:
+            negative.update(uid for uid in pending if str(uid) in absent)
+            pending = [uid for uid in pending if str(uid) not in absent]
     if not pending:
         return negative, out
     try:
@@ -420,7 +431,7 @@ async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
     覆盖它（版本条件只拒「更旧」，0 不拒任何正 sv）；被失效 bump 后，在途的负写也会被代次
     条件拒掉，不会把已删用户「复活」成不存在。写失败静默返回 False，不影响读语义。
     """
-    ok = await write_if_newer(
+    return await write_if_newer(
         user_id,
         None,
         _NEG_SV,
@@ -428,14 +439,6 @@ async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
         ttl_seconds=_NEG_TTL_S,
         negative=True,
     )
-    if ok:
-        # 蓝图 §5.6 的布隆面接入点：负值缓存落定（上游权威确认该 id 不存在）时顺手记一笔。
-        # **只 add、不做 might_contain 拦截**——布隆不可删，若某 id 先判不存在、后又被创建，
-        # 按缺失拦截会永久误拒合法用户；「白名单式拦截非法形态」需以权威存量 id 建过滤器，
-        # 当前无此接入点（非法形态在 pydantic 边界已被 422 挡下，到不了这里），故不强行拦截。
-        # add 自身 fail-open，写失败不影响负值缓存语义。
-        await bloom.add(str(user_id))
-    return ok
 
 
 def _extract_sv(raw_snap: str) -> int | None:
