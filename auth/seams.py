@@ -66,6 +66,7 @@ __all__ = [
     "cleanup_expired_challenges",
     "create_admin_access_token",
     "decode_admin_access",
+    "ensure_demo_user",
     "export_audit_logs",
     "get_auth_session",
     "get_channel",
@@ -123,6 +124,26 @@ async def open_session_pair() -> Any:
     from auth import user_dim_sync as _uds
 
     return await _uds._session_factory()
+
+
+async def ensure_demo_user(
+    *,
+    username: str,
+    nickname: str,
+    email: str | None = None,
+    account_level: str = "local",
+) -> Any:
+    """幂等确保一个 auth realm 演示用户存在，返回其 uuid（供示例数据脚本引用）。
+
+    用户表唯属 auth（蓝图 §3.1），故 app 侧 seed 不得用业务库会话写 users/profiles——那是
+    拆库后必 `UndefinedTable` 的跨 realm 写。本缝把该写操作留在 auth 域，app 只取回 uuid。
+    惰性取内部实现，保持测试对 ``auth.seed_users`` 的 monkeypatch 依然生效。
+    """
+    from auth import seed_users as _seed_users
+
+    return await _seed_users.ensure_demo_user(
+        username=username, nickname=nickname, email=email, account_level=account_level
+    )
 
 
 async def mint_bot_sso_ticket(

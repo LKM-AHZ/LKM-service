@@ -16,7 +16,7 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.core import messaging, task_registry
+from app.core import messaging, scheduler_state, task_registry
 from app.core.logging import log_exceptions
 
 logger = logging.getLogger("lkm.scheduler")
@@ -24,9 +24,15 @@ logger = logging.getLogger("lkm.scheduler")
 
 @log_exceptions
 async def _fire(routing_key: str, fn: str) -> None:
-    ok = await messaging.publish(routing_key, {"fn": fn})
-    if not ok:
-        logger.warning("cron %s 发布失败(fail-open), fn=%s", routing_key, fn)
+    # 在途作业数（蓝图 §5.5-6 调度器运行态）：进出各更新一次，收尾时可据此判断「未停残余」。
+    # 只记进程内状态——对外暴露经 Redis 心跳由 API 进程的 reporter 完成（见 scheduler_state）。
+    scheduler_state.note_job_started()
+    try:
+        ok = await messaging.publish(routing_key, {"fn": fn})
+        if not ok:
+            logger.warning("cron %s 发布失败(fail-open), fn=%s", routing_key, fn)
+    finally:
+        scheduler_state.note_job_finished()
 
 
 def build_scheduler() -> AsyncIOScheduler:
@@ -51,4 +57,5 @@ def build_scheduler() -> AsyncIOScheduler:
         except (KeyError, ValueError):
             logger.exception("cron job %r 定义非法，跳过", job.get("id"))
             continue
+    # 运行态的对外暴露在 worker_scheduler（起停点）与 _fire（在途数）里记，见 scheduler_state
     return s

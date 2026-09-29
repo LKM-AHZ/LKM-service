@@ -94,3 +94,26 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
     assert job_fns == expect_fns
     # 引用一下 run_default_worker 避免"未使用"；真实契约由集成测试最终验证
     assert callable(run_default_worker)
+
+
+def test_build_scheduler_jobs_count_matches_registry() -> None:
+    """蓝图 §5.5-6：作业数取自装配后的调度器（即心跳载荷 jobs 字段的来源）。"""
+    s = scheduler.build_scheduler()
+    assert len(s.get_jobs()) == len(cron_jobs())
+
+
+async def test_fire_tracks_in_flight_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """蓝图 §5.5-6：``_fire`` 进出各更新一次在途作业数（收尾残余即可观测）。"""
+    from app.core import scheduler_state
+
+    seen: list[int] = []
+
+    async def _publish(routing_key: str, payload: dict) -> bool:
+        seen.append(scheduler_state.snapshot()["pending"])
+        return True
+
+    monkeypatch.setattr(scheduler.messaging, "publish", _publish)
+    await scheduler._fire("cron.reconcile", "reconcile_content_counts")
+
+    assert seen == [1]  # 作业执行期间在途数为 1
+    assert scheduler_state.snapshot()["pending"] == 0  # 退出后归零

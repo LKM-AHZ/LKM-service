@@ -242,3 +242,42 @@ def test_receive_timeout_is_not_logged_as_exception(
 
     assert calls["n"] == 4
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_namespace_isolation_is_enforced_at_assembly() -> None:
+    """蓝图 §5.0-6：auth/biz 命名空间隔离由消息层强制（2026-09-29 审计收口）。
+
+    三处强制点各验一次：未知命名空间被拒、逻辑键只落已知命名空间、订阅不跨命名空间。
+    """
+    # ① 命名空间白名单：拼错的命名空间在 _topic 就被拒（不静默建新命名空间）
+    with pytest.raises(ValueError, match="unknown pulsar namespace"):
+        messaging._topic("bizz", "x")
+
+    # ② 每个逻辑键都落在一个已知命名空间，且 namespace_of 能正确切段
+    for routing_key, topic in messaging.ROUTING_KEY_TOPICS.items():
+        assert messaging.namespace_of(topic) in messaging.NAMESPACES, routing_key
+
+    # ③ 无订阅跨命名空间：订阅声明的 routing_key 必须与订阅 topic 同命名空间
+    for sub in messaging.SUBSCRIPTIONS.values():
+        sub_ns = messaging.namespace_of(sub.topic)
+        for routing_key in sub.routing_keys:
+            topic = messaging.ROUTING_KEY_TOPICS[routing_key]
+            assert messaging.namespace_of(topic) == sub_ns, (sub.name, routing_key)
+
+
+def test_namespace_isolation_validation_rejects_cross_namespace() -> None:
+    """把一条订阅改成跨命名空间，`_validate_namespace_isolation` 必须报错（证明校验有牙）。"""
+    bogus = messaging.Subscription(
+        "bogus", messaging.TOPIC_CONTENT, (messaging.RKEY_AUDIT_LOGIN_FAIL,)
+    )
+    messaging.SUBSCRIPTIONS[bogus.name] = bogus
+    try:
+        with pytest.raises(ValueError, match="跨命名空间"):
+            messaging._validate_namespace_isolation()
+    finally:
+        del messaging.SUBSCRIPTIONS[bogus.name]
+
+
+def test_namespace_of_rejects_malformed_topic() -> None:
+    with pytest.raises(ValueError, match="malformed pulsar topic"):
+        messaging.namespace_of("lkm/biz/points.apply")

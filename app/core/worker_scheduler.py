@@ -7,6 +7,7 @@ from contextlib import suppress
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.core import scheduler_state
 from app.core.scheduler import build_scheduler
 from app.core.tracing import setup_tracing, shutdown_tracing
 
@@ -66,6 +67,7 @@ async def _graceful_shutdown(sched: AsyncIOScheduler) -> None:
     """
     with suppress(Exception):
         sched.pause()  # 拒新触发：关闭窗口内不再产生新作业
+    scheduler_state.note_stopped()  # 运行态转「已暂停」（§5.5-6 生命周期可观测）
     pending = _pending_job_futures(sched)
     if pending:
         try:
@@ -91,12 +93,21 @@ async def _main() -> None:
 
     sched = build_scheduler()
     sched.start()
+    scheduler_state.note_started(len(sched.get_jobs()))
+    # 运行态心跳（§5.5-6）：本进程不暴露 /metrics，故把状态写进 Redis 交给 API 进程的
+    # reporter 上报；TTL 到期即意味着本进程已亡，API 侧 scheduler_up 转 0。
+    heartbeat = asyncio.create_task(scheduler_state.run_heartbeat())
     logger.info("scheduler started")
     try:
         await _wait_for_shutdown()
     finally:
         # 优雅关闭：先拒新触发，等当前作业完成或超时强停（见 _graceful_shutdown 的实况说明）
         await _graceful_shutdown(sched)
+        # 收尾前补最后一拍（state=0 + 残余在途数），让 API 侧立刻看到「已停」而不是等 TTL
+        await scheduler_state.write_heartbeat()
+        heartbeat.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat
         # setup_tracing 装的是 BatchSpanProcessor，不显式 flush 会丢掉最后一批 span
         # （cron 触发的 publish 与 httpx 埋点都在内）；幂等，异常仅记日志
         shutdown_tracing()

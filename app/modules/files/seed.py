@@ -15,38 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import new_worker_session as new_session
 from app.modules.files.models import FileStatus, LibraryFile
-from auth import register_models
-from auth.entities import Profile, User
-
-register_models()  # 注册 auth ORM 映射类（幂等）
+from auth.seams import ensure_demo_user
 
 # 种子文件归属的演示上传者用户名（避免依赖具体本地用户）
 _SEED_UPLOADER_USERNAME = "file_library_seed_uploader"
-
-
-async def _ensure_uploader(db: AsyncSession) -> User:
-    user = (
-        (await db.execute(select(User).where(User.username == _SEED_UPLOADER_USERNAME)))
-        .scalars()
-        .first()
-    )
-    if user is None:
-        user = User(
-            username=_SEED_UPLOADER_USERNAME,
-            email=f"{_SEED_UPLOADER_USERNAME}@example.com",
-            hashed_password="!seed-only-no-login",  # 不可登录，仅满足 FK
-            account_level="local",
-        )
-        db.add(user)
-        await db.flush()
-    profile_exists = (
-        (await db.execute(select(Profile).where(Profile.user_id == user.id)))
-        .scalars()
-        .first()
-    )
-    if profile_exists is None:
-        db.add(Profile(user_id=user.id, nickname="文件库运营"))
-    return user
+_SEED_UPLOADER_NICKNAME = "文件库运营"
 
 
 class _SeedFileData(TypedDict):
@@ -155,7 +128,11 @@ SEED_FILES: list[_SeedFileData] = [
 
 async def seed_files(db: AsyncSession) -> int:
     count = 0
-    uploader = await _ensure_uploader(db)
+    # 演示上传者属 auth realm（用户表唯属 auth，蓝图 §3.1）：经 auth 缝在 **auth 库**造，
+    # 拿到裸 uuid 供业务行引用——绝不用业务库会话写 users/profiles（拆库后那里没有该表）。
+    uploader_id = await ensure_demo_user(
+        username=_SEED_UPLOADER_USERNAME, nickname=_SEED_UPLOADER_NICKNAME
+    )
     for data in SEED_FILES:
         original_name = str(data["original_name"])
         existing = (
@@ -173,7 +150,7 @@ async def seed_files(db: AsyncSession) -> int:
             continue
         db.add(
             LibraryFile(
-                uploader_id=uploader.id,
+                uploader_id=uploader_id,
                 stored_name=f"{uuid.uuid4().hex}.bin",  # 唯一占位名，无实际物理文件
                 original_name=original_name,
                 mime_type=data["mime_type"],

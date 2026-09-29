@@ -24,6 +24,9 @@ def __getattr__(name: str) -> Any:
             from app.modules.admin.content_router import router as router_content
             from app.modules.admin.dim_report_router import router as router_dim_report
             from app.modules.admin.dlq_router import router as router_dlq
+            from app.modules.admin.event_failure_router import (
+                router as router_event_failures,
+            )
             from app.modules.admin.moderation.admin_router import (
                 router as router_moderation,
             )
@@ -37,6 +40,7 @@ def __getattr__(name: str) -> Any:
                 router_reports,
                 router_dim_report,
                 router_dlq,
+                router_event_failures,
                 router_moderation,
                 router_analytics,
                 router_bot,

@@ -92,3 +92,40 @@ class TestGracefulShutdown:
         sched = _BadPause()
         await ws._graceful_shutdown(sched)  # type: ignore[arg-type]
         assert sched.events == ["shutdown"]  # pause 异常不阻断收尾
+
+
+class TestSchedulerLifecycleState:
+    """蓝图 §5.5-6：调度器生命周期（暂停/未停残余）须在运行态里可观测。
+
+    运行态先在进程内记（``scheduler_state``），再由心跳交给 API 进程上报——故这里验进程内
+    快照；跨进程那一段（心跳 → gauge）在 ``tests/test_scheduler_state.py``。
+    """
+
+    async def test_shutdown_marks_state_paused(self) -> None:
+        from app.core import scheduler_state
+
+        scheduler_state.note_started(3)
+        sched = _FakeScheduler()
+        await ws._graceful_shutdown(sched)  # type: ignore[arg-type]
+        assert scheduler_state.snapshot()["state"] == 0
+
+    async def test_timeout_keeps_residual_pending(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import scheduler_state
+
+        async def _slow_job() -> None:
+            await asyncio.sleep(30)
+
+        scheduler_state.note_started(3)
+        scheduler_state.note_job_started()  # 模拟一个正在跑的 cron
+        task = asyncio.ensure_future(_slow_job())
+        sched = _FakeScheduler({task})
+        monkeypatch.setattr(ws, "_SHUTDOWN_WAIT_S", 0.01)
+
+        await asyncio.wait_for(ws._graceful_shutdown(sched), timeout=2)  # type: ignore[arg-type]
+
+        # 未停残余数留在快照里（随后由收尾那一拍心跳带给 API 侧）
+        assert scheduler_state.snapshot() == {"state": 0, "jobs": 3, "pending": 1}
+        scheduler_state.note_job_finished()  # 归还全局计数，避免污染后续用例
+

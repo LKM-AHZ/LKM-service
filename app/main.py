@@ -28,6 +28,8 @@ from app.core.err import BizError, map_err, resp_json
 from app.core.metrics import setup_metrics
 from app.core.middleware import GraphQLHTTPMiddleware, install_security_middleware
 from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
+from app.core.scheduler_state import start_reporter as start_scheduler_reporter
+from app.core.scheduler_state import stop_reporter as stop_scheduler_reporter
 from app.core.tracing import (
     instrument_sqlalchemy,
     setup_tracing,
@@ -128,6 +130,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
     start_lag_reporter()
+    # 可观测（§5.5-6）：调度器运行态上报——调度器在独立进程、不暴露 /metrics，
+    # 故由本进程读它的 Redis 心跳并 set gauge（同 lag 上报范式）
+    start_scheduler_reporter()
 
     yield
 
@@ -158,6 +163,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     await _shutdown_step("verify_key_refresh", stop_verify_key_refresh)
     # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
+    await _shutdown_step("scheduler_state", stop_scheduler_reporter)
     await _shutdown_step("messaging", messaging.shutdown)
     # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）
     await _shutdown_step("clickhouse", clickhouse.close)

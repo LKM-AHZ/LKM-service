@@ -21,39 +21,11 @@ from app.modules.content.models import (
     ColumnApplication,
     ColumnPost,
 )
-from auth import register_models
-from auth.entities import Profile, User
-
-register_models()  # 注册 auth ORM 映射类（幂等）
+from auth.seams import ensure_demo_user
 
 # 种子专栏归属的演示作者用户名（避免依赖具体本地用户）
 _SEED_AUTHOR_USERNAME = "column_seed_author"
-
-
-async def _ensure_user(db: AsyncSession) -> User:
-    user = (
-        (await db.execute(select(User).where(User.username == _SEED_AUTHOR_USERNAME)))
-        .scalars()
-        .first()
-    )
-    if user is None:
-        user = User(
-            username=_SEED_AUTHOR_USERNAME,
-            email=f"{_SEED_AUTHOR_USERNAME}@example.com",
-            hashed_password="!seed-only-no-login",  # 不可登录，仅满足 FK
-            account_level="local",
-        )
-        db.add(user)
-        await db.flush()
-    # 用显式查询而非 user.profile（async 下避免懒加载 MissingGreenlet）
-    profile_exists = (
-        (await db.execute(select(Profile).where(Profile.user_id == user.id)))
-        .scalars()
-        .first()
-    )
-    if profile_exists is None:
-        db.add(Profile(user_id=user.id, nickname="理科迷专栏编辑"))
-    return user
+_SEED_AUTHOR_NICKNAME = "理科迷专栏编辑"
 
 
 class _ColumnSeedData(TypedDict):
@@ -224,7 +196,11 @@ async def _board_id(db: AsyncSession, slug: str | None) -> uuid.UUID | None:
 
 async def seed_columns(db: AsyncSession) -> int:
     count = 0
-    user = await _ensure_user(db)
+    # 演示作者属 auth realm（用户表唯属 auth，蓝图 §3.1）：经 auth 缝在 **auth 库**造，
+    # 拿到裸 uuid 供业务行引用——绝不用业务库会话写 users/profiles（拆库后那里没有该表）。
+    owner_id = await ensure_demo_user(
+        username=_SEED_AUTHOR_USERNAME, nickname=_SEED_AUTHOR_NICKNAME
+    )
     for data in SEED_COLUMNS:
         slug = data["slug"]
         existing = (
@@ -239,7 +215,7 @@ async def seed_columns(db: AsyncSession) -> int:
         # （service._ensure_column_for_application）就是这么做的。原先申请行建了但没回链，
         # 结果 applicationId 对每个种子专栏都是 null、申请行成了孤儿。
         application = ColumnApplication(
-            user_id=user.id,
+            user_id=owner_id,
             title=str(data["title"]),
             description=str(data["description"]),
             reason="示例专栏申请",
@@ -249,7 +225,7 @@ async def seed_columns(db: AsyncSession) -> int:
         db.add(application)
         await db.flush()
         col = Column(
-            owner_id=user.id,
+            owner_id=owner_id,
             title=data["title"],
             description=data["description"],
             slug=slug,
@@ -273,7 +249,7 @@ async def seed_columns(db: AsyncSession) -> int:
             db.add(
                 ColumnPost(
                     column_id=col.id,
-                    author_id=user.id,
+                    author_id=owner_id,
                     title=p["title"],
                     summary=p["summary"],
                     content=p["content"],

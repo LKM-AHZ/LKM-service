@@ -145,6 +145,31 @@ graphql_query_depth = Histogram(
 )
 
 
+# ---- 调度器运行态（蓝图 §5.5 第 6 条「生命周期监控」）----
+# 蓝图要求「调度器运行态(启用/暂停/待触发队列)暴露指标，生命周期异常(未停残余)可观测」。
+# **取数路径**：调度器在独立 worker-scheduler 进程（§5.5-3① 拓扑），该进程既不跑 ASGI
+# 也不暴露 /metrics，故指标不由它直接 set——它把运行态写进 **Redis 心跳**，由 **API 进程**
+# （唯一被 Prometheus 抓取的进程，见父仓 prometheus.yml）的 reporter 读取后 set，与
+# ``pulsar_subscription_backlog`` 同一范式。实现见 app/core/scheduler_state.py。
+# 这四个值因此**在 backend 进程里被更新**：唯一写者 = reporter，不存在两进程各写一半。
+scheduler_up = Gauge(
+    "scheduler_up",
+    "调度器心跳是否新鲜：1=在跑，0=进程没了/卡死/心跳不可读（§5.5 第 6 条，告警取数点）",
+)
+scheduler_state = Gauge(
+    "scheduler_state",
+    "调度器运行态：1=运行中，0=已暂停/已停止（心跳上报）",
+)
+scheduler_jobs = Gauge(
+    "scheduler_jobs",
+    "调度器已注册的 cron 作业数（待触发队列规模，心跳上报）",
+)
+scheduler_pending_jobs = Gauge(
+    "scheduler_pending_jobs",
+    "调度器在途（正在执行）作业数；收尾后保留残余值，供「未停残余」观测",
+)
+
+
 # ---- 连接池水位（蓝图 §3.3 第 3 条，标"关键"）----
 # Web 主池与 worker 批处理池各自独立（见 app/db/session.py）。size/checkedout/overflow 是
 # **瞬时量**，普通 Gauge 需要有人周期 set，会把「实时」退化成「上次任务跑时」；故用

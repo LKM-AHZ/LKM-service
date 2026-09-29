@@ -71,9 +71,58 @@ RKEY_AUDIT_PERMISSION_CHANGE = "audit.permission_change"
 
 # ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
 
+# 蓝图 §5.0-6：auth/biz 两命名空间的隔离**由消息层强制**，不跨命名空间直达。强制点有三：
+#   ① 命名空间白名单——`_topic` 对未知命名空间直接拒绝，拼错在 import 期即炸，而不是悄悄
+#      建出一个新命名空间（Pulsar 会为写错的名字自动建 tenant/namespace）；
+#   ② 逻辑键唯一归属——发布只经 `ROUTING_KEY_TOPICS`（dict 保证一个逻辑键只对一个 topic），
+#      业务代码拿不到「直接指名 topic」的入口；
+#   ③ 订阅不跨命名空间——每个订阅声明的 routing_keys 必须与其 topic 同命名空间，消费侧
+#      无法「一次订阅横跨 auth 与 biz」。见 `_validate_namespace_isolation`。
+NAMESPACES: frozenset[str] = frozenset({"auth", "biz", "system"})
+
 
 def _topic(namespace: str, name: str) -> str:
+    if namespace not in NAMESPACES:
+        raise ValueError(
+            f"unknown pulsar namespace {namespace!r}; allowed: {sorted(NAMESPACES)}"
+        )
     return f"persistent://{settings.pulsar_tenant}/{namespace}/{name}"
+
+
+def namespace_of(topic: str) -> str:
+    """取 topic 全名的命名空间段（`persistent://<tenant>/<ns>/<name>`）。
+
+    刻意**不比对 tenant 字面**（只按段位解析）：tenant 来自 Settings，测试/多环境可改；
+    这里只负责把命名空间切出来，隔离判定交给 :data:`NAMESPACES`。
+    """
+    parts = topic.split("/")
+    # ["persistent:", "", tenant, namespace, ...] → 命名空间在 index 3
+    if len(parts) < 5 or parts[0] != "persistent:" or parts[1] != "":
+        raise ValueError(f"malformed pulsar topic: {topic!r}")
+    return parts[3]
+
+
+def _validate_namespace_isolation() -> None:
+    """装配期校验命名空间隔离（蓝图 §5.0-6）；违反即 import 期报错，不做静默容忍。
+
+    只校验静态声明（routing_key→topic 表、订阅清单），不碰运行时消息——运行时的隔离由
+    「发布只经逻辑键」「订阅按 predeclared topic 建 consumer」共同保证。
+    """
+    for routing_key, topic in ROUTING_KEY_TOPICS.items():
+        ns = namespace_of(topic)
+        if ns not in NAMESPACES:
+            raise ValueError(f"routing_key {routing_key!r} → 未知命名空间 {ns!r}: {topic}")
+    for sub in SUBSCRIPTIONS.values():
+        sub_ns = namespace_of(sub.topic)
+        for routing_key in sub.routing_keys:
+            topic = ROUTING_KEY_TOPICS.get(routing_key)
+            if topic is None:
+                raise ValueError(f"订阅 {sub.name!r} 声明了未知 routing_key {routing_key!r}")
+            if namespace_of(topic) != sub_ns:
+                raise ValueError(
+                    f"订阅 {sub.name!r} 跨命名空间：{routing_key!r} → {topic}"
+                    f"（订阅 topic 在 {sub_ns!r}）"
+                )
 
 
 TOPIC_EMAIL = _topic("auth", "email")
@@ -172,6 +221,10 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
         SUB_DLQ,
     )
 }
+
+# 装配期即验（蓝图 §5.0-6）：任何未来新增的订阅/逻辑键若跨命名空间，在这一行就炸，
+# 而不是等到某个消费者误收另一命名空间的消息才发现。
+_validate_namespace_isolation()
 
 # 事件 envelope JSON Schema（Pulsar schema registry 校验用）。
 #
