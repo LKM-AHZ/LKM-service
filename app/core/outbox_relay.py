@@ -24,7 +24,7 @@ from redis import WatchError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import messaging
+from app.core import event_contract, messaging
 from app.core import redis as redis_client
 from app.core.config import settings
 from app.core.metrics import outbox_leader_total, outbox_pending_count
@@ -149,11 +149,22 @@ async def relay_poll(
 
         for msg in rows:
             # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
-            # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留，多余键对 handler 无害。
+            # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留；event_id 也正是 envelope
+            # 契约允许的第三个键（多余键会判违约，见 core/event_contract.py）。
             payload = {**msg.payload_json, "event_id": msg.event_id}
             reason = messaging.permanent_failure_reason(msg.routing_key, payload)
             if reason is not None:
                 # 确定性错误：重试不会变好，一次即折叠（不累加 attempt_count，不空耗退避）。
+                # 契约违约另记违约指标：这条路径**不会**走到 messaging.publish（在投递前就折叠了），
+                # 不在这里记账的话「relay 折叠掉的违约」在 /metrics 上完全不可见。
+                problems = messaging.contract_violations(msg.routing_key, payload)
+                if problems:
+                    event_contract.record_violation(
+                        payload.get("fn"),
+                        "produce",
+                        problems,
+                        where=f"outbox-relay rk={msg.routing_key}",
+                    )
                 logger.error(
                     "outbox 永久失败折叠 id=%s rk=%s reason=%s",
                     msg.id,
@@ -291,9 +302,7 @@ async def archive_published(
             )
             await db.delete(msg)
         await db.commit()
-        logger.info(
-            "outbox 归档 %s 条已发布行（保留期 %ss）", len(rows), retention
-        )
+        logger.info("outbox 归档 %s 条已发布行（保留期 %ss）", len(rows), retention)
         return len(rows)
     finally:
         await db.close()

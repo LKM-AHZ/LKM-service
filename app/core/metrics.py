@@ -53,6 +53,17 @@ notify_failed_total = Counter(
     "notify_failed_total",
     "消息总线投递失败次数（publish 抛错 / 不可用，unified at messaging.publish）",
 )
+# 事件契约违约计数（`app/core/event_contract.py`）：side=produce（messaging.publish 拒发，
+# relay 侧另有 permanent_failure_reason 折叠进 event_failures）| consume（worker 丢弃坏消息）。
+# fn 取契约登记表里的名字，未登记/非字符串统一归到 "<unknown>"——否则任何脏 payload 都能凭空
+# 造出 label 维度（label 无界 = 指标基数爆炸），与 audit_events_total 的白名单同理。
+# 两侧都有写出点（consume 侧在 worker 进程），故已进 metrics_relay.RELAYED。
+event_contract_violations_total = Counter(
+    "event_contract_violations_total",
+    "事件契约违约次数（side=produce|consume；detail 见日志）",
+    ("fn", "side"),
+)
+
 # outbox 积压量：outbox relay 每轮 poll 结束后统计仍是 pending（含指数退避等待下一轮）的
 # 事件数 set 到此，供积压看板；未配置消息总线时 relay 空转不调用，本 gauge 保持初始 0。
 outbox_pending_count = Gauge(

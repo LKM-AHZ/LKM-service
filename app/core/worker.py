@@ -15,7 +15,7 @@ import asyncio
 import logging
 from typing import Any
 
-from app.core import messaging, metrics_relay, task_registry
+from app.core import event_contract, messaging, metrics_relay, task_registry
 from app.core.logging import log_exceptions
 from app.core.tracing import setup_tracing
 from app.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
@@ -114,26 +114,31 @@ async def _consume(subscription_name: str) -> None:
     handlers = task_registry.handlers_for(subscription_name)
 
     @log_exceptions
-    async def _on_payload(
-        payload: dict[str, Any], _meta: messaging.MessageMeta
-    ) -> None:
-        fn = payload.get("fn")
-        args = payload.get("args", [])
-        if not isinstance(args, list):
-            # args 形状非法（null/dict/str）：dict 会按 key 展开成多个实参、str 会按字符展开，
-            # 都是「静默用错参数跑一遍」而非报错；与未知 fn 同样 ack 丢弃
-            logger.warning(
-                "args 类型非法(%s), 丢弃 subscription=%s fn=%s",
-                type(args).__name__,
-                subscription_name,
-                fn,
+    async def _on_payload(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
+        # 事件契约校验（consume 侧）：fn 未登记 / 实参个数或类型不符 / 经不允许的 routing_key
+        # 抵达。**ack 丢弃**而非负确认——这是确定性的坏消息，重投只会把同一条再跑一遍
+        # （原先只挡住「args 非数组」与「未知 fn」，漏掉了 args 元素类型与个数）。
+        # routing_key 取自发布时写的 properties，缺失时退化为只校验 fn/args。
+        problems = event_contract.payload_violations(
+            payload, meta.properties.get("routing_key")
+        )
+        if problems:
+            event_contract.record_violation(
+                payload.get("fn"),
+                "consume",
+                problems,
+                where=f"subscription={subscription_name}",
             )
             return
-        handler = handlers.get(fn) if isinstance(fn, str) else None
+        handler = handlers.get(payload["fn"])
         if handler is None:
-            logger.warning("未知任务 %s, 丢弃 subscription=%s", fn, subscription_name)
+            logger.warning(
+                "未知任务 %s, 丢弃 subscription=%s", payload["fn"], subscription_name
+            )
             return  # ack 丢弃
-        await _dispatch_with_dedup(payload, handler, args, scope=subscription_name)
+        await _dispatch_with_dedup(
+            payload, handler, payload.get("args", []), scope=subscription_name
+        )
 
     await messaging.run_subscription(subscription_name, _on_payload)
 

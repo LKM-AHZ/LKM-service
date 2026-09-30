@@ -41,6 +41,25 @@ def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> N
     （如 ``"0 * * * *"`` 每小时整点、``"0 4 * * 4"`` 每周四 04:00）。
     重复 job_id 会告警并覆盖。
     """
+    from app.core import event_contract
+
+    contract = event_contract.EVENT_CONTRACTS.get(fn)
+    if contract is None:
+        raise ValueError(
+            f"cron 任务 {job_id!r} 的 fn={fn!r} 未登记事件契约"
+            "（core/event_contract.EVENT_CONTRACTS）"
+        )
+    if contract.args:
+        raise ValueError(
+            f"cron 任务 {job_id!r} 的 fn={fn!r} 带实参契约，但 scheduler 只发 "
+            '{"fn": fn}（core/scheduler.py）——二者不可能相容'
+        )
+    if routing_key not in contract.routing_keys:
+        raise ValueError(
+            f"cron 任务 {job_id!r} 经 {routing_key!r} 发布，但 fn={fn!r} 的契约只允许 "
+            f"{list(contract.routing_keys)}"
+        )
+
     for existing in _CRON_JOBS:
         if existing["id"] == job_id:
             logger.warning("cron job %r 重复登记，覆盖", job_id)
@@ -96,8 +115,39 @@ def ensure_tasks_registered() -> None:
     import_task_modules()
 
 
+def _assert_subscription_carries(subscription: str, fn: str) -> None:
+    """装配期校验：该订阅确实能收到这个 fn（否则 handler 永不触发，且无人报错）。
+
+    判据 = 「订阅声明的 routing_keys」∩「契约允许承载该 fn 的 routing_key」非空。两侧的事实源
+    分别是 ``messaging.SUBSCRIPTIONS`` 与 ``event_contract.EVENT_CONTRACTS``，本函数只做交叉。
+    """
+    from app.core import event_contract, messaging
+
+    sub = messaging.SUBSCRIPTIONS.get(subscription)
+    if sub is None:
+        raise ValueError(f"订阅 {subscription!r} 未在 messaging.SUBSCRIPTIONS 登记")
+    allowed = set(event_contract.EVENT_CONTRACTS[fn].routing_keys)
+    if not allowed & set(sub.routing_keys):
+        raise ValueError(
+            f"订阅 {subscription!r}（routing_keys={list(sub.routing_keys)}）承载不了 "
+            f"fn={fn!r}（契约允许 {sorted(allowed)}）——handler 将永不触发"
+        )
+
+
 def register_task(subscription: str, fn: str, handler: Callable[..., Any]) -> None:
-    """注册某订阅的单个任务 handler。重复注册同一 fn 会覆盖（以最后声明为准）并告警。"""
+    """注册某订阅的单个任务 handler。重复注册同一 fn 会覆盖（以最后声明为准）并告警。
+
+    **装配期即验事件契约**（三个 ``tasks.py`` 写错在进程启动时就炸，而不是等消息到了才
+    TypeError）：fn 必须已登记（``event_contract.EVENT_CONTRACTS``）、handler 形参元数接得住
+    契约实参、订阅的 routing_keys 承载得了该 fn。见 ``core/event_contract.py`` 模块头。
+    """
+    from app.core import event_contract
+
+    violation = event_contract.handler_violation(fn, handler)
+    if violation is not None:
+        raise ValueError(violation)
+    _assert_subscription_carries(subscription, fn)
+
     table = _TASK_HANDLERS.setdefault(subscription, {})
     if fn in table:
         logger.warning("task %r 重复注册于订阅 %r，覆盖旧 handler", fn, subscription)

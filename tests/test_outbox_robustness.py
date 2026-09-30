@@ -32,7 +32,11 @@ from app.db.outbox import OUTBOX_PENDING, OUTBOX_PUBLISHED, OutboxMessage
 from app.db.outbox_archive import OutboxArchived
 
 _RK = "event.apply_point"
-_PAYLOAD = {"fn": "apply_point_event", "args": [7, "post", "item:9"]}
+# 必须符合事件契约（core/event_contract）：user_id 线上是 str（uuid.UUID 过 JSON 即 str）
+_PAYLOAD = {
+    "fn": "apply_point_event",
+    "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+}
 _SCHEMA = f"s_outbox_rb_{os.getpid()}"
 
 

@@ -35,7 +35,12 @@ from app.db.outbox import (
 )
 
 _RK = "event.apply_point"
-_PAYLOAD = {"fn": "apply_point_event", "args": [7, "post", "item:9"]}
+# 必须符合事件契约（core/event_contract）：user_id 在线上是 **str**（uuid.UUID 过 JSON 即 str），
+# 写成 int 会被判违约并直接折叠进 event_failures，relay 的那些「投递/退避」断言就全落空了。
+_PAYLOAD = {
+    "fn": "apply_point_event",
+    "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+}
 
 
 @pytest.fixture
@@ -335,14 +340,16 @@ async def test_relay_payload_carries_event_id(fact, monkeypatch) -> None:
     monkeypatch.setattr(messaging, "publish", _pub)
     db = await fact()
     try:
-        await enqueue_outbox(db, "event.notify_upload", {"fn": "n", "args": ["u"]})
+        await enqueue_outbox(
+            db, "event.notify_upload", {"fn": "notify_upload", "args": ["up-1"]}
+        )
         await db.commit()
     finally:
         await db.close()
     await outbox_relay.relay_poll(session_factory=fact)
     assert len(sent) == 1
     assert sent[0]["event_id"]  # 透传
-    assert sent[0]["fn"] == "n"
+    assert sent[0]["fn"] == "notify_upload"
 
 
 async def _dispatch(fact, monkeypatch, payload: dict, handler) -> None:

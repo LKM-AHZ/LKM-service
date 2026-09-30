@@ -48,6 +48,7 @@ from app.core.metrics import (
     cache_lock_total,
     content_index_events_total,
     counts_reconcile_repeated_total,
+    event_contract_violations_total,
     metrics_relay_instances,
     metrics_relay_up,
     notify_failed_total,
@@ -110,6 +111,14 @@ RELAYED: tuple[RelaySpec, ...] = (
     ),
     # audit.* 消费计数（handler 折在 worker_default 里）
     RelaySpec("audit_events_total", "counter", ("action",), audit_events_total),
+    # 事件契约违约：consume 侧写出点在 worker 进程（worker._on_payload），produce 侧在
+    # relay/scheduler/API/auth 都有——两侧都要能在 API 进程的 /metrics 上看见
+    RelaySpec(
+        "event_contract_violations_total",
+        "counter",
+        ("fn", "side"),
+        event_contract_violations_total,
+    ),
 )
 
 _SPEC_BY_NAME = {spec.name: spec for spec in RELAYED}

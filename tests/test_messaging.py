@@ -103,7 +103,13 @@ async def test_publish_transport_failure_is_fail_open() -> None:
     transport = InMemoryTransport(fail=True)
     messaging.set_transport(transport)
     before = _failed_count()
-    ok = await messaging.publish(messaging.RKEY_POINTS, {"fn": "apply_point_event"})
+    ok = await messaging.publish(
+        messaging.RKEY_POINTS,
+        {
+            "fn": "apply_point_event",
+            "args": ["01890000-0000-7000-8000-000000000001", "post", "p1"],
+        },
+    )
     assert ok is False
     assert _failed_count() == before + 1
 
@@ -113,7 +119,9 @@ async def test_publish_unconfigured_returns_false(
 ) -> None:
     monkeypatch.setattr(messaging.settings, "pulsar_url", "")
     before = _failed_count()
-    ok = await messaging.publish(messaging.RKEY_NOTIFY, {"fn": "notify_upload"})
+    ok = await messaging.publish(
+        messaging.RKEY_NOTIFY, {"fn": "notify_upload", "args": ["up-1"]}
+    )
     assert ok is False
     # 未配置 fail-open 不计数（对齐迁移前「ch None 不计」语义）
     assert _failed_count() == before
@@ -144,15 +152,14 @@ async def test_publish_uses_pulsar_producer(
         return _FakeProducer()
 
     monkeypatch.setattr(messaging, "_get_producer", _fake_get_producer)
-    ok = await messaging.publish(
-        messaging.RKEY_SEND_CODE, {"fn": "send_code", "args": [1]}
-    )
+    payload = {"fn": "send_code", "args": ["email", "a@b.c", "1234"]}
+    ok = await messaging.publish(messaging.RKEY_SEND_CODE, payload)
     assert ok is True
     assert sent[0] == ("topic", messaging.TOPIC_EMAIL)
     _, content, properties = sent[1]
     assert properties["routing_key"] == messaging.RKEY_SEND_CODE
     assert properties["fn"] == "send_code"
-    assert content == {"fn": "send_code", "args": [1]}
+    assert content == payload
 
 
 def test_event_schema_roundtrip() -> None:

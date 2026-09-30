@@ -32,7 +32,12 @@ from app.db.outbox import (
 from tests.prop_pg import PropPG
 
 _RK = "event.apply_point"
-_PAYLOAD = {"fn": "apply_point_event", "args": [7, "post", "item:9"]}
+# 必须符合事件契约（core/event_contract）：user_id 线上是 str（uuid.UUID 过 JSON 即 str），
+# 写成 int 会被判违约并直接折叠进 event_failures，relay 的投递性质在这里就测不到了。
+_PAYLOAD = {
+    "fn": "apply_point_event",
+    "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+}
 
 
 @pytest.fixture(autouse=True)

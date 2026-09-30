@@ -86,6 +86,41 @@ def test_entrypoint_creates_are_idempotent(script: str) -> None:
     assert "exit 1" in body, "复查不通过必须非 0 退出，而不是继续打「已就绪」"
 
 
+def test_entrypoint_enforces_schema_validation(script: str) -> None:
+    """三个命名空间必须开 schema 校验强制（《后端规划》§九「事件契约校验」）。
+
+    **别误读这条断言的边界**：2026-09-30 真 broker 实测，``schemaValidationEnforced=true``
+    **不校验 payload**（违约 payload 与未声明的 fn 照发），它只做到「topic 已有 schema 时，
+    未声明 schema 的 producer 接不进来」。真正的契约在应用层
+    （``LKM-service/app/core/event_contract.py``）。这里钉的是「开关确实被打开、且回读过」——
+    只信命令退出码会吞掉真实错误（同 create 的教训）。
+    """
+    body = _no_comments(script)
+    assert re.search(
+        r"set-schema-validation-enforce\s+(-e|--enable)[^\n]*lkm/\$", body
+    ), "缺少 set-schema-validation-enforce -e lkm/${ns}"
+    # 开完必须回读确认策略真的为 true，否则「静默没生效」等价于没开
+    assert re.search(r"get-schema-validation-enforce[^\n]*lkm/\$", body), (
+        "开启后缺少 get-schema-validation-enforce 回读"
+    )
+    assert '"true"' in body, "回读结果必须与 true 比对"
+
+
+def test_k8s_sidecar_enforces_schema_validation() -> None:
+    """k8s 侧同一口径：init sidecar 里也要开 + 回读（compose 与 k8s 不许分叉）。"""
+    text = (_ROOT / "deploy" / "k8s" / "base" / "infra" / "pulsar.yaml").read_text(
+        encoding="utf-8"
+    )
+    docs = [d for d in yaml.safe_load_all(text) if d]  # Service + StatefulSet 多文档
+    statefulset = next(d for d in docs if d.get("kind") == "StatefulSet")
+    containers = statefulset["spec"]["template"]["spec"]["containers"]
+    sidecar = next(c for c in containers if c["name"] == "pulsar-init")
+    args = " ".join(sidecar["args"])
+    assert "set-schema-validation-enforce" in args
+    assert "get-schema-validation-enforce" in args, "开启后缺少回读"
+    assert '"true"' in args
+
+
 def test_entrypoint_forwards_stop_signal(script: str) -> None:
     """broker 后台跑 + 前台 wait 的形态必须转发 SIGTERM，否则 `docker stop` 只能等超时被 KILL。"""
     body = _no_comments(script)

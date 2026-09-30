@@ -311,6 +311,37 @@ def make_event_schema(topic: str) -> Any:
     return _EventJsonSchema()
 
 
+def _contract_violations(payload: Any, routing_key: str | None) -> list[str]:
+    """事件契约校验的延迟入口。
+
+    ``event_contract`` 反向 import 本模块的 RKEY 常量（它按「逻辑键 → 允许的 fn」声明），
+    模块级 import 会成环；放函数里只是 ``sys.modules`` 查表，成本可忽略。
+    """
+    from app.core import event_contract
+
+    return event_contract.payload_violations(payload, routing_key)
+
+
+def _record_violation(fn: Any, side: str, problems: list[str], *, topic: str) -> None:
+    """记一次契约违约（延迟 import，理由同 :func:`_contract_violations`）。"""
+    from app.core import event_contract
+
+    event_contract.record_violation(fn, side, problems, where=f"topic={topic}")
+
+
+def contract_violations(routing_key: str, payload: Any) -> list[str]:
+    """按**线上形态**校验 envelope 的事件契约；返回违约原因清单（空=合规）。
+
+    与 :func:`permanent_failure_reason` 共用同一判据。独立暴露是为了让 relay 在**折叠**这类
+    事件时能拿到结构化原因去记违约指标，而不必去解析原因字符串。
+    """
+    try:
+        wire = json.loads(_encode_event(dict(payload)))
+    except (TypeError, ValueError):
+        return []  # 编码失败是另一类永久失败，由 permanent_failure_reason 单独报
+    return _contract_violations(wire, routing_key)
+
+
 def permanent_failure_reason(
     routing_key: str, payload: Mapping[str, Any]
 ) -> str | None:
@@ -318,11 +349,15 @@ def permanent_failure_reason(
 
     只覆盖 relay 侧在投递前就可确定的确定性错误（M6.3 失败分类）：
     - 未知 ``routing_key``：不在 ``ROUTING_KEY_TOPICS`` 里，连目标 topic 都定不出来；
-    - payload 无法按线上格式编码（含非 JSON 可序列化对象）。
+    - payload 无法按线上格式编码（含非 JSON 可序列化对象）；
+    - **事件契约违约**（``event_contract.payload_violations``，见该模块头）：fn 未登记、
+      实参个数/类型不符、经不允许的 routing_key 承载等。这类同样是确定性的——重试 5 次
+      只会把同一条坏消息重复投到总线上，故与上面两类同解：一次即折叠进 ``event_failures``
+      （留档、可人工重放），不占用退避窗口。
 
     其余情况（连接失败 / 超时 / 总线不可达 / broker 拒收）一律**不**判永久——relay 不得把
     瞬时故障折叠成失败归档，否则一次总线抖动就丢事件。schema registry 侧校验不在此判定：
-    ``make_event_schema().encode`` 与 ``_encode_event`` 是同一套 JSON 编码，差异只在元数据。
+    broker 对 payload **不做任何校验**（2026-09-30 真机实测，见 ``event_contract`` 模块头）。
     """
     if routing_key not in ROUTING_KEY_TOPICS:
         return f"unknown routing_key={routing_key}"
@@ -330,6 +365,9 @@ def permanent_failure_reason(
         _encode_event(dict(payload))
     except (TypeError, ValueError) as exc:
         return f"payload not json-encodable: {exc}"
+    problems = contract_violations(routing_key, payload)
+    if problems:
+        return "event contract violation: " + "; ".join(problems)
     return None
 
 
@@ -460,6 +498,15 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             # 声明的 fail-open 契约，且漏计 notify_failed_total。
             logger.exception("payload 编码失败 rk=%s", routing_key)
             notify_failed_total.inc()
+            return False
+        # 事件契约校验：校的就是**即将上线的字节**（json.loads(data)），故 uuid/datetime 等
+        # native 对象在此时已是线上形态。违约不发（fail-open 语义与其它失败一致：返回 False），
+        # 但计**独立**指标而非 notify_failed_total——后者涨=broker 出问题，混入契约违约会把
+        # 告警语义搅浑。不在这里抛异常：relay 侧经 permanent_failure_reason 折叠进
+        # event_failures，直接发布口（jobs/scheduler/dlq）则按各自既有语义降级。
+        problems = _contract_violations(json.loads(data), routing_key)
+        if problems:
+            _record_violation(payload.get("fn"), "produce", problems, topic=topic)
             return False
         props: dict[str, str] = {"routing_key": routing_key}
         fn = payload.get("fn")
