@@ -114,3 +114,30 @@ class DimUserRow(BaseModel):
     role: str | None = None
     # PII（离线副本镜像；include_pii=True 才投影）
     email: str | None = None
+
+
+class PointsReportPoint(BaseModel):
+    """积分度量/行为报表的一个日桶 × 行为类型数据点。
+
+    来源是 continuous aggregate ``points_daily``（``time_bucket('1 day')`` × ``reason``），
+    故 ``day`` 是 UTC 日桶起点。``reason`` 即行为类型（``points/rules.py::RULE_DELTAS``
+    的键：post/comment/like/file_approved/...）。
+    """
+
+    day: datetime.date
+    reason: str
+    delta_sum: int
+    entry_count: int
+
+
+class PointsReportOut(BaseModel):
+    """积分度量/行为报表（离线面）。
+
+    **读的是连续聚合物化视图，不是实时真值**：数据新鲜度由 TimescaleDB 的刷新策略决定
+    （装配按 1 小时刷新、``end_offset`` 1 小时），实时积分/排行榜请走 ``/points/leaderboard``。
+    """
+
+    days: int
+    series: list[PointsReportPoint]
+    total_delta: int
+    total_entries: int

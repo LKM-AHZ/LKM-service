@@ -30,6 +30,9 @@ def __getattr__(name: str) -> Any:
             from app.modules.admin.moderation.admin_router import (
                 router as router_moderation,
             )
+            from app.modules.admin.points_report_router import (
+                router as router_points_report,
+            )
             from app.modules.admin.reports_router import router as router_reports
             from app.modules.admin.users_router import router as router_users
 
@@ -44,6 +47,7 @@ def __getattr__(name: str) -> Any:
                 router_moderation,
                 router_analytics,
                 router_bot,
+                router_points_report,
             ]
         # 返回浅拷贝：直接给缓存列表的话，任何调用方 append/remove 都会污染
         # 进程级缓存，影响后续所有消费方

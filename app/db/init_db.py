@@ -145,6 +145,10 @@ _TIMESCALE_CHUNK_INTERVAL = "7 days"
 _HYPERTABLE_SPECS: tuple[tuple[str, str, str], ...] = (
     ("outbox_events", "created_at", _TIMESCALE_CHUNK_INTERVAL),
     ("outbox_archived", "created_at", _TIMESCALE_CHUNK_INTERVAL),
+    # 积分流水：纯 append、无热更新，转 hypertable 以支撑 continuous aggregate 报表
+    # （度量/行为报表，蓝图目标篇该项）。**未启用列式压缩**（首轮保守）：本表同时是 cagg
+    # 的刷新源与 `leaderboard` 的实时扫描对象，压缩与这两条读路径的交互待真机验证。
+    ("points_ledger", "created_at", _TIMESCALE_CHUNK_INTERVAL),
 )
 
 # 启用列式压缩的表：(表名, compress_segmentby, compress_orderby)
@@ -158,6 +162,36 @@ _COMPRESSION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_archived", "7 day
 # 保留策略：(表名, 阈值)——超期 chunk 直接 DROP（仅 outbox_events，兜底；
 # outbox_archived 是「可查历史」，刻意不设，其增长由归档链路约束）
 _RETENTION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_events", "30 days"),)
+
+# ---- continuous aggregate 装配（度量/行为报表）----
+#
+# 在 hypertable 上建按时间桶预聚合的物化视图。当前唯一一项 `points_daily`：积分流水按
+# **日桶 × reason** 聚合（`reason` 即行为类型——`points/rules.py:RULE_DELTAS` 的键
+# post/comment/like/file_approved/...，写入点 `points/tasks.py` 以事件名作 reason），
+# 服务 admin 离线报表读口 `/admin/points-report`。**刻意不接 `leaderboard`**（热榜要求
+# 精确实时，读 cagg 会引入刷新滞后）。
+#
+# 刷新策略的 `end_offset` 必须 > 0（含当前未完成的桶会报错），且要显著大于
+# `schedule_interval` 的抖动；`start_offset` 是回填窗口，须覆盖报表最长期望天数。
+_CONTINUOUS_AGGREGATE_SPECS: tuple[tuple[str, str], ...] = (
+    (
+        "points_daily",
+        """
+        SELECT time_bucket(INTERVAL '1 day', created_at) AS bucket,
+               reason,
+               sum(delta) AS delta_sum,
+               count(*)   AS entry_count
+        FROM points_ledger
+        WHERE delta > 0
+        GROUP BY bucket, reason
+        """,
+    ),
+)
+
+# (视图名, start_offset, end_offset, schedule_interval)
+_CONTINUOUS_AGGREGATE_POLICIES: tuple[tuple[str, str, str, str], ...] = (
+    ("points_daily", "30 days", "1 hour", "1 hour"),
+)
 
 
 async def _ensure_timescaledb(conn: Any) -> bool:
@@ -242,6 +276,88 @@ async def _ensure_hypertables(conn: Any) -> list[str]:
     return changed
 
 
+async def _ensure_continuous_aggregates(engine: Any) -> list[str]:
+    """在 hypertable 上装配 continuous aggregate（幂等；须先 :func:`_ensure_hypertables`）。
+
+    Args:
+        engine: 业务库 ``AsyncEngine``。本函数**自开 AUTOCOMMIT 连接**，刻意不复用调用方的
+            事务（理由见下）。
+
+    **必须在事务块之外**：TimescaleDB 的 ``CREATE MATERIALIZED VIEW ... WITH
+    (timescaledb.continuous)``（隐含 ``WITH DATA``）**不允许在事务块内运行**——放进
+    ``engine.begin()`` 只会拿到 ``cannot run inside a transaction block``，而本模块的容错会把它
+    当成「已装配」静默吞掉，现场表现为「扩展可用、hypertable 也转了，但 cagg 始终不存在」。
+    故这里用 ``isolation_level="AUTOCOMMIT"`` 的独立连接：每条语句自成事务，失败天然不污染
+    后续，try/except 记告警即可（也因此**不能**沿用 :func:`_ensure_hypertables` 的
+    ``begin_nested()`` 逐条 savepoint 骨架）。
+
+    幂等：``CREATE ... continuous`` **没有** ``IF NOT EXISTS``，先查
+    ``timescaledb_information.continuous_aggregates`` 判存在；刷新策略的
+    ``add_continuous_aggregate_policy`` 自带 ``if_not_exists``。
+
+    **刻意不写 ``timescaledb.materialized_only``**：该参数名随 TimescaleDB 版本变动，写死会让
+    旧/新版本上的 CREATE 直接失败。接受实例默认——纯物化则按策略刷新（报表面容忍滞后），
+    real-time 默认则查询时自动合并未物化部分。报表读口因此**不假设新鲜度**。
+    """
+    import sqlalchemy as sa
+
+    changed: list[str] = []
+
+    async def _run(conn: Any, sql: str, label: str) -> None:
+        try:
+            await conn.execute(sa.text(sql))
+        except sa.exc.DBAPIError as exc:
+            logger.warning("TimescaleDB %s 失败（按已装配跳过）：%s", label, exc)
+            return
+        changed.append(label)
+
+    auto = engine.execution_options(isolation_level="AUTOCOMMIT")
+    async with auto.connect() as conn:
+        # 扩展不可用（普通 PG 镜像 / CI 临时 PG）→ 直接返回空，不去白试一遍 CREATE
+        try:
+            has_timescale = await conn.scalar(
+                sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
+            )
+        except sa.exc.DBAPIError as exc:
+            logger.warning("TimescaleDB 扩展探测失败，跳过 continuous aggregate：%s", exc)
+            return []
+        if has_timescale is None:
+            return []
+
+        existing: set[str] = set()
+        try:
+            rows = await conn.execute(
+                sa.text(
+                    "SELECT view_name"
+                    " FROM timescaledb_information.continuous_aggregates"
+                )
+            )
+            existing = {row[0] for row in rows}
+        except sa.exc.DBAPIError as exc:
+            logger.warning("TimescaleDB cagg 目录查询失败，按无已装配视图处理：%s", exc)
+
+        for name, definition in _CONTINUOUS_AGGREGATE_SPECS:
+            if name in existing:
+                continue
+            await _run(
+                conn,
+                f"CREATE MATERIALIZED VIEW {name} "
+                f"WITH (timescaledb.continuous) AS {definition}",
+                f"cagg:{name}",
+            )
+        for name, start_offset, end_offset, schedule in _CONTINUOUS_AGGREGATE_POLICIES:
+            await _run(
+                conn,
+                f"SELECT add_continuous_aggregate_policy('{name}', "
+                f"start_offset => INTERVAL '{start_offset}', "
+                f"end_offset => INTERVAL '{end_offset}', "
+                f"schedule_interval => INTERVAL '{schedule}', "
+                f"if_not_exists => TRUE)",
+                f"cagg_policy:{name}",
+            )
+    return changed
+
+
 async def _create_all() -> None:
     """create_all 降级通道：按 Base.metadata 建缺失的表，并补已存在表缺失的列/索引。
 
@@ -253,7 +369,8 @@ async def _create_all() -> None:
     注意必须 import 所有模型模块，
     metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
     各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`；
-    建表后另做 TimescaleDB 装配（hypertable + 压缩/保留策略），见 :func:`_ensure_hypertables`。
+    建表后另做 TimescaleDB 装配（hypertable + 压缩/保留策略 + continuous aggregate），
+    见 :func:`_ensure_hypertables` 与 :func:`_ensure_continuous_aggregates`。
     """
     from app.db.base import Base
     from app.db.model_registry import ensure_all_models
@@ -263,13 +380,41 @@ async def _create_all() -> None:
     engine = get_async_engine()
     if engine is None:
         return
+    changed: list[str] = []
+    timescale_ready = False
     async with engine.begin() as conn:
         await ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
         # 建表之后：hypertable 转换只对已存在的表有意义；扩展不可用时静默跳过（见上）。
         if await _ensure_timescaledb(conn):
-            await _ensure_hypertables(conn)
+            changed = await _ensure_hypertables(conn)
+            timescale_ready = True
+    # continuous aggregate **不能在事务块内创建**（TimescaleDB 限制，见该函数 docstring），
+    # 故必须等上面的事务提交之后，由它自开 AUTOCOMMIT 连接装配（依赖 hypertable 已建）。
+    if timescale_ready:
+        changed += await _ensure_continuous_aggregates(engine)
+    # 装配项落启动日志：否则 hypertable/cagg 静默跳过时（扩展缺失、版本不兼容、事务限制）
+    # 现场无从判断，验机只能靠手工查目录视图。
+    if changed:
+        logger.info("TimescaleDB 装配：%s", ", ".join(changed))
+
+
+async def _ensure_caggs_after_migration() -> None:
+    """Alembic 通道下补装配 continuous aggregate（迁移里建不了，见 0004 的模块 docstring）。
+
+    ``CREATE MATERIALIZED VIEW ... (timescaledb.continuous)`` 在事务块内一律失败（连 DO 块的
+    隐式事务都过不去），故迁移 0004 只把 ``points_ledger`` 转成 hypertable，cagg 挪到这里——
+    与 create_all 通道共用 :func:`_ensure_continuous_aggregates`（自开 AUTOCOMMIT、幂等）。
+    """
+    from app.db.session import get_async_engine
+
+    engine = get_async_engine()
+    if engine is None:
+        return
+    changed = await _ensure_continuous_aggregates(engine)
+    if changed:
+        logger.info("TimescaleDB 装配（迁移通道）：%s", ", ".join(changed))
 
 
 async def _seed_base_data() -> None:
@@ -344,6 +489,8 @@ async def _init_db_schema() -> None:
     held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)
     try:
         await asyncio.to_thread(_run_upgrade)
+        # cagg 在迁移事务内建不了（0004 docstring），迁移跑完后在此补装配
+        await _ensure_caggs_after_migration()
         await _seed_base_data()
     finally:
         await release_migration_lock(held, _MIGRATION_LOCK_KEY)

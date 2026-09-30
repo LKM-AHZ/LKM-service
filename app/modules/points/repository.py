@@ -8,6 +8,10 @@ service 层只做纯 Python 组装与缓存编排。
 ``IntegrityError``；本层改用 ``pg_upsert(do_nothing=True)``（约束
 ``uq_points_ledger_ref``）—— 冲突由 PG 直接忽略，不产生异常、不污染调用方事务，
 service 侧以「回读流水行」判定是否已存在。并发语义仍幂等（撞键者回读既有行）。
+
+**该约束现为 ``(user_id, ref_type, ref_id, created_at)``**：``points_ledger`` 是 hypertable，
+唯一索引必须含分区列（见 ``points/models.py`` 的类 docstring），故 DB 级去重只在
+``created_at`` 恰好相同时才生效——真实幂等由 ``service.reward`` 的按用户行锁 + 预检承担。
 """
 
 from __future__ import annotations
@@ -96,7 +100,12 @@ class PointsLedgerRepository(AsyncRepository[PointsLedger]):
     async def get_by_ref(
         self, user_id: uuid.UUID, ref_type: str, ref_id: str
     ) -> PointsLedger | None:
-        """按幂等键 (user_id, ref_type, ref_id) 取流水行。"""
+        """按幂等键 (user_id, ref_type, ref_id) 取流水行。
+
+        ``get_one`` 是 limit-1 语义（取首行），故在唯一约束并入 ``created_at`` 后
+        （同键理论可多行）**不会抛 MultipleResultsFound**——多行时取首行，这是幂等弱化后的
+        已知面（见模块 docstring）；正常路径下行锁 + 预检已保证同键至多一行。
+        """
         return await self.get_one(
             PointsLedger.user_id == user_id,
             PointsLedger.ref_type == ref_type,

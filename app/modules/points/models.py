@@ -38,10 +38,27 @@ class UserBalance(Base):
 
 
 class PointsLedger(UUIDPrimaryKeyMixin, Base):
+    """积分流水账本。
+
+    **复合主键 ``(created_at, id)``**：本表是 TimescaleDB hypertable（按 ``created_at``
+    时间分区，见 ``app/db/init_db.py``），而 hypertable 的**每个唯一索引都必须包含分区列**
+    ——故 ``id`` 不再是单列主键，幂等键的唯一约束也由 ``(user_id, ref_type, ref_id)`` 放宽为
+    ``(user_id, ref_type, ref_id, created_at)``（约束名不变，``pg_upsert`` 按名解析 arbiter）。
+    ``id`` 仍是 uuid7（全局唯一），语义未变。
+
+    **幂等弱化的已知面（与 ``outbox_events`` 同款取舍）**：并入 ``created_at`` 后，同一
+    ``(user_id, ref_type, ref_id)`` 的两次投递因 ``created_at`` 不同而**不再撞唯一约束**，
+    DB 级兜底由「强保证」降为「同微秒才生效」。实际幂等改由 ``reward()`` 的**按用户行锁 +
+    ``get_by_ref`` 预检**承担（见 ``points/service.py``）——行锁已把同一 ref 的并发投递串行化，
+    唯一约束本就只是锁失效时的兜底。无 timescaledb 的普通表上本约束同样成立（多一列无副作用）。
+    """
+
     __tablename__: str = "points_ledger"
-    # (user_id, ref_type, ref_id) 唯一：幂等——同一事件对同一用户不重复发分
+    # 幂等键 (user_id, ref_type, ref_id) + 分区列 created_at（hypertable 要求唯一索引含分区列）
     __table_args__: tuple[Any, ...] = (
-        UniqueConstraint("user_id", "ref_type", "ref_id", name="uq_points_ledger_ref"),
+        UniqueConstraint(
+            "user_id", "ref_type", "ref_id", "created_at", name="uq_points_ledger_ref"
+        ),
         # 排行榜日/周窗口聚合：`created_at >= since AND delta > 0`，命中索引免全表扫
         Index("ix_ledger_created_delta", "created_at", "delta"),
     )
@@ -54,8 +71,10 @@ class PointsLedger(UUIDPrimaryKeyMixin, Base):
     # 幂等引用键：如 ``<question_uuid>:<answer_uuid>``（73 字符）——uuid 化后两个 36 字符
     # uuid 加分隔已超原 String(64)，故加宽
     ref_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # primary_key=True 是与 mixin 的 id 组成复合主键 (created_at, id)：hypertable 的分区列
+    # 必须出现在主键里（见类 docstring）。写入仍由 Python 侧 default 提供值。
     created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
+        UTCDateTime, nullable=False, default=now_iso, primary_key=True
     )
 
 

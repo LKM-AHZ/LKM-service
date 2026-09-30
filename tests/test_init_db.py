@@ -370,30 +370,37 @@ async def test_additive_schema_sync_skips_not_null_without_default() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_outbox_unique_indexes_include_partition_column() -> None:
+def test_hypertable_unique_indexes_include_partition_column() -> None:
     """hypertable 硬约束的回归锚（批 2）。
 
     ``create_hypertable`` 要求表上**每个唯一索引都包含分区列**（这里是 ``created_at``）：
-    主键与 ``outbox_events.event_id`` 的唯一约束都必须带上它。一旦有人把 PK 改回单列
-    ``id``，装配会静默降级成普通表（扩展可用也转不了），分区/压缩就此悄悄失效——
-    这个断言让它在单测阶段就红。
+    主键与各表的幂等约束都必须带上它。一旦有人把 PK 改回单列 ``id``，装配会静默降级成
+    普通表（扩展可用也转不了），分区/压缩/cagg 就此悄悄失效——这个断言让它在单测阶段就红。
+
+    以 ``_HYPERTABLE_SPECS`` 为**单一事实源**遍历（清单与断言同源，新增 hypertable 表自动
+    纳入，不会漏）。
     """
     import sqlalchemy as sa
 
-    from app.db.outbox import OutboxMessage
-    from app.db.outbox_archive import OutboxArchived
+    from app.db.base import Base
+    from app.db.init_db import _HYPERTABLE_SPECS
+    from app.db.model_registry import ensure_all_models
 
-    for model in (OutboxMessage, OutboxArchived):
-        table = model.__table__
+    ensure_all_models()
+    assert _HYPERTABLE_SPECS, "hypertable 清单为空"
+    for table_name, partition_col, _interval in _HYPERTABLE_SPECS:
+        table = Base.metadata.tables[table_name]
         unique_keys = [tuple(c.name for c in table.primary_key.columns)]
         unique_keys += [
             tuple(sorted(c.name for c in con.columns))
             for con in table.constraints
             if isinstance(con, sa.UniqueConstraint)
         ]
-        assert unique_keys, f"{table.name} 无唯一索引"
+        assert unique_keys, f"{table_name} 无唯一索引"
         for cols in unique_keys:
-            assert "created_at" in cols, f"{table.name} 的唯一索引缺分区列：{cols}"
+            assert partition_col in cols, (
+                f"{table_name} 的唯一索引缺分区列 {partition_col}：{cols}"
+            )
 
 
 async def test_timescale_assembly_is_optional_and_non_fatal() -> None:
