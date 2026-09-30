@@ -18,11 +18,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import ApiResp, ListData
-from app.core.err import BizError, CommonErr, respond
-from app.db.event_failure import EventFailure, replay_failure
-from app.db.session import get_session
 from app.modules.admin.deps import require_admin
+from core.common import ApiResp, ListData
+from core.db.event_failure import EventFailure, replay_failure
+from core.db.session import get_session
+from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/admin/event-failures", tags=["admin-event-failures"])
 

@@ -9,7 +9,18 @@ from __future__ import annotations
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.err import (
+from app.modules.content.blog.errors import BlogErr
+from app.modules.content.boards.errors import BoardErr
+from app.modules.content.errors import ContentErr
+from app.modules.interaction.errors import FollowErr, InteractionErr
+from app.modules.notification.errors import NotificationErr
+from app.modules.projects.errors import ProjectErr
+from core.db.session import (
+    _is_unique_violation,
+    _unique_constraint_name,
+    unique_violation_errcode,
+)
+from core.err import (
     _RETRY_AFTER_SECONDS,
     NS_AUTH,
     NS_COMMON,
@@ -20,17 +31,6 @@ from app.core.err import (
     err_info,
     resp_json,
 )
-from app.db.session import (
-    _is_unique_violation,
-    _unique_constraint_name,
-    unique_violation_errcode,
-)
-from app.modules.content.blog.errors import BlogErr
-from app.modules.content.boards.errors import BoardErr
-from app.modules.content.errors import ContentErr
-from app.modules.interaction.errors import FollowErr, InteractionErr
-from app.modules.notification.errors import NotificationErr
-from app.modules.projects.errors import ProjectErr
 
 
 class _AsyncpgUniqueViolation(Exception):

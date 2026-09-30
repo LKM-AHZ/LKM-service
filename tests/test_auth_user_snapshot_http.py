@@ -22,11 +22,10 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
 import auth.snapshot as snap_mod
 import auth.user_http as user_http
-from app.core.config import settings
+import core.redis as redis_mod
+import core.user_cache as uc
 from auth.models import Profile, User
 from auth.security import hashpwd
 from auth.snapshot import (
@@ -34,6 +33,7 @@ from auth.snapshot import (
     get_user_snapshot,
     get_user_snapshot_batch,
 )
+from core.config import settings
 from tests.conftest import DB, Client
 
 

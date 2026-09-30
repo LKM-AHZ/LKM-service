@@ -166,7 +166,7 @@ async def test_checkin_fail_open_when_redis_unavailable(
         async def incr(self, key):
             raise RuntimeError("redis down")
 
-    import app.core.cache as cache
+    import core.cache as cache
 
     # redis_client.get_redis() 本身从不抛错（内部已兜底），但返回后的实际操作可能失败；
     # cache 各函数对 operation 都有 try/except → 抛错也应被吞掉，打卡不中断。

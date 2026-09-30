@@ -10,7 +10,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.core.common import parse_tags
+from core.common import parse_tags
 
 
 class FileCreate(BaseModel):

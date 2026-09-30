@@ -19,13 +19,13 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.db.session import (
+from core.config import settings
+from core.db.session import (
     _is_unique_violation,
     create_realm_async_engine,
     unique_violation_errcode,
 )
+from core.err import BizError
 
 _auth_async_engine: AsyncEngine | None = None
 _auth_AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
@@ -71,7 +71,7 @@ async def new_auth_session() -> AsyncSession:
 async def get_auth_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 依赖：提供 auth 库会话，负责 commit / rollback / close。
 
-    与 :func:`app.db.session.get_session` 同款语义——**绝大多数 auth 路由依赖它并
+    与 :func:`core.db.session.get_session` 同款语义——**绝大多数 auth 路由依赖它并
     假定「外层会话会提交」**（service 层只 ``flush``）。曾因本函数是普通协程依赖
     （仅 ``return session``）而无人提交：注册/登录等全部写入在请求结束时被回滚，
     ``/auth/reg/local`` 返回 200 且给出 user_id，但 ``auth.users`` 始终 0 行

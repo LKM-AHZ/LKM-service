@@ -13,7 +13,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.boards.schemas import (
     BanRequest,
@@ -35,6 +34,7 @@ from app.modules.content.boards.service import (
     update_board_ex,
 )
 from app.modules.content.models import Board
+from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
 

@@ -15,13 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.router_authz  # noqa: F401  # 确保 ROUTERS 已装好 router_authz
-from app.core.config import settings
-from app.core.secrets import reveal
 from app.main import app as _app
 from auth.db.session import get_auth_session
 from auth.models import Profile, User
 from auth.security import hashpwd
 from auth.service_authz import grant_exam_unlock
+from core.config import settings
+from core.secrets import reveal
 from tests.conftest import DB, Client
 
 

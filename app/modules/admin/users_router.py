@@ -19,7 +19,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import (
+from app.modules.content.models import ContentItem, ContentType
+from app.modules.files.models import FileStatus, LibraryFile
+from app.modules.rbac.permissions import Permission
+from core.common import (
     ApiResp,
     ListData,
     PageData,
@@ -27,14 +30,11 @@ from app.core.common import (
     PaginateParams,
     paginate_pages,
 )
-from app.core.err import respond
-from app.db.session import get_read_session
-from app.modules.content.models import ContentItem, ContentType
-from app.modules.files.models import FileStatus, LibraryFile
-from app.modules.rbac.permissions import Permission
-from auth.deps import CurrentUser
-from auth.seams import new_auth_session as _new_auth_session_raw
-from auth.snapshot import (
+from core.contracts import CurrentUser
+from core.db.session import get_read_session
+from core.err import respond
+from core.ports.audit import new_auth_session as _new_auth_session_raw
+from core.ports.snapshot import (
     count_active_users,
     list_user_snapshots,
     user_count_by_day,

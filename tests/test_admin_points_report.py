@@ -115,12 +115,12 @@ async def test_points_report_200_with_continuous_aggregate(
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from app.db.init_db import (
+    from app.modules.points.models import PointsLedger
+    from core.db.init_db import (
         _ensure_continuous_aggregates,
         _ensure_hypertables,
         _ensure_timescaledb,
     )
-    from app.modules.points.models import PointsLedger
 
     conn = await db.connection()
     if not await _ensure_timescaledb(conn):

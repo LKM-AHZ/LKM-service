@@ -4,10 +4,6 @@ import hashlib
 import secrets
 from typing import Any, cast
 
-from app.core.err import BizError, CommonErr
-from app.db.base import expires_at, now_iso
-from app.db.repo import consume_once, get_or_raise
-from app.db.repository import DbSession
 from auth import events, security
 from auth.channels import CHANNELS, channel_for
 from auth.errors import AuthErr
@@ -31,6 +27,10 @@ from auth.service_auth import (
     verify_magic_link,
 )
 from auth.service_verify import check_code_rate_limit
+from core.db.base import expires_at, now_iso
+from core.db.repo import consume_once, get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
 
 
 async def find_user_by_contact(db: DbSession, field: str, value: str) -> User:

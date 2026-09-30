@@ -6,7 +6,7 @@ import uuid
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import (  # 注意 db.base 而非 db.models
+from core.db.base import (  # 注意 db.base 而非 db.models
     Base,
     UTCDateTime,
     UUIDPrimaryKeyMixin,

@@ -17,8 +17,8 @@ from collections.abc import Sequence
 
 from sqlalchemy import func, or_
 
-from app.db.repository import AsyncRepository
 from app.modules.content.models import ContentItem, ContentStatus
+from core.db.repository import AsyncRepository
 
 # LIKE 通配符转义：用户输入里的 % / _ / \ 必须按字面处理，否则 ``%`` 会命中全表。
 _LIKE_ESCAPE = "\\"

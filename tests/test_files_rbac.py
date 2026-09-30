@@ -77,7 +77,7 @@ async def _mk_file(
     需把 files_store_dir 指到 tmp_path 使落盘可用。上传者与审核者都建在 auth realm，
     HTTP 经 auth_seam_realm 跨 realm 裁决。
     """
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     await _grant(db, "normal:member", "files.upload")
@@ -115,7 +115,7 @@ async def test_upload_without_auth_is_403(db: DB, client: Client) -> None:
 async def test_member_without_upload_perm_is_403(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     # member 未授 files.upload（默认 normal:member 不授）
@@ -128,7 +128,7 @@ async def test_member_without_upload_perm_is_403(
 async def test_member_with_upload_perm_can_upload(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     await _grant(db, "normal:member", "files.upload")
@@ -144,7 +144,7 @@ async def test_member_with_upload_perm_can_upload(
 async def test_download_without_perm_is_403(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     uploader = await _mk_au(auth_db, "dl_owner", level="normal", role="member")
@@ -158,7 +158,7 @@ async def test_download_without_perm_is_403(
 async def test_download_with_perm_is_200(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     uploader = await _mk_au(auth_db, "dl2_owner", level="normal", role="member")
@@ -175,7 +175,7 @@ async def test_download_with_perm_is_200(
 async def test_delete_others_file_is_403(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     owner = await _mk_au(auth_db, "del_owner", level="normal", role="member")
@@ -188,7 +188,7 @@ async def test_delete_others_file_is_403(
 async def test_delete_own_file_is_200(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     owner = await _mk_au(auth_db, "del_self", level="normal", role="member")
@@ -201,7 +201,7 @@ async def test_delete_own_file_is_200(
 async def test_super_admin_can_delete_others_file(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
 ) -> None:
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     owner = await _mk_au(auth_db, "del_sa_owner", level="normal", role="member")

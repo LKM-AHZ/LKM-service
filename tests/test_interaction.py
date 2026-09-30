@@ -11,7 +11,6 @@ from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.models import Board, ContentItem, ContentStatus, ContentType
 from app.modules.interaction.errors import InteractionErr
 from app.modules.interaction.models import InteractionFavorite, InteractionViewLog
@@ -23,6 +22,7 @@ from app.modules.interaction.service import (
     record_view,
     remove_favorite,
 )
+from core.err import BizError
 from tests.conftest import auth_user_uid
 
 # 不存在的 content id（uuid 形态），用于未命中路径。

@@ -6,8 +6,6 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import ApiResp
-from app.core.err import BizError, respond
 from auth import service_oauth
 from auth.db.session import get_auth_session
 from auth.deps import CurrentUser, get_current_user
@@ -17,6 +15,8 @@ from auth.schemas import (
     MessageResponse,
     OAuthRedirectResponse,
 )
+from core.common import ApiResp
+from core.err import BizError, respond
 
 router = APIRouter(prefix="/auth/oauth", tags=["oauth"])
 

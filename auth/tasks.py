@@ -24,7 +24,7 @@ worker.py 不再手写 handler 表。
 import logging
 from typing import Any
 
-from app.core.messaging import (
+from core.messaging import (
     RKEY_ANALYTICS,
     RKEY_AUDIT_LOGIN_FAIL,
     RKEY_AUDIT_PERMISSION_CHANGE,
@@ -38,7 +38,7 @@ from app.core.messaging import (
     SUB_SEND,
     SUB_USER_INVALIDATE,
 )
-from app.core.task_registry import register_cron_job, register_task
+from core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger("lkm.auth.tasks")
 
@@ -69,7 +69,7 @@ async def invalidate_user_snap(user_id: int) -> None:
     其异常被吞（仅记日志）先保证在线失效/worker 成功不因 ETL 故障受影响，漏刷新由周期
     对账 reconcile 兜底。
     """
-    from app.core import user_cache
+    from core import user_cache
 
     await user_cache.invalidate_user_snap(user_id)
     try:
@@ -94,7 +94,7 @@ async def record_audit_event(
     参数形状与事件 payload 的 ``args`` 一一对应（worker 按名展开调用）。本任务只读取、
     不落库，天然幂等：重复投递只是把计数多记一次（计数器语义即可观测性，非账目）。
     """
-    from app.core.metrics import audit_events_total
+    from core.metrics import audit_events_total
 
     # action 直接取 routing key（路由键本身就是审计语义），只认白名单以免任何 payload 都能
     # 造出任意 label 维度（label 无界 = 指标基数爆炸）。
@@ -130,9 +130,9 @@ async def _trigger_prefect_flow(deployment: str, parameters: dict[str, Any]) -> 
     try:
         import os
 
-        from app.core import tracing
-        from app.core.config import settings
-        from app.core.secrets import reveal
+        from core import tracing
+        from core.config import settings
+        from core.secrets import reveal
 
         # 显式赋值而非 setdefault：Settings 是这两个值的唯一事实源，进程环境里残留的旧
         # PREFECT_API_* 若优先命中，会悄悄把触发打到错误的 deployment/项目上，而运维以为
@@ -167,7 +167,7 @@ async def reconcile_user_dim() -> None:
     Prefect 开启且触发成功 → 由 flow 执行；否则（默认关 / 触发失败）回落直调，保持
     既有 crash-safety 语义不因编排层故障而丢跑。
     """
-    from app.core.config import settings
+    from core.config import settings
 
     if settings.prefect_enabled and await _trigger_prefect_flow(
         settings.prefect_deployment, {"mode": "reconcile"}
@@ -184,10 +184,10 @@ async def export_analytics_clickhouse() -> None:
 
     把业务库 ``event_failures`` + auth 库 ``audit_logs`` 增量导出到 ClickHouse。
     Prefect 开启且配了 analytics deployment 且触发成功 → 由 flow 执行（DAG/重试/回填）；
-    否则回落直调纯体层 ``app.flows.analytics_body.run_analytics_export``——该模块**不 import
+    否则回落直调纯体层 ``core.flows.analytics_body.run_analytics_export``——该模块**不 import
     prefect**，故默认关/触发失败路径零 Prefect 依赖。CH 未启用时两头都是 no-op，不报错。
     """
-    from app.core.config import settings
+    from core.config import settings
 
     if (
         settings.prefect_enabled
@@ -196,7 +196,7 @@ async def export_analytics_clickhouse() -> None:
     ):
         return
 
-    from app.flows.analytics_body import run_analytics_export
+    from core.flows.analytics_body import run_analytics_export
 
     await run_analytics_export()
 
@@ -205,10 +205,10 @@ async def run_ops_daily() -> None:
     """运营日报消费口（jobs worker 消费 cron.ops_daily）。
 
     Prefect 开启且配了 ops-daily deployment 且触发成功 → 由 flow 执行（重试/UI 留痕）；
-    否则回落直调纯体层 ``app.flows.ops_daily_body.collect_daily_report``——该模块**不 import
+    否则回落直调纯体层 ``core.flows.ops_daily_body.collect_daily_report``——该模块**不 import
     prefect**，故默认关/触发失败路径零 Prefect 依赖。
     """
-    from app.core.config import settings
+    from core.config import settings
 
     if (
         settings.prefect_enabled
@@ -219,7 +219,7 @@ async def run_ops_daily() -> None:
     ):
         return
 
-    from app.flows.ops_daily_body import collect_daily_report
+    from core.flows.ops_daily_body import collect_daily_report
 
     await collect_daily_report(days=1)
 
@@ -242,9 +242,9 @@ async def purge_revoked_access_tokens() -> None:
     靠 ``ex`` 自洁，本表没有 TTL —— 过期行不删会无界累积，故按 ``expires_at`` 周期清理。
     函数级 import，避免 worker 冷启动拉整棵 auth/db 树。
     """
-    from app.db.base import now_iso
     from auth.db.session import new_auth_session
     from auth.repository import RevokedAccessTokenRepository
+    from core.db.base import now_iso
 
     async with await new_auth_session() as db:
         removed = await RevokedAccessTokenRepository(db).purge_expired(now=now_iso())

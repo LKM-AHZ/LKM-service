@@ -22,14 +22,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-import app.db.outbox  # noqa: F401  # 确保 OutboxMessage 入 Base.metadata
-from app.core import messaging, outbox_relay
-from app.core.config import settings
-from app.db.base import Base
-from app.db.event_failure import EventFailure
-from app.db.model_registry import ensure_all_models
-from app.db.outbox import OUTBOX_PENDING, OUTBOX_PUBLISHED, OutboxMessage
-from app.db.outbox_archive import OutboxArchived
+import core.db.outbox  # noqa: F401  # 确保 OutboxMessage 入 Base.metadata
+from core import messaging, outbox_relay
+from core.config import settings
+from core.db.base import Base
+from core.db.event_failure import EventFailure
+from core.db.model_registry import ensure_all_models
+from core.db.outbox import OUTBOX_PENDING, OUTBOX_PUBLISHED, OutboxMessage
+from core.db.outbox_archive import OutboxArchived
 
 _RK = "event.apply_point"
 # 必须符合事件契约（core/event_contract）：user_id 线上是 str（uuid.UUID 过 JSON 即 str）

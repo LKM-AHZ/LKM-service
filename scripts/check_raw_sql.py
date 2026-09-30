@@ -1,7 +1,7 @@
 """裸 SQL 门禁：业务代码走 ORM，裸 SQL 只留 DDL/探活/ClickHouse（M 类 CI 门禁）。
 
 口径见 ``DEVELOPMENT.md``「类型门禁与 lint」：LKM-service 的 PostgreSQL 访问统一经
-SQLAlchemy ORM 与 :class:`app.db.repository.AsyncRepository`。裸 SQL 会绕开软删过滤等
+SQLAlchemy ORM 与 :class:`core.db.repository.AsyncRepository`。裸 SQL 会绕开软删过滤等
 横切逻辑、绕开分层契约（service 只 flush、sqlalchemy import 收口在 db 层），也拿不到
 ORM 的类型安全。
 
@@ -28,17 +28,18 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# auth 已独立成顶层包，与 app 一样是生产代码，同受裸 SQL 门禁约束。
-SCAN_ROOTS = [REPO_ROOT / "app", REPO_ROOT / "auth"]
+# core / auth / app 均为顶层包与生产代码，同受裸 SQL 门禁约束。
+SCAN_ROOTS = [REPO_ROOT / "core", REPO_ROOT / "app", REPO_ROOT / "auth"]
 
 #: 整体放行的文件 -> 放行原因。新增条目须确认是 ORM 无法表达的场景。
 ALLOWLIST: dict[str, str] = {
-    "app/db/init_db.py": "建表/索引/扩展装配与 TimescaleDB 策略，DDL 无法 ORM 化",
-    "app/db/shared_objects.py": "库级共享对象（pg_trgm / uuid_generate_v7）DDL，无法 ORM 化",
-    "app/db/base.py": "uuid_generate_v7() 作为列 server_default",
+    "core/db/init_db.py": "建表/索引/扩展装配与 TimescaleDB 策略，DDL 无法 ORM 化",
+    "core/db/shared_objects.py": "库级共享对象（pg_trgm / uuid_generate_v7）DDL，无法 ORM 化",
+    "core/db/base.py": "uuid_generate_v7() 作为列 server_default",
     "auth/health.py": "auth 库探活 SELECT 1",
     "app/modules/health/router.py": "业务库探活 SELECT 1",
-    "app/core/clickhouse.py": "ClickHouse 专用 client，无 ORM",
+    "core/clickhouse.py": "ClickHouse 专用 client，无 ORM",
+    "core/flows/ops_daily_body.py": "ClickHouse 按日聚合查询，无 ORM（B3 从 app/flows 下沉）",
     "app/modules/admin/analytics_router.py": "ClickHouse 查询，无 ORM",
 }
 

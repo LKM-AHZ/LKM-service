@@ -27,14 +27,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
-from app.db.user_dim import UserDim
 from auth.db.base import auth_metadata
 from auth.models import Profile, User
 from auth.security import hashpwd
 from auth.tasks import invalidate_user_snap, reconcile_user_dim
+from core.config import settings
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
+from core.db.user_dim import UserDim
 
 
 @pytest.fixture

@@ -3,15 +3,6 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import (
-    ApiResp,
-    ModuleStatus,
-    PageData,
-    PaginateDep,
-    PaginateParams,
-)
-from app.core.err import respond
-from app.db.session import get_read_session, get_session
 from app.modules.content.qa.schemas import (
     AcceptIn,
     AnswerCreate,
@@ -29,7 +20,17 @@ from app.modules.content.qa.service import (
     get_question,
     list_questions,
 )
-from auth.deps import CurrentUser, RequireLevel
+from core.common import (
+    ApiResp,
+    ModuleStatus,
+    PageData,
+    PaginateDep,
+    PaginateParams,
+)
+from core.contracts import CurrentUser
+from core.db.session import get_read_session, get_session
+from core.err import respond
+from core.ports.authz import RequireLevel
 
 
 def _status() -> ModuleStatus:

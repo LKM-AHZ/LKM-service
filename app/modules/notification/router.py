@@ -8,17 +8,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from app.core.common import (
-    ApiResp,
-    ModuleStatus,
-    PageData,
-    PaginateDep,
-    PaginateParams,
-)
-from app.core.config import settings
-from app.core.err import respond
-from app.core.wire import msgspec_ok
-from app.db.session import get_read_session, get_session
 from app.modules.notification.schemas import (
     MarkReadIn,
     MarkReadOut,
@@ -41,7 +30,18 @@ from app.modules.notification.service import (
 from app.modules.notification.wire import to_wire
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
-from auth.deps import CurrentUser
+from core.common import (
+    ApiResp,
+    ModuleStatus,
+    PageData,
+    PaginateDep,
+    PaginateParams,
+)
+from core.config import settings
+from core.contracts import CurrentUser
+from core.db.session import get_read_session, get_session
+from core.err import respond
+from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/notification", tags=["notification"])
 

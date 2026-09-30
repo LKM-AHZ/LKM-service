@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import settings
 from auth import tasks as auth_tasks
 from auth import user_dim_sync
+from core.config import settings
 
 
 @pytest.fixture

@@ -9,10 +9,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from auth.errors import AuthErr
 from auth.models import TOTP, MagicLink, User
 from auth.providers.console import ConsoleEmailProvider
+from core.err import BizError
 
 
 @pytest.fixture

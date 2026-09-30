@@ -15,8 +15,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from app.core import messaging
-from app.core.config import settings
+from core import messaging
+from core.config import settings
 
 pytestmark = pytest.mark.integration
 

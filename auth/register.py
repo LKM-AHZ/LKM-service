@@ -1,6 +1,6 @@
 """auth 包对 app 侧的注册钩子：模型 / 任务 / 错误码。
 
-app 侧的基础设施枢纽（``app.db.model_registry``、``app.core.task_registry``、
+app 侧的基础设施枢纽（``core.db.model_registry``、``core.task_registry``、
 ``app.modules.registry``）不得直接 import auth 内部模块，只调这里的函数触发注册副作用；
 实现一律惰性 import，保持 ``import auth`` 轻量、无包级循环。
 """

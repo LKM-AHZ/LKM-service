@@ -10,8 +10,8 @@ from typing import Any
 
 from prometheus_client.registry import REGISTRY
 
-import app.core.metrics as metrics
-import app.db.session as session_mod
+import core.db.session as session_mod
+import core.metrics as metrics
 
 
 class _FakePool:

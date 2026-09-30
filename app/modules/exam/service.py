@@ -4,9 +4,6 @@ import datetime
 import json
 import uuid
 
-from app.core.err import BizError, CommonErr
-from app.db.base import now_iso
-from app.db.repository import DbSession
 from app.modules.exam.errors import ExamErr
 from app.modules.exam.models import (
     Exam,
@@ -31,7 +28,10 @@ from app.modules.exam.schemas import (
     SubmitResult,
 )
 from app.modules.points.rules import enqueue_points_event
-from auth.snapshot import get_user_snapshot_batch
+from core.db.base import now_iso
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
+from core.ports.snapshot import get_user_snapshot_batch
 
 
 def _question_for_attempt(q: ExamQuestion) -> QuestionForAttempt:
@@ -268,7 +268,7 @@ async def _apply_unlock(db: DbSession, exam: Exam, user_id: uuid.UUID) -> None:
     （author 独立库后 auth 是 users/profiles 唯一写者）。同库蓝绿阶段与 exam 事务在同一 DB
     会话内执行，语义与旧实现一一对等（只升不降、有改才 bump）并发出 user.updated。
     """
-    from auth.seams import grant_exam_unlock_from_business
+    from core.ports.users import grant_exam_unlock_from_business
 
     if not exam.unlock_level and not exam.unlock_role:
         return

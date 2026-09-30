@@ -16,9 +16,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-from app.core.config import settings
-from app.core.err import AuthErr, BizError, CommonErr
+import core.redis as redis_mod
 from auth.admin_router import _require_admin_from_cookie
 from auth.admin_session import (
     COOKIE_NAME,
@@ -33,6 +31,8 @@ from auth.token_revocation import (
     block_payload_jti,
     is_jti_blocked,
 )
+from core.config import settings
+from core.err import AuthErr, BizError, CommonErr
 
 
 @pytest.fixture(autouse=True)

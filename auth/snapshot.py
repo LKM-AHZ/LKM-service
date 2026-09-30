@@ -47,14 +47,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-import app.core.bloom as bloom
-import app.core.singleflight as singleflight
-import app.core.user_cache as user_cache
-from app.core.config import settings
-from app.core.metrics import user_snap_singleflight_total
+import core.bloom as bloom
+import core.singleflight as singleflight
+import core.user_cache as user_cache
 from auth import user_http
 from auth.models import Profile, User
 from auth.schemas import ProfileInfo, ProfileRole
+from core.config import settings
+from core.metrics import user_snap_singleflight_total
 
 logger = logging.getLogger("lkm.auth.snapshot")
 

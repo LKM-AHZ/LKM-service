@@ -11,15 +11,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from app.core.common import ApiResp
-from app.core.config import settings
-from app.core.err import respond
-from app.core.wire import msgspec_ok
-from app.db.session import get_read_session
 from app.modules.feed.schemas import FeedResponse
 from app.modules.feed.service import get_timeline
 from app.modules.feed.wire import to_wire
-from auth.deps import CurrentUser, get_optional_user
+from core.common import ApiResp
+from core.config import settings
+from core.contracts import CurrentUser
+from core.db.session import get_read_session
+from core.err import respond
+from core.ports.authz import get_optional_user
+from core.wire import msgspec_ok
 
 timeline_router = APIRouter(prefix="/timeline", tags=["timeline"])
 

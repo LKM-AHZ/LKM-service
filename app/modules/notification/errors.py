@@ -1,4 +1,4 @@
-from app.core.err import (
+from core.err import (
     NS_NOTIFICATION,
     ErrCode,
     register,

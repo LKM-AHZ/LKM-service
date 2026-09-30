@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from app.core.secrets_bootstrap import bootstrap
+from core.secrets_bootstrap import bootstrap
 
 _BASE_ENV: dict[str, str] = {
     "LKM_INFISICAL_ENABLED": "true",

@@ -19,8 +19,6 @@ import datetime
 import uuid
 from typing import Any
 
-from app.core.cache import TTL_LIST_S, cached_read, make_key
-from app.db.repository import DbSession
 from app.modules.admin.moderation.engine import (
     ModerationResult,
     evaluate,
@@ -34,7 +32,9 @@ from app.modules.interaction.service import (
     get_followed_board_ids,
     get_following_ids,
 )
-from auth.snapshot import get_user_snapshot_batch
+from core.cache import TTL_LIST_S, cached_read, make_key
+from core.db.repository import DbSession
+from core.ports.snapshot import get_user_snapshot_batch
 
 
 async def _fill_authors(db: DbSession, items: list[FeedItem]) -> None:

@@ -16,11 +16,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
 from app.modules.admin.models import RolePermission
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.models import Board
 from app.modules.exam.models import Exam, ExamCertificate
+from core.err import CommonErr
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 

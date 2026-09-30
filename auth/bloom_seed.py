@@ -26,9 +26,9 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import bloom
 from auth.db.session import new_auth_session
 from auth.models import User
+from core import bloom
 
 logger = logging.getLogger("lkm.auth.bloom_seed")
 

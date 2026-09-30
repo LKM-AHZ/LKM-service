@@ -5,11 +5,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.starhope.errors import StarHopeErr
 from app.modules.starhope.models import StarHopeQuestion
 from app.modules.starhope.schemas import StarHopeTombstone
 from app.modules.starhope.service import pull_entity, push_entity
+from core.err import BizError
 from tests.conftest import auth_user_uid
 
 

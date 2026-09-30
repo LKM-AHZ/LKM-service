@@ -25,11 +25,11 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import cache_get, cache_set, make_key
-from app.core.config import settings
 from app.modules.feed import feed as feed_src
 from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
 from app.modules.feed.schemas import FeedItem
+from core.cache import cache_get, cache_set, make_key
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 

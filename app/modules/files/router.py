@@ -7,18 +7,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from app.core.common import (
-    ApiResp,
-    ModuleStatus,
-    PageData,
-    PaginateDep,
-    PaginateParams,
-    parse_tags,
-)
-from app.core.config import settings
-from app.core.err import BizError, CommonErr, respond
-from app.core.wire import msgspec_ok
-from app.db.session import get_read_session, get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.files.schemas import (
@@ -46,7 +34,20 @@ from app.modules.files.wire import to_wire
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import check_owner, role_has_permission
-from auth.deps import CurrentUser, get_current_user
+from core.common import (
+    ApiResp,
+    ModuleStatus,
+    PageData,
+    PaginateDep,
+    PaginateParams,
+    parse_tags,
+)
+from core.config import settings
+from core.contracts import CurrentUser
+from core.db.session import get_read_session, get_session
+from core.err import BizError, CommonErr, respond
+from core.ports.authz import get_current_user
+from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/files", tags=["files"])
 

@@ -11,7 +11,6 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import messaging, task_registry
 from app.modules.points.engine import (
     apply_stats_side_effects,
     apply_task_side_effects,
@@ -22,6 +21,7 @@ from app.modules.points.tasks import (
     apply_point_reward,
     apply_point_stats,
 )
+from core import messaging, task_registry
 from tests.conftest import auth_user_uid
 
 _SUB_NAMES = (

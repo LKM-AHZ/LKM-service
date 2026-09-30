@@ -25,10 +25,10 @@ import boto3
 from botocore.config import Config
 from sqlalchemy import select
 
-from app.core.config import settings
-from app.db.session import dispose_engine
-from app.db.session import new_worker_session as new_session
 from app.modules.files.models import LibraryFile
+from core.config import settings
+from core.db.session import dispose_engine
+from core.db.session import new_worker_session as new_session
 
 LIST_LIMIT = 20  # 每类漂移最多列出的条数
 

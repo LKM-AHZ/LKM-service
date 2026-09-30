@@ -7,13 +7,6 @@ import secrets
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
-from app.core import bloom, jobs
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
-from app.core.throttle import check_password_login_rate_limit
-from app.db.base import expires_at, now_iso
-from app.db.repo import consume_once, get_or_raise, isolated_update
-from app.db.repository import DbSession
 from auth import events
 from auth.channels import CHANNELS, channel_for
 from auth.errors import AuthErr
@@ -52,6 +45,13 @@ from auth.service_verify import (
     consume_email_code,
     consume_phone_code,
 )
+from core import bloom, jobs
+from core.config import settings
+from core.db.base import expires_at, now_iso
+from core.db.repo import consume_once, get_or_raise, isolated_update
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
+from core.throttle import check_password_login_rate_limit
 
 logger = logging.getLogger(__name__)
 

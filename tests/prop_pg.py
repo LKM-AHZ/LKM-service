@@ -28,9 +28,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
+from core.config import settings
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
 
 #: schema 名要拼进 DDL，必须是裸标识符（见 PropPG.__init__ 的校验）
 _SCHEMA_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")

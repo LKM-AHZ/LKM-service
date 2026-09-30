@@ -18,12 +18,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-from app.core import counters
-from app.core.config import settings
-from app.core.messaging import SUB_JOBS
-from app.core.metrics import counts_reconcile_repeated_total
-from app.core.task_registry import cron_jobs, ensure_tasks_registered, handlers_for
+import core.redis as redis_mod
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import (
@@ -37,6 +32,11 @@ from app.modules.content.schemas import ContentCommentCreate
 from app.modules.content.service import create_comment, like_item, unlike_item
 from app.modules.interaction.models import InteractionFavorite
 from app.modules.interaction.service import add_favorite, remove_favorite
+from core import counters
+from core.config import settings
+from core.messaging import SUB_JOBS
+from core.metrics import counts_reconcile_repeated_total
+from core.task_registry import cron_jobs, ensure_tasks_registered, handlers_for
 from tests.conftest import auth_user_uid
 
 

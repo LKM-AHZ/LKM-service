@@ -28,9 +28,9 @@ from typing import Any
 
 import httpx
 
-from app.core.config import settings
-from app.core.secrets import reveal
 from auth.circuit_breaker import auth_http_breaker
+from core.config import settings
+from core.secrets import reveal
 
 # 冻结只读字段（与 auth.snapshot.UserSnapshot 完全一致）；缺任一字段即判畸形 → fail-open。
 # raw nickname 已加入快照缝冻结字段（M3.A 残项），HTTP OFF/ON 两侧 `_SNAP_FIELDS` 须同源，

@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from app.db.repository import AsyncRepository
 from app.modules.admin.models import ModerationRule
+from core.db.repository import AsyncRepository
 
 
 class ModerationRuleRepository(AsyncRepository[ModerationRule]):

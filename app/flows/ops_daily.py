@@ -32,7 +32,7 @@ _DEFAULT_DAYS = 1
 def _flow_span(traceparent: str) -> Any:
     """把 flow 执行挂到触发方 trace（跨进程续链，fail-open）。"""
     try:
-        from app.core.tracing import extract_context, tracer
+        from core.tracing import extract_context, tracer
 
         ctx = extract_context({"traceparent": traceparent}) if traceparent else None
         return tracer("lkm.flows").start_as_current_span(
@@ -92,7 +92,7 @@ def main() -> None:
 
 async def _run_cli(days: int, traceparent: str) -> dict[str, Any]:
     """CLI 包装：跑完关闭 CH 客户端（一次性进程，不关会遗留 aiohttp connector）。"""
-    from app.core import clickhouse
+    from core import clickhouse
 
     try:
         return await ops_daily_flow(days=days, traceparent=traceparent)

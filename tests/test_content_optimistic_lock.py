@@ -14,8 +14,6 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
-from app.db.repository import VersionConflictError
 from app.modules.admin.models import RolePermission
 from app.modules.content.articles.models import Article
 from app.modules.content.articles.schemas import (
@@ -30,6 +28,8 @@ from app.modules.content.articles.service import (
 )
 from app.modules.content.boards.schemas import BoardCreate, BoardUpdate
 from app.modules.content.boards.service import create_board_ex, update_board_ex
+from core.db.repository import VersionConflictError
+from core.err import CommonErr
 from tests.conftest import AuthUser, auth_user_uid
 
 

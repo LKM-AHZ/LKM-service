@@ -7,17 +7,17 @@
 
 import logging
 
-from app.core.messaging import RKEY_CLEANUP, SUB_JOBS
-from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_worker_session as new_session
 from app.modules.interaction.service import purge_stale_view_logs as _purge
+from core.db.session import new_worker_session as new_session
+from core.messaging import RKEY_CLEANUP, SUB_JOBS
+from core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger(__name__)
 
 
 async def purge_stale_view_logs() -> None:
     """周期任务：删除超过保留期的浏览记录（无过期行时删除 0 行，不报错）。"""
-    from app.core.config import settings
+    from core.config import settings
 
     retention_days = settings.interaction_view_log_retention_days
     if retention_days <= 0:

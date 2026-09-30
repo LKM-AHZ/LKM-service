@@ -6,10 +6,10 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.core.err import BizError
 from app.modules.projects.errors import ProjectErr
 from app.modules.projects.schemas import ProjectMemberOut, ProjectOut
 from app.modules.projects.service import get_project_ex, list_projects
+from core.err import BizError
 
 
 @strawberry.type

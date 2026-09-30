@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.db.repository import AsyncRepository, DbSession, ValuesDict
+from core.db.repository import AsyncRepository, DbSession, ValuesDict
 
 
 class StarHopeRepository(AsyncRepository[Any]):

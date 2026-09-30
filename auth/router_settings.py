@@ -17,9 +17,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.common import ApiResp
-from app.core.err import BizError, CommonErr, respond
-from app.db.repo import get_or_raise
 from auth import service_2fa, service_auth
 from auth.db.session import get_auth_session
 from auth.deps import (
@@ -46,6 +43,9 @@ from auth.service_verify import (
     create_email_verification,
     create_phone_verification,
 )
+from core.common import ApiResp
+from core.db.repo import get_or_raise
+from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/auth/settings", tags=["auth-settings"])
 

@@ -1,4 +1,4 @@
-from app.core.err import NS_COLUMNS, ErrCode, register
+from core.err import NS_COLUMNS, ErrCode, register
 
 
 class ColumnErr(ErrCode):

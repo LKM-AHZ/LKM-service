@@ -4,7 +4,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from auth.schemas import Password
+from core.contracts import Password
 
 
 class AdminLoginReq(BaseModel):

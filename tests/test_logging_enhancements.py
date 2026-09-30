@@ -2,7 +2,7 @@
 
 - 多 sink：dev 走彩色终端、其余（含生产）走无色 JSON → stderr；
 - 彩色**只**在 env=dev（生产彩色会破坏采集端解析）；
-- :func:`app.core.logging.log_exceptions` = loguru ``logger.catch`` 的等价物。
+- :func:`core.logging.log_exceptions` = loguru ``logger.catch`` 的等价物。
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from app.core import logging as lkm_logging
-from app.core.config import settings
+from core import logging as lkm_logging
+from core.config import settings
 
 
 def _record(level: int = logging.ERROR, msg: str = "boom") -> logging.LogRecord:

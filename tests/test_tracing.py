@@ -18,9 +18,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from app.core import logging as lkm_logging
-from app.core import tracing
-from app.core.config import settings
+from core import logging as lkm_logging
+from core import tracing
+from core.config import settings
 
 
 def _fresh_app() -> FastAPI:

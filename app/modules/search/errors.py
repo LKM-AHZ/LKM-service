@@ -1,4 +1,4 @@
-from app.core.err import NS_SEARCH, ErrCode, register
+from core.err import NS_SEARCH, ErrCode, register
 
 
 class SearchErr(ErrCode):

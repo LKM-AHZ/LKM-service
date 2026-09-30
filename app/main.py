@@ -19,40 +19,41 @@ from app.api.graphql import (
     build_schema,
 )
 from app.api.router import api_router
-from app.core import clickhouse, messaging, user_cache_events
-from app.core import logging as logger
-from app.core import redis as redis_client
-from app.core.apm import init_sentry
-from app.core.config import settings
-from app.core.err import BizError, map_err, resp_json
-from app.core.metrics import setup_metrics
-from app.core.metrics_relay import start_reporter as start_metrics_relay_reporter
-from app.core.metrics_relay import stop_reporter as stop_metrics_relay_reporter
-from app.core.middleware import GraphQLHTTPMiddleware, install_security_middleware
-from app.core.pulsar_lag import start_lag_reporter, stop_lag_reporter
-from app.core.scheduler_state import start_reporter as start_scheduler_reporter
-from app.core.scheduler_state import stop_reporter as stop_scheduler_reporter
-from app.core.tracing import (
-    instrument_sqlalchemy,
-    setup_tracing,
-    shutdown_tracing,
-)
-from app.db.init_db import init_db
-from app.db.session import (
+from app.modules import registry
+from app.ws.manager import manager
+from core import clickhouse, messaging, user_cache_events
+from core import logging as logger
+from core import redis as redis_client
+from core.apm import init_sentry
+from core.config import settings
+from core.contracts import CurrentUser
+from core.db.init_db import init_db
+from core.db.session import (
     AsyncSession,
     dispose_engine,
     get_async_engine,
 )
-from app.db.session import (
+from core.db.session import (
     get_read_session as get_graphql_session,  # GraphQL 仅 Query(纯读)，避免空提交
 )
-from app.modules import registry
-from app.ws.manager import manager
-from auth.deps import CurrentUser, get_optional_user
-from auth.seams import (
+from core.err import BizError, map_err, resp_json
+from core.metrics import setup_metrics
+from core.metrics_relay import start_reporter as start_metrics_relay_reporter
+from core.metrics_relay import stop_reporter as stop_metrics_relay_reporter
+from core.middleware import GraphQLHTTPMiddleware, install_security_middleware
+from core.ports.authz import get_optional_user
+from core.ports.verify_keys import (
     cleanup_expired_challenges,
     start_verify_key_refresh,
     stop_verify_key_refresh,
+)
+from core.pulsar_lag import start_lag_reporter, stop_lag_reporter
+from core.scheduler_state import start_reporter as start_scheduler_reporter
+from core.scheduler_state import stop_reporter as stop_scheduler_reporter
+from core.tracing import (
+    instrument_sqlalchemy,
+    setup_tracing,
+    shutdown_tracing,
 )
 
 

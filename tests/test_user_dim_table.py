@@ -5,7 +5,7 @@
 **禁止**任何在线读路径使用（在线一致性走 ``user:snap``/``auth.snapshot``）。
 
 与 conftest 的默认 db fixture 解耦：本文件自带隔离 PG schema 引擎，并在建表前显式
-``ensure_all_models()`` —— 保证含 ``user_dim``（由 `app.db.model_registry` 导入注册）的
+``ensure_all_models()`` —— 保证含 ``user_dim``（由 `core.db.model_registry` 导入注册）的
 真实全量 metadata 参与 create_all，从而让断言看到此表（镜像 test_outbox 的自足 engine 范式）。
 
 迁移链验证直接按文件读入各迁移模块（alembic/versions 非 import 包，故用
@@ -21,9 +21,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
+from core.config import settings
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
 
 
 def _load_migration_module(path: Path):

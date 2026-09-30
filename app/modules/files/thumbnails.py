@@ -22,7 +22,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.storage.base import StorageBackend
+from core.storage.base import StorageBackend
 
 logger = logging.getLogger(__name__)
 

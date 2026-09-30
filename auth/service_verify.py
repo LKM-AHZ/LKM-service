@@ -7,16 +7,16 @@ import secrets
 import uuid
 from typing import Any, cast
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.redis_limiter import RedisRateLimiter
-from app.core.secrets import reveal
-from app.db.base import now_iso
-from app.db.repo import consume_once, isolated_update
-from app.db.repository import DbSession
 from auth.errors import AuthErr
 from auth.models import EmailVerification, PhoneVerification
 from auth.repository import VerificationRepository
+from core.config import settings
+from core.db.base import now_iso
+from core.db.repo import consume_once, isolated_update
+from core.db.repository import DbSession
+from core.err import BizError
+from core.redis_limiter import RedisRateLimiter
+from core.secrets import reveal
 
 _CODE_EXPIRE_MINUTES = 10
 _MAX_FAILED_ATTEMPTS = 3

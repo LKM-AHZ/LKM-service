@@ -9,10 +9,6 @@ from typing import Any
 
 import pytest
 
-from app.core.common import ApiResp, PageData
-from app.core.config import settings
-from app.core.err import _wrap_result
-from app.core.wire import msgspec_ok
 from app.modules.feed.schemas import FeedItem, FeedResponse
 from app.modules.feed.wire import to_wire
 from app.modules.files.schemas import FileInfo
@@ -23,6 +19,10 @@ from app.modules.notification.schemas import NotificationOut
 from app.modules.notification.wire import to_wire as notification_to_wire
 from app.modules.search.schemas import SearchHit
 from app.modules.search.wire import to_wire as search_to_wire
+from core.common import ApiResp, PageData
+from core.config import settings
+from core.err import _wrap_result
+from core.wire import msgspec_ok
 
 _EXPECTED_KEYS = {
     "item_type",

@@ -19,8 +19,6 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
-from app.db.repository import AsyncRepository
 from app.modules.content.articles.models import Article, ArticleCategory, ArticleComment
 from app.modules.content.articles.repository import ArticleCommentRepository
 from app.modules.content.blog.models import BlogSeries
@@ -49,6 +47,8 @@ from app.modules.interaction.repository import (
 )
 from app.modules.interaction.service import add_favorite, list_history, record_view
 from app.modules.search.repository import SearchRepository
+from core.db.repository import AsyncRepository
+from core.err import BizError, CommonErr
 from tests.conftest import DB, auth_user_uid
 
 

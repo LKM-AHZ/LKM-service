@@ -6,7 +6,7 @@ set -e
 
 # 显式处理退出码：python 不在 PATH(127)/app 不可 import 等「与拉密钥无关」的失败，若只靠
 # set -e 直接终止，日志里看不出失败发生在 secrets bootstrap 这一步（容器表现为无因 crash-loop）。
-python -m app.core.secrets_bootstrap || {
+python -m core.secrets_bootstrap || {
     rc=$?
     echo "secrets bootstrap failed (rc=$rc)" >&2
     exit "$rc"

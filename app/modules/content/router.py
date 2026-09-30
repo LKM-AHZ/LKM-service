@@ -4,12 +4,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import (
-    ApiResp,
-)
-from app.core.err import respond
-from app.db.session import get_session
-
 # 内容域子路由：版块 / 专栏 / 问答 统一挂到 /content 前缀下（逐域子前缀）。
 from app.modules.content.boards.router import router as _boards_router
 from app.modules.content.columns.router import router as _columns_router
@@ -31,7 +25,13 @@ from app.modules.content.service import (
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from app.modules.rbac.service import check_owner
-from auth.deps import CurrentUser, get_current_user
+from core.common import (
+    ApiResp,
+)
+from core.contracts import CurrentUser
+from core.db.session import get_session
+from core.err import respond
+from core.ports.authz import get_current_user
 
 router = APIRouter(prefix="/content", tags=["content"])
 router.include_router(_boards_router)

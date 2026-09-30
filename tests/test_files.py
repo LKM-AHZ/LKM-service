@@ -26,8 +26,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.models  # noqa: F401  副作用导入（auth 表挂 AuthBase 需收集）
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.files.schemas import DownloadUrlInfo, FileCreate, FileInfo
@@ -41,7 +39,9 @@ from app.modules.files.service import (
     review_file,
     upload_init,
 )
-from app.modules.storage.s3 import S3Storage
+from core.config import settings
+from core.err import BizError, CommonErr
+from core.storage.s3 import S3Storage
 from tests.conftest import AuthUser, auth_user_uid
 
 # 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。

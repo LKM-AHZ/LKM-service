@@ -20,13 +20,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import ApiResp
-from app.core.err import BizError, respond
-from app.db.base import expires_at, now_iso
-from app.db.repo import consume_once, get_or_raise
 from auth import security, service_2fa
 from auth.db.session import get_auth_session
-from auth.deps import CurrentUser, RequireLevel, get_current_user
+from auth.deps import CurrentUser, get_current_user
 from auth.errors import AuthErr
 from auth.limits import (
     GLOBAL_VERIFY_MAX_PER_WINDOW,
@@ -47,6 +43,11 @@ from auth.schemas import (
 )
 from auth.service_auth import issue_session_tokens
 from auth.service_verify import check_code_rate_limit
+from core.common import ApiResp
+from core.db.base import expires_at, now_iso
+from core.db.repo import consume_once, get_or_raise
+from core.err import BizError, respond
+from core.ports.authz import RequireLevel
 
 router = APIRouter(prefix="/auth/2fa", tags=["auth-2fa"])
 

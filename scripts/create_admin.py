@@ -21,10 +21,10 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.core import bloom
 from auth.db.session import dispose_auth_engine, new_auth_session
 from auth.entities import Profile, User
 from auth.seams import hashpwd, verifypwd
+from core import bloom
 
 _USAGE = (
     "用法：python scripts/create_admin.py <用户名> <邮箱> <手机> [密码]\n"

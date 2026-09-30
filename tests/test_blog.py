@@ -10,8 +10,6 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
 from app.modules.content.blog.errors import BlogErr
 from app.modules.content.blog.models import BlogSeriesStatus
 from app.modules.content.blog.schemas import (
@@ -36,6 +34,8 @@ from app.modules.content.blog.service import (
 from auth.schemas import ProfileUpdate
 from auth.security import create_access_token, hashpwd
 from auth.service import update_profile
+from core.config import settings
+from core.err import BizError, CommonErr
 
 
 @pytest.fixture

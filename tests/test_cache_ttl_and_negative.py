@@ -15,10 +15,10 @@ from typing import Any
 import fakeredis.aioredis
 import pytest
 
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-from app.core.cache import cache_set, jitter_ttl
-from app.core.config import settings
+import core.redis as redis_mod
+import core.user_cache as uc
+from core.cache import cache_set, jitter_ttl
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

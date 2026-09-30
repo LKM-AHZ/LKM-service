@@ -18,9 +18,6 @@ import uuid
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
-from app.core.messaging import RKEY_CLEANUP, SUB_JOBS, SUB_NOTIFY
-from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_worker_session as new_session
 from app.modules.files.models import UploadSession
 from app.modules.files.repository import UploadSessionRepository
 from app.modules.files.service import (
@@ -30,6 +27,9 @@ from app.modules.files.service import (
 )
 from app.modules.files.thumbnails import generate_variants_for_library_file
 from app.ws.broker import publish_upload_bound
+from core.db.session import new_worker_session as new_session
+from core.messaging import RKEY_CLEANUP, SUB_JOBS, SUB_NOTIFY
+from core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger(__name__)
 

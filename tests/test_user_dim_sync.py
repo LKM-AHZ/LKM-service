@@ -31,10 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 import auth.models  # noqa: F401  确保 User/Profile 模型元数据可见
-from app.core.config import settings
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
-from app.db.user_dim import UserDim
 from auth.db.base import auth_metadata
 from auth.models import Profile, User
 from auth.user_dim_sync import (
@@ -42,6 +38,10 @@ from auth.user_dim_sync import (
     refresh_user_dim,
     sync_dim_for_ids,
 )
+from core.config import settings
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
+from core.db.user_dim import UserDim
 
 # 合法 uuid7 形态的不存在 id（sync 应被 join 丢弃）。
 _MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")

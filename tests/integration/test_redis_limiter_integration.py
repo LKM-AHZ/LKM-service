@@ -12,10 +12,10 @@ from contextlib import suppress
 import pytest
 from redis.asyncio import Redis
 
-from app.core import redis as redis_core
-from app.core.err import BizError
-from app.core.redis_limiter import RedisRateLimiter
 from auth.errors import AuthErr
+from core import redis as redis_core
+from core.err import BizError
+from core.redis_limiter import RedisRateLimiter
 
 pytestmark = pytest.mark.integration
 

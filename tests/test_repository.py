@@ -12,12 +12,12 @@ import uuid
 
 import pytest
 
-from app.core.err import BizError, CommonErr
-from app.db.repository import AsyncRepository
 from app.modules.admin.models import RolePermission
 from app.modules.content.models import Board
 from app.modules.notification.models import Notification, NotificationPreference
 from app.modules.starhope.models import StarHopeFolder
+from core.db.repository import AsyncRepository
+from core.err import BizError, CommonErr
 from tests.conftest import DB
 
 

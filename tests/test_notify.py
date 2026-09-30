@@ -111,8 +111,8 @@ class TestNotifyEndpoint:
     async def test_missing_token_rejected(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, notify_token: str
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         monkeypatch.setattr(notify_mod, "_enqueue_upload", _Recorder())
@@ -126,8 +126,8 @@ class TestNotifyEndpoint:
     async def test_wrong_token_rejected(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, notify_token: str
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         monkeypatch.setattr(notify_mod, "_enqueue_upload", _Recorder())
@@ -142,8 +142,8 @@ class TestNotifyEndpoint:
     async def test_unconfigured_token_rejects_all(
         self, client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", "")
         monkeypatch.setattr(notify_mod, "_enqueue_upload", _Recorder())
@@ -158,8 +158,8 @@ class TestNotifyEndpoint:
     async def test_valid_up_event_enqueues(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, notify_token: str
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         recorder = _Recorder()
@@ -180,8 +180,8 @@ class TestNotifyEndpoint:
         """预签名直传对象在桶里的真实 key 可能带 ``<s3_prefix>/up/<id>``（S3Storage 拼前缀）。
         事件回调必须识别并取出 upload_id（Phase 2-C 真实前端路径）。
         """
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         monkeypatch.setattr(settings, "s3_prefix", "files")
@@ -200,8 +200,8 @@ class TestNotifyEndpoint:
     async def test_non_up_key_not_enqueued(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, notify_token: str
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         recorder = _Recorder()
@@ -219,8 +219,8 @@ class TestNotifyEndpoint:
     async def test_non_put_event_not_enqueued(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, notify_token: str
     ) -> None:
-        from app.core.config import settings
         from app.modules.files import notify as notify_mod
+        from core.config import settings
 
         monkeypatch.setattr(settings, "files_notify_token", notify_token)
         recorder = _Recorder()
@@ -240,7 +240,7 @@ class TestNotifyTask:
     """notify_upload 单元：fake redis + moto S3 真实登记；标记消失 → 幂等 no-op。"""
 
     def _moto_s3_storage(self) -> tuple[Any, Any]:
-        from app.modules.storage.s3 import S3Storage
+        from core.storage.s3 import S3Storage
 
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="lkm")
@@ -250,7 +250,7 @@ class TestNotifyTask:
         self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import app.modules.files.tasks as notify_task
-        from app.core.config import settings
+        from core.config import settings
 
         monkeypatch.setattr(settings, "storage_backend", "s3")
         with mock_aws():

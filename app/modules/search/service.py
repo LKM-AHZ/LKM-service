@@ -23,16 +23,16 @@ import logging
 import uuid
 from typing import Any
 
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.err import BizError
-from app.core.metrics import search_engine_fallback_total
-from app.db.repository import DbSession
 from app.modules.search.engines.base import SearchEngine
 from app.modules.search.engines.factory import get_engine
 from app.modules.search.errors import SearchErr
 from app.modules.search.repository import SearchRepository
 from app.modules.search.schemas import SearchHit
-from auth.snapshot import get_user_snapshot_batch
+from core.common import PageData, paginate_offset, paginate_pages
+from core.db.repository import DbSession
+from core.err import BizError
+from core.metrics import search_engine_fallback_total
+from core.ports.snapshot import get_user_snapshot_batch
 
 logger = logging.getLogger(__name__)
 

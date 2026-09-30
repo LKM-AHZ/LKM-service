@@ -29,17 +29,17 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.db.base import expires_at, now_iso
-from app.db.repo import consume_once, get_or_raise
-from app.db.repository import DbSession
 from auth.errors import AuthErr
 from auth.models import PasskeyChallenge, PasskeyCredential, User
 from auth.repository import (
     PasskeyChallengeRepository,
     PasskeyCredentialRepository,
 )
+from core.config import settings
+from core.db.base import expires_at, now_iso
+from core.db.repo import consume_once, get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError
 
 _CHALLENGE_TTL_MINUTES = 5
 

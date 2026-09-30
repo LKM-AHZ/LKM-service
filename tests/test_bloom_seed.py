@@ -14,12 +14,12 @@ import fakeredis.aioredis
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.bloom as bloom
-import app.core.redis as redis_mod
-from app.core.config import settings
+import core.bloom as bloom
+import core.redis as redis_mod
 from auth import bloom_seed
 from auth.service_auth import create_user_with_profile
 from auth.snapshot import get_user_snapshot
+from core.config import settings
 
 
 class _SharedSession:

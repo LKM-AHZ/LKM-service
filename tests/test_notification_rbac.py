@@ -6,10 +6,10 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
 from app.modules.admin.models import RolePermission
 from app.modules.notification.models import Notification
 from app.modules.notification.service import NotificationType, create_notification
+from core.err import CommonErr
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 

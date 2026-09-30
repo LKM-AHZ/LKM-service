@@ -15,9 +15,9 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from app.core.config import settings
-from app.core.secrets import reveal
 from auth import jwt_keys
+from core.config import settings
+from core.secrets import reveal
 
 _ph = PasswordHasher()
 # 虚拟哈希，防枚举

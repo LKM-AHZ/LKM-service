@@ -22,12 +22,12 @@ from fastapi import APIRouter, Request
 from fastapi import Header as FastAPIHeader
 from fastapi.responses import JSONResponse
 
-from app.core.config import settings
-from app.core.jobs import RKEY_NOTIFY
-from app.core.logging import get_request_id
-from app.core.secrets import reveal
-from app.db.outbox import enqueue_outbox
-from app.db.session import new_session
+from core.config import settings
+from core.db.outbox import enqueue_outbox
+from core.db.session import new_session
+from core.jobs import RKEY_NOTIFY
+from core.logging import get_request_id
+from core.secrets import reveal
 
 logger = logging.getLogger(__name__)
 

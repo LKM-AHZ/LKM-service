@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from auth.models import OAuthState, UserOAuth
+from core.config import settings
 
 
 @pytest.fixture
@@ -79,11 +79,11 @@ class TestOAuthState:
         assert records[0].consumed
 
     async def should_reject_already_consumed_state(self, db: AsyncSession):
-        from app.core.err import BizError
         from auth.service_oauth import (
             consume_oauth_state,
             generate_oauth_state,
         )
+        from core.err import BizError
 
         state = await generate_oauth_state(db, "login")
         await consume_oauth_state(db, state, "login")
@@ -92,11 +92,11 @@ class TestOAuthState:
             await consume_oauth_state(db, state, "login")
 
     async def should_reject_wrong_purpose(self, db: AsyncSession):
-        from app.core.err import BizError
         from auth.service_oauth import (
             consume_oauth_state,
             generate_oauth_state,
         )
+        from core.err import BizError
 
         state = await generate_oauth_state(db, "login")
         with pytest.raises(BizError):
@@ -180,9 +180,9 @@ class TestOauthRouterCallback:
     async def should_bind_callback_propagate_biz_error(self, db: AsyncSession):
         from unittest.mock import patch
 
-        from app.core.err import BizError
         from auth import router_oauth
         from auth.errors import AuthErr
+        from core.err import BizError
 
         async def _boom(db: AsyncSession, code: str, state: str) -> None:
             raise BizError(AuthErr.OAUTH_EMAIL_TAKEN)
@@ -202,7 +202,6 @@ class TestOAuthEmailAutoBind:
     ):
         from unittest.mock import AsyncMock, patch
 
-        from app.core.err import BizError
         from auth.errors import AuthErr
         from auth.models import User
         from auth.providers.github import GithubOAuth
@@ -212,6 +211,7 @@ class TestOAuthEmailAutoBind:
             generate_oauth_state,
             handle_github_callback,
         )
+        from core.err import BizError
 
         db.add(
             User(

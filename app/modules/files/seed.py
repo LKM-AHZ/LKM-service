@@ -13,9 +13,9 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import new_worker_session as new_session
 from app.modules.files.models import FileStatus, LibraryFile
-from auth.seams import ensure_demo_user
+from core.db.session import new_worker_session as new_session
+from core.ports.users import ensure_demo_user
 
 # 种子文件归属的演示上传者用户名（避免依赖具体本地用户）
 _SEED_UPLOADER_USERNAME = "file_library_seed_uploader"

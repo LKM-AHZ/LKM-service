@@ -12,8 +12,6 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import now_iso
-from app.db.session import new_worker_session as new_session
 from app.modules.content.column_models import ColumnPostStatus, ColumnStatus
 from app.modules.content.models import (
     Board,
@@ -21,7 +19,9 @@ from app.modules.content.models import (
     ColumnApplication,
     ColumnPost,
 )
-from auth.seams import ensure_demo_user
+from core.db.base import now_iso
+from core.db.session import new_worker_session as new_session
+from core.ports.users import ensure_demo_user
 
 # 种子专栏归属的演示作者用户名（避免依赖具体本地用户）
 _SEED_AUTHOR_USERNAME = "column_seed_author"

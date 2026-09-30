@@ -17,11 +17,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import jobs
-from app.core.client_ip import client_ip
-from app.core.common import ApiResp
-from app.core.config import settings
-from app.core.err import respond
 from auth import service_recovery
 from auth.db.session import get_auth_session
 from auth.deps import get_email_provider
@@ -47,6 +42,11 @@ from auth.service_verify import (
     create_email_verification,
     create_phone_verification,
 )
+from core import jobs
+from core.client_ip import client_ip
+from core.common import ApiResp
+from core.config import settings
+from core.err import respond
 
 router = APIRouter(prefix="/auth/recover", tags=["auth-recovery"])
 

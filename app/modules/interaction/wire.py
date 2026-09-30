@@ -12,8 +12,8 @@ import uuid
 
 import msgspec
 
-from app.core.common import PageData
 from app.modules.interaction.schemas import FavoriteItem, HistoryItem
+from core.common import PageData
 
 
 class FavoriteItemWire(msgspec.Struct):

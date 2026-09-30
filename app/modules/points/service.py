@@ -4,16 +4,6 @@ import datetime
 import uuid
 from typing import Any
 
-from app.core.cache import (
-    bump_collection_version,
-    cache_invalidate,
-    cached_read,
-    collection_version,
-    make_key,
-)
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.err import BizError, CommonErr
-from app.db.repository import DbSession
 from app.modules.points.errors import PointsErr
 from app.modules.points.models import (
     PointsLedger,
@@ -37,7 +27,17 @@ from app.modules.points.schemas import (
     LedgerEntry,
     TaskOut,
 )
-from auth.snapshot import get_user_snapshot_batch
+from core.cache import (
+    bump_collection_version,
+    cache_invalidate,
+    cached_read,
+    collection_version,
+    make_key,
+)
+from core.common import PageData, paginate_offset, paginate_pages
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
+from core.ports.snapshot import get_user_snapshot_batch
 
 
 async def ensure_balance(db: DbSession, user_id: uuid.UUID) -> UserBalance:

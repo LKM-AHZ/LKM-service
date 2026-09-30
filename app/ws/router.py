@@ -24,11 +24,11 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.core.err import BizError
-from app.db.session import new_session
 from app.ws.broker import CHANNEL_UPLOAD, CHANNELS
 from app.ws.manager import manager
-from auth.seams import resolve_current_user
+from core.db.session import new_session
+from core.err import BizError
+from core.ports.authz import resolve_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,11 @@ _HEARTBEAT_S = 30.0
 
 
 async def _authorize(token: str) -> uuid.UUID | None:
-    """校验 access token，返回 user_id；缺失/无效返回 None。"""
+    """校验 access token，返回 user_id；缺失/无效返回 None。
+
+    传入业务会话：融合部署/测试下 users 与业务表同库，直查即可；拆库形态下裁决由
+    auth 端口内部改走 seam，``db`` 不参与。
+    """
     if not token:
         return None
     db = await new_session()

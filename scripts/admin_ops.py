@@ -31,12 +31,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core import bloom
-from app.db.base import now_iso
 from auth.db.session import dispose_auth_engine, new_auth_session
 from auth.entities import TOTP, Profile, RecoveryCode, RefreshToken, User
 from auth.schemas import Password
 from auth.seams import hashpwd
+from core import bloom
+from core.db.base import now_iso
 
 # 与 API 侧同一个密码策略类型（auth/schemas.Password）：脚本建号也必须过同一道校验，
 # 否则运维能直接建出 `1` 这种弱口令管理员，绕开注册/改密端点的约束。

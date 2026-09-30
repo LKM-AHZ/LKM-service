@@ -2,11 +2,11 @@
 
 背景：backend/auth 是 ASGI app，各自在 environment 里显式声明了 ``LKM_OTEL_*``；而
 worker / scheduler / outbox / dlq 进程**不是 ASGI app**（它们只 ``python -m
-app.core.worker_*`` 起消费循环），此前 compose 完全没给它们下发 OTel 变量 —— 于是即便
+core.worker_*`` 起消费循环），此前 compose 完全没给它们下发 OTel 变量 —— 于是即便
 `LKM_OTEL_ENABLED=true`，``pulsar.consume`` / ``pulsar.publish`` 等 span 一条也采不到，
 「trace_id 贯穿 Pulsar/调度」在部署层面就不可能成立。真机验证 trace 贯穿时才发现。
 
-代码侧已由 ``app.core.worker._consume`` 等入口调 ``setup_tracing()`` 补齐；本文件守的是
+代码侧已由 ``core.worker._consume`` 等入口调 ``setup_tracing()`` 补齐；本文件守的是
 **部署侧**：新增 worker 服务忘了继承 ``x-otel-env`` 锚点即变红。
 
 按**规则**断言（不照抄当前取值，见路线图 §8 #26 的教训）。

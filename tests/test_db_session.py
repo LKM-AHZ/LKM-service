@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
-from app.db.session import _is_unique_violation, get_async_engine
+from core.db.session import _is_unique_violation, get_async_engine
 
 
 def _ie(orig: Exception | None) -> IntegrityError:
@@ -40,8 +40,8 @@ class TestEnginePoolConfig:
     """PostgreSQL(asyncpg) 建池：显式 pool_size/max_overflow/pool_pre_ping。"""
 
     def should_configure_pool_for_postgres(self, monkeypatch):
-        import app.db.session as session_mod
-        from app.core.config import settings
+        import core.db.session as session_mod
+        from core.config import settings
 
         captured: dict[str, Any] = {}
 
@@ -67,9 +67,9 @@ class TestEnginePoolConfig:
 
         分池的意义：outbox relay / 调度任务 / worker 的周期突发不再与 Web 请求争抢连接。
         """
-        import app.db.session as session_mod
-        from app.core.config import settings
-        from app.db.session import get_async_engine, get_worker_engine
+        import core.db.session as session_mod
+        from core.config import settings
+        from core.db.session import get_async_engine, get_worker_engine
 
         calls: list[dict[str, Any]] = []
 
@@ -100,8 +100,8 @@ class TestEnginePoolConfig:
         recycle 主动轮换陈旧连接（区别于 pre_ping 的取用时探活）；timeout 是池满后的等待上限
         （拒绝崩溃，不做无限等待）。两者是**池形态**参数，故两池共用同一组配置。
         """
-        import app.db.session as session_mod
-        from app.core.config import settings
+        import core.db.session as session_mod
+        from core.config import settings
 
         captured: dict[str, Any] = {}
 
@@ -135,8 +135,8 @@ class TestReadSession:
         from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
         from sqlalchemy.pool import StaticPool
 
-        import app.db.session as session_mod
-        from app.core.config import settings
+        import core.db.session as session_mod
+        from core.config import settings
 
         engine = create_async_engine(settings.database_url, poolclass=StaticPool)
 
@@ -179,7 +179,7 @@ class TestLazySingletonNoSelfDeadlock:
     def should_build_session_local_on_cold_start(self, monkeypatch) -> None:
         import threading
 
-        import app.db.session as session_mod
+        import core.db.session as session_mod
 
         assert not session_mod._engine_lock.locked(), "前置用例泄漏了 _engine_lock"
         monkeypatch.setattr(session_mod, "_async_engine", None)

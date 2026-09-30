@@ -22,22 +22,21 @@ from typing import Any
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
-from app.db.session import get_session
-from auth.deps import (  # 复用其字段契约 + authz seam 开关
-    CurrentUser,
-    seam_enabled,
-)
-from auth.seams import (
+from core.contracts import CurrentUser
+from core.db.session import get_session
+from core.err import BizError, CommonErr
+from core.ports.authz import (
     _ADMIN_AUD,
     ACCESS_TOKEN_MINUTES,
-    COOKIE_NAME,  # 后台 access cookie 常量单一事实源
+    COOKIE_NAME,
     COOKIE_PATH,
-    MFA_TRUST_SECONDS,  # 2FA step-up 信任窗口常量单一事实源
+    MFA_TRUST_SECONDS,
     REFRESH_NAME,
-    create_admin_access_token,  # 签发基元单一事实源（测试/同域复用）
-    decode_admin_access,  # 解签/校验 audience+type（纯函数，无 DB 写）
-    is_jti_blocked,  # jti 撤销快速预检（登出即时失效）
+    create_admin_access_token,
+    decode_admin_access,
+    is_jti_blocked,
+    resolve_via_seam,
+    seam_enabled,
 )
 
 # —— 后台 cookie 签发/校验纯基元与常量：单一事实源 auth.admin_session，此处原样 re-export，
@@ -124,7 +123,6 @@ async def _resolve_admin_via_seam(
 
     seam 拿不到权威裁决（auth 不可用/超时）→ fail-closed 一律 FORBIDDEN（后台绝不保守放行）。
     """
-    from auth.seams import resolve_via_seam
 
     try:
         return await resolve_via_seam(

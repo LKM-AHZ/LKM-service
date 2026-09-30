@@ -18,17 +18,17 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import (  # 注意是 db.base 不是 db.models
+from app.modules.content.column_models import (
+    ColumnApplicationStatus,
+    ColumnPostStatus,
+    ColumnStatus,
+)
+from core.db.base import (  # 注意是 db.base 不是 db.models
     Base,
     SoftDeleteMixin,
     UTCDateTime,
     UUIDPrimaryKeyMixin,
     now_iso,
-)
-from app.modules.content.column_models import (
-    ColumnApplicationStatus,
-    ColumnPostStatus,
-    ColumnStatus,
 )
 
 if TYPE_CHECKING:

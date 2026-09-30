@@ -4,10 +4,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import ApiResp
-from app.core.err import ErrCode, respond
-from app.db.repository import VersionConflictError
-from app.db.session import get_session
 from app.modules.content.articles.models import ArticleComment
 from app.modules.content.articles.schemas import (
     ArticleCommentCreate,
@@ -36,7 +32,12 @@ from app.modules.content.articles.service import (
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from app.modules.rbac.service import check_owner
-from auth.deps import CurrentUser, get_current_user
+from core.common import ApiResp
+from core.contracts import CurrentUser
+from core.db.repository import VersionConflictError
+from core.db.session import get_session
+from core.err import ErrCode, respond
+from core.ports.authz import get_current_user
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 

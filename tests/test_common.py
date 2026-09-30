@@ -2,7 +2,7 @@
 
 from fastapi.responses import JSONResponse
 
-from app.core.common import (
+from core.common import (
     PageData,
     PaginateDep,
     PaginateParams,
@@ -11,7 +11,7 @@ from app.core.common import (
     parse_tags,
     tag_names_sequence,
 )
-from app.core.err import CommonErr, _wrap_result, resp_json
+from core.err import CommonErr, _wrap_result, resp_json
 
 
 def test_parse_tags_list_passthrough() -> None:

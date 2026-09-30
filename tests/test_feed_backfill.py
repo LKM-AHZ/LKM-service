@@ -11,8 +11,7 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-from app.core.config import settings
+import core.redis as redis_mod
 from app.flows.feed_backfill_body import _EARLIEST, _parse_since, backfill_feed
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
@@ -21,6 +20,7 @@ from app.modules.content.service import create_item
 from app.modules.feed import feed as feed_src
 from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
 from app.modules.interaction.service import follow_user
+from core.config import settings
 from tests.conftest import AuthUser, auth_user_uid
 
 

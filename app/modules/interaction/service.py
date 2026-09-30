@@ -21,17 +21,6 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from app.core import counters
-from app.core.cache import (
-    TTL_ITEM_S,
-    cache_invalidate,
-    cached_read,
-    make_key,
-)
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.config import settings
-from app.core.err import BizError
-from app.db.repository import DbSession
 from app.modules.feed import fanout
 from app.modules.interaction.errors import FollowErr, InteractionErr
 from app.modules.interaction.repository import (
@@ -48,7 +37,18 @@ from app.modules.interaction.schemas import (
     HistoryItem,
     ViewState,
 )
-from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
+from core import counters
+from core.cache import (
+    TTL_ITEM_S,
+    cache_invalidate,
+    cached_read,
+    make_key,
+)
+from core.common import PageData, paginate_offset, paginate_pages
+from core.config import settings
+from core.db.repository import DbSession
+from core.err import BizError
+from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 
 async def _bookmark_count(db: DbSession, content_id: uuid.UUID) -> int:

@@ -14,8 +14,8 @@ from pathlib import Path
 
 # ruff: noqa: ASYNC240 一次性 CLI 迁移脚本：async 仅因 storage 抽象，本地 pathlib 批量读小文件
 # 属一次性维护动作、非并发请求路径，阻塞 IO 可接受，无需换 anyio.Path。
-from app.core.config import settings
-from app.modules.storage.factory import get_storage
+from core.config import settings
+from core.storage.factory import get_storage
 
 
 async def _migrate() -> None:

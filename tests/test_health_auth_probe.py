@@ -17,8 +17,8 @@ import httpx
 import pytest
 
 import app.modules.health.router as health_mod
-from app.core.config import settings
 from app.modules.health.router import DependencyStatus
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

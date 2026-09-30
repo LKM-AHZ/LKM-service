@@ -11,7 +11,7 @@ admin 会话真值收进 auth 域后，签发/校验/清空后台 cookie 所需�
 后台 access cookie 与前台分离的 audience：后台只认专属 ``aud lkm:admin`` 且
 ``type=admin``，防被前台或 temp token 冒用。
 
-*db-less、纯函数*：本模块只依赖 ``app.core``（config/err）+ ``app.db.base``(now_iso)，
+*db-less、纯函数*：本模块只依赖 ``core``（config/err）+ ``core.db.base``(now_iso)，
 不带任何 auth 表/session —— 让签名端(auth)与校验端(admin)都能孤立复用。
 """
 
@@ -23,9 +23,9 @@ from typing import Any
 
 import jwt
 
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
 from auth import jwt_keys
+from core.config import settings
+from core.err import BizError, CommonErr
 
 COOKIE_NAME = "admin_session"
 REFRESH_NAME = "admin_refresh"

@@ -2,7 +2,7 @@
 
 被守的**规则**（不照抄当前取值，见路线图 §8 #26 的教训）：
 
-- compose 有 ``worker-content-index``，其 command 指向 ``app.core.worker_content_index``；
+- compose 有 ``worker-content-index``，其 command 指向 ``core.worker_content_index``；
 - 它满足「消费型 worker 的依赖三件套」：postgres / redis / pulsar 均
   ``condition: service_healthy``——少一个就会出现「中间件未就绪、worker 先崩」的启动竞态；
 - 继承 ``x-otel-env`` 锚点（与 ``test_compose_otel`` 同一规则，此处再钉一次，防锚点被换掉）；
@@ -22,7 +22,7 @@ _COMPOSE = _ROOT / "docker-compose.yml"
 _WORKERS_YAML = _ROOT / "deploy" / "k8s" / "base" / "app" / "workers.yaml"
 
 _SERVICE = "worker-content-index"
-_MODULE = "app.core.worker_content_index"
+_MODULE = "boot.workers.content_index"
 _REQUIRED_DEPS = ("postgres", "redis", "pulsar")
 _OTEL_KEY = "LKM_OTEL_ENABLED"
 

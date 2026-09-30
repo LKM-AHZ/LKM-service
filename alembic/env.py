@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.core.config import settings
+from core.config import settings
 
 # Alembic Config object
 config = context.config
@@ -26,9 +26,13 @@ if config.config_file_name is not None:
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Import all models so metadata is fully populated for autogenerate
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
+from app import bootstrap as app_bootstrap
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
 
+# 业务模型模块须先登记：core 不再知道任何业务模块名（见 core/db/model_registry.py）。
+# 漏登记会让 autogenerate 看不到业务表，生成「删表」的破坏性迁移。
+app_bootstrap.register()
 ensure_all_models()
 
 target_metadata = Base.metadata

@@ -1,7 +1,7 @@
 """user_dim 离线宽表的 ETL 同步（M3.B0.2，填充腿）。
 
 把 auth 源（``users`` + ``profiles`` 的登录锚字段）反范式物化进只读离线宽表
-``app.db.user_dim.UserDim``（B0.1 建表）。**OFFLINE-ONLY**：本模块只**写**
+``core.db.user_dim.UserDim``（B0.1 建表）。**OFFLINE-ONLY**：本模块只**写**
 ``user_dim``，绝不经在线热路径写/读源（source 永远不可在此被改，也绝不作在线读源）。
 唯一写者是 B0.3/report（后续任务）读的这张报表副本的填充侧。
 
@@ -50,9 +50,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import now_iso
-from app.db.user_dim import UserDim
 from auth.models import Profile, User
+from core.db.base import now_iso
+from core.db.user_dim import UserDim
 
 logger = logging.getLogger("lkm.auth.user_dim_sync")
 
@@ -236,8 +236,8 @@ async def _open_session_pair() -> SessionPair:
 
     返回 ``(auth 源会话, 业务目标会话)``——两库物理分离，绝不合一。
     """
-    from app.db.session import new_worker_session as new_session
     from auth.db.session import new_auth_session
+    from core.db.session import new_worker_session as new_session
 
     source = await new_auth_session()
     try:
@@ -279,7 +279,7 @@ async def reconcile_user_dim_periodic() -> int:
     - 自开 auth+业务会话对 + commit/rollback/close，天然离线，不放任何在线请求热路径。
     - 命令数 = reconcile_user_dim_incremental 的 4 条常数（另有 Redis SET/DEL，非 DB）。
     """
-    from app.core.redis import get_redis as _get_redis
+    from core.redis import get_redis as _get_redis
 
     redis = await _get_redis(_RECONCILE_LOCK)
     token: str | None = None

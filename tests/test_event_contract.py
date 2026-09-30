@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from prometheus_client import REGISTRY
 
-from app.core import event_contract, messaging, task_registry, worker
+from core import event_contract, messaging, task_registry, worker
 from tests.fakes import InMemoryTransport
 
 

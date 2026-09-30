@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import (
+from core.db.base import (
     Base,
     SoftDeleteMixin,
     UTCDateTime,

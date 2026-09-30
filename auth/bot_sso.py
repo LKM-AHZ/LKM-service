@@ -32,8 +32,8 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from app.core.config import settings
 from auth import jwt_keys
+from core.config import settings
 
 #: bot 面板 SSO 专属 audience（与 lkm:admin / 前台会话隔离）。部署层暴露为
 #: LKM_BOT_SSO_AUDIENCE（见 x-bot-sso-env）：这是票据的**隔离边界**，多面板部署可能要区分。

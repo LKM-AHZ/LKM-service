@@ -32,15 +32,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core import logging as app_logging
-from app.core import metrics_relay
-from app.core import redis as redis_client
-from app.core.apm import init_sentry
-from app.core.config import settings
-from app.core.err import BizError, map_err, resp_json
-from app.core.middleware import install_security_middleware
-from app.core.tracing import setup_tracing, shutdown_tracing
-from app.db.session import dispose_engine
 from auth import (
     admin_router,
     router_2fa,
@@ -60,6 +51,15 @@ from auth import (
 )
 from auth.db.init import init_auth_db
 from auth.db.session import dispose_auth_engine
+from core import logging as app_logging
+from core import metrics_relay
+from core import redis as redis_client
+from core.apm import init_sentry
+from core.config import settings
+from core.db.session import dispose_engine
+from core.err import BizError, map_err, resp_json
+from core.middleware import install_security_middleware
+from core.tracing import setup_tracing, shutdown_tracing
 
 logger = logging.getLogger(__name__)
 

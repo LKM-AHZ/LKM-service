@@ -1,4 +1,4 @@
-from app.core.err import NS_ARTICLES, ErrCode, register
+from core.err import NS_ARTICLES, ErrCode, register
 
 
 class ArticleErr(ErrCode):

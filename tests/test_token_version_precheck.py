@@ -16,15 +16,15 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
 import auth.deps as auth_deps
 import auth.token_revocation as tv
-from app.core.config import settings
-from app.core.err import BizError
+import core.redis as redis_mod
 from auth.errors import AuthErr
 from auth.models import User
 from auth.repository import UserRepository
 from auth.security import create_access_token, hashpwd
+from core.config import settings
+from core.err import BizError
 
 UID = uuid.UUID("00000000-0000-7000-8000-00000000abc1")
 

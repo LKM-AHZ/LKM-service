@@ -19,9 +19,9 @@ import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.err import BizError, CommonErr
 from auth.bot_sso import BOT_SSO_ACCOUNT_LEVEL, mint_ticket
 from auth.router_read import _require_internal_token
+from core.err import BizError, CommonErr
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 

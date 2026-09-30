@@ -20,13 +20,13 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
-import app.db.outbox  # noqa: F401  # 确保 OutboxMessage 已入 Base.metadata
-from app.core import messaging, outbox_relay, worker
-from app.core.config import settings
-from app.db.base import Base
-from app.db.event_processed import EventProcessed, already_processed, record_processed
-from app.db.model_registry import ensure_all_models
-from app.db.outbox import (
+import core.db.outbox  # noqa: F401  # 确保 OutboxMessage 已入 Base.metadata
+from core import messaging, outbox_relay, worker
+from core.config import settings
+from core.db.base import Base
+from core.db.event_processed import EventProcessed, already_processed, record_processed
+from core.db.model_registry import ensure_all_models
+from core.db.outbox import (
     MAX_TRIES,
     OUTBOX_PENDING,
     OUTBOX_PUBLISHED,
@@ -231,7 +231,7 @@ async def test_relay_folds_to_event_failure_at_max_tries(fact, monkeypatch) -> N
         # 原 outbox 行已迁出；归档表存一笔审计副本
         outbox_left = (await db.execute(sa.select(OutboxMessage))).scalars().all()
         assert outbox_left == []
-        from app.db.event_failure import EventFailure
+        from core.db.event_failure import EventFailure
 
         ef = (await db.execute(sa.select(EventFailure))).scalars().one()
         assert ef.event_id == "near-max"
@@ -294,7 +294,7 @@ async def test_relay_folds_backlogged_event_at_max_tries(fact, monkeypatch) -> N
         db.add(m)
         await db.commit()
         await outbox_relay.relay_poll(session_factory=fact)
-        from app.db.event_failure import EventFailure
+        from core.db.event_failure import EventFailure
 
         ef = (await db.execute(sa.select(EventFailure))).scalars().one()
         assert ef.event_id == "soon-failed"

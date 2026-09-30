@@ -2,12 +2,12 @@
 
 from typing import Any, cast
 
-from app.core.config import settings
+from core.config import settings
 
 
 async def test_init_sentry_noop_when_dsn_empty(monkeypatch) -> None:
     """空 DSN → init_sentry 不加载 sentry_sdk（fail-open 开关）。"""
-    import app.core.apm as apm
+    import core.apm as apm
 
     monkeypatch.setattr(settings, "sentry_dsn", "")
 

@@ -4,8 +4,6 @@ import uuid
 import jwt
 import pytest
 
-from app.core.config import settings
-from app.core.secrets import reveal
 from auth.security import (
     create_access_token,
     create_temp_token,
@@ -21,6 +19,8 @@ from auth.security import (
     verify_totp,
     verifypwd,
 )
+from core.config import settings
+from core.secrets import reveal
 
 # ---------------------------------------------------------------------------
 # JWT – access token

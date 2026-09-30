@@ -10,8 +10,8 @@ import datetime
 import uuid
 from typing import Any
 
-from app.db.repository import AsyncRepository
 from app.modules.feed.models import FeedItemMaterialized
+from core.db.repository import AsyncRepository
 
 
 class FeedItemMaterializedRepository(AsyncRepository[FeedItemMaterialized]):

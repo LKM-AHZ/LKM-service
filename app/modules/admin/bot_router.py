@@ -14,10 +14,10 @@ auth 域，经 ``auth.seams.mint_bot_sso_ticket`` 走内部 HTTP 缝取。缝不
 
 from fastapi import APIRouter
 
-from app.core.common import ApiResp
-from app.core.err import BizError, CommonErr, respond
-from auth.deps import CurrentUser
-from auth.seams import mint_bot_sso_ticket
+from core.common import ApiResp
+from core.contracts import CurrentUser
+from core.err import BizError, CommonErr, respond
+from core.ports.users import mint_bot_sso_ticket
 
 from .deps import require_admin
 from .schemas import AdminBotSsoTicket

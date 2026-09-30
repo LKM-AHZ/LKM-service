@@ -15,10 +15,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-from app.core.config import settings
-from app.core.messaging import SUB_JOBS
-from app.core.task_registry import cron_jobs, ensure_tasks_registered, handlers_for
+import core.redis as redis_mod
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.schemas import ContentItemCreate
@@ -32,6 +29,9 @@ from app.modules.interaction.service import (
     unfollow_board,
     unfollow_user,
 )
+from core.config import settings
+from core.messaging import SUB_JOBS
+from core.task_registry import cron_jobs, ensure_tasks_registered, handlers_for
 from tests.conftest import AuthUser, auth_user_uid
 
 

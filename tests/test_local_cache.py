@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any
 
-import app.core.local_cache as local_cache
+import core.local_cache as local_cache
 
 
 async def test_set_get_roundtrip() -> None:

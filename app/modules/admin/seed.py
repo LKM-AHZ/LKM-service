@@ -8,11 +8,8 @@ import asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import new_worker_session as new_session
 from app.modules.admin.models import Report
-from auth import register_models
-
-register_models()  # 注册 auth ORM 映射类（幂等）
+from core.db.session import new_worker_session as new_session
 
 SEED_REPORTS: list[dict[str, str]] = [
     {

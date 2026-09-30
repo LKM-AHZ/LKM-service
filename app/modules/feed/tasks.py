@@ -5,9 +5,9 @@
 
 import logging
 
-from app.core.messaging import RKEY_RECONCILE, SUB_JOBS
-from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_worker_session as new_session
+from core.db.session import new_worker_session as new_session
+from core.messaging import RKEY_RECONCILE, SUB_JOBS
+from core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger(__name__)
 

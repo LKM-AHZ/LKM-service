@@ -16,10 +16,6 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.model_registry import ensure_all_models
-from app.db.user_dim import UserDim
 from app.flows.user_dim import (
     _incremental,
     _reconcile_once,
@@ -28,6 +24,10 @@ from app.flows.user_dim import (
     user_dim_reconcile_flow,
 )
 from auth.db.base import auth_metadata
+from core.config import settings
+from core.db.base import Base
+from core.db.model_registry import ensure_all_models
+from core.db.user_dim import UserDim
 from tests.test_user_dim_sync import _counting
 from tests.test_user_dim_wiring_event import (
     _dim,

@@ -2,13 +2,13 @@
 
 原位于 ``app/db/init_db.py``，随 auth 拆包迁入：auth 库的 create_all 降级通道与
 ``alembic_auth`` 第二迁移链只服务 auth 进程，归 auth 包持有；业务库链仍由
-``app.db.init_db`` 负责，两者互不触达。
+``core.db.init_db`` 负责，两者互不触达。
 
 通道与业务库一致：
 
 - ``settings.use_alembic=False``（默认/生产 compose）→ ``auth_metadata.create_all``；
 - ``True``（历史库/显式迁移）→ 驱动 ``alembic_auth/``（锁 key 与业务链分离，
-  见 ``app.db.migration_lock``，避免业务/auth 迁移互相阻塞）。
+  见 ``core.db.migration_lock``，避免业务/auth 迁移互相阻塞）。
 
 由 auth 进程调用而非单体：单体不实例化 auth 引擎（见 ``auth.db.session`` 装配规则）。
 """
@@ -19,9 +19,9 @@ import asyncio
 import logging
 from pathlib import Path
 
-from app.core.config import settings
-from app.db.migration_lock import acquire_migration_lock, release_migration_lock
-from app.db.shared_objects import ensure_shared_objects
+from core.config import settings
+from core.db.migration_lock import acquire_migration_lock, release_migration_lock
+from core.db.shared_objects import ensure_shared_objects
 
 logger = logging.getLogger("lkm.init_db")
 
@@ -31,7 +31,7 @@ _AUTH_MIGRATION_LOCK_KEY = "lkm:migration:auth:lock"
 def _run_auth_upgrade() -> None:
     """在独立线程里同步执行 auth 独立库的 Alembic upgrade head。
 
-    与 ``app.db.init_db._run_upgrade`` 同因（env.py 在线迁移自带 ``asyncio.run``，须躲开
+    与 ``core.db.init_db._run_upgrade`` 同因（env.py 在线迁移自带 ``asyncio.run``，须躲开
     lifespan 已运行的事件循环）：驱动 ``alembic.auth.ini`` → ``alembic_auth/``，
     其 env.py 的 URL 取自 ``settings.auth_database_url``（async→sync 方言）。
     """
@@ -65,7 +65,7 @@ async def _create_auth_all() -> None:
 
 
 # —— schema 初始化完成标志（进程内状态，供 auth readiness 如实上报）——
-# 与单体 app.db.init_db 的标志同因：启动不阻塞后，进程可能在 auth 库 schema 尚未就绪时
+# 与单体 core.db.init_db 的标志同因：启动不阻塞后，进程可能在 auth 库 schema 尚未就绪时
 # 应答探针；只看 `SELECT 1` 会误报 up（DB 可达但 users 表还没建）。
 _auth_db_initialized: bool = False
 

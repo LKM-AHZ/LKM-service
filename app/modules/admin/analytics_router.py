@@ -20,19 +20,19 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import clickhouse
-from app.core.clickhouse import (
+from app.modules.rbac.permissions import Permission
+from core import clickhouse
+from core.clickhouse import (
     ClickHouseClient,
     ClickHouseUnavailableError,
     result_rows,
     to_ch_datetime,
 )
-from app.core.common import ApiResp, PageData, paginate_pages
-from app.core.config import settings
-from app.core.err import BizError, CommonErr, respond
-from app.db.session import get_read_session
-from app.modules.rbac.permissions import Permission
-from auth.deps import CurrentUser
+from core.common import ApiResp, PageData, paginate_pages
+from core.config import settings
+from core.contracts import CurrentUser
+from core.db.session import get_read_session
+from core.err import BizError, CommonErr, respond
 
 from .deps import require_admin
 from .permissions import require_permission

@@ -3,11 +3,6 @@ import hashlib
 import uuid
 from typing import Any
 
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.err import BizError, CommonErr
-from app.db.base import now_iso
-from app.db.repo import get_or_raise
-from app.db.repository import DbSession
 from app.modules.content.blog import git_svc
 from app.modules.content.blog.errors import BlogErr
 from app.modules.content.blog.models import (
@@ -33,12 +28,13 @@ from app.modules.content.blog.schemas import (
     BlogStarStatus,
 )
 from app.modules.content.service import publish_blog_item
-from auth.schemas import ProfileInfo
-from auth.snapshot import (
-    get_user_snapshot,
-    get_user_snapshot_batch,
-    profile_info_from_snap,
-)
+from core.common import PageData, paginate_offset, paginate_pages
+from core.contracts import ProfileInfo, profile_info_from_snap
+from core.db.base import now_iso
+from core.db.repo import get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
+from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 # ---- private converters ----
 

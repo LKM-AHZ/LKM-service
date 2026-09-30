@@ -17,8 +17,8 @@ import httpx
 import pytest
 
 import auth.user_http as user_http
-from app.core.config import settings
 from auth.circuit_breaker import CircuitBreaker, auth_http_breaker
+from core.config import settings
 
 
 class _Clock:

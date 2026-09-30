@@ -12,9 +12,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import app.modules.health.router as health_mod
-from app.core.config import settings
 from app.modules.health.router import DependencyStatus
 from app.modules.health.router import router as health_router
+from core.config import settings
 
 
 @pytest.fixture

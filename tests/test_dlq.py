@@ -2,8 +2,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.core import messaging, worker_dlq
-from app.modules.admin.models import DlqMessage
+from core.db.dlq import DlqMessage
+from core import messaging, worker_dlq
 
 
 def test_make_model_maps_payload() -> None:
@@ -49,7 +49,7 @@ async def test_requeue_publishes_and_marks_requeued(db: Any, monkeypatch: Any) -
         return True
 
     monkeypatch.setattr(messaging, "publish", fake_pub)
-    # worker_dlq 经 `from app.core import messaging` 引用同一模块对象，patch 其 publish 即生效。
+    # worker_dlq 经 `from core import messaging` 引用同一模块对象，patch 其 publish 即生效。
 
     m = DlqMessage(
         routing_key=messaging.RKEY_POINTS,

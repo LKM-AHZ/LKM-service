@@ -14,10 +14,10 @@ pending 也加进去，则「明细已提交 + pending 未 flush」会双计。
 
 import logging
 
-from app.core.config import settings
-from app.core.messaging import RKEY_CLEANUP, RKEY_RECONCILE, SUB_JOBS
-from app.core.task_registry import register_cron_job, register_task
-from app.db.session import new_worker_session as new_session
+from core.config import settings
+from core.db.session import new_worker_session as new_session
+from core.messaging import RKEY_CLEANUP, RKEY_RECONCILE, SUB_JOBS
+from core.task_registry import register_cron_job, register_task
 
 logger = logging.getLogger(__name__)
 

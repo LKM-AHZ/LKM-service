@@ -30,11 +30,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
-from app.core.secrets import reveal
 from auth import snapshot as snap_mod
 from auth.db.session import get_auth_session
+from core.config import settings
+from core.err import BizError, CommonErr
+from core.secrets import reveal
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 

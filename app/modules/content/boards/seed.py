@@ -5,11 +5,8 @@ import asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import new_worker_session as new_session
 from app.modules.content.models import Board
-from auth import register_models
-
-register_models()  # 注册 auth ORM 映射类（幂等）
+from core.db.session import new_worker_session as new_session
 
 # 父分类 → 子板块。parent_id 为空者为一级大类，子板块挂到对应父板块 slug。
 _BOARDS_SPEC = {

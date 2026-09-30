@@ -4,10 +4,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import ApiResp, ModuleStatus
-from app.core.err import BizError, CommonErr, ErrCode, respond
-from app.db.repository import VersionConflictError
-from app.db.session import get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.content.boards.errors import (
     BoardErr,  # noqa: F401  (副作用注册已由 main 统一)
@@ -34,7 +30,12 @@ from app.modules.content.models import Board
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import check_owner, role_has_permission
-from auth.deps import CurrentUser, get_current_user
+from core.common import ApiResp, ModuleStatus
+from core.contracts import CurrentUser
+from core.db.repository import VersionConflictError
+from core.db.session import get_session
+from core.err import BizError, CommonErr, ErrCode, respond
+from core.ports.authz import get_current_user
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 # 危险操作（审核通过/驳回等破坏性写操作）：需已通过 2FA 且信任未过期（1 小时）；

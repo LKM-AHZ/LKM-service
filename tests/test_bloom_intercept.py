@@ -17,11 +17,11 @@ from typing import Any
 import fakeredis.aioredis
 import pytest
 
-import app.core.bloom as bloom
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-from app.core.config import settings
+import core.bloom as bloom
+import core.redis as redis_mod
+import core.user_cache as uc
 from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
+from core.config import settings
 
 _NEVER_EXISTED = uuid.UUID("00000000-0000-7000-8000-0000000000ff")
 

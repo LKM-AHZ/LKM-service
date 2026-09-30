@@ -4,7 +4,7 @@
 错误码数值是线上契约（前端/日志/告警按数值对账），不能因归属调整而重排。
 """
 
-from app.core.err import (
+from core.err import (
     NS_FOLLOW,
     NS_INTERACTION,
     ErrCode,

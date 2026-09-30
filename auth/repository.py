@@ -1,11 +1,11 @@
 """auth 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **auth 域的领域查询/语句构造**。service 层因此不再 ``import sqlalchemy``。
 
 分工口径（批 3）：
 
-- ``app.db.repo`` 的 ``get_or_raise`` / ``consume_once`` / ``isolated_update`` 仍是
+- ``core.db.repo`` 的 ``get_or_raise`` / ``consume_once`` / ``isolated_update`` 仍是
   三把独立原语，由 service 直接调用；本模块只提供它们需要的**条件元组**或
   ``UPDATE`` 语句（如 :meth:`RefreshTokenRepository.consume_conditions`、
   :meth:`UserRepository.failed_login_stmt`），不改其语义。
@@ -25,9 +25,6 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import selectinload
 
-from app.core.err import ErrCode
-from app.db.base import expires_at, now_iso
-from app.db.repository import AsyncRepository, DbSession
 from auth.models import (
     TOTP,
     AuditLog,
@@ -47,6 +44,9 @@ from auth.models import (
     UserOAuth,
 )
 from auth.token_revocation import set_token_version
+from core.db.base import expires_at, now_iso
+from core.db.repository import AsyncRepository, DbSession
+from core.err import ErrCode
 
 
 def is_integrity_error(exc: BaseException) -> bool:

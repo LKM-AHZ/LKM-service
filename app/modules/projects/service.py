@@ -5,9 +5,6 @@ import uuid
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.err import BizError
-from app.db.base import now_iso
-from app.db.repository import DbSession
 from app.modules.projects.errors import ProjectErr
 from app.modules.projects.models import Project, ProjectApplication, ProjectMember
 from app.modules.projects.repository import (
@@ -22,7 +19,10 @@ from app.modules.projects.schemas import (
     ProjectOut,
     ReviewProjectApplicationRequest,
 )
-from auth.snapshot import get_user_snapshot_batch
+from core.db.base import now_iso
+from core.db.repository import DbSession
+from core.err import BizError
+from core.ports.snapshot import get_user_snapshot_batch
 
 
 def _app_to_schema(a: ProjectApplication) -> ProjectApplicationOut:
@@ -195,7 +195,7 @@ async def _apply_incubation(db: DbSession, applicant_id: uuid.UUID) -> None:
     auth_seam_realm）由 auth 内部写端点把升权落地 auth realm；seam 关时回落本地同库会话执行
     （蓝绿/单库，语义与旧实现一一对等并发出 user.updated）。
     """
-    from auth.seams import grant_incubation_from_business
+    from core.ports.users import grant_incubation_from_business
 
     await grant_incubation_from_business(db, applicant_id)
 

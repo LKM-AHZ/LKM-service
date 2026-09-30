@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import Settings
+from core.config import Settings
 
 _SECRETS = {
     "jwt_secret": "j" * 48,

@@ -1,4 +1,4 @@
-from app.core.err import NS_QA, ErrCode, register
+from core.err import NS_QA, ErrCode, register
 
 
 class QaErr(ErrCode):

@@ -145,7 +145,7 @@ def _integration_containers() -> Iterator[None]:
         # 同时改**已实例化**的 settings：部分用例（如 check_code_rate_limit）先看
         # settings.redis_url 是否为空再决定是否限流，只设 env 对它无效（Settings 在
         # 模块导入时就已读盘）。
-        from app.core.config import settings as _settings
+        from core.config import settings as _settings
 
         _settings.redis_url = redis_url  # pydantic 自动转 SecretStr
         with contextlib.suppress(Exception):

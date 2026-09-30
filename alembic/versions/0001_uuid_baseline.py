@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # 时间列统一写 sa.DateTime(timezone=True)：UTCDateTime 的 impl 就是 DateTime(timezone=True)，DDL 等价。
-# 基线 revision 必须自包含——import 应用代码会让「UTCDateTime 改名/挪位或 app.db.base 导入链断裂」
+# 基线 revision 必须自包含——import 应用代码会让「UTCDateTime 改名/挪位或 core.db.base 导入链断裂」
 # 在全新库上以 ImportError 直接打断 alembic upgrade head，且只能靠改历史 revision 才能修。
 
 # revision identifiers, used by Alembic.

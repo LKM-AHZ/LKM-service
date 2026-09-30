@@ -35,7 +35,7 @@ from app.modules.content.models import (
 )
 from app.modules.feed.schemas import FeedItem
 from app.modules.projects.models import Project
-from auth.snapshot import get_user_snapshot_batch
+from core.ports.snapshot import get_user_snapshot_batch
 
 _PREVIEW_LEN = 150
 

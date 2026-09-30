@@ -17,8 +17,8 @@ from collections.abc import Iterable
 from contextlib import suppress
 from typing import Any, Protocol
 
-from app.core.redis import get_redis
 from app.ws.broker import CHANNEL_UPLOAD, parse_channel
+from core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 

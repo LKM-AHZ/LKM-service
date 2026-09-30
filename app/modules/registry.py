@@ -53,7 +53,8 @@ _ERROR_MODULES: list[str] = [
     "content.boards",  # BoardErr
     "content.columns",  # ColumnErr
     "content.qa",  # QaErr
-    "storage",  # StorageErr：原缺失，显式化以免某个进程两条 import 链都不断时漏注册
+    # 注：StorageErr 随存储抽象下沉 core.storage，不在业务错误码清单内——
+    # 其注册由 core.storage.errors 自身在导入期完成（见 load_errors）。
 ]
 
 
@@ -76,18 +77,15 @@ def load_errors() -> None:
     """导入各模块 ``errors`` 模块触发错误码 register() 副作用（幂等）。"""
     for name in _ERROR_MODULES:
         import_module(f"app.modules.{name}.errors")
+    # 存储抽象已下沉 core（auth 与 files 共用），其错误码不属任何业务模块
+    import_module("core.storage.errors")
 
 
 def load_all() -> None:
-    """应用/worker 装配入口：加载全部模块并触发注册副作用。
+    """应用/worker 装配入口：加载全部业务模块并触发注册副作用。
 
-    聚合：错误码（load_errors）+ auth 错误码（经其公开钩子，auth 已独立成顶层包、
-    不在 MODULES 内）。模型与任务的预注册由各自基础设施枢纽
-    （db.model_registry / core.task_registry）承担，此处聚焦业务侧副作用，
-    避免重复触发；如需随应用启动一并注册，调用方按需组合。
+    只负责**业务侧**错误码（load_errors）；auth 的错误码/模型/任务由其 bootstrap 自行注册
+    （``auth.bootstrap.register``，由 ``boot.assemble`` 触发）——app 不 import auth。
+    模型与任务的预注册由 ``core.db.model_registry`` / ``core.task_registry`` 承担。
     """
     load_errors()
-
-    from auth import register_errors
-
-    register_errors()

@@ -14,7 +14,7 @@ from tests.conftest import auth_user_uid
 
 @pytest.fixture
 def repo_dir(monkeypatch, tmp_path):
-    from app.core.config import settings
+    from core.config import settings
 
     p = str(tmp_path / "blog_repos")
     monkeypatch.setattr(settings, "blog_repo_dir", p)

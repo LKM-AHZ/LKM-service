@@ -119,8 +119,8 @@ class TestAdminMe:
 
         直接替换 authz seam 判定为「该 admin 已失效」，验证 monolith 不本地回落、按不可用拒。
         """
-        from app.core.config import settings as _cfg
         from auth import user_http as uh
+        from core.config import settings as _cfg
 
         admin = await _mk_admin(auth_db, "seam_rev_root")
         _set_admin_cookie(client, admin)

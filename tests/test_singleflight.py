@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-import app.core.singleflight as sf
+import core.singleflight as sf
 
 
 async def test_concurrent_calls_merge_to_one_loader() -> None:

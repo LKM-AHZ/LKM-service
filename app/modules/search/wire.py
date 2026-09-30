@@ -16,8 +16,8 @@ import uuid
 
 import msgspec
 
-from app.core.common import PageData
 from app.modules.search.schemas import SearchHit
+from core.common import PageData
 
 
 class SearchHitWire(msgspec.Struct):

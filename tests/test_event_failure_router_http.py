@@ -15,11 +15,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.db.event_failure import EventFailure
-from app.db.outbox import OutboxMessage
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from auth.models import Profile, User
+from core.config import settings
+from core.db.event_failure import EventFailure
+from core.db.outbox import OutboxMessage
 from tests.conftest import DB, Client
 
 

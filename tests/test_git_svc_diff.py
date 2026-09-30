@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.config import settings
 from app.modules.content.blog import git_svc
+from core.config import settings
 
 
 @pytest.fixture

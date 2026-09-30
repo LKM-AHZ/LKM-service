@@ -8,20 +8,20 @@ Pulsar 同一 topic ``biz/points.apply`` 挂三个 Shared subscription，各收�
 
 三者各由独立 worker 进程消费、独立事务，单订阅故障（重投/死信）不影响其余（故障隔离）。
 消息 ``fn`` 均为 ``apply_point_event``，各订阅 handler 表指向不同实现。worker 无请求上下文，
-用 app.db.session.new_session() 自建会话。
+用 core.db.session.new_session() 自建会话。
 """
 
 import uuid
 
-from app.core.messaging import (
+from app.modules.points.rules import RULE_DELTAS
+from app.modules.points.service import reward
+from core.db.session import new_worker_session as new_session
+from core.messaging import (
     SUB_POINTS_REWARD,
     SUB_POINTS_STATS,
     SUB_POINTS_TASKS,
 )
-from app.core.task_registry import register_task
-from app.db.session import new_worker_session as new_session
-from app.modules.points.rules import RULE_DELTAS
-from app.modules.points.service import reward
+from core.task_registry import register_task
 
 
 async def apply_point_reward(user_id: uuid.UUID, event: str, ref_id: str) -> None:

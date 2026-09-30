@@ -7,7 +7,6 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.core.err import BizError
 from app.modules.content.articles.errors import ArticleErr
 from app.modules.content.articles.schemas import ArticleDetail, ArticleListItem
 from app.modules.content.articles.service import (
@@ -18,6 +17,7 @@ from app.modules.content.articles.service import (
     list_tags,
     search_articles,
 )
+from core.err import BizError
 
 # GraphQL 分页边界：page/pageSize 是客户端可传的裸值，不夹紧会让 pageSize=0/负数直接落到
 # SQL（负 offset/limit 报错、除零）或让超大 pageSize 整表拉取并污染 service 缓存键。

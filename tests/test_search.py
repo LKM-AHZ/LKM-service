@@ -17,7 +17,6 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.models import ContentItem, ContentStatus
@@ -25,6 +24,7 @@ from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item
 from app.modules.search.errors import SearchErr
 from app.modules.search.service import search_items
+from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
 

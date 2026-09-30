@@ -27,10 +27,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from starlette.responses import JSONResponse
 
-from app.core.common import ApiResp
-from app.core.wire import msgspec_ok
 from app.modules.feed.schemas import FeedItem, FeedResponse
 from app.modules.feed.wire import to_wire
+from core.common import ApiResp
+from core.wire import msgspec_ok
 
 _N = 0.5  # 每个测量点的最短采样时长（秒）
 _SPEEDUP_MIN = 1.5
@@ -128,8 +128,8 @@ async def _enable_fake_redis() -> tuple[Any, Callable[[], None]]:
     """
     import fakeredis.aioredis
 
-    import app.core.redis as redis_mod
-    from app.core.config import settings
+    import core.redis as redis_mod
+    from core.config import settings
 
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     prev_url = settings.redis_url
@@ -155,8 +155,8 @@ async def _enable_fake_redis() -> tuple[Any, Callable[[], None]]:
 
 
 async def bench_l1() -> None:
-    import app.core.user_cache as uc
-    from app.core.config import settings
+    import core.user_cache as uc
+    from core.config import settings
 
     fake, restore = await _enable_fake_redis()
     prev_l1 = settings.user_snap_l1_enabled

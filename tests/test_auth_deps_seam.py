@@ -17,14 +17,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.user_http as user_http
-from app.core.config import settings
-from app.core.err import BizError
 from app.modules.admin import deps as admin_deps
 from app.modules.admin.deps import create_admin_access_token
 from auth import deps as auth_deps
 from auth.errors import AuthErr
 from auth.models import Profile, User
 from auth.security import create_access_token, hashpwd
+from core.config import settings
+from core.err import BizError
 from tests.conftest import DB
 
 
@@ -197,7 +197,7 @@ async def test_admin_seam_ok(db: DB, monkeypatch) -> None:
 
 async def test_admin_seam_fail_closed(db: DB, monkeypatch) -> None:
     """后台 seam：裁决 not_admin → 统一 FORBIDDEN。"""
-    from app.core.err import CommonErr
+    from core.err import CommonErr
 
     _enable_seam(monkeypatch)
     _uid, token = await _mk_admin(db)

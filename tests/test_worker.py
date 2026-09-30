@@ -1,6 +1,6 @@
 """worker 订阅配置测试：订阅拓扑、points 三订阅扇出、handler 注册。"""
 
-from app.core import messaging, task_registry, worker
+from core import messaging, task_registry, worker
 
 
 def test_subscription_constants() -> None:

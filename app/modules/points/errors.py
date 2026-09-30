@@ -1,4 +1,4 @@
-from app.core.err import NS_POINTS, ErrCode, register
+from core.err import NS_POINTS, ErrCode, register
 
 
 class PointsErr(ErrCode):

@@ -20,14 +20,14 @@ from hypothesis import settings as hsettings
 from hypothesis import strategies as st
 from sqlalchemy import delete, event, select, update
 
-from app.db.base import now_iso
-from app.db.user_dim import UserDim
 from auth.db.base import auth_metadata
 from auth.models import Profile, User
 from auth.user_dim_sync import (
     reconcile_user_dim_incremental,
     sync_dim_for_ids,
 )
+from core.db.base import now_iso
+from core.db.user_dim import UserDim
 from tests.prop_pg import PropPG
 
 

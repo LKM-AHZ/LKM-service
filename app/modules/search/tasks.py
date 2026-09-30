@@ -8,11 +8,11 @@
 
 import logging
 
-from app.core.logging import log_exceptions
-from app.core.messaging import SUB_CONTENT_INDEX
-from app.core.metrics import content_index_events_total
-from app.core.task_registry import register_task
 from app.modules.search import sync
+from core.logging import log_exceptions
+from core.messaging import SUB_CONTENT_INDEX
+from core.metrics import content_index_events_total
+from core.task_registry import register_task
 
 logger = logging.getLogger(__name__)
 

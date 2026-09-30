@@ -13,10 +13,10 @@ from typing import Any
 import fakeredis.aioredis
 import pytest
 
-import app.core.bloom as bloom
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-from app.core.config import settings
+import core.bloom as bloom
+import core.redis as redis_mod
+import core.user_cache as uc
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

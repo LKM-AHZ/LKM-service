@@ -45,14 +45,21 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
-from app.core import local_cache as _local_cache
-from app.core import singleflight as _singleflight
-from app.core.config import settings
-from app.db.base import Base
-from app.db.session import get_read_session, get_session
-from app.db.shared_objects import ensure_shared_objects
-from app.main import app
+from boot.assemble import assemble
+
+# 收集期即装配（不能放 fixture）：下面 `from app.main import app` 在**收集阶段**就构建
+# API 路由，而 auth 前台路由经 core.route_registry 注入、鉴权依赖经 core.ports 取实现——
+# 晚于此则路由挂不上、端口抛 PortNotBound。生产侧由 boot.backend / boot.workers.* 承担同一件事。
+assemble()
+
+from app.main import app  # noqa: E402
 from auth.db.base import auth_metadata
+from core import local_cache as _local_cache
+from core import singleflight as _singleflight
+from core.config import settings
+from core.db.base import Base
+from core.db.session import get_read_session, get_session
+from core.db.shared_objects import ensure_shared_objects
 
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
@@ -93,8 +100,8 @@ def _ensure_pg_shared_objects() -> None:
     """
 
     async def _run() -> None:
-        # 与生产两条建库链同源（app.db.shared_objects），避免测试与生产漂移。
-        from app.db.shared_objects import ensure_shared_objects
+        # 与生产两条建库链同源（core.db.shared_objects），避免测试与生产漂移。
+        from core.db.shared_objects import ensure_shared_objects
 
         for url in (settings.database_url, settings.auth_database_url):
             engine = create_async_engine(url, poolclass=NullPool)
@@ -243,7 +250,7 @@ def _pg_templates() -> Iterator[None]:
     """session 级建三个模板库（业务 / auth / 融合），测毕清理。"""
 
     async def _build() -> None:
-        from app.db.model_registry import ensure_all_models
+        from core.db.model_registry import ensure_all_models
 
         ensure_all_models()
         await _build_template(_TMPL_BIZ, settings.database_url, (Base.metadata,))
@@ -563,8 +570,8 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     - verify_password_via_seam：凭证校验替身 → carrier 上 User + verifypwd（等价 AUTH 内部
       /auth/internal/verify-password 端点），供 blog git HTTP-Basic 路径消费。
     """
-    from app.core.config import settings as _cfg
     from auth import user_http as uh
+    from core.config import settings as _cfg
 
     monkeypatch.setattr(_cfg, "auth_http_url", "http://auth-realm-test")
     monkeypatch.setattr(_cfg, "auth_http_token", "internal-test-secret")
@@ -617,7 +624,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             banned=bool(u.is_locked),
             nickname=p.nickname if p else None,
         )
-        from app.core.user_cache import version_of_updated_at
+        from core.user_cache import version_of_updated_at
 
         version = version_of_updated_at(u.updated_at) if u.updated_at else None
         return _snap_to_dict(snap), version
@@ -721,8 +728,8 @@ async def auth_seam_fused(
 @pytest.fixture(autouse=True)
 async def _reset_global_engines() -> AsyncGenerator[None]:
     yield
-    from app.db.session import dispose_engine
     from auth.db.session import dispose_auth_engine
+    from core.db.session import dispose_engine
 
     await dispose_engine()
     await dispose_auth_engine()

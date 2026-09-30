@@ -28,9 +28,9 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import bloom
 from auth.db.session import new_auth_session
 from auth.models import Profile, User
+from core import bloom
 
 # 演示用户一律不可登录：口令位是哨兵串，绝非任何真实口令的合法哈希。同时它与
 # `_SEED_AUTHOR_USERNAME` 同名标识出「这是 seed 造的」，运维可据此识别/清理。

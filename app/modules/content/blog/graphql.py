@@ -6,7 +6,6 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.core.err import BizError
 from app.modules.content.blog.errors import BlogErr
 from app.modules.content.blog.schemas import (
     BlogCommentInfo,
@@ -19,7 +18,8 @@ from app.modules.content.blog.service import (
     list_comments,
     list_series,
 )
-from auth.schemas import ProfileInfo
+from core.contracts import ProfileInfo
+from core.err import BizError
 
 # GraphQL 分页边界（同 content/columns 与 articles/graphql 口径）：pageSize 缺省时 service
 # 会「不限量」整表拉取（公开字段，易被 DoS），page<=0 会产生负 offset 报错。夹紧后再下传。

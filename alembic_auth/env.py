@@ -21,7 +21,7 @@ if REPO_ROOT not in sys.path:
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.core.config import settings
+from core.config import settings
 
 # Alembic Config object
 config = context.config
@@ -30,8 +30,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 目标 metadata = auth 独立库（AuthBase）
+# 目标 metadata = auth 独立库（AuthBase）。auth 模型不挂在业务 Base 上，
+# 由 auth 自己的注册钩子导入并 configure（幂等）。
+from auth import register as auth_register
 from auth.db.base import auth_metadata
+
+auth_register.register_models()
 
 target_metadata = auth_metadata
 

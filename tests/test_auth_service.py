@@ -6,10 +6,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
-from app.db.base import expires_at
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
+from core.db.base import expires_at
+from core.err import BizError
 
 
 @pytest.fixture

@@ -11,11 +11,11 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from app.core.config import settings
-from app.core.secrets import reveal
 from app.modules.search.engines.base import SearchEngine
 from app.modules.search.engines.meili import MeiliSearchEngine
 from app.modules.search.engines.opensearch import OpenSearchEngine
+from core.config import settings
+from core.secrets import reveal
 
 logger = logging.getLogger(__name__)
 

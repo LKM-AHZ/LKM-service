@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.err import BizError, CommonErr
 from auth.admin_session import (
     _ADMIN_AUD,
     ACCESS_TOKEN_MINUTES,
@@ -54,6 +53,7 @@ from auth.user_dim_sync import (
     reconcile_user_dim_periodic,
     sync_dim_for_ids,
 )
+from core.err import BizError, CommonErr
 
 __all__ = [
     "ACCESS_TOKEN_MINUTES",
@@ -103,7 +103,7 @@ def get_channel(channel_key: str) -> Any:
     """按 key 取联系通道（发送降级路径用）。
 
     每次调用重新读 ``auth.channels.CHANNELS``，使测试对该表 monkeypatch 依然生效；
-    调用方（``app.core.jobs``）因此不得自行缓存返回值。
+    调用方（``core.jobs``）因此不得自行缓存返回值。
     """
     from auth.channels import CHANNELS
 

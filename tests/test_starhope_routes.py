@@ -2,7 +2,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
+from core.err import CommonErr
 from tests.conftest import auth_user_uid
 
 

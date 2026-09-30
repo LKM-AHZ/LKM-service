@@ -26,7 +26,7 @@ from typing import Any
 
 from prefect import flow, task
 
-from app.core.config import settings
+from core.config import settings
 
 logger = logging.getLogger("lkm.flows.user_dim")
 
@@ -48,7 +48,7 @@ def _flow_span(traceparent: str) -> Any:
     tracing 未启用时 ``extract_context`` 返回 None、``tracer`` 返回 no-op tracer，
     上下文管理器照常工作，不引入额外分支。
     """
-    from app.core.tracing import extract_context, tracer
+    from core.tracing import extract_context, tracer
 
     ctx = extract_context({"traceparent": traceparent}) if traceparent else None
     return tracer("lkm.flows").start_as_current_span("prefect.user_dim", context=ctx)
@@ -63,7 +63,7 @@ async def _in_session(
     不复制任何 SQL。测试仍可 monkeypatch ``auth.user_dim_sync._session_factory`` 走融合
     schema——seam 包装是惰性取属性的，patch 照常生效。
     """
-    from auth.seams import open_session_pair
+    from core.ports.users import open_session_pair
 
     source_db, target_db = await open_session_pair()
     try:
@@ -83,14 +83,14 @@ async def _in_session(
 
 async def _reconcile_once() -> int:
     """一拍周期对账：复用 periodic 入口（自开会话 + Redis 锁 + commit），幂等。"""
-    from auth.seams import reconcile_user_dim_periodic
+    from core.ports.users import reconcile_user_dim_periodic
 
     return await reconcile_user_dim_periodic()
 
 
 async def _incremental(*, window: int) -> int:
     """单拍增量对账：一条 auth 轻扫 + 一条业务轻扫 + 差集批量 upsert（命令数恒 4/2）。"""
-    from auth.seams import reconcile_user_dim_incremental
+    from core.ports.users import reconcile_user_dim_incremental
 
     return await _in_session(
         lambda src, tgt: reconcile_user_dim_incremental(src, tgt, window=window)
@@ -99,7 +99,7 @@ async def _incremental(*, window: int) -> int:
 
 async def _sync_ids(*, user_ids: list[int]) -> int:
     """显式 id 批量回填：复用 sync_dim_for_ids（命令数恒 2），空列表 no-op。"""
-    from auth.seams import sync_dim_for_ids
+    from core.ports.users import sync_dim_for_ids
 
     return await _in_session(lambda src, tgt: sync_dim_for_ids(src, tgt, user_ids))
 

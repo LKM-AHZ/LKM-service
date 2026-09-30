@@ -37,16 +37,16 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.messaging import (
+from core.config import settings
+from core.db.outbox import enqueue_outbox
+from core.db.session import new_session
+from core.messaging import (
     RKEY_AUDIT_LOGIN_FAIL,
     RKEY_AUDIT_PERMISSION_CHANGE,
     RKEY_USER_BANNED,
     RKEY_USER_SESSION_REVOKE,
     RKEY_USER_UPDATED,
 )
-from app.db.outbox import enqueue_outbox
-from app.db.session import new_session
 
 logger = logging.getLogger("lkm.auth.events")
 

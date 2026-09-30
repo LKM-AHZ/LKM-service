@@ -4,21 +4,6 @@ import re
 import uuid
 from typing import Any
 
-from app.core.cache import (
-    TTL_ITEM_S,
-    TTL_LIST_S,
-    bump_collection_version,
-    cache_invalidate,
-    cached_read,
-    collection_version,
-    make_key,
-)
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.metrics import post_created_total
-from app.db.base import now_iso
-from app.db.repository import DbSession
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.boards.schemas import (
     BanRequest,
@@ -91,7 +76,22 @@ from app.modules.content.schemas import (
 )
 from app.modules.points.rules import enqueue_points_event
 from app.modules.points.service import reward, spend
-from auth.snapshot import get_user_snapshot, get_user_snapshot_batch
+from core.cache import (
+    TTL_ITEM_S,
+    TTL_LIST_S,
+    bump_collection_version,
+    cache_invalidate,
+    cached_read,
+    collection_version,
+    make_key,
+)
+from core.common import PageData, paginate_offset, paginate_pages
+from core.config import settings
+from core.db.base import now_iso
+from core.db.repository import DbSession
+from core.err import BizError
+from core.metrics import post_created_total
+from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 READING_WPM = 300  # 每 300 字约 1 分钟阅读时间
 
@@ -198,7 +198,7 @@ async def list_items(
 # 视图计数写会话缝：GraphQL 用只读会话不能写，故 bump 自建独立写会话。
 # 默认 new_session()；测试可替换为 conftest 内存会话以断言落库（仿 blog git _session_factory）。
 async def _new_write_session() -> DbSession:
-    from app.db.session import new_session
+    from core.db.session import new_session
 
     return await new_session()
 

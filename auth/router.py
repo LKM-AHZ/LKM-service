@@ -14,11 +14,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import jobs
-from app.core.client_ip import client_ip
-from app.core.common import ApiResp
-from app.core.config import settings
-from app.core.err import BizError, CommonErr, respond
 from auth import service_auth
 from auth.channels import (
     EMAIL_CHANNEL,
@@ -70,6 +65,11 @@ from auth.service_auth import (
 )
 from auth.service_verify import check_code_rate_limit
 from auth.token_revocation import block_payload_jti
+from core import jobs
+from core.client_ip import client_ip
+from core.common import ApiResp
+from core.config import settings
+from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

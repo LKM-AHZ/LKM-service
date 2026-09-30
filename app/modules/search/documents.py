@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.common import parse_tags
 from app.modules.content.models import ContentItem
 from app.modules.search.engines.base import IndexDoc
+from core.common import parse_tags
 
 
 def _tag_list(raw: str | None) -> list[str]:

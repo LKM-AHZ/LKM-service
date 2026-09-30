@@ -25,7 +25,6 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.errors import ContentErr
@@ -46,6 +45,7 @@ from app.modules.content.service import (
     publish_blog_item,
     unlike_item,
 )
+from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
 # 合法 uuid7 形态的不存在内容 id。

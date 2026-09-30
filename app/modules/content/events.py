@@ -1,6 +1,6 @@
 """内容域领域事件（``content.*``）：外部检索引擎增量同步的单一数据源。
 
-内容落库与「事件入队」同一事务（``app.db.outbox``），relay 投到 ``biz/content.events``，
+内容落库与「事件入队」同一事务（``core.db.outbox``），relay 投到 ``biz/content.events``，
 由 search 模块的索引 worker 消费后增量同步外部索引（Meilisearch / OpenSearch）。
 
 **事件是「失效通知」而非数据快照**：payload 只带 ``item_id`` 与动作，消费侧回查业务库取
@@ -21,14 +21,14 @@ from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.messaging import (
+from app.modules.content.models import ContentItem, ContentStatus
+from core.config import settings
+from core.db.outbox import enqueue_outbox
+from core.messaging import (
     RKEY_CONTENT_DELETED,
     RKEY_CONTENT_PUBLISHED,
     RKEY_CONTENT_UPDATED,
 )
-from app.db.outbox import enqueue_outbox
-from app.modules.content.models import ContentItem, ContentStatus
 
 CONTENT_ACTION_PUBLISHED: Final = "published"
 CONTENT_ACTION_UPDATED: Final = "updated"

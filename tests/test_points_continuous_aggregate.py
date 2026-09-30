@@ -51,7 +51,7 @@ async def test_points_continuous_aggregate_assembly_and_read(
     db: AsyncSession,
 ) -> None:
     """有 timescaledb：装配 cagg → 写一笔积分 → 刷新 → 读口看到当天桶；无则降级。"""
-    from app.db.init_db import (
+    from core.db.init_db import (
         _ensure_continuous_aggregates,
         _ensure_hypertables,
         _ensure_timescaledb,
@@ -107,7 +107,7 @@ async def test_points_continuous_aggregate_assembly_and_read(
 
 async def test_points_report_filters_by_reason(db: AsyncSession) -> None:
     """``reason`` 过滤把窗口缩到单一行为类型（降级时同样走异常路径）。"""
-    from app.db.init_db import (
+    from core.db.init_db import (
         _ensure_continuous_aggregates,
         _ensure_hypertables,
         _ensure_timescaledb,

@@ -14,7 +14,7 @@
 - ``version``：调用方给的单调版本号（缺省 0 = 未指定）。前端可据 ``(event_id, version)``
   丢弃旧帧。
 
-发布一律 fail-open（``app.core.redis`` 语义）：Redis 不可用或 publish 异常静默 no-op，
+发布一律 fail-open（``core.redis`` 语义）：Redis 不可用或 publish 异常静默 no-op，
 广播只是体验增强，缺失时前端回退到「稍后刷新」即可，不该阻塞登记/通知主流程。
 """
 
@@ -23,7 +23,7 @@ import logging
 import uuid
 from typing import Any
 
-from app.core.redis import get_redis
+from core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 

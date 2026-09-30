@@ -4,15 +4,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import (
-    ApiResp,
-    ModuleStatus,
-    PageData,
-    PaginateDep,
-    PaginateParams,
-)
-from app.core.err import BizError, CommonErr, respond
-from app.db.session import get_read_session, get_session
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.content.columns.schemas import (
     ColumnApplicationCreate,
@@ -36,7 +27,17 @@ from app.modules.content.models import Column, ColumnApplication
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission, composible_role
 from app.modules.rbac.service import check_owner, role_has_permission
-from auth.deps import CurrentUser, RequireLevel, get_current_user
+from core.common import (
+    ApiResp,
+    ModuleStatus,
+    PageData,
+    PaginateDep,
+    PaginateParams,
+)
+from core.contracts import CurrentUser
+from core.db.session import get_read_session, get_session
+from core.err import BizError, CommonErr, respond
+from core.ports.authz import RequireLevel, get_current_user
 
 router = APIRouter(prefix="/columns", tags=["content", "columns"])
 

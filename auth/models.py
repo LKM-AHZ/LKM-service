@@ -17,8 +17,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 from auth.db.base import AuthBase
+from core.db.base import UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
@@ -50,7 +50,7 @@ class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
 class RevokedAccessToken(AuthBase):
     """已撤销的 access token（按 ``jti``）——**关闭 Redis 持久化后的撤销权威面**。
 
-    背景：``jti:block:{jti}``（``app.core.redis``）只是**快速预检**，Redis 重启即空。对前台
+    背景：``jti:block:{jti}``（``core.redis``）只是**快速预检**，Redis 重启即空。对前台
     会话这不是问题（登出会 bump ``token_version``，DB 里有兜底判据）；但 **admin 单设备登出
     刻意不 bump token_version**（那会连带踢掉该管理员的其他设备），jti 是它**唯一**的撤销依据
     ——Redis 一旦无持久化，重启后已登出的 admin token 会在剩余 15min 内复活。

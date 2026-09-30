@@ -6,8 +6,8 @@
 
 from typing import Any
 
-from app.core import redis as redis_mod
-from app.core.config import settings
+from core import redis as redis_mod
+from core.config import settings
 
 
 def _configure(
@@ -62,7 +62,7 @@ async def test_publish_invalidate_fans_out_to_all_backends(monkeypatch: Any) -> 
 
     只发一个后端会让另一个后端的实例漏删本地 L1（陈旧到 L1 TTL 到期才自愈）。
     """
-    from app.core import user_cache_events as uce
+    from core import user_cache_events as uce
 
     sent: list[tuple[str, str]] = []
 

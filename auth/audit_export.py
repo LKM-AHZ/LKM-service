@@ -16,12 +16,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.clickhouse import (
+from auth.models import AuditLog
+from core.clickhouse import (
     ClickHouseClient,
     fetch_watermark,
     to_ch_datetime,
 )
-from auth.models import AuditLog
 
 logger = logging.getLogger(__name__)
 

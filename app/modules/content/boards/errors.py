@@ -1,4 +1,4 @@
-from app.core.err import NS_BOARDS, ErrCode, register
+from core.err import NS_BOARDS, ErrCode, register
 
 
 class BoardErr(ErrCode):

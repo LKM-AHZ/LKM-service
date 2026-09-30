@@ -9,9 +9,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
 from app.modules.admin.models import RolePermission
 from app.modules.content.models import Board, ContentItem, ContentStatus, ContentType
+from core.err import CommonErr
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 # 不存在的 content id（uuid 形态），用于未命中路径。

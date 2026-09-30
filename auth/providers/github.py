@@ -5,11 +5,11 @@ from typing import Any, cast
 
 import httpx
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.secrets import reveal
 from auth.errors import AuthErr
 from auth.providers.oauth import OAuthUserInfo, register_provider
+from core.config import settings
+from core.err import BizError
+from core.secrets import reveal
 
 logger = logging.getLogger(__name__)
 

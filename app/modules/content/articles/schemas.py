@@ -10,7 +10,7 @@ from pydantic import (
     model_validator,
 )
 
-from auth.schemas import ProfileInfo
+from core.contracts import ProfileInfo
 
 
 class ArticleListItem(BaseModel):

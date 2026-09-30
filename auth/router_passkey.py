@@ -14,12 +14,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.client_ip import client_ip
-from app.core.common import ApiResp
-from app.core.err import respond
 from auth import service_passkey
 from auth.db.session import get_auth_session
-from auth.deps import CurrentUser, RequireLevel, get_current_user, require_2fa
+from auth.deps import CurrentUser, get_current_user, require_2fa
 from auth.schemas import (
     AuthTokenData,
     MessageResponse,
@@ -31,6 +28,10 @@ from auth.schemas import (
     PasskeyRegistrationOptionsResponse,
 )
 from auth.service_verify import check_code_rate_limit
+from core.client_ip import client_ip
+from core.common import ApiResp
+from core.err import respond
+from core.ports.authz import RequireLevel
 
 router = APIRouter(prefix="/auth/passkey", tags=["auth-passkey"])
 

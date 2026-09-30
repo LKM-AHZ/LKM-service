@@ -85,8 +85,8 @@ async def test_readiness_ok_when_both_up(auth_client, monkeypatch) -> None:
 
 async def test_probe_db_uses_auth_engine(monkeypatch) -> None:
     """probe_db 探的是 auth 独立库引擎（get_auth_engine），绝不是业务引擎。"""
-    from app.db import session
     from auth.db import session as auth_session
+    from core.db import session
 
     assert health_auth.get_auth_engine is auth_session.get_auth_engine
     assert health_auth.get_auth_engine is not session.get_async_engine

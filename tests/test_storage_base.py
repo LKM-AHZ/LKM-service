@@ -1,4 +1,4 @@
-from app.modules.storage import StorageBackend, StorageErr
+from core.storage import StorageBackend, StorageErr
 
 
 def test_storage_module_importable():

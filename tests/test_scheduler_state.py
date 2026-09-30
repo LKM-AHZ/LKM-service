@@ -14,7 +14,7 @@ import fakeredis.aioredis
 import pytest
 from prometheus_client import REGISTRY
 
-from app.core import scheduler_state
+from core import scheduler_state
 
 
 @pytest.fixture

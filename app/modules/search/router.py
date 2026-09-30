@@ -11,14 +11,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from app.core.common import ApiResp, ModuleStatus, PageData, PaginateDep, PaginateParams
-from app.core.config import settings
-from app.core.err import respond
-from app.core.wire import msgspec_ok
-from app.db.session import get_read_session
 from app.modules.search.schemas import SearchHit
 from app.modules.search.service import search_items
 from app.modules.search.wire import to_wire
+from core.common import ApiResp, ModuleStatus, PageData, PaginateDep, PaginateParams
+from core.config import settings
+from core.db.session import get_read_session
+from core.err import respond
+from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/search", tags=["search"])
 

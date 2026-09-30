@@ -14,9 +14,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import event_failure as ef_mod
-from app.db.event_failure import EventFailure, replay_failure
-from app.db.outbox import OutboxMessage
+from core.db import event_failure as ef_mod
+from core.db.event_failure import EventFailure, replay_failure
+from core.db.outbox import OutboxMessage
 
 
 async def _add_failure(db: AsyncSession, **kw: Any) -> EventFailure:

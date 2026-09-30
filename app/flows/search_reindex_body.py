@@ -17,12 +17,12 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from app.core.config import settings
-from app.db.session import new_worker_session as new_session
 from app.modules.search.documents import build_doc
 from app.modules.search.engines.factory import get_engine
 from app.modules.search.repository import SearchRepository
-from auth.snapshot import get_user_snapshot_batch
+from core.config import settings
+from core.db.session import new_worker_session as new_session
+from core.ports.snapshot import get_user_snapshot_batch
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.core import jobs, messaging
+from core import jobs, messaging
 
 
 @pytest.fixture(autouse=True)

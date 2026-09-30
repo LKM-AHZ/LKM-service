@@ -18,10 +18,10 @@ from hypothesis import settings as hsettings
 from hypothesis import strategies as st
 from sqlalchemy import delete, func, select, update
 
-from app.core import messaging, outbox_relay
-from app.core.config import settings
-from app.db.event_failure import EventFailure
-from app.db.outbox import (
+from core import messaging, outbox_relay
+from core.config import settings
+from core.db.event_failure import EventFailure
+from core.db.outbox import (
     _BACKOFF_CAP_S,
     MAX_TRIES,
     OUTBOX_PUBLISHED,

@@ -5,22 +5,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import (
-    bump_collection_version,
-    cached_read,
-    collection_version,
-    make_key,
-)
-from app.core.common import (
-    ApiResp,
-    ListData,
-    ModuleStatus,
-    PageData,
-    PaginateDep,
-    PaginateParams,
-)
-from app.core.err import respond
-from app.db.session import get_read_session, get_session
 from app.modules.exam.schemas import (
     AttemptStartResp,
     CertificateOut,
@@ -39,7 +23,24 @@ from app.modules.exam.service import (
     start_attempt,
     submit_attempt,
 )
-from auth.deps import CurrentUser, RequireLevel, get_current_user
+from core.cache import (
+    bump_collection_version,
+    cached_read,
+    collection_version,
+    make_key,
+)
+from core.common import (
+    ApiResp,
+    ListData,
+    ModuleStatus,
+    PageData,
+    PaginateDep,
+    PaginateParams,
+)
+from core.contracts import CurrentUser
+from core.db.session import get_read_session, get_session
+from core.err import respond
+from core.ports.authz import RequireLevel, get_current_user
 
 
 def _status() -> ModuleStatus:

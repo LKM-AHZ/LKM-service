@@ -10,9 +10,9 @@ from collections.abc import Iterator
 
 import pytest
 
-from app.core import clickhouse
-from app.core.clickhouse import ClickHouseUnavailableError
-from app.core.config import settings
+from core import clickhouse
+from core.clickhouse import ClickHouseUnavailableError
+from core.config import settings
 from tests.fakes import FakeClickHouseClient
 
 

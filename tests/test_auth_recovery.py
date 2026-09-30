@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from auth.errors import AuthErr
 from auth.models import MagicLink, Profile, RefreshToken, User
+from core.err import BizError
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ async def _create_magic_link(
     import datetime as dt
     import secrets
 
-    from app.db.base import now_iso as _now
+    from core.db.base import now_iso as _now
 
     raw = secrets.token_hex(32)
     token_hash = hashlib.sha256(raw.encode()).hexdigest()

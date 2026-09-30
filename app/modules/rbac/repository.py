@@ -12,8 +12,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.db.repository import AsyncRepository, DbSession
 from app.modules.admin.models import RolePermission
+from core.db.repository import AsyncRepository, DbSession
 
 
 class RolePermissionRepository(AsyncRepository[RolePermission]):

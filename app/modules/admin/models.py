@@ -8,15 +8,13 @@ from sqlalchemy import (
     Boolean,
     Float,
     Index,
-    Integer,
     String,
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import (  # 注意 db.base 而非 db.models
+from core.db.base import (  # 注意 db.base 而非 db.models
     Base,
     UTCDateTime,
     UUIDPrimaryKeyMixin,
@@ -92,24 +90,5 @@ class ModerationRule(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class DlqMessage(UUIDPrimaryKeyMixin, Base):
-    """死信消息落库：worker_dlq 消费 lkm.dlq 队列持久化，供人工重投/审计。
-
-    时间列遵循本文件既有约定：用 UTCDateTime 类型 + ``now_iso()`` 默认值
-    （参考 LibraryFile.created_at）。勿用裸 ``DateTime`` / ``datetime.now(UTC)``。
-    """
-
-    __tablename__: str = "dlq_messages"
-
-    routing_key: Mapped[str] = mapped_column(String(255), index=True)
-    payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    exchange: Mapped[str] = mapped_column(String(255), default="lkm.events")
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    reason: Mapped[str] = mapped_column(String(255), default="")
-    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-    requeued_at: Mapped[datetime.datetime | None] = mapped_column(
-        UTCDateTime, nullable=True
-    )
+# DlqMessage（dlq_messages 表）已下沉 core.db.dlq——死信的生产方是 core 侧进程，
+# 表定义留在 app 会让 core 反向依赖业务模块。消费方请从 core.db.dlq 引用。

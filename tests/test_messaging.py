@@ -10,7 +10,7 @@ from collections.abc import Iterator
 import pytest
 from prometheus_client import REGISTRY
 
-from app.core import messaging
+from core import messaging
 from tests.fakes import InMemoryTransport
 
 

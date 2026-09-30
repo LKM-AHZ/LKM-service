@@ -1,6 +1,6 @@
 """blog 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **blog 域的领域查询**（star 计数/批量查、评论回复预载、内容行读写、隔离台账、
 发布用板块 get-or-create），非 blog 用的查询不往这里加。
 """
@@ -12,8 +12,6 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.core.err import BizError, CommonErr
-from app.db.repository import AsyncRepository
 from app.modules.content.blog.models import (
     BlogComment,
     BlogContent,
@@ -22,6 +20,8 @@ from app.modules.content.blog.models import (
     BlogStar,
 )
 from app.modules.content.models import Board
+from core.db.repository import AsyncRepository
+from core.err import BizError, CommonErr
 
 
 class BlogSeriesRepository(AsyncRepository[BlogSeries]):

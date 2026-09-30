@@ -18,7 +18,7 @@ from app.modules.files.thumbnails import (
     generate_variants,
     variant_key,
 )
-from app.modules.storage.local import LocalStorage
+from core.storage.local import LocalStorage
 
 _KEY = "ab/deadbeefdeadbeef"
 

@@ -8,7 +8,6 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.core.err import BizError
 from app.modules.content.boards.service import list_boards
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentStatus
@@ -21,6 +20,7 @@ from app.modules.content.service import (
     list_comments,
     list_items,
 )
+from core.err import BizError
 
 # 公开 GraphQL 仅暴露该状态的内容（对齐 REST 列表的 PUBLISHED 过滤）
 PUBLISHED_STATUS = ContentStatus.PUBLISHED.value

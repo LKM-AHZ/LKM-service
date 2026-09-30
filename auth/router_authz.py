@@ -24,7 +24,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
 from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
@@ -34,6 +33,7 @@ from auth.service_authz import (
     grant_exam_unlock,
     grant_incubation,
 )
+from core.err import BizError, CommonErr
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
 

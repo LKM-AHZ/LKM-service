@@ -12,8 +12,8 @@ from typing import Any
 
 import msgspec
 
-from app.core.common import PageData
 from app.modules.notification.schemas import NotificationOut
+from core.common import PageData
 
 
 class NotificationWire(msgspec.Struct):

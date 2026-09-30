@@ -14,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.models  # noqa: F401
-from app.core.err import BizError
 from auth.errors import AuthErr
 from auth.models import PasskeyCredential
+from core.err import BizError
 
 
 @pytest.fixture

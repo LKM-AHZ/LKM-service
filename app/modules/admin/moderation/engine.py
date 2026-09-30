@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import TTL_LIST_S, cached_read, collection_version, make_key
 from app.modules.admin.models import ModerationRule
+from core.cache import TTL_LIST_S, cached_read, collection_version, make_key
 
 # 短缓存：规则改动后 ≤60s（或 admin bump 后立即）生效
 RULE_TTL_S = TTL_LIST_S

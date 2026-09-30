@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm.collections import InstrumentedList
 
 from app.modules.content.blog.models import BlogSeriesStatus
-from auth.schemas import ProfileInfo
+from core.contracts import ProfileInfo
 
 # ---- request schemas ----
 

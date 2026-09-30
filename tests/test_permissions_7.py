@@ -1,9 +1,9 @@
 """模块7 错误码注册收敛（require_owner_or_admin 已随 RBAC 迁移删除）。"""
 
-from app.core.err import ERRTABLE, CommonErr, ErrCode
 from app.modules.content.columns.errors import ColumnErr
 from app.modules.content.errors import ContentErr
 from app.modules.files.errors import FileErr
+from core.err import ERRTABLE, CommonErr, ErrCode
 
 
 def test_all_error_modules_register_without_duplicate() -> None:

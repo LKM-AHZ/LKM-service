@@ -32,11 +32,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-from app.core.config import settings
-from app.db.base import Base
-from app.db.outbox import OutboxMessage
+import core.redis as redis_mod
+import core.user_cache as uc
 from auth import events as auth_events
 from auth.models import Profile, User
 from auth.schemas import ProfileUpdate
@@ -45,6 +42,9 @@ from auth.service import update_profile
 from auth.service_auth import upgrade_to_normal
 from auth.service_recovery import _reset_password as reset_password_svc
 from auth.tasks import invalidate_user_snap
+from core.config import settings
+from core.db.base import Base
+from core.db.outbox import OutboxMessage
 from tests.conftest import DB
 
 
@@ -55,8 +55,8 @@ from tests.conftest import DB
 async def _fused_realm():
     from sqlalchemy import text
 
-    from app.db.model_registry import ensure_all_models
     from auth.db.base import auth_metadata
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     url = settings.database_url

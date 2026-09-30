@@ -1,8 +1,8 @@
 import pytest
 
-from app.core import scheduler
-from app.core.config import settings
-from app.core.task_registry import cron_jobs
+from core import scheduler
+from core.config import settings
+from core.task_registry import cron_jobs
 
 
 def test_ensure_tasks_registered_survives_partial_import(
@@ -14,7 +14,7 @@ def test_ensure_tasks_registered_survives_partial_import(
     不填 cron 表；旧 guard 据此判「已注册」而跳过全量导入，``build_scheduler()`` 会拿到
     0 个 job（2026-09-18 在 ``test_notification.py`` 先收集时暴露）。
     """
-    from app.core import task_registry
+    from core import task_registry
 
     calls: list[int] = []
     monkeypatch.setattr(task_registry, "_tasks_imported", False)
@@ -31,7 +31,7 @@ def test_import_task_modules_marks_import_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """全量导入须置标志（模块被 ``sys.modules`` 缓存，重导不会再触发注册）。"""
-    from app.core import task_registry
+    from core import task_registry
 
     monkeypatch.setattr(task_registry, "_tasks_imported", False)
     task_registry.import_task_modules()
@@ -73,7 +73,7 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
     若 fn 与 worker 注册表键不一致，worker 按其 fn 查表得 None 会当"未知任务"
     丢弃，cron 永不执行。此测试直接检查 build_scheduler 里每个 job 的 kwargs.fn。
     """
-    from app.core.worker import run_default_worker
+    from core.worker import run_default_worker
 
     # 期望的 fn ↔ worker run_default_worker 各队列 handler 键并集
     expect_fns = {
@@ -106,7 +106,7 @@ def test_build_scheduler_jobs_count_matches_registry() -> None:
 
 async def test_fire_tracks_in_flight_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """蓝图 §5.5-6：``_fire`` 进出各更新一次在途作业数（收尾残余即可观测）。"""
-    from app.core import scheduler_state
+    from core import scheduler_state
 
     seen: list[int] = []
 

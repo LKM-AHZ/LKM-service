@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from app.core.config import settings
+from core.config import settings
 
 _CLOSED = "closed"
 _OPEN = "open"

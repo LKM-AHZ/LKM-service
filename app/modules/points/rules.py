@@ -6,8 +6,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.jobs import RKEY_POINTS
-from app.db.outbox import enqueue_outbox
+from core.db.outbox import enqueue_outbox
+from core.jobs import RKEY_POINTS
 
 # event → delta 奖励分（answer_accepted 不给分：QA 已按悬赏派发，见设计中说明）
 RULE_DELTAS: dict[str, int] = {

@@ -1,6 +1,6 @@
 """exam 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **exam 域的领域查询**（题目预载、成绩单 join、证书判定、榜单排序），非 exam 用的
 查询不往这里加。``points.rules`` / ``auth.snapshot`` / ``auth.service_authz`` 等
 跨模块**服务调用**仍留在 service 编排层，不在此收编。
@@ -14,9 +14,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.core.err import BizError, ErrCode
-from app.db.repository import AsyncRepository
 from app.modules.exam.models import Exam, ExamAttempt, ExamCertificate, ExamQuestion
+from core.db.repository import AsyncRepository
+from core.err import BizError, ErrCode
 
 
 def _question_options() -> tuple[Any, ...]:

@@ -1,6 +1,6 @@
 """content 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **content 域的领域查询**（多表 join、聚合、排序窗口、批量 in、原子自增），不做
 过度抽象——非 content 用的查询不往这里加。
 
@@ -15,7 +15,6 @@ import uuid
 
 from sqlalchemy import Select, func, select
 
-from app.db.repository import AsyncRepository
 from app.modules.content.models import (
     Board,
     BoardApplication,
@@ -33,6 +32,7 @@ from app.modules.content.models import (
     QAQuestionImage,
 )
 from app.modules.exam.models import Exam, ExamCertificate
+from core.db.repository import AsyncRepository
 
 
 class ContentItemRepository(AsyncRepository[ContentItem]):

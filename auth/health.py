@@ -8,7 +8,7 @@
 - ``readiness``：依赖就绪。聚合 DB(SELECT 1) + Redis(ping)，供 service 依赖序判定。
   细粒度复合/合并生产端点是 B1.3 的活，此处先给出干净、可被 healthcheck 单独命中的探测缝。
 
-跨文件 import 保持极简：只依赖 ``app.core.redis``、``auth.db.session`` 的
+跨文件 import 保持极简：只依赖 ``core.redis``、``auth.db.session`` 的
 ``get_auth_engine`` 与 ``auth.db.init`` 的初始化标志，均属 infra 且为 auth 进程必要的只读
 底座，不引业务模块。**探的是 auth 独立库**（auth 进程自持的 users/profiles 库），而非业务库
 ——业务库 schema 不属本进程职责。
@@ -23,9 +23,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from app.core import redis as redis_client
 from auth.db.init import is_auth_db_initialized
 from auth.db.session import get_auth_engine
+from core import redis as redis_client
 
 logger = logging.getLogger("lkm.auth.health")
 

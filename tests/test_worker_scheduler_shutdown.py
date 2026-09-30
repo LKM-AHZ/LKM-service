@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import asyncio
 
+import boot.workers.scheduler as ws
 import pytest
-
-import app.core.worker_scheduler as ws
 
 
 class _FakeExecutor:
@@ -102,7 +101,7 @@ class TestSchedulerLifecycleState:
     """
 
     async def test_shutdown_marks_state_paused(self) -> None:
-        from app.core import scheduler_state
+        from core import scheduler_state
 
         scheduler_state.note_started(3)
         sched = _FakeScheduler()
@@ -112,7 +111,7 @@ class TestSchedulerLifecycleState:
     async def test_timeout_keeps_residual_pending(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.core import scheduler_state
+        from core import scheduler_state
 
         async def _slow_job() -> None:
             await asyncio.sleep(30)

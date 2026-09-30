@@ -73,7 +73,7 @@ def test_os_environ_only_in_allowlisted_files() -> None:
 
 def test_settings_expose_the_collected_fields() -> None:
     """本轮收口的字段确实在 Settings 上（env 名由 ``env_prefix=LKM_`` 自动派生）。"""
-    from app.core.config import is_test_env, settings
+    from core.config import is_test_env, settings
 
     assert settings.prefect_work_pool == "lkm"
     assert settings.prefect_source == "/app"
@@ -96,7 +96,7 @@ def test_bot_sso_env_names_map_to_settings(monkeypatch) -> None:
     收口到 Settings 后，env → 值在 ``Settings()`` 构造期完成（``env_prefix=LKM_``），故这里
     重新构造一份 Settings 验证名字接得上——env 名与 compose/k8s/LKM-bot 消费侧一字不差。
     """
-    from app.core.config import Settings
+    from core.config import Settings
 
     overrides = {
         "LKM_BOT_SSO_AUDIENCE": "lkm:bot-x",
@@ -129,7 +129,6 @@ def test_bot_sso_env_names_map_to_settings(monkeypatch) -> None:
 
 def test_bot_sso_constants_come_from_settings() -> None:
     """``auth.bot_sso`` 的协议常量是 Settings 的别名（不是各自 ``os.environ.get``）。"""
-    from app.core.config import settings
     from auth.bot_sso import (
         BOT_SSO_ACCOUNT_LEVEL,
         BOT_SSO_AUD,
@@ -137,6 +136,7 @@ def test_bot_sso_constants_come_from_settings() -> None:
         BOT_SSO_TTL_SECONDS,
         BOT_SSO_TYPE,
     )
+    from core.config import settings
 
     assert settings.bot_sso_audience == BOT_SSO_AUD
     assert settings.bot_sso_type == BOT_SSO_TYPE

@@ -26,8 +26,8 @@ import time
 import uuid
 from typing import Any
 
-from app.core.cache import jitter_ttl
-from app.core.redis import get_redis
+from core.cache import jitter_ttl
+from core.redis import get_redis
 
 logger = logging.getLogger("lkm.auth.token_revocation")
 

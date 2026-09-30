@@ -7,14 +7,14 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from app.core import redis as redis_client
-from app.core.common import ApiResp
-from app.core.config import settings
-from app.core.err import respond
-from app.core.pulsar_lag import probe_health as probe_pulsar_health
-from app.db.init_db import is_db_initialized
-from app.db.session import get_async_engine
-from auth.seams import refresh_verify_key, verify_key_status
+from core import redis as redis_client
+from core.common import ApiResp
+from core.config import settings
+from core.db.init_db import is_db_initialized
+from core.db.session import get_async_engine
+from core.err import respond
+from core.ports.verify_keys import refresh_verify_key, verify_key_status
+from core.pulsar_lag import probe_health as probe_pulsar_health
 
 router = APIRouter(tags=["health"])
 
@@ -139,7 +139,7 @@ async def _probe_db() -> DependencyStatus:
 
     只探连通性不够：DB 可达但表/迁移尚未建好时 `SELECT 1` 照样成功，readiness 会误报 up，
     把流量放进一个查不了业务表的进程——启动不阻塞（lifespan 不再 await init_db）之后这个
-    窗口是真实存在的。故先看进程内的初始化完成标志（见 ``app.db.init_db.is_db_initialized``）。
+    窗口是真实存在的。故先看进程内的初始化完成标志（见 ``core.db.init_db.is_db_initialized``）。
     """
     if not is_db_initialized():
         return DependencyStatus(status="error", detail="schema not initialized")

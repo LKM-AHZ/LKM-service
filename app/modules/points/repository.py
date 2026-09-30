@@ -22,8 +22,6 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from app.db.base import now_iso
-from app.db.repository import AsyncRepository
 from app.modules.points.models import (
     Achievement,
     ExchangeItem,
@@ -34,6 +32,8 @@ from app.modules.points.models import (
     UserBehaviorStat,
     UserTaskProgress,
 )
+from core.db.base import now_iso
+from core.db.repository import AsyncRepository
 
 
 class UserBalanceRepository(AsyncRepository[UserBalance]):

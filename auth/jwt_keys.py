@@ -32,8 +32,8 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.core.config import settings
-from app.core.secrets import reveal
+from core.config import settings
+from core.secrets import reveal
 
 logger = logging.getLogger("lkm.auth.jwt_keys")
 

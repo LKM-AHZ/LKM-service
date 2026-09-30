@@ -27,7 +27,7 @@ import pytest
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError, WatchError
 
-from app.core import redis as redis_core
+from core import redis as redis_core
 
 pytestmark = pytest.mark.integration
 
@@ -259,8 +259,8 @@ class TestModulePaths:
     """走真实模块代码路径（而非裸命令），验证端到端一致。"""
 
     async def should_roundtrip_l2_lock(self, real_redis: Redis) -> None:
-        from app.core.cache_lock import l2_lock
-        from app.core.config import settings
+        from core.cache_lock import l2_lock
+        from core.config import settings
 
         if not settings.cache_lock_enabled:
             pytest.skip("cache_lock 未启用，跳过")

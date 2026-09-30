@@ -1,6 +1,6 @@
 """projects 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **projects 域的领域查询**（pending 去重判定、成员预载、公开列表排序）。
 ``auth.snapshot`` / ``auth.service_authz`` 等跨模块**服务调用**仍留在 service
 编排层，不在此收编。
@@ -14,9 +14,9 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 
-from app.core.err import BizError, ErrCode
-from app.db.repository import AsyncRepository
 from app.modules.projects.models import Project, ProjectApplication, ProjectMember
+from core.db.repository import AsyncRepository
+from core.err import BizError, ErrCode
 
 
 def _project_options() -> tuple[Any, ...]:

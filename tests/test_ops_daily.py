@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 
-from app.core import clickhouse
-from app.core.messaging import SUB_JOBS
-from app.core.task_registry import ensure_tasks_registered, handlers_for
-from app.flows import ops_daily_body
+from core.flows import ops_daily_body
 from app.flows.ops_daily import orchestrate_ops_daily
+from core import clickhouse
+from core.messaging import SUB_JOBS
+from core.task_registry import ensure_tasks_registered, handlers_for
 
 
 async def test_orchestrate_passes_window_and_returns_report() -> None:

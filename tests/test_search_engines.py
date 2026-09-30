@@ -10,8 +10,6 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.metrics import search_engine_fallback_total
 from app.flows import search_reindex_body
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
@@ -21,6 +19,8 @@ from app.modules.search import service as search_service
 from app.modules.search import sync as search_sync
 from app.modules.search.engines import factory as engine_factory
 from app.modules.search.engines.meili import MeiliSearchEngine
+from core.config import settings
+from core.metrics import search_engine_fallback_total
 from tests.conftest import AuthUser, auth_user_uid
 from tests.fakes import FakeSearchEngine
 

@@ -3,8 +3,8 @@
 import json
 import logging
 
-from app.core import logging as lkm_logging
-from app.core.logging import JsonFormatter
+from core import logging as lkm_logging
+from core.logging import JsonFormatter
 
 
 def _make_record(message: str) -> logging.LogRecord:

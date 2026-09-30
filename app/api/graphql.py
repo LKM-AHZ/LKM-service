@@ -68,13 +68,13 @@ from strawberry.fastapi import GraphQLRouter
 from strawberry.tools import merge_types
 from strawberry.utils.await_maybe import await_maybe
 
-from app.core.config import settings
-from app.core.metrics import (
+from app.modules import registry
+from core.config import settings
+from core.metrics import (
     graphql_query_depth,
     graphql_query_duration_seconds,
     graphql_query_rejected_total,
 )
-from app.modules import registry
 
 # 时间预算耗尽的固定文案：process_result 依此识别并归类为 reason=timeout（前端可据文案提示重试）。
 TIMEOUT_MESSAGE = "query exceeded time budget"

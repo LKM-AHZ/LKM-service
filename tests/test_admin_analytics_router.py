@@ -14,10 +14,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.main import app
 from app.modules.admin.analytics_router import get_analytics_client
 from app.modules.rbac.permissions import Permission
+from core.config import settings
 from tests.fakes import FakeClickHouseClient
 from tests.test_admin_reports import _grant, _mk_admin, _mk_member, _set_admin_cookie
 

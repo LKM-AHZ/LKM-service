@@ -23,8 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.bot_sso as bot_sso
 import auth.router_bot_sso  # noqa: F401  # 确保 ROUTERS 已装好 bot-ticket 端点
-from app.core.config import settings
-from app.core.secrets import reveal
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from auth import jwt_keys
 from auth.bot_sso import (
@@ -36,6 +34,8 @@ from auth.bot_sso import (
     mint_ticket,
 )
 from auth.models import User
+from core.config import settings
+from core.secrets import reveal
 from tests.conftest import DB, Client, auth_user_uid
 
 _INTERNAL_PATH = "/api/v1/auth/internal/bot-ticket"

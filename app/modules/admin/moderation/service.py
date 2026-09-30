@@ -2,9 +2,6 @@
 
 import uuid
 
-from app.core.cache import bump_collection_version
-from app.core.err import BizError
-from app.db.repository import DbSession
 from app.modules.admin.moderation import engine as mod_engine
 from app.modules.admin.moderation.errors import ModerationErr
 from app.modules.admin.moderation.repository import ModerationRuleRepository
@@ -17,6 +14,9 @@ from app.modules.admin.moderation.schemas import (
     RuleTestResult,
     RuleUpdate,
 )
+from core.cache import bump_collection_version
+from core.db.repository import DbSession
+from core.err import BizError
 
 # 合法取值的事实源在 schemas 的 Literal（RULE_ACTIONS/RULE_SCOPES 由其 get_args 派生）：
 # request schema 已在边界拒绝非法值，service 侧仍复校一次，兜住绕过 schema 的直呼（测试/内部）

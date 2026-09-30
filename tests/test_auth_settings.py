@@ -13,12 +13,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
 from auth.deps import CurrentUser
 from auth.errors import AuthErr
 from auth.models import User
 from auth.router_settings import BindEmailVerify, BindPhoneVerify
 from auth.schemas import UnbindRequest
+from core.err import BizError, CommonErr
 
 
 def _FakeCurrentUser(
@@ -382,8 +382,8 @@ class TestUnbind:
         user.email = "a@b.com"
         await auth_db.flush()
 
-        from app.core.err import BizError
         from auth.router_settings import unbind
+        from core.err import BizError
 
         # 先解绑 phone，使仅剩 email
         _unwrap(
@@ -411,8 +411,8 @@ class TestUnbind:
         auth_db.add(TOTP(user_id=user.id, secret="s", enabled=True))
         await auth_db.flush()
 
-        from app.core.err import BizError
         from auth.router_settings import unbind
+        from core.err import BizError
 
         with pytest.raises(BizError) as exc:
             await unbind(
@@ -511,8 +511,8 @@ class TestUnbind:
 
     async def should_reject_invalid_type(self, auth_db: AsyncSession):
         user = await self._reg_with_bindings(auth_db)
-        from app.core.err import BizError
         from auth.router_settings import unbind
+        from core.err import BizError
 
         with pytest.raises(BizError) as exc:
             await unbind(

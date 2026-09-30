@@ -15,10 +15,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-from app.core.cache import cache_get
-from app.core.config import settings
-from app.core.err import BizError
+import core.redis as redis_mod
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.errors import ContentErr
@@ -32,6 +29,9 @@ from app.modules.content.service import (
     get_item,
     get_item_by_slug,
 )
+from core.cache import cache_get
+from core.config import settings
+from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
 

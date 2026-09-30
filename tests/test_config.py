@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.config import Settings
+from core.config import Settings
 
 
 def test_pulsar_url_default_empty() -> None:

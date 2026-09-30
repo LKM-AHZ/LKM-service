@@ -13,13 +13,13 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.user_dim import UserDim
 from auth.models import Profile, User
 from auth.user_dim_sync import (
     reconcile_user_dim_incremental,
     refresh_user_dim,
     sync_dim_for_ids,
 )
+from core.db.user_dim import UserDim
 
 
 async def _mk_user(

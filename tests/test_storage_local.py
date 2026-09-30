@@ -4,9 +4,9 @@ import pathlib
 
 import pytest
 
-from app.core.err import BizError
-from app.modules.storage.errors import StorageErr
-from app.modules.storage.local import LocalStorage
+from core.err import BizError
+from core.storage.errors import StorageErr
+from core.storage.local import LocalStorage
 
 
 @pytest.fixture

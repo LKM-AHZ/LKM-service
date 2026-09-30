@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 
-from app.core.client_ip import UNKNOWN_IP, client_ip
+from core.client_ip import UNKNOWN_IP, client_ip
 
 _app = FastAPI()
 

@@ -28,8 +28,8 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
 import auth.jwt_keys as jk
-from app.core.config import settings
 from app.modules.health import router as health_mod
+from core.config import settings
 
 _AUD = "lkm:web"
 

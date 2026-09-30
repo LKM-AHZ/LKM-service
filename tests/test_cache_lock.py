@@ -10,11 +10,11 @@ from typing import Any
 
 import pytest
 
-import app.core.redis as redis_mod
-from app.core import cache as cache_mod
-from app.core.cache import cached_read
-from app.core.cache_lock import _release, l2_lock
-from app.core.config import settings
+import core.redis as redis_mod
+from core import cache as cache_mod
+from core.cache import cached_read
+from core.cache_lock import _release, l2_lock
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

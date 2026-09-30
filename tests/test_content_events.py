@@ -16,9 +16,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.messaging import RKEY_CONTENT_DELETED, RKEY_CONTENT_PUBLISHED
-from app.db.outbox import OutboxMessage
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.models import QAQuestion
@@ -30,6 +27,9 @@ from app.modules.content.service import (
     publish_blog_item,
 )
 from app.modules.search.tasks import apply_content_event
+from core.config import settings
+from core.db.outbox import OutboxMessage
+from core.messaging import RKEY_CONTENT_DELETED, RKEY_CONTENT_PUBLISHED
 from tests.conftest import AuthUser, auth_user_uid
 
 _BUS = "pulsar://content-events:6650"
@@ -235,9 +235,9 @@ def test_subscription_and_handler_are_wired() -> None:
 
     少了任一环，事件会被静默「未知任务丢弃」（worker 只告警不报错），链路看着通、实际空转。
     """
-    from app.core import task_registry
-    from app.core.messaging import SUB_CONTENT_INDEX, SUBSCRIPTIONS
     from app.modules.content.events import CONTENT_EVENT_FN
+    from core import task_registry
+    from core.messaging import SUB_CONTENT_INDEX, SUBSCRIPTIONS
 
     assert SUBSCRIPTIONS[SUB_CONTENT_INDEX.name] is SUB_CONTENT_INDEX
 

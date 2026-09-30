@@ -19,8 +19,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr
 
-from app.core.config import settings
-from app.core.secrets import reveal
 from auth import jwt_keys
 from auth.admin_session import (
     create_admin_access_token,
@@ -32,6 +30,8 @@ from auth.security import (
     decode_access_token,
     decode_temp_token,
 )
+from core.config import settings
+from core.secrets import reveal
 
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _PRIVATE_PEM = _PRIVATE_KEY.private_bytes(
@@ -295,7 +295,7 @@ async def test_jwks_endpoint_published(
 
 def test_fallback_off_without_any_key_is_rejected() -> None:
     """关掉 HS 回退却没有任何 RSA 公钥 → 两条验签路径都不通，属自相矛盾配置。"""
-    from app.core.config import Settings
+    from core.config import Settings
 
     with pytest.raises(ValueError, match="jwt_hs_fallback=false"):
         Settings(

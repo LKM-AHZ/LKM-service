@@ -1,0 +1,184 @@
+"""Pulsar worker：注册表驱动的订阅消费（M4）。
+
+每个 worker 进程常驻消费一个（或一组）Pulsar 订阅，按 payload.fn 从注册表分发 handler。
+各模块 ``tasks.py`` 经 ``task_registry.register_task`` 把 handler 注册到订阅名下（订阅本身
+定义在 ``core.messaging.SUBSCRIPTIONS``）；**新增任务不再改本文件**。
+
+- 死信：Pulsar DeadLetterPolicy 在消费失败重投超限后投到 ``system/dlq`` topic，
+  由 ``worker_dlq`` 消费落库（见 app/core/worker_dlq.py）。
+- 幂等：``_dispatch_with_dedup`` 复用 ``EventProcessed`` 账本，``scope`` = 订阅名，
+  多订阅消费同一事件各自独立记账（points 扇出）。
+- cron：scheduler 发布 ``cron.*`` 消息到 ``system/cron`` topic，由 jobs 订阅消费。
+"""
+
+import asyncio
+import logging
+from typing import Any
+
+from core import event_contract, messaging, metrics_relay, task_registry
+from core.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
+from core.db.session import new_worker_session as new_session
+from core.logging import log_exceptions
+from core.tracing import setup_tracing
+
+logger = logging.getLogger("lkm.worker")
+
+# ---- 订阅名常量（部署编排与测试引用；与 core.messaging.SUBSCRIPTIONS 对齐）----
+SEND_SUBSCRIPTION = messaging.SUB_SEND.name
+NOTIFY_SUBSCRIPTION = messaging.SUB_NOTIFY.name
+POINTS_REWARD_SUBSCRIPTION = messaging.SUB_POINTS_REWARD.name
+POINTS_STATS_SUBSCRIPTION = messaging.SUB_POINTS_STATS.name
+POINTS_TASKS_SUBSCRIPTION = messaging.SUB_POINTS_TASKS.name
+NOTIFICATION_SUBSCRIPTION = messaging.SUB_NOTIFICATION.name
+USER_INVALIDATE_SUBSCRIPTION = messaging.SUB_USER_INVALIDATE.name
+JOBS_SUBSCRIPTION = messaging.SUB_JOBS.name
+CONTENT_INDEX_SUBSCRIPTION = messaging.SUB_CONTENT_INDEX.name
+AUDIT_SUBSCRIPTION = messaging.SUB_AUDIT.name
+AUDIT_PERMISSION_SUBSCRIPTION = messaging.SUB_AUDIT_PERMISSION.name
+
+# 死信 topic（worker_dlq 消费）
+DLQ = messaging.TOPIC_DLQ
+
+
+async def _dispatch_with_dedup(
+    payload: dict[str, Any],
+    handler: Any,
+    args: list[Any],
+    *,
+    scope: str = DEFAULT_SCOPE,
+) -> None:
+    """带幂等的任务分派（供消费回调复用）。
+
+    - payload 带 event_id（outbox relay 发布透传）→ 开临时会话查 event_processed：
+      已处理 → 返回（外层对其 ack，不二次执行）；未处理 → 跑 handler，成功后记账。
+    - 无 event_id（send/cron 等直发）→ 原语义直跑，不经 DB，零额外开销。
+    - ``scope`` = 订阅名：同一事件被多个订阅消费（points 扇出）时各订阅独立记账，互不误跳过。
+
+    **去重强度是 best-effort，不是「恰好一次」**：查账（SELECT）→ 跑 handler → 记账
+    （INSERT）三步非原子，故两个并发投递可能都判定「未处理」而各跑一遍；handler 跑成功但
+    记账失败/进程被杀时账本无记录，重投也会再跑一遍。之所以不做「先原子占位再跑、失败回滚」
+    的 claim-first：那会把风险从「重复执行」换成「硬崩溃后占位行残留 → 重投被静默跳过 →
+    **事件丢失**」，与本仓 at-least-once + 消费端幂等（各 handler 自身幂等，且有 ref 等
+    次级守约）的取向相反（重投可重、丢事件不可恢复）。
+    """
+    eid = payload.get("event_id")
+    if not isinstance(eid, str) or not eid:
+        await handler(*args)
+        return
+    db = await new_session()
+    try:
+        try:
+            if await already_processed(db, eid, scope=scope):
+                logger.info("幂等跳过已处理 scope=%s event_id=%s", scope, eid)
+                return  # ack，不重复执行 handler
+        except Exception:
+            # 账本查不动：保守当作未记账，继续执行，避免一旦 DB 抖动业务停摆。
+            logger.exception("event_processed 查账失败,继续执行 event_id=%s", eid)
+        await handler(*args)
+        try:
+            await record_processed(db, eid, scope=scope)
+        except Exception:
+            # 记账失败(罕见)：已跑过一次副作用，宁可让 DLQ requeue 重试走幂等查账兜底。
+            logger.exception(
+                "event_processed 记账失败 scope=%s event_id=%s", scope, eid
+            )
+            raise
+    finally:
+        await db.close()
+
+
+async def _consume(subscription_name: str) -> None:
+    """常驻消费一个 Pulsar 订阅，按 payload.fn 从注册表分发 handler。
+
+    成功 → ack；handler 异常/超时 → core.messaging 负确认（重投超限后进死信）。
+    """
+    # worker 进程不是 ASGI app：初始化 provider + httpx，让消费 span（含从消息属性
+    # extract 出的上游 trace 上下文）能真正导出；不配 LKM_OTEL_ENABLED 时是 no-op。
+    setup_tracing(service_suffix="-worker")
+    # 跨进程指标中继（选项③）：本进程不暴露 /metrics，故把业务指标快照写进 Redis 交给 API
+    # 进程代报。放在这里可一处覆盖全部 worker（send/notify/points×3/notification/
+    # content-index/default）；幂等——run_default_worker 的 4 个并发 _consume 只起一个发布 task。
+    metrics_relay.start_publisher()
+
+    handlers = task_registry.handlers_for(subscription_name)
+
+    @log_exceptions
+    async def _on_payload(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
+        # 事件契约校验（consume 侧）：fn 未登记 / 实参个数或类型不符 / 经不允许的 routing_key
+        # 抵达。**ack 丢弃**而非负确认——这是确定性的坏消息，重投只会把同一条再跑一遍
+        # （原先只挡住「args 非数组」与「未知 fn」，漏掉了 args 元素类型与个数）。
+        # routing_key 取自发布时写的 properties，缺失时退化为只校验 fn/args。
+        problems = event_contract.payload_violations(
+            payload, meta.properties.get("routing_key")
+        )
+        if problems:
+            event_contract.record_violation(
+                payload.get("fn"),
+                "consume",
+                problems,
+                where=f"subscription={subscription_name}",
+            )
+            return
+        handler = handlers.get(payload["fn"])
+        if handler is None:
+            logger.warning(
+                "未知任务 %s, 丢弃 subscription=%s", payload["fn"], subscription_name
+            )
+            return  # ack 丢弃
+        await _dispatch_with_dedup(
+            payload, handler, payload.get("args", []), scope=subscription_name
+        )
+
+    await messaging.run_subscription(subscription_name, _on_payload)
+
+
+# ---- worker 入口（各 worker_*.py 调用）----
+
+
+async def run_send_worker() -> None:
+    await _consume(SEND_SUBSCRIPTION)
+
+
+async def run_notify_worker() -> None:
+    await _consume(NOTIFY_SUBSCRIPTION)
+
+
+async def run_points_reward_worker() -> None:
+    await _consume(POINTS_REWARD_SUBSCRIPTION)
+
+
+async def run_points_stats_worker() -> None:
+    await _consume(POINTS_STATS_SUBSCRIPTION)
+
+
+async def run_points_tasks_worker() -> None:
+    await _consume(POINTS_TASKS_SUBSCRIPTION)
+
+
+async def run_notification_worker() -> None:
+    await _consume(NOTIFICATION_SUBSCRIPTION)
+
+
+async def run_content_index_worker() -> None:
+    """content-index worker：消费 content.* 事件，增量同步外部检索索引。"""
+    await _consume(CONTENT_INDEX_SUBSCRIPTION)
+
+
+async def run_points_worker() -> None:
+    """兼容旧入口：points 拆三订阅后默认跑 reward 订阅（生产用三个独立入口）。"""
+    await _consume(POINTS_REWARD_SUBSCRIPTION)
+
+
+async def run_default_worker() -> None:
+    """jobs worker：并行消费 cron、auth 用户事件失效、以及 audit.* 审计订阅。
+
+    audit.* 的消费体只是「记一个指标 + 一条结构化日志」（见 ``auth.tasks.record_audit_event``），
+    不落库、无外部依赖，故与 user-invalidate 同款**折进本 worker**，不为它单开容器；
+    单开会让部署面多一个空转进程，而收益只是隔离——这里没有需要隔离的重活。
+    """
+    await asyncio.gather(
+        _consume(JOBS_SUBSCRIPTION),
+        _consume(USER_INVALIDATE_SUBSCRIPTION),
+        _consume(AUDIT_SUBSCRIPTION),
+        _consume(AUDIT_PERMISSION_SUBSCRIPTION),
+    )

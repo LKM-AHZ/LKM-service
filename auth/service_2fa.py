@@ -4,10 +4,6 @@ import hashlib
 import uuid
 from typing import Any
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.db.repo import consume_once, isolated_update
-from app.db.repository import DbSession
 from auth.errors import AuthErr
 from auth.models import TOTP, RecoveryCode, TempTokenUsage, User
 from auth.repository import (
@@ -29,6 +25,10 @@ from auth.security import (
     verify_totp,
 )
 from auth.service_auth import issue_session_tokens, log_audit
+from core.config import settings
+from core.db.repo import consume_once, isolated_update
+from core.db.repository import DbSession
+from core.err import BizError
 
 _TOTP_MAX_FAILED = 3
 _RECOVERY_MAX_FAILED = 3  # 恢复码暴力尝试上限（对齐 TOTP 的失败锁定）

@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from app.core import redis as redis_core
-from app.core.redis_limiter import RedisRateLimiter
+from core import redis as redis_core
+from core.redis_limiter import RedisRateLimiter
 
 
 @pytest.fixture(autouse=True)

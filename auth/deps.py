@@ -4,7 +4,6 @@ import datetime as _dt
 import logging
 import time as _time
 import uuid
-from typing import Any
 
 from fastapi import Depends, Header
 from jwt import PyJWTError
@@ -13,9 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.config import is_test_env
-from app.core.err import BizError, CommonErr
-from app.db.base import now_iso
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import User
@@ -30,8 +26,10 @@ from auth.service_authz import (
     CAUSE_SESSION_REVOKED,
 )
 from auth.token_revocation import is_jti_blocked, token_version_is_stale
-
-_LEVEL_ORDER = {"local": 0, "normal": 1, "admin": 2}
+from core.config import is_test_env
+from core.db.base import now_iso
+from core.err import BizError, CommonErr
+from core.ports.authz import MFA_TRUST_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -256,27 +254,8 @@ async def get_optional_user(
         return None
 
 
-def RequireLevel(min_level: str) -> Any:
-    """
-    级别（从低到高排列）：``local``, ``normal``, ``admin``。
-    用法::
-        @router.get("/admin-only")
-        async def admin_endpoint(cur: CurrentUser = Depends(RequireLevel("admin"))):
-            ...
-    """
-
-    async def checker(cur: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        required = _LEVEL_ORDER.get(min_level)
-        current = _LEVEL_ORDER.get(cur.account_level, 0)
-        if required is None or current < required:
-            raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
-        return cur
-
-    return Depends(checker)
-
-
-# 前台危险操作 step-up 2FA 的信任窗口：验证通过后 1 小时内不再重复要求（与后台 admin/deps 同值）
-MFA_TRUST_SECONDS = 3600
+# RequireLevel 与 MFA_TRUST_SECONDS 收敛到 core.ports.authz（app 与 auth 同源，
+# 避免两份实现漂移）；其内部经端口回调本模块的 _resolve_current_user，无循环。
 
 
 async def get_current_user_2fa(

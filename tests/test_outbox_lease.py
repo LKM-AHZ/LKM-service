@@ -15,9 +15,9 @@ from typing import Any
 
 import pytest
 
-import app.core.redis as redis_mod
-from app.core import outbox_relay
-from app.core.config import settings
+import core.redis as redis_mod
+from core import outbox_relay
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
 from auth.deps import CurrentUser
 from auth.router_onboarding import (
     get_onboarding,
@@ -21,6 +20,7 @@ from auth.router_onboarding import (
     skip_onboarding,
 )
 from auth.schemas import OnboardingStepRequest
+from core.err import CommonErr
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ class TestPutOnboardingStep:
                 cur=cur,
                 db=db,
             )
-        from app.core.err import BizError
+        from core.err import BizError
 
         assert isinstance(exc.value, BizError)
         assert exc.value.errcode == CommonErr.INVALID_INPUT

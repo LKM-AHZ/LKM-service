@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.core.err import BizError, CommonErr
+from core.err import BizError, CommonErr
 
 
 @dataclass(frozen=True)

@@ -11,10 +11,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.client_ip import client_ip
-from app.core.common import ApiResp, PageData, PaginateDep, PaginateParams
-from app.core.err import respond
-from app.db.session import get_session
 from app.modules.content.articles.service import (
     delete_article_comment as delete_article_comment_svc,
 )
@@ -30,8 +26,12 @@ from app.modules.content.service import (
 )
 from app.modules.content.service import list_items as list_content_items_svc
 from app.modules.rbac.permissions import Permission
-from auth.deps import CurrentUser
-from auth.seams import log_audit
+from core.client_ip import client_ip
+from core.common import ApiResp, PageData, PaginateDep, PaginateParams
+from core.contracts import CurrentUser
+from core.db.session import get_session
+from core.err import respond
+from core.ports.audit import log_audit
 
 from .deps import require_admin, require_admin_2fa
 from .permissions import require_permission

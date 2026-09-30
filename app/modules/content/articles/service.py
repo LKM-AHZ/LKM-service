@@ -2,20 +2,6 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from app.core.cache import (
-    TTL_ITEM_S,
-    TTL_LIST_S,
-    bump_collection_version,
-    cache_invalidate,
-    cached_read,
-    collection_version,
-    make_key,
-)
-from app.core.common import PageData, paginate_pages
-from app.core.err import BizError, CommonErr
-from app.db.base import now_iso
-from app.db.repo import get_or_raise
-from app.db.repository import DbSession
 from app.modules.content.articles.errors import ArticleErr
 from app.modules.content.articles.models import (
     Article,
@@ -42,11 +28,22 @@ from app.modules.content.articles.schemas import (
     CategoryOut,
 )
 from app.modules.points.rules import enqueue_points_event
-from auth.schemas import ProfileInfo
-from auth.snapshot import (
-    get_user_snapshot_batch,
-    profile_info_from_snap,
+from core.cache import (
+    TTL_ITEM_S,
+    TTL_LIST_S,
+    bump_collection_version,
+    cache_invalidate,
+    cached_read,
+    collection_version,
+    make_key,
 )
+from core.common import PageData, paginate_pages
+from core.contracts import ProfileInfo, profile_info_from_snap
+from core.db.base import now_iso
+from core.db.repo import get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError, CommonErr
+from core.ports.snapshot import get_user_snapshot_batch
 
 # 默认阅读速度：中文约 300 字/分钟
 READING_SPEED_CPS = 300

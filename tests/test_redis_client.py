@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-import app.core.redis as redis_mod
-from app.core.config import settings
+import core.redis as redis_mod
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)

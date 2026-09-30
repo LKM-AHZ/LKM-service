@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.models import (
     Board,
     ContentComment,
@@ -35,6 +34,7 @@ from app.modules.notification.service import (
     set_preferences,
     unread_count,
 )
+from core.err import BizError
 from tests.conftest import auth_user_uid
 
 # 聚合目标 id（Notification.target_id 为 uuid 列）；同一测试内多次复用同一值。

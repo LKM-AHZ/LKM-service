@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from app.core.config import settings
-from app.flows import analytics_body
+from core.flows import analytics_body
 from auth import tasks as auth_tasks
+from core.config import settings
 
 
 @pytest.fixture

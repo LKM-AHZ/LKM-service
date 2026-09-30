@@ -22,7 +22,7 @@ from typing import Any
 
 from prefect import flow, task
 
-from app.core.config import settings
+from core.config import settings
 
 logger = logging.getLogger("lkm.flows.analytics")
 
@@ -50,7 +50,7 @@ def _flow_span(traceparent: str) -> Any:
     # docstring 承诺 fail-open：埋点问题绝不能阻断导出。tracing 依赖初始化失败、
     # traceparent 非法导致 span 创建抛错时，降级为无 span 继续跑
     try:
-        from app.core.tracing import extract_context, tracer
+        from core.tracing import extract_context, tracer
 
         ctx = extract_context({"traceparent": traceparent}) if traceparent else None
         return tracer("lkm.flows").start_as_current_span(
@@ -150,7 +150,7 @@ async def _run_cli(window: int, traceparent: str) -> dict[str, Any]:
     flow 在常驻 prefect-worker 进程内复用单例连接（不关），但 CLI 是一次性进程——
     不显式关闭会遗留 aiohttp connector（退出时报 Unclosed connector）。
     """
-    from app.core import clickhouse
+    from core import clickhouse
 
     try:
         return await analytics_export_flow(window=window, traceparent=traceparent)

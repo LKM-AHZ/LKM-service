@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from auth.errors import AuthErr
 from auth.models import EmailVerification, PhoneVerification
 from auth.service_verify import (
@@ -20,6 +19,7 @@ from auth.service_verify import (
     generate_code,
     hash_code,
 )
+from core.err import BizError
 
 
 @pytest.fixture
@@ -229,7 +229,7 @@ class TestCheckCodeRateLimit:
 
     async def should_pass_when_redis_unconfigured(self) -> None:
         """LKM_REDIS_URL 为空 → 放行，不抛异常（无分布式限流依赖可失败）。"""
-        from app.core.config import settings
+        from core.config import settings
 
         original_url = settings.redis_url
         settings.redis_url = ""
@@ -246,8 +246,8 @@ class TestCheckCodeRateLimit:
 
         Redis 抖动瞬间 fail-open 等于放开暴力破解面，这里宁可拒绝。
         """
-        from app.core import redis as redis_core
-        from app.core.config import settings
+        from core import redis as redis_core
+        from core.config import settings
 
         original = redis_core.get_redis
 

@@ -17,7 +17,6 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
 from app.modules.admin.models import RolePermission
 from app.modules.content.articles.errors import ArticleErr
 from app.modules.content.articles.models import Article
@@ -39,6 +38,7 @@ from app.modules.content.articles.service import (
     update_article_ex,
     update_category_ex,
 )
+from core.err import BizError, CommonErr
 from tests.conftest import AuthUser, auth_user_uid
 
 # 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。

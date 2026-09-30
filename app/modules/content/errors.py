@@ -1,4 +1,4 @@
-from app.core.err import NS_CONTENT, ErrCode, register, register_unique_constraint
+from core.err import NS_CONTENT, ErrCode, register, register_unique_constraint
 
 
 class ContentErr(ErrCode):

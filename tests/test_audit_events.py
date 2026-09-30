@@ -24,23 +24,23 @@ from prometheus_client import REGISTRY
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.messaging import (
-    RKEY_AUDIT_LOGIN_FAIL,
-    RKEY_AUDIT_PERMISSION_CHANGE,
-    SUBSCRIPTIONS,
-    TOPIC_AUDIT_LOGIN_FAIL,
-    TOPIC_AUDIT_PERMISSION_CHANGE,
-)
-from app.core.task_registry import handlers_for, import_task_modules
-from app.db.outbox import OutboxMessage
 from auth.models import Profile, User
 from auth.schemas import UserLoginPassword
 from auth.security import hashpwd
 from auth.service_auth import login_password
 from auth.service_authz import grant_incubation
 from auth.tasks import record_audit_event
+from core.config import settings
+from core.db.outbox import OutboxMessage
+from core.err import BizError
+from core.messaging import (
+    RKEY_AUDIT_LOGIN_FAIL,
+    RKEY_AUDIT_PERMISSION_CHANGE,
+    SUBSCRIPTIONS,
+    TOPIC_AUDIT_LOGIN_FAIL,
+    TOPIC_AUDIT_PERMISSION_CHANGE,
+)
+from core.task_registry import handlers_for, import_task_modules
 
 
 @pytest.fixture

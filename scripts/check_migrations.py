@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 进程内解析迁移链（_revisions）跑在调用者的 cwd 下，而 alembic 的 prepend_sys_path = .
-# 是相对 cwd 解析的、版本模块里又有 `import app.db.base` 这类仓库内导入——从别处调用
+# 是相对 cwd 解析的、版本模块里又有 `import core.db.base` 这类仓库内导入——从别处调用
 # `python <repo>/scripts/check_migrations.py` 会直接 ImportError。子进程那条路（_run）
 # 显式钉了 cwd=REPO_ROOT，这里补上等价的 sys.path 入口，让两条路都不依赖调用者 cwd。
 if str(REPO_ROOT) not in sys.path:

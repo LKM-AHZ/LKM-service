@@ -18,7 +18,7 @@ import pytest
 import strawberry
 from prometheus_client import REGISTRY
 
-from app.core.config import settings
+from core.config import settings
 from tests.conftest import Client
 
 # 前端真实查询（LKM-official-website/src/lib/api/modules/content.graphql.ts 的 CONTENT_ITEMS

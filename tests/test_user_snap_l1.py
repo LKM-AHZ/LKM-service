@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
-import app.core.local_cache as local_cache
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-import app.core.user_cache_events as uce
-from app.core.config import settings
+import core.local_cache as local_cache
+import core.redis as redis_mod
+import core.user_cache as uc
+import core.user_cache_events as uce
+from core.config import settings
 
 _SNAP = {
     "user_id": 7,

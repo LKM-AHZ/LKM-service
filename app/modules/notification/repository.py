@@ -11,12 +11,12 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from app.db.repository import AsyncRepository
 from app.modules.notification.models import (
     Notification,
     NotificationPreference,
     NotificationToken,
 )
+from core.db.repository import AsyncRepository
 
 
 class NotificationRepository(AsyncRepository[Notification]):

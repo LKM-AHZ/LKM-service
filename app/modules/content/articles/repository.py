@@ -1,6 +1,6 @@
 """articles 域的仓储子类：把 SQLAlchemy 表达式收在 service 层之外。
 
-基类 :class:`app.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
+基类 :class:`core.db.repository.AsyncRepository` 供通用 CRUD；本文件只放
 **articles 域的领域查询**（多表 join、聚合、FTS/ILIKE 组合检索、原子计数回填、
 标签 upsert 关联），非 articles 用的查询不往这里加。
 """
@@ -14,8 +14,6 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.core.common import tag_names_sequence
-from app.db.repository import AsyncRepository
 from app.modules.content.articles.models import (
     Article,
     ArticleCategory,
@@ -24,6 +22,8 @@ from app.modules.content.articles.models import (
     ArticleTag,
     Tag,
 )
+from core.common import tag_names_sequence
+from core.db.repository import AsyncRepository
 
 # bump_count 允许改写的计数列（对应 Article 的四个 Integer 计数列）
 CounterColumn = Literal["views", "likes", "comments", "bookmarks"]

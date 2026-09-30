@@ -32,13 +32,13 @@ import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import counters
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.metrics import counts_reconcile_repeated_total
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentComment, ContentItem, ContentLike
 from app.modules.interaction.models import InteractionFavorite
+from core import counters
+from core.config import settings
+from core.err import BizError
+from core.metrics import counts_reconcile_repeated_total
 
 logger = logging.getLogger(__name__)
 

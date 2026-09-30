@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-import app.core.redis as redis_mod
-from app.core.cache import (
+import core.redis as redis_mod
+from core.cache import (
     bump_collection_version,
     cache_get,
     cache_invalidate,
@@ -15,7 +15,7 @@ from app.core.cache import (
     collection_version,
     make_key,
 )
-from app.core.config import settings
+from core.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +53,7 @@ def test_make_key() -> None:
 
 def test_make_key_honors_env(monkeypatch) -> None:
     """env 变化 → key 命名空间变化，producion 不污染 dev 缓存。"""
-    from app.core.config import settings
+    from core.config import settings
 
     monkeypatch.setattr(settings, "env", "production")
     assert make_key("columns:list", 1) == "lkm:production:columns:list:1"

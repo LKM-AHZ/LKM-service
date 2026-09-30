@@ -10,12 +10,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.event_failure import EventFailure
-from app.db.event_failure_export import CH_TABLE as FAILURES_TABLE
-from app.db.event_failure_export import export_event_failures
 from auth.audit_export import CH_TABLE as AUDITS_TABLE
 from auth.audit_export import export_audit_logs
 from auth.models import AuditLog
+from core.db.event_failure import EventFailure
+from core.db.event_failure_export import CH_TABLE as FAILURES_TABLE
+from core.db.event_failure_export import export_event_failures
 from tests.fakes import FakeClickHouseClient
 
 

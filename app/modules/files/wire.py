@@ -11,8 +11,8 @@ import uuid
 
 import msgspec
 
-from app.core.common import PageData
 from app.modules.files.schemas import FileInfo
+from core.common import PageData
 
 
 class FileInfoWire(msgspec.Struct):

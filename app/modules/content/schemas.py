@@ -4,7 +4,7 @@ from typing import ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.common import parse_tags
+from core.common import parse_tags
 
 
 class ContentItemInfo(BaseModel):

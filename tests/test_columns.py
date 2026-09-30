@@ -16,7 +16,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, CommonErr
 from app.modules.content.column_models import ColumnApplicationStatus
 from app.modules.content.columns.errors import ColumnErr
 from app.modules.content.columns.schemas import (
@@ -39,6 +38,7 @@ from app.modules.content.columns.service import (
 )
 from auth.errors import AuthErr
 from auth.security import create_access_token
+from core.err import BizError, CommonErr
 from tests.conftest import AuthUser, auth_user_uid
 
 # db 与 client fixture 均由 tests/conftest.py 提供（business realm schema + httpx.AsyncClient）

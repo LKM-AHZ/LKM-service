@@ -18,8 +18,6 @@ import uuid
 
 from sqlalchemy import select
 
-from app.db.base import now_iso
-from app.db.repository import DbSession
 from auth import events, user_http
 from auth.models import User
 from auth.repository import (
@@ -27,6 +25,8 @@ from auth.repository import (
     RevokedAccessTokenRepository,
     UserRepository,
 )
+from core.db.base import now_iso
+from core.db.repository import DbSession
 
 # account_level / Profile.role 的“单向提升”单调序。auth 是身份词表 owner，故把 exam/service、
 # projects/service 各自硬编码的 rank 语义集中到这里（Phase 4 由 auth 侧以此裁决是否真升）。

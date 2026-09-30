@@ -1,6 +1,6 @@
 """模块8 配置沉淀：settings 成为限流/会话时长唯一来源（含默认值与覆盖）。"""
 
-from app.core.config import Settings, settings
+from core.config import Settings, settings
 
 
 def test_security_and_cookie_settings_have_sane_defaults() -> None:

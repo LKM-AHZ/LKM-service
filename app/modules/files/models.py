@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
+from core.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
 
 class FileStatus(StrEnum):

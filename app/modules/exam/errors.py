@@ -1,4 +1,4 @@
-from app.core.err import NS_EXAM, ErrCode, register
+from core.err import NS_EXAM, ErrCode, register
 
 
 class ExamErr(ErrCode):

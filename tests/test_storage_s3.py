@@ -5,9 +5,9 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from app.core.err import BizError
-from app.modules.storage.errors import StorageErr
-from app.modules.storage.s3 import S3Storage
+from core.err import BizError
+from core.storage.errors import StorageErr
+from core.storage.s3 import S3Storage
 
 
 @pytest.fixture
@@ -181,7 +181,7 @@ def test_addressing_style_rejects_unknown_value() -> None:
     """非法寻址风格在配置层即拒（否则会一路以 boto3 默认 auto 静默跑）。"""
     from pydantic import ValidationError
 
-    from app.core.config import Settings
+    from core.config import Settings
 
     with pytest.raises(ValidationError):
         Settings(storage_backend="s3", s3_addressing_style="bogus")

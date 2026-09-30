@@ -19,9 +19,9 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import CommonErr
 from auth.errors import AuthErr
 from auth.security import create_access_token, hashpwd
+from core.err import CommonErr
 
 # 版本化 key：avatars/{uid}/v{ms}-{rand8}.webp。随机段是**有意**的（只靠毫秒的话，
 # 同毫秒两次上传会算出同一个 key、就地覆盖对象，而 immutable + max-age=31536000 的
@@ -34,8 +34,8 @@ async def avatar_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> pathlib.Path:
     """把 local 存储后端 root 指向每测独立 tmp_path，兼清 storage factory 解析缓存。"""
-    from app.core.config import settings
-    from app.modules.storage.factory import get_storage
+    from core.config import settings
+    from core.storage.factory import get_storage
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     get_storage.cache_clear()

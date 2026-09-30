@@ -12,12 +12,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import worker_dlq
-from app.core.common import ApiResp, ListData
-from app.core.err import BizError, CommonErr, respond
-from app.db.session import get_session
 from app.modules.admin.deps import require_admin
-from app.modules.admin.models import DlqMessage
+from core import worker_dlq
+from core.common import ApiResp, ListData
+from core.db.dlq import DlqMessage
+from core.db.session import get_session
+from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/admin/dlq", tags=["admin-dlq"])
 

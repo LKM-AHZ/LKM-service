@@ -14,8 +14,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from app.core.err import BizError
-from app.db.base import Base
 from app.modules.points.errors import PointsErr
 from app.modules.points.service import (
     get_balance,
@@ -25,6 +23,8 @@ from app.modules.points.service import (
     spend,
     transfer,
 )
+from core.db.base import Base
+from core.err import BizError
 from tests.conftest import auth_user_uid
 
 
@@ -152,7 +152,7 @@ class TestConcurrency:
         from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy.pool import NullPool
 
-        from app.core.config import settings
+        from core.config import settings
 
         url = settings.database_url
         # schema 名含 pid：xdist 并行时各 worker 不撞名

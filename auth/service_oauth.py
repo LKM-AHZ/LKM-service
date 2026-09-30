@@ -10,10 +10,6 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.err import BizError
-from app.db.base import expires_at, now_iso
-from app.db.repo import consume_once, get_or_raise
-from app.db.repository import DbSession
 from auth.errors import AuthErr
 from auth.models import OAuthState, User
 from auth.providers.github import GithubOAuth
@@ -32,6 +28,10 @@ from auth.service_auth import (
     log_audit,
     upgrade_to_normal,
 )
+from core.db.base import expires_at, now_iso
+from core.db.repo import consume_once, get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError
 
 
 async def generate_oauth_state(

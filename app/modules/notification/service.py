@@ -16,9 +16,6 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from app.core.common import PageData, paginate_offset, paginate_pages
-from app.core.err import BizError
-from app.db.repository import DbSession
 from app.modules.notification.errors import NotificationErr
 from app.modules.notification.models import (
     Notification,
@@ -35,6 +32,9 @@ from app.modules.notification.schemas import (
     PreferenceOut,
     TokenOut,
 )
+from core.common import PageData, paginate_offset, paginate_pages
+from core.db.repository import DbSession
+from core.err import BizError
 
 
 class NotificationType(StrEnum):

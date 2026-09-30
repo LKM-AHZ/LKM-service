@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 from prometheus_client import REGISTRY
 
-from app.core import metrics_relay
-from app.core.config import settings
+from core import metrics_relay
+from core.config import settings
 
 
 class _FakeRedis:
@@ -74,8 +74,8 @@ def _payload(*entries: tuple[str, list[str], float]) -> str:
 
 
 def test_relayed_specs_reference_real_metric_objects() -> None:
-    """清单里的 metric 必须就是 app.core.metrics 的同名单例（改名会在装配期之外静默丢数）。"""
-    from app.core import metrics as metrics_mod
+    """清单里的 metric 必须就是 core.metrics 的同名单例（改名会在装配期之外静默丢数）。"""
+    from core import metrics as metrics_mod
 
     for spec in metrics_relay.RELAYED:
         assert getattr(metrics_mod, spec.name) is spec.metric, spec.name
@@ -117,7 +117,7 @@ def test_outbox_metrics_are_on_the_relay_list() -> None:
 
 
 def test_snapshot_reports_current_values_with_labels() -> None:
-    from app.core.metrics import outbox_leader_total, outbox_pending_count
+    from core.metrics import outbox_leader_total, outbox_pending_count
 
     outbox_leader_total.labels("acquired").inc(2)
     outbox_pending_count.set(42)
@@ -129,7 +129,7 @@ def test_snapshot_reports_current_values_with_labels() -> None:
 
 
 async def test_publish_snapshot_writes_key_with_ttl() -> None:
-    from app.core.metrics import outbox_pending_count
+    from core.metrics import outbox_pending_count
 
     outbox_pending_count.set(9)
     redis = _FakeRedis()
@@ -147,7 +147,7 @@ async def test_publish_snapshot_fail_open_without_redis(
     async def _none(*_a, **_k) -> None:
         return None
 
-    monkeypatch.setattr("app.core.redis.get_redis", _none)
+    monkeypatch.setattr("core.redis.get_redis", _none)
     assert await metrics_relay.publish_snapshot() is False
 
 
@@ -236,7 +236,7 @@ async def test_collect_once_rebaselines_on_remote_reset() -> None:
 
 
 async def test_collect_once_takes_max_for_gauges() -> None:
-    from app.core.metrics import outbox_pending_count
+    from core.metrics import outbox_pending_count
 
     redis = _FakeRedis(
         {
@@ -253,7 +253,7 @@ async def test_collect_once_takes_max_for_gauges() -> None:
 
 async def test_collect_once_keeps_last_gauge_when_no_source() -> None:
     """来源消失时保留上次值并把 up 置 0——写 0 会假装「积压已清零」。"""
-    from app.core.metrics import outbox_pending_count
+    from core.metrics import outbox_pending_count
 
     redis = _FakeRedis(
         {metrics_relay.relay_key("a"): _payload(("outbox_pending_count", [], 7))}
@@ -278,7 +278,7 @@ async def test_collect_once_fail_open_without_redis(
     async def _none(*_a, **_k) -> None:
         return None
 
-    monkeypatch.setattr("app.core.redis.get_redis", _none)
+    monkeypatch.setattr("core.redis.get_redis", _none)
     await metrics_relay.collect_once()  # 不抛
     assert _sample("metrics_relay_up") == 0
 

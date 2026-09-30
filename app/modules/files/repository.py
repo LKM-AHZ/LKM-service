@@ -14,8 +14,8 @@ import uuid
 
 from sqlalchemy import select
 
-from app.db.repository import AsyncRepository
 from app.modules.files.models import FileStatus, LibraryFile, UploadSession
+from core.db.repository import AsyncRepository
 
 
 class UploadSessionRepository(AsyncRepository[UploadSession]):

@@ -29,13 +29,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-import app.core.redis as redis_mod
-from app.core.config import settings
-from app.db.outbox import OutboxMessage
+import core.redis as redis_mod
 from auth.models import Profile, User
 from auth.security import hashpwd
 from auth.service_auth import upgrade_to_normal
 from auth.service_authz import grant_incubation
+from core.config import settings
+from core.db.outbox import OutboxMessage
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +55,7 @@ async def _bus_on(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
 def _events_use_business_db(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """把 ``auth.events`` 的自建会话指向**业务库**测试会话所在的 engine。
 
-    生产里 ``app.db.session.new_session()`` 本就解析到业务库；测试里必须显式指向本测的
+    生产里 ``core.db.session.new_session()`` 本就解析到业务库；测试里必须显式指向本测的
     业务库 schema，否则会连到默认库、断言看不到行。
     """
     maker = async_sessionmaker(db.bind, expire_on_commit=False)

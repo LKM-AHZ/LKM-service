@@ -11,13 +11,12 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.err import BizError, CommonErr
-from app.db.session import get_read_session, new_session
 from app.modules.content.blog import backfill, git_svc
 from app.modules.content.blog.models import BlogSeries
-from auth.entities import User
-from auth.seams import seam_enabled, verify_password_via_seam, verifypwd
+from core.config import settings
+from core.db.session import get_read_session, new_session
+from core.err import BizError, CommonErr
+from core.ports.users import verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -102,33 +101,21 @@ async def _authenticate_credentials(
 ) -> tuple[uuid.UUID, str] | None:
     """校验一组 Basic 凭证，通过则返回 ``(user_id, username)``，否则 None。
 
-    **拆库形态（seam 开启）**：身份真值唯在 auth 库，凭证直读必须经 ``auth.seams`` 的
-    verify-password 缝打到 auth 进程。缝不可用/畸形时**按未认证收场（fail-closed）**，
-    绝不回落地业务库——拆库后那里没有 users 表，直查必 ``UndefinedTable``。
-    **融合形态（seam 关闭）**：就地查本库 User 行（单库/测试部署下合法）。
+    拆库/融合两条形态都由 ``core.ports.users.verify_password`` 决定（auth 是 users 表唯一
+    owner，业务侧不该知道自己有没有该表）：拆库走 auth 内部验密端点，融合形态由 auth 侧用
+    传入的 ``db`` 就地查 User 行。缝不可用/畸形时**按未认证收场（fail-closed）**——
+    拿不到真值就绝不放行。
     """
-    if seam_enabled():
-        try:
-            verified = await verify_password_via_seam(username, password)
-        except BizError as exc:
-            # 缝拿不到真值 = 无法证明身份，按未认证收场。日志保留根因（配置漏配 / auth 不可达
-            # 与「口令错」在此可区分），但不向外暴露。
-            logger.warning("git Basic Auth 凭证缝不可用，按未认证收场: %s", exc)
-            return None
-        if verified is None:
-            return None
-        return uuid.UUID(str(verified["user_id"])), str(verified["username"])
-
-    user = (
-        (await db.execute(select(User).where(User.username == username)))
-        .scalars()
-        .first()
-    )
-    if user is None or not user.hashed_password:
+    try:
+        verified = await verify_password(db, username, password)
+    except BizError as exc:
+        # 缝拿不到真值 = 无法证明身份，按未认证收场。日志保留根因（配置漏配 / auth 不可达
+        # 与「口令错」在此可区分），但不向外暴露。
+        logger.warning("git Basic Auth 凭证缝不可用，按未认证收场: %s", exc)
         return None
-    if not await verifypwd(password, str(user.hashed_password)):
+    if verified is None:
         return None
-    return user.id, user.username
+    return uuid.UUID(str(verified["user_id"])), str(verified["username"])
 
 
 async def _require_owner_for_push(

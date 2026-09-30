@@ -1,6 +1,6 @@
 """自动审校规则错误码。"""
 
-from app.core.err import NS_MODERATION, ErrCode, register
+from core.err import NS_MODERATION, ErrCode, register
 
 
 class ModerationErr(ErrCode):

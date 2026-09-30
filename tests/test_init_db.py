@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-import app.core.redis as redis_mod
-from app.core.config import settings
-from app.db import init_db as init_db_mod
+import core.redis as redis_mod
 from auth.db import init as auth_init_mod
+from core.config import settings
+from core.db import init_db as init_db_mod
 
 
 @pytest.fixture(autouse=True)
@@ -110,10 +110,10 @@ async def test_invokes_rbac_seed(monkeypatch) -> None:
     )
     from sqlalchemy.pool import StaticPool
 
-    import app.db.session as db_session
-    from app.db.base import Base
+    import core.db.session as db_session
     from app.modules.admin.models import RolePermission
     from app.modules.rbac.permissions import DEFAULT_GRANTS
+    from core.db.base import Base
 
     # 建一个隔离 PG schema（业务库），StaticPool 单连接 + SET search_path → 该连接所有
     # 会话（含 seed 落库）都落此 schema，避免误写开发库；测毕 drop。模式与 conftest 一致。
@@ -134,7 +134,7 @@ async def test_invokes_rbac_seed(monkeypatch) -> None:
         return SessionLocal()
 
     # 后台路径（seed/建表）现走 worker 独立池的 new_worker_session；init_db 内部是
-    # **函数内** import，运行时从 app.db.session 取属性，故 patch 该名字即可生效。
+    # **函数内** import，运行时从 core.db.session 取属性，故 patch 该名字即可生效。
     monkeypatch.setattr(db_session, "new_worker_session", _fake_new_session)
 
     async def _noop_create_all() -> None:
@@ -258,9 +258,9 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
 
 async def test_auth_metadata_disjoint_from_business_base() -> None:
     """拆库不变量：auth 表（users/profiles…）只挂 AuthBase，不进业务 Base.metadata。"""
-    from app.db.base import Base
-    from app.db.model_registry import ensure_all_models
     from auth.db.base import auth_metadata
+    from core.db.base import Base
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     assert set(auth_metadata.tables).isdisjoint(Base.metadata.tables)
@@ -290,9 +290,9 @@ async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
 
-    from app.db.base import Base
-    from app.db.init_db import _sync_additive_schema
-    from app.db.model_registry import ensure_all_models
+    from core.db.base import Base
+    from core.db.init_db import _sync_additive_schema
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     schema = f"s_additive_{os.getpid()}"
@@ -341,9 +341,9 @@ async def test_additive_schema_sync_skips_not_null_without_default() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
 
-    from app.db.base import Base
-    from app.db.init_db import _sync_additive_schema
-    from app.db.model_registry import ensure_all_models
+    from core.db.base import Base
+    from core.db.init_db import _sync_additive_schema
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     schema = f"s_additive2_{os.getpid()}"
@@ -382,9 +382,9 @@ def test_hypertable_unique_indexes_include_partition_column() -> None:
     """
     import sqlalchemy as sa
 
-    from app.db.base import Base
-    from app.db.init_db import _HYPERTABLE_SPECS
-    from app.db.model_registry import ensure_all_models
+    from core.db.base import Base
+    from core.db.init_db import _HYPERTABLE_SPECS
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     assert _HYPERTABLE_SPECS, "hypertable 清单为空"
@@ -414,9 +414,9 @@ async def test_timescale_assembly_is_optional_and_non_fatal() -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy.pool import StaticPool
 
-    from app.db.base import Base
-    from app.db.init_db import _ensure_hypertables, _ensure_timescaledb
-    from app.db.model_registry import ensure_all_models
+    from core.db.base import Base
+    from core.db.init_db import _ensure_hypertables, _ensure_timescaledb
+    from core.db.model_registry import ensure_all_models
 
     ensure_all_models()
     schema = f"s_timescale_{os.getpid()}"
@@ -449,8 +449,8 @@ def test_scan_window_aligns_with_retention_policy() -> None:
     窗口**小于**保留期 → 窗口内被漏掉的行不会立刻被删，等于静默少投事件。故二者必须
     对齐，改一个必须改另一个（此断言即那条耦合的可执行文档）。
     """
-    from app.core.config import settings
-    from app.db.init_db import _RETENTION_POLICIES
+    from core.config import settings
+    from core.db.init_db import _RETENTION_POLICIES
 
     assert _RETENTION_POLICIES == (("outbox_events", "30 days"),)
     assert settings.outbox_scan_window_s == 30 * 86400

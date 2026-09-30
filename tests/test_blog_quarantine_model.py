@@ -6,7 +6,7 @@ from app.modules.content.blog.models import BlogRepoQuarantine
 
 @pytest.mark.asyncio
 async def test_blog_repo_quarantine_table_exists():
-    from app.db.base import Base
+    from core.db.base import Base
 
     table = Base.metadata.tables.get("blog_repo_quarantine")
     assert table is not None

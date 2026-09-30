@@ -12,7 +12,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError
 from app.modules.content.models import QAQuestion
 from app.modules.content.qa.errors import QaErr
 from app.modules.content.qa.schemas import AnswerCreate, QuestionCreate
@@ -25,6 +24,7 @@ from app.modules.content.qa.service import (
     list_questions,
 )
 from app.modules.points.service import get_balance, reward
+from core.err import BizError
 from tests.conftest import auth_user_uid
 
 

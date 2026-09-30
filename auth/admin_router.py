@@ -6,7 +6,7 @@ admin 会话真值收进 auth 域后，本 router 承载后台 4 个**写面**�
 
 纯新增、不改单体现成文件（admin domain 的 auth_router.py 仍留着直至 Step1 才摘）。
 
-*owner-leaf 合规*：本模块**只 import auth 域内部 + app.core + app.db.base/err/session**，
+*owner-leaf 合规*：本模块**只 import auth 域内部 + core + core.db.base/err/session**，
 绝不 import 业务域（admin/rbac/board...）。签名/校验所用后台 cookie 基元（COOKIE_NAME、
 COOKIE_PATH、_ADMIN_AUD、create_admin_access_token 等）取自
 ``auth.admin_session``（auth 域单一事实源），不复制第二份。
@@ -29,11 +29,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.client_ip import client_ip
-from app.core.config import settings
-from app.core.err import BizError, CommonErr, resp_json
-from app.db.base import now_iso
-from app.db.repo import consume_once, get_or_raise
 from auth import jwt_keys
 from auth.admin_session import (
     _ADMIN_AUD,
@@ -53,6 +48,11 @@ from auth.service_2fa import verify_user_totp
 from auth.service_auth import generate_refresh_token, hash_refresh_token
 from auth.service_verify import check_code_rate_limit
 from auth.token_revocation import block_payload_jti, is_jti_blocked
+from core.client_ip import client_ip
+from core.config import settings
+from core.db.base import now_iso
+from core.db.repo import consume_once, get_or_raise
+from core.err import BizError, CommonErr, resp_json
 
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
 

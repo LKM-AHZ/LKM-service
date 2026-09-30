@@ -13,7 +13,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.err import BizError, err_info
 from app.modules.content.blog import backfill
 from app.modules.content.blog.git_http import (
     _decode_basic_auth,
@@ -27,6 +26,7 @@ from auth.models import User
 from auth.seams import seam_enabled
 from auth.security import hashpwd
 from auth.user_http import UserHttpUnavailable
+from core.err import BizError, err_info
 
 
 @pytest.fixture
@@ -95,8 +95,8 @@ class TestGitHttpDbErrorPropagates:
         """Basic Auth 的 DB 查询失败应正常传播，而非被 except Exception 吞成匿名读。"""
         import os
 
-        from app.core.config import settings
         from app.modules.content.blog.git_http import git_http_backend
+        from core.config import settings
 
         repo_dir = str(tmp_path / "blog_repos")
         monkeypatch.setattr(settings, "blog_repo_dir", repo_dir)
@@ -137,8 +137,8 @@ class TestGitHttpStreamsBody:
         """请求体应经 request.stream() 流式喂入，而非 request.body() 全量缓冲。"""
         import os
 
-        from app.core.config import settings
         from app.modules.content.blog.git_http import git_http_backend
+        from core.config import settings
 
         repo_dir = str(tmp_path / "blog_repos")
         monkeypatch.setattr(settings, "blog_repo_dir", repo_dir)

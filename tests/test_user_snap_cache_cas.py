@@ -22,13 +22,13 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.redis as redis_mod
-import app.core.user_cache as uc
-from app.core.cache import make_key
-from app.core.config import settings
+import core.redis as redis_mod
+import core.user_cache as uc
 from auth.models import Profile, User
 from auth.security import hashpwd
 from auth.snapshot import get_user_snapshot
+from core.cache import make_key
+from core.config import settings
 from tests.conftest import DB
 
 
@@ -141,7 +141,7 @@ class TestReadPopulateAndKeyShape:
         # 经 write_if_newer 得到的快照键带 TTL
         e = await uc.current_epoch(uid)
         await uc.write_if_newer(uid, {"x": 1}, 1, e)
-        import app.core.user_cache as _uc
+        import core.user_cache as _uc
 
         raw = await fake.get(_uc._snap_key(uid))
         assert raw is not None

@@ -23,8 +23,6 @@ from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.db.base import now_iso
-from app.db.repository import AsyncRepository, DbSession
 from app.modules.content.models import Board, ContentItem
 from app.modules.interaction.models import (
     BoardFollow,
@@ -32,6 +30,8 @@ from app.modules.interaction.models import (
     InteractionViewLog,
     UserFollow,
 )
+from core.db.base import now_iso
+from core.db.repository import AsyncRepository, DbSession
 
 
 class InteractionContentItemRepository(AsyncRepository[ContentItem]):

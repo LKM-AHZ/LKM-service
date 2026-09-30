@@ -6,19 +6,19 @@ from typing import Protocol
 
 from fastapi.responses import StreamingResponse
 
-from app.core.config import settings
-from app.core.err import BizError
-from app.core.secrets import reveal
-from app.db.repo import get_or_raise
-from app.db.repository import DbSession
-from app.modules.storage.base import StorageBackend
-from app.modules.storage.errors import StorageErr
-from app.modules.storage.factory import get_storage
 from auth import events
 from auth.errors import AuthErr
 from auth.models import Profile, User
 from auth.repository import ProfileRepository
 from auth.schemas import ProfileInfo, ProfileUpdate
+from core.config import settings
+from core.db.repo import get_or_raise
+from core.db.repository import DbSession
+from core.err import BizError
+from core.secrets import reveal
+from core.storage.base import StorageBackend
+from core.storage.errors import StorageErr
+from core.storage.factory import get_storage
 
 
 async def get_profile(db: DbSession, user_id: uuid.UUID) -> ProfileInfo:

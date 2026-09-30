@@ -7,10 +7,10 @@
 import uuid
 from typing import Any
 
-from app.db.repository import DbSession
 from auth.models import OnboardingProgress
 from auth.repository import OnboardingProgressRepository
 from auth.schemas import OnboardingState
+from core.db.repository import DbSession
 
 #: 向导最后一步（跳过时要把 step 置到这里）。事实源应与 router_onboarding.ONBOARDING_STEPS
 #: 一致——服务层不能 import router（router 已 import 本模块，会成环），故常量先落在本模块，

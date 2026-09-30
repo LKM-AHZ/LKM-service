@@ -7,18 +7,18 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.common import (
+from app.modules.admin.models import Report
+from app.modules.rbac.permissions import Permission
+from core.common import (
     ApiResp,
     PageData,
     PaginateDep,
     PaginateParams,
     paginate_pages,
 )
-from app.core.err import respond
-from app.db.session import get_read_session
-from app.modules.admin.models import Report
-from app.modules.rbac.permissions import Permission
-from auth.deps import CurrentUser
+from core.contracts import CurrentUser
+from core.db.session import get_read_session
+from core.err import respond
 
 from .deps import require_admin
 from .permissions import require_permission

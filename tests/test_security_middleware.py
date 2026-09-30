@@ -13,9 +13,9 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.core import middleware
-from app.core.config import settings
-from app.core.middleware import _HSTS_VALUE, install_security_middleware
+from core import middleware
+from core.config import settings
+from core.middleware import _HSTS_VALUE, install_security_middleware
 
 _SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",

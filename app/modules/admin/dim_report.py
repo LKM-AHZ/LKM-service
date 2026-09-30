@@ -1,6 +1,6 @@
 """离线报表宽表 ``user_dim`` 的只读 read port（M3.B0.3，读侧）。
 
-**OFFLINE-ONLY 读取边界（本次收束落笔）**：本模块是对 ``app.db.user_dim.UserDim``（B0.1
+**OFFLINE-ONLY 读取边界（本次收束落笔）**：本模块是对 ``core.db.user_dim.UserDim``（B0.1
 离线反范式宽表，B0.2 由 auth 源 ETL/事件已填充）的**唯一 intended 报表读口**。它只读
 ``user_dim``，**绝不经在线热路径读源（users/profiles/user:snap/auth 缝）**，也**绝不相耦任何
 管理/改动作**：
@@ -17,10 +17,10 @@
 内容举报）。故 B0.3 **不发明**新的报表路由/UI，也不把这些实时读误标为报告去 repoint——只
 交付可被未来 B1/域路线图的离线报表消费方现成接用的只读 port + 边界 seg 测 + 本注释作账。
 
-落位选择：放 ``app/modules/admin/``（业务模块），import 的是 ``app.db.user_dim``（基础设施
+落位选择：放 ``app/modules/admin/``（业务模块），import 的是 ``core.db.user_dim``（基础设施
 db 层，非业务模块）——modules→db 方向，是既有 admin routers 也有的同方向边（如
-``app.db.session``），**零新增 import-linter 违约边**（契约二拦的是 db→modules 反向；
-契约三/四只拦 business→business / business→auth 内部，``app.db.user_dim`` 均不在
+``core.db.session``），**零新增 import-linter 违约边**（契约二拦的是 db→modules 反向；
+契约三/四只拦 business→business / business→auth 内部，``core.db.user_dim`` 均不在
 其 forbidden 集内）。宽表语义归属 auth＝单一数据源 owner（写侧在 auth/user_dim_sync），此处
 只是 read-only 离线的**读方**，不构成任何写/管理参与方。
 
@@ -35,7 +35,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.user_dim import UserDim
+from core.db.user_dim import UserDim
 
 from .schemas import DimUserRow
 
