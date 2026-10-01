@@ -112,6 +112,21 @@ async def test_discussion_create_and_list(
     assert page.items[0].title == "黎曼猜想"
 
 
+async def test_unsupported_content_type_is_rejected(db: AsyncSession) -> None:
+    with pytest.raises(BizError) as exc:
+        await create_item(
+            db,
+            uuid.uuid4(),
+            ContentItemCreate(
+                board_id=uuid.uuid4(),
+                content_type="unknown",
+                title="无效体裁",
+                content="正文",
+            ),
+        )
+    assert exc.value.errcode == ContentErr.UNSUPPORTED_TYPE
+
+
 async def test_column_post_requires_column(
     db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
 ) -> None:

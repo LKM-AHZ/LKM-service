@@ -324,6 +324,12 @@ async def create_item(
     author_id: uuid.UUID,
     info: ContentItemCreate,
 ) -> ContentItemInfo:
+    # 未知体裁不能绕过下方按体裁执行的发言准入校验。
+    try:
+        ContentType(info.content_type)
+    except ValueError:
+        raise BizError(ContentErr.UNSUPPORTED_TYPE) from None
+
     # 发言准入：板块存在 / 认证 / 日限发（仅社区用户写作体裁）
     if info.content_type in (
         ContentType.DISCUSSION,
@@ -426,7 +432,8 @@ def _now() -> _dt.datetime:
 
 
 async def like_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> int:
-    await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
+    # 与明细查/写及计数更新保持同一把行锁，重复请求不会同时通过存在性检查。
+    await ContentItemRepository(db).lock_active(item_id)
     existing = await ContentLikeRepository(db).get_one_like(
         content_id=item_id, user_id=user_id
     )
@@ -439,7 +446,7 @@ async def like_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> in
 
 
 async def unlike_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> int:
-    await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
+    await ContentItemRepository(db).lock_active(item_id)
     existing = await ContentLikeRepository(db).get_one_like(
         content_id=item_id, user_id=user_id
     )
@@ -487,7 +494,8 @@ async def create_comment(
     user_id: uuid.UUID,
     info: ContentCommentCreate,
 ) -> ContentCommentInfo:
-    await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
+    # 同一内容的评论必须串行分配楼层；锁持续到事务提交，含软删楼层也不会重号。
+    await ContentItemRepository(db).lock_active(item_id)
     repo = ContentCommentRepository(db)
     if info.parent_id is not None:
         await repo.get_one_or_raise(

@@ -13,8 +13,9 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import func, select
 
+from app.modules.content.errors import ContentErr
 from app.modules.content.models import (
     Board,
     BoardApplication,
@@ -33,6 +34,7 @@ from app.modules.content.models import (
 )
 from app.modules.exam.models import Exam, ExamCertificate
 from core.db.repository import AsyncRepository
+from core.err import BizError
 
 
 class ContentItemRepository(AsyncRepository[ContentItem]):
@@ -76,6 +78,16 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
         """按 slug 取活跃条目（软删条目不返回）。"""
         return await self.get_one(ContentItem.slug == slug)
 
+    async def lock_active(self, item_id: uuid.UUID) -> None:
+        """只读取主键并锁住未删除内容，串行化互动明细与楼层分配。"""
+        locked_id = await self.db.scalar(
+            select(ContentItem.id)
+            .where(ContentItem.id == item_id, ContentItem.deleted_at.is_(None))
+            .with_for_update()
+        )
+        if locked_id is None:
+            raise BizError(ContentErr.CONTENT_NOT_FOUND)
+
     async def id_by_slug(self, slug: str) -> uuid.UUID | None:
         """按 slug 只取 id（窄列，不拉正文）：详情缓存按 id 建键，slug 读路径先解析 id 再复用缓存。"""
         return await self.db.scalar(
@@ -100,9 +112,7 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
                     ContentItem.comment_count,
                     ContentItem.bookmark_count,
                     ContentItem.forward_count,
-                ).where(
-                    ContentItem.id == item_id, ContentItem.deleted_at.is_(None)
-                )
+                ).where(ContentItem.id == item_id, ContentItem.deleted_at.is_(None))
             )
         ).first()
         if row is None:
@@ -253,7 +263,7 @@ class BoardRepository(AsyncRepository[Board]):
 
         证书表属 exam 域，content 侧只读判定（跨模块读缝已在 import-linter 豁免）。
         """
-        stmt: Select[object] = (
+        stmt = (
             select(ExamCertificate.id)
             .join(Exam, Exam.id == ExamCertificate.exam_id)
             .where(
