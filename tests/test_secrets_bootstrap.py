@@ -41,7 +41,7 @@ def _ok_handler(request: httpx.Request) -> httpx.Response:
             200,
             json={
                 "secrets": [
-                    {"secretKey": "LKM_JWT_SECRET", "secretValue": "real-jwt"},
+                    {"secretKey": "LKM_TOTP_ENCRYPTION_KEY", "secretValue": "real-totp"},
                     {"secretKey": "LKM_DB_PASSWORD", "secretValue": "real-db"},
                     {"secretKey": "SOME_OTHER", "secretValue": "ignored"},
                 ]
@@ -51,20 +51,20 @@ def _ok_handler(request: httpx.Request) -> httpx.Response:
 
 
 def test_disabled_does_nothing() -> None:
-    env = {"LKM_INFISICAL_ENABLED": "false", "LKM_JWT_SECRET": "keep"}
+    env = {"LKM_INFISICAL_ENABLED": "false", "LKM_TOTP_ENCRYPTION_KEY": "keep"}
 
     def _boom(_timeout: float) -> Any:
         raise AssertionError("disabled 时不应建 client")
 
     assert bootstrap(env, client_factory=_boom) == 0
-    assert env["LKM_JWT_SECRET"] == "keep"
+    assert env["LKM_TOTP_ENCRYPTION_KEY"] == "keep"
 
 
 def test_injects_lkm_secrets_and_keeps_existing() -> None:
     env = dict(_BASE_ENV)
     env["LKM_DB_PASSWORD"] = "explicit-wins"
     assert bootstrap(env, client_factory=_factory(_ok_handler)) == 0
-    assert env["LKM_JWT_SECRET"] == "real-jwt"  # 缺失 → 注入
+    assert env["LKM_TOTP_ENCRYPTION_KEY"] == "real-totp"  # 缺失 → 注入
     assert env["LKM_DB_PASSWORD"] == "explicit-wins"  # 已存在 → 不覆盖
     assert "SOME_OTHER" not in env  # 非 LKM_ 前缀不入
 
@@ -83,7 +83,7 @@ def test_fetch_failure_failopen_vs_fastfail() -> None:
     factory = _factory(_unauthorized)
     env = dict(_BASE_ENV)
     assert bootstrap(env, client_factory=factory) == 0  # 非必需 → 降级
-    assert "LKM_JWT_SECRET" not in env
+    assert "LKM_TOTP_ENCRYPTION_KEY" not in env
 
     required = dict(_BASE_ENV)
     required["LKM_INFISICAL_REQUIRED"] = "true"
@@ -121,7 +121,7 @@ def test_missing_file_falls_back_to_env(tmp_path: Any) -> None:
     env["LKM_INFISICAL_CLIENT_ID_FILE"] = str(tmp_path / "does-not-exist")
 
     assert bootstrap(env, client_factory=_factory(_ok_handler)) == 0
-    assert env["LKM_JWT_SECRET"] == "real-jwt"
+    assert env["LKM_TOTP_ENCRYPTION_KEY"] == "real-totp"
 
 
 def test_empty_file_failopen_vs_fastfail(tmp_path: Any) -> None:

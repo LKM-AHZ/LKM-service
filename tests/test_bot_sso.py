@@ -35,7 +35,6 @@ from auth.bot_sso import (
 )
 from auth.models import User
 from core.config import settings
-from core.secrets import reveal
 from tests.conftest import DB, Client, auth_user_uid
 
 _INTERNAL_PATH = "/api/v1/auth/internal/bot-ticket"
@@ -49,13 +48,10 @@ def _internal_headers(token: str) -> dict[str, str]:
 
 
 def _decode_ticket(ticket: str, *, audience: str = BOT_SSO_AUD) -> dict[str, object]:
-    """按签发算法验签（生产 RS256，本地/测试 HS256），校验 aud 后返回 payload。"""
-    alg = jwt.get_unverified_header(ticket)["alg"]
-    if alg == jwt_keys.RS256:
-        key: object = jwt_keys.public_key()
-    else:
-        key = reveal(settings.jwt_secret)
-    return jwt.decode(ticket, key, algorithms=[alg], audience=audience)  # type: ignore[arg-type]
+    """用 RS256 公钥验签（唯一算法），校验 aud 后返回 payload。"""
+    return jwt.decode(  # type: ignore[arg-type]
+        ticket, jwt_keys.public_key(), algorithms=["RS256"], audience=audience
+    )
 
 
 async def _mk_admin(auth_db: AsyncSession, uname: str) -> User:

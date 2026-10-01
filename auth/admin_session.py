@@ -80,7 +80,7 @@ def create_admin_access_token(
 def decode_admin_access(token: str) -> dict[str, Any]:
     """解签后台 access cookie，校验 audience/type；非法抛 FORBIDDEN。
 
-    纯函数：只依赖 settings.jwt_secret/algorithm，无 DB 侧写；供单体内 me/危险操作
+    纯函数：只依赖 local jwt_keys（RS256 公钥），无 DB 侧写；供单体内 me/危险操作
     的 require danger 复用（仅校验现 cookie 不写 auth 表）。
     """
     try:

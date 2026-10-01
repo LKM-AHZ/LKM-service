@@ -184,9 +184,8 @@ async def _probe_redis() -> DependencyStatus:
 async def _probe_verify_key() -> DependencyStatus:
     """硬依赖（§2 第 2 条）：JWT 验签公钥是否可用。
 
-    - 本地有公钥（env / ``*_file``）、或运行期已从 AUTH JWKS 拉到、或本部署是纯 HS256
-      （验签走共享密钥，公钥非必需）→ ``up``；
-    - 需要公钥却拿不到 → **就地尝试一次** JWKS 拉取（自愈：AUTH 晚于本进程起来也能接上），
+    - 本地有公钥（env / ``*_file``）、或运行期已从 AUTH JWKS 拉到 → ``up``；
+    - 拿不到公钥 → **就地尝试一次** JWKS 拉取（自愈：AUTH 晚于本进程起来也能接上），
       仍失败才 ``error``。detail 刻意不含内网信息（本端点是匿名可读的）。
     """
     if verify_key_status() == "ok":
@@ -282,7 +281,7 @@ async def readiness(response: Response) -> ReadyData:
     """就绪探针：DB + Redis + Pulsar + AUTH + **验签公钥** 复合（AND 语义），未就绪返回 **503**。
 
     - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``；**验签公钥**必须可用
-      （纯 HS256 部署天然可用，见 ``_probe_verify_key``）。
+      （RS256-only，见 ``_probe_verify_key``）。
     - ``disabled``（未配置，如单机无总线/未接 AUTH 进程）不降就绪——是部署取向而非故障。
     - **软依赖**（检索/对象存储，蓝图 §2 第 3 条）：仅作 ``soft`` 字段告知，**不参与**下述
       ``ready`` 判定——它们缺失时可降级，绝不能把进程挡在入流之外。

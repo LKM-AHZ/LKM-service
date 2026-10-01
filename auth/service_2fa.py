@@ -21,6 +21,7 @@ from auth.security import (
     generate_totp_secret,
     get_totp_uri,
     hash_recovery_code,
+    is_legacy_secret,
     legacy_hash_recovery_code,
     verify_totp,
 )

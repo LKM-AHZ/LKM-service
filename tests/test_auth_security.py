@@ -3,7 +3,9 @@ import uuid
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 
+from auth import jwt_keys
 from auth.security import (
     create_access_token,
     create_temp_token,
@@ -19,8 +21,6 @@ from auth.security import (
     verify_totp,
     verifypwd,
 )
-from core.config import settings
-from core.secrets import reveal
 
 # ---------------------------------------------------------------------------
 # JWT – access token
@@ -37,28 +37,27 @@ class TestAccessToken:
         assert payload["role"] == "member"
         assert payload["type"] == "access"
 
-    def should_reject_wrong_secret(self):
+    def should_reject_wrong_public_key(self):
         token = create_access_token(
             user_id=uuid.uuid4(), account_level="normal", role="member"
         )
-        wrong_key = "wrong-secret-key-hopefully-not-used"
+        other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         with pytest.raises(jwt.exceptions.InvalidSignatureError):
-            jwt.decode(token, wrong_key, algorithms=[settings.jwt_algorithm])
+            jwt.decode(token, other.public_key(), algorithms=["RS256"])
 
     def should_reject_expired_token(self):
-        # Build an already-expired JWT manually
+        # Build an already-expired JWT manually（用配置的私钥以 RS256 签）
         now = int(time.time())
         payload = {
             "user_id": str(uuid.uuid4()),
             "account_level": "normal",
             "role": "member",
             "type": "access",
+            "aud": "lkm:web",
             "iat": now - 9999,
             "exp": now - 3600,  # expired 1 hour ago
         }
-        token = jwt.encode(
-            payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
-        )
+        token = jwt_keys.encode(payload)
         with pytest.raises(jwt.exceptions.ExpiredSignatureError):
             decode_access_token(token)
 

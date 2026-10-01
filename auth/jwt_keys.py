@@ -1,20 +1,16 @@
-"""JWT 密钥与签发/验签原语（批 5：HS256 → RS256 + JWKS）。
+"""JWT 密钥与签发/验签原语（RS256-only + JWKS）。
 
-蓝图 §4.2 定案「演进目标 RS256 非对称」：AUTH 用私钥签发，主服务与网关用公钥验签，
-使验签方不再持有可签发的密钥。
+蓝图 §4.2 定案「RS256 非对称」：AUTH 用私钥签发，主服务与网关用公钥验签，使验签方
+不再持有可签发的密钥。本仓已**移除 HS256 对称兼容**——不存在按密钥有无在 HS/RS 之间
+静默切换的降级路径。
 
 **密钥来源**：``LKM_JWT_PRIVATE_KEY`` / ``LKM_JWT_PUBLIC_KEY``（PEM，经 Infisical/Secret
-注入）。两者都留空则维持既有 HS256 行为（本地开发与测试的默认路径）；只给公钥可做
-「只验不签」的验签方部署。**本地来源为空时**，验签方可让进程从 AUTH 的
+注入）。只给公钥即「只验不签」的验签方部署。**本地来源为空时**，验签方可让进程从 AUTH 的
 ``/.well-known/jwks.json`` **运行期拉取并缓存**公钥（蓝图 §2 第 2 条，见
 :func:`refresh_public_key_from_jwks` / :func:`verification_status`），从而不必带密钥文件上线。
 
-**双验签灰度**（蓝图给的时序：HS+RS 并存 → 灰度 ≥7 天 → 关 HS）：``LKM_JWT_HS_FALLBACK``
-默认 true，RS256 生效后仍接受 HS256 旧 token；存量 token 清空后置 false 即关闭。
-本仓因批 1 已重建库、token 全失效，**实际无存量需要灰度**，可直接置 false（登记 §8）。
-
-**算法绑定**：验签按 token 头部的 ``alg`` 分支选密钥，且每支只放行单一算法——不做
-「同一把密钥按算法列表逐个试」，避免 alg confusion（用公钥当 HMAC 密钥的经典混淆）。
+**算法绑定**：只接受 token 头部的 ``alg == RS256``，其余一律拒——不做「同一把密钥按算法
+列表逐个试」，避免 alg confusion（用公钥当 HMAC 密钥的经典混淆）。
 """
 
 from __future__ import annotations
@@ -38,7 +34,6 @@ from core.secrets import reveal
 logger = logging.getLogger("lkm.auth.jwt_keys")
 
 RS256 = "RS256"
-HS256 = "HS256"
 
 #: APISIX 网关消费者的 ``key`` 必须与 token 里该 claim 相同（jwt-auth 靠它查消费者）。
 #: 「网关可验签但不可签发」的取舍与 schema 细节见路线图 §8 #43。
@@ -50,7 +45,7 @@ def _pem(value: Any, path: str = "") -> str | None:
 
     文件形态是为 k8s Secret 卷挂载与 compose 只读挂载准备的——多行 PEM 塞进 env 变量
     在 env_file / Secret 两侧都容易出转义问题。读不到文件直接抛（属部署配置错误，
-    静默降级成「无密钥」会让 RS256 悄悄退回 HS256，比启动失败更危险）。
+    静默降级成「无密钥」会让签发全线失败，比启动期报错更晚暴露）。
     """
     if value is not None:
         text = reveal(value).strip()
@@ -58,8 +53,8 @@ def _pem(value: Any, path: str = "") -> str | None:
             return text
         if not path:
             # 显式配了却解析为空（Secret/env 注入成空串——常见于密钥卷没挂上）：
-            # 静默返回 None 会让 RS256 悄悄退回 HS256 签名，而只验签的网关/backend
-            # 拿不到私钥推导的公钥，全线 401；比启动期直接失败危险得多。
+            # 静默返回 None 会让本进程「以为配了密钥其实没有」——签发侧 500、
+            # 验签侧全线 401；比启动期直接失败危险得多。
             raise RuntimeError(
                 "JWT key is configured but empty (blank PEM value and no *_file path)"
             )
@@ -87,13 +82,6 @@ def _load_public(pem: str) -> rsa.RSAPublicKey:
     if not isinstance(key, rsa.RSAPublicKey):
         raise ValueError("LKM_JWT_PUBLIC_KEY must be an RSA public key (PEM)")
     return key
-
-
-def signing_algorithm() -> str:
-    """当前签发算法：配了私钥即 RS256，否则沿用 ``jwt_algorithm``（默认 HS256）。"""
-    if _pem(settings.jwt_private_key, settings.jwt_private_key_file) is not None:
-        return RS256
-    return settings.jwt_algorithm
 
 
 def _local_public_pem() -> str | None:
@@ -124,42 +112,33 @@ def public_key() -> rsa.RSAPublicKey | None:
 
 
 def encode(payload: dict[str, Any]) -> str:
-    """按 :func:`signing_algorithm` 签发。"""
-    if signing_algorithm() == RS256:
-        private_pem = _pem(settings.jwt_private_key, settings.jwt_private_key_file)
-        # 不能用 assert：signing_algorithm() 只保证「有私钥 或 jwt_algorithm==RS256」，
-        # 显式配 LKM_JWT_ALGORITHM=RS256 而未配私钥时这里就是 None；断言还会在
-        # python -O 下被剥掉，退化成 _load_private(None) 的 AttributeError。
-        if private_pem is None:
-            raise RuntimeError(
-                "JWT 签发算法为 RS256 但未配置 RSA 私钥（LKM_JWT_PRIVATE_KEY/_FILE）"
-            )
-        return jwt.encode(payload, _load_private(private_pem), algorithm=RS256)
-    return jwt.encode(
-        payload, reveal(settings.jwt_secret), algorithm=settings.jwt_algorithm
-    )
+    """用 RSA 私钥以 RS256 签发；未配私钥即抛（签发方必须有私钥）。"""
+    private_pem = _pem(settings.jwt_private_key, settings.jwt_private_key_file)
+    # 不用 assert：断言会在 python -O 下被剥掉，退化成 _load_private(None) 的
+    # AttributeError，报错点偏离真正的配置缺失。
+    if private_pem is None:
+        raise RuntimeError(
+            "JWT 签发需要 RSA 私钥，但未配置（LKM_JWT_PRIVATE_KEY/_FILE）"
+        )
+    return jwt.encode(payload, _load_private(private_pem), algorithm=RS256)
 
 
 def decode(token: str, *, audience: str) -> dict[str, Any]:
     """验签 + 校验 ``aud``，返回 payload。
 
-    ``alg`` 决定用哪把密钥与哪套白名单（见模块 docstring）；HS256 仅在
-    ``jwt_hs_fallback`` 打开时放行。异常沿用 PyJWT 原生类型（``PyJWTError`` 家族），
-    调用方既有的 ``except jwt.*`` 分支无需改动。
+    只接受 ``alg == RS256``，其余（含 HS256）一律拒——不做「按算法列表逐个试」。
+    异常沿用 PyJWT 原生类型（``PyJWTError`` 家族），调用方既有的 ``except jwt.*``
+    分支无需改动。
     """
     alg = jwt.get_unverified_header(token).get("alg")
-    if alg == RS256:
-        key = public_key()
-        if key is None:
-            raise jwt.InvalidAlgorithmError(
-                "RS256 token presented but no public key configured"
-            )
-        return jwt.decode(token, key, algorithms=[RS256], audience=audience)
-    if alg == HS256 and settings.jwt_hs_fallback:
-        return jwt.decode(
-            token, reveal(settings.jwt_secret), algorithms=[HS256], audience=audience
+    if alg != RS256:
+        raise jwt.InvalidAlgorithmError(f"unsupported JWT alg: {alg!r}")
+    key = public_key()
+    if key is None:
+        raise jwt.InvalidAlgorithmError(
+            "RS256 token presented but no public key configured"
         )
-    raise jwt.InvalidAlgorithmError(f"unsupported or disabled JWT alg: {alg!r}")
+    return jwt.decode(token, key, algorithms=[RS256], audience=audience)
 
 
 # ─────────────────────── JWKS ───────────────────────
@@ -234,28 +213,15 @@ def _jwk_to_pem(jwk: dict[str, Any]) -> str:
     return pem.decode("ascii")
 
 
-def rsa_expected() -> bool:
-    """是否**必须**拿到非对称公钥才能验签（决定 readiness 是否把公钥计入硬依赖）。
-
-    纯 HS256 部署（未配任何 RSA 密钥、alg 仍 HS256、且未关 HS 回落）不需要公钥——验签走共享
-    密钥，公钥缺失不是故障。只要出现任一 RS256 迹象（显式 ``alg=RS256`` / 配了私钥 / 配了公钥
-    / 已关 HS 回落），公钥就成了验签的**前置条件**。
-    """
-    if settings.jwt_algorithm == RS256 or not settings.jwt_hs_fallback:
-        return True
-    return _local_public_pem() is not None
-
-
 def verification_status() -> str:
-    """验签能力状态：``"ok"``（可用）或 ``"unavailable"``（RS256 需要公钥但拿不到）。
+    """验签能力状态：``"ok"``（公钥可用）或 ``"unavailable"``（拿不到公钥）。
 
-    readiness 据此**如实上报**（§2 第 2 条）。本函数**绝不抛**——它被探针调用，密钥配置异常
-    不能让探针 500（那会把「配置错」伪装成「探针坏」）。
+    RS256-only 下公钥是验签的**前置条件**，故拿不到即不可用。readiness 据此**如实上报**
+    （§2 第 2 条）。本函数**绝不抛**——它被探针调用，密钥配置异常不能让探针 500
+    （那会把「配置错」伪装成「探针坏」）。
     """
     try:
-        if public_key() is not None:
-            return "ok"
-        return "unavailable" if rsa_expected() else "ok"
+        return "ok" if public_key() is not None else "unavailable"
     except Exception:
         logger.warning("验签状态判定失败", exc_info=True)
         return "unavailable"

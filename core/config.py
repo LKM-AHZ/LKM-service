@@ -2,7 +2,7 @@ import os
 import urllib.parse
 from typing import ClassVar, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from core.secrets import reveal
@@ -77,21 +77,14 @@ class Settings(BaseSettings):
     db_worker_pool_size: int = 5
     db_worker_pool_max_overflow: int = 10
 
-    # JWT 签名密钥 — 所有非测试环境必须覆盖此值
-    jwt_secret: SecretStr = SecretStr(
-        "change-me-to-a-random-secret-thats-at-least-32-bytes-long"
-    )
-    jwt_algorithm: str = "HS256"
-    # RS256/JWKS（批 5，蓝图 §4.2）：配了 RSA 私钥 PEM 即改用 RS256 签发（``jwt_algorithm``
-    # 仅在未配私钥的 HS256 路径生效）。公钥留空则由私钥推导；验签方（主服务/网关）只需公钥。
+    # JWT 签名（RS256-only，蓝图 §4.2）：auth 持私钥签发，backend/网关持公钥验签。
+    # 不支持 HS256 对称签名——配了 RSA 私钥即用 RS256；缺密钥时签发期 RuntimeError、
+    # 验签期一律拒（readiness 如实报「验签不可用」，见 auth/jwt_keys.verification_status）。
     jwt_private_key: SecretStr | None = None
     jwt_public_key: SecretStr | None = None
     # 亦可给 PEM 文件路径（k8s Secret 卷 / compose 只读挂载）；内联值优先于文件。
     jwt_private_key_file: str = ""
     jwt_public_key_file: str = ""
-    # 双验签灰度：RS256 生效后是否仍接受 HS256 旧 token。存量 token 清空后置 false 关闭。
-    # 本仓因批 1 重建库、token 全失效，可直接置 false（偏离蓝图灰度时序，登记 §8）。
-    jwt_hs_fallback: bool = True
     # 运行期从 AUTH ``/.well-known/jwks.json`` 拉取验签公钥的**刷新间隔**（秒）。
     # 蓝图 §2 第 2 条：本地无公钥时可从 JWKS 拉取并缓存。仅在「本地没有公钥」时才真正发请求；
     # 拉到后仍按此间隔重拉，以便 AUTH 换钥后（重启换文件）无需重启验签方。
@@ -125,12 +118,12 @@ class Settings(BaseSettings):
     login_global_max_per_min: int = 200
     login_window_seconds: int = 60
 
-    # TOTP / 敏感数据加密密钥 — 必须与 jwt_secret 分开设置
+    # TOTP / 敏感数据加密密钥 — 独立密钥，勿与验证码 pepper 复用
     totp_encryption_key: SecretStr = SecretStr(
         "change-me-totp-encryption-key-at-least-32-bytes"
     )
 
-    # 验证码 HMAC 盐值 — 必须与 totp_encryption_key 和 jwt_secret 分开设置
+    # 验证码 HMAC 盐值 — 必须与 totp_encryption_key 分开设置
     verification_code_pepper: SecretStr = SecretStr(
         "change-me-verification-code-pepper-at-least-32-bytes"
     )
@@ -450,18 +443,6 @@ class Settings(BaseSettings):
     s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
     s3_public_addressing_style: Literal["path", "virtual", "auto"] = "path"
 
-    @field_validator("jwt_algorithm")
-    @classmethod
-    def _check_jwt_algorithm(cls, v: str) -> str:
-        """jwt_algorithm 取值收敛到 HS256/RS256（拼错或填 none 者装配期即报错）。
-
-        注意不强制「RS256 必须配私钥」：只验签的进程（不调 encode）可以只持公钥，
-        硬绑会误杀这类部署；签发侧缺私钥时 jwt_keys.encode 已有明确 RuntimeError。
-        """
-        if v not in ("HS256", "RS256"):
-            raise ValueError(f"LKM_JWT_ALGORITHM 仅支持 HS256/RS256，收到 {v!r}")
-        return v
-
     @model_validator(mode="after")
     def _no_insecure_secrets_outside_dev(self) -> "Settings":
         """生产（非宽松环境）必须提供真实密钥，禁止用 change-me 占位或空串启动。
@@ -483,33 +464,19 @@ class Settings(BaseSettings):
             return not v or any(p in v.lower() for p in placeholders)
 
         for name, value in (
-            ("jwt_secret", self.jwt_secret),
             ("totp_encryption_key", self.totp_encryption_key),
             ("verification_code_pepper", self.verification_code_pepper),
         ):
             v = reveal(value)
             if _bad(v):
                 insecure.append(name)
-            elif (
-                name
-                in (
-                    "jwt_secret",
-                    "totp_encryption_key",
-                    "verification_code_pepper",
-                )
-                and len(v) < 32
-            ):
+            elif len(v) < 32:
                 insecure.append(f"{name}(too short)")
-        if reveal(self.jwt_secret) == reveal(self.totp_encryption_key):
-            insecure.append("jwt_secret==totp_encryption_key")
-        # pepper 同样要求是「独立密钥」（字段注释如此要求）：原先只比 jwt/totp 一对，
-        # 漏掉了 pepper 等于另两把之一的情况。空/占位值上面已标记，这里跳过以免重复上报。
+        # pepper 要求是「独立密钥」（字段注释如此要求）：与 totp 同值即报错。
+        # 空/占位值上面已标记，这里跳过以免重复上报。
         pepper = reveal(self.verification_code_pepper)
-        if pepper and pepper in (
-            reveal(self.jwt_secret),
-            reveal(self.totp_encryption_key),
-        ):
-            insecure.append("verification_code_pepper==jwt_secret/totp_encryption_key")
+        if pepper and pepper == reveal(self.totp_encryption_key):
+            insecure.append("verification_code_pepper==totp_encryption_key")
 
         # 注：不在此强制 db_password/redis_url —— 各 worker 进程 env 集不同（如
         # worker-scheduler 不接 DB/Redis），按进程强校验会误杀。仅在「用到了才校验」的
@@ -534,30 +501,9 @@ class Settings(BaseSettings):
         # ClickHouse 分析后端启用即须给 HTTP 基址（否则客户端建连必失败）
         if self.clickhouse_enabled and not self.clickhouse_url:
             insecure.append("clickhouse_url(required while clickhouse_enabled=true)")
-        # RS256/JWKS：关掉 HS 回退却没有任何 RSA 公钥 → RS 与 HS 两条验签路径都不通，
-        # 所有 token 一律被拒。这是**自相矛盾**的配置（与进程 env 集无关），装配期即拦。
-        if not self.jwt_hs_fallback and not (
-            reveal(self.jwt_public_key).strip()
-            or reveal(self.jwt_private_key).strip()
-            or self.jwt_public_key_file
-            or self.jwt_private_key_file
-        ):
-            insecure.append(
-                "jwt_hs_fallback=false without jwt_public_key/jwt_private_key"
-            )
-        # 蓝图 §4.2：RS256 生效后须在一个 refresh 周期内关闭 HS 回落。本仓批 1 已重建库、
-        # HS token 全失效，灰度期本可立即结束——故生产一旦配了 RSA 私钥（即已在走 RS256
-        # 签发）却仍开着 HS 回落，就是"配了私钥忘了关"的静默降级：旧 HS token 仍被接受，
-        # 非对称签名的收益让回去一半。装配期直接拦下，而不是靠注释提醒。
-        _private_key_set = bool(self.jwt_private_key_file) or (
-            self.jwt_private_key is not None
-            and bool(reveal(self.jwt_private_key).strip())
-        )
-        if self.jwt_hs_fallback and _private_key_set:
-            insecure.append(
-                "jwt_hs_fallback=true while RS256 private key set "
-                "(set LKM_JWT_HS_FALLBACK=false)"
-            )
+        # RS256-only 下缺 RSA 密钥不在此强制：各进程 env 集不同（只验签方只需公钥、
+        # worker 不碰 JWT），按进程强校验会误杀。缺钥由 readiness 探针如实上报、
+        # 签发侧由 jwt_keys.encode 抛 RuntimeError 表达（与旧设计一致）。
 
         if insecure:
             raise ValueError(

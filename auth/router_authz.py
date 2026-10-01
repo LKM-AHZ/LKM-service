@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 class _AuthzIn(BaseModel):
     user_id: uuid.UUID
-    # 会话描述：monolith 已在其侧自行解码 JWT(用共享 jwt_secret)，把“需 auth 侧复核/裁决”的关键
+    # 会话描述：monolith 已在其侧自行解码 JWT(用本地 RS256 公钥)，把“需 auth 侧复核/裁决”的关键
     # 载荷原样送来复审；不带 email/phone→ 缝不透 PII。
     # 两个字段**故意不给默认值**：原先 expect_token_version 默认 0（与绝大多数账号的初始
     # token_version 相同）、iat_ts 默认 None（跳过改密撤销），调用方漏传就把权威裁决静默降级成

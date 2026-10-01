@@ -58,7 +58,7 @@ async def _grant_super_admin(db: DB, *perms: str) -> None:
 def _set_admin_cookie(client: Client, user: User, *, mfa: bool = False) -> None:
     """把该 admin(从 auth realm ORM) 的后台 access cookie 装进 monolith client jar。
 
-    与 auth_app 签发的 cookie 同源（settings.jwt_secret + admin_session audience），故 seam/
+    与 auth_app 签发的 cookie 同源（同一 RS256 私钥 + admin_session audience），故 seam/
     require_admin_2fa 解码一致。mfa=True 表示已过危险操作 step-up(1h 信任) —— 与 test_admin_auth
     _process 经 auth /admin/auth/2fa 产物同形（cookie 契约单一）。
     """

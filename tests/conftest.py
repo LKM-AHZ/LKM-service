@@ -28,13 +28,16 @@ from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-# 确保测试始终以 test 标志运行，允许弱 JWT 密钥
+# 确保测试始终以 test 标志运行（宽松环境：放行占位密钥等）
 os.environ["PYTEST_RUNNING"] = "1"
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 from hypothesis import HealthCheck
 from hypothesis import settings as _hypothesis_settings
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
@@ -64,6 +67,40 @@ from app.main import app  # noqa: E402
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
 Client = Annotated[AsyncClient, pytest.fixture]
+
+
+# ───────────────────────────────────────────────────────────────────────
+# RS256 测试密钥（服务已移除 HS256 对称兼容）
+#
+# 服务只签发/接受 RS256，测试不再有「无密钥即 HS 默认」的兜底，故这里生成一对进程内
+# 临时 RSA 密钥注入 ``settings``，供全套件的 ``create_access_token`` / ``jwt_keys.encode``
+# / ``decode`` 使用。个别测试若要覆盖密钥状态，用 monkeypatch 在函数级改写即可——函数级
+# 晚于本 session fixture 生效，且测末会自动还原到这里的注入值。
+# ───────────────────────────────────────────────────────────────────────
+_RSA_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_RSA_PRIVATE_PEM = _RSA_KEY.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption(),
+).decode("ascii")
+_RSA_PUBLIC_PEM = _RSA_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+).decode("ascii")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _rs256_test_keys() -> Iterator[None]:
+    """给全套件注入一对 RSA 密钥（RS256-only 下签发/验签的硬前置）。"""
+    import auth.jwt_keys as _jwt_keys
+
+    settings.jwt_private_key = SecretStr(_RSA_PRIVATE_PEM)
+    settings.jwt_public_key = SecretStr(_RSA_PUBLIC_PEM)
+    settings.jwt_private_key_file = ""
+    settings.jwt_public_key_file = ""
+    # 复位运行期缓存，避免跨会话残留（按 PEM 文本缓存，文本变了本会自然失效）
+    _jwt_keys._fetched_public_pem = None
+    yield
 
 
 # ───────────────────────────────────────────────────────────────────────

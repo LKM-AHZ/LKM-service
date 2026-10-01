@@ -5,7 +5,7 @@
 
 覆盖：
 - JWK → PEM 转换（n/e → SubjectPublicKeyInfo）；
-- ``verification_status`` 的三档（本地有钥 / 纯 HS256 不需要钥 / RS256 需要却拿不到）；
+- ``verification_status`` 两档（本地有钥可用 / 拿不到公钥即不可用）；
 - ``refresh_public_key_from_jwks`` 的本地优先、未配 URL、非 200、无 RSA 成员、成功拉取五种路径；
 - 拉到的公钥**真的能验签**（签一枚 RS256 token，用拉来的公钥 decode 成功）；
 - readiness：公钥不可用时 503、可用时 200，且 ``verify_key`` 如实出现在响应里。
@@ -41,8 +41,6 @@ def _clean_key_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "jwt_public_key", None)
     monkeypatch.setattr(settings, "jwt_private_key_file", "")
     monkeypatch.setattr(settings, "jwt_public_key_file", "")
-    monkeypatch.setattr(settings, "jwt_algorithm", "HS256")
-    monkeypatch.setattr(settings, "jwt_hs_fallback", True)
     monkeypatch.setattr(settings, "auth_http_url", "")
     monkeypatch.setattr(jk, "_fetched_public_pem", None)
     monkeypatch.setattr(jk, "_jwks_client_factory", None)
@@ -103,18 +101,8 @@ class TestJwkToPem:
 
 
 class TestVerificationStatus:
-    def should_be_ok_for_hs256_only_deployment(self) -> None:
-        """未配任何 RSA 密钥且 HS 回落开着：验签走共享密钥，公钥非必需 → ok。"""
-        assert jk.rsa_expected() is False
-        assert jk.verification_status() == "ok"
-
-    def should_be_unavailable_when_rs256_needs_a_key(self, monkeypatch) -> None:
-        monkeypatch.setattr(settings, "jwt_algorithm", "RS256")
-        assert jk.rsa_expected() is True
-        assert jk.verification_status() == "unavailable"
-
-    def should_be_unavailable_when_hs_fallback_disabled(self, monkeypatch) -> None:
-        monkeypatch.setattr(settings, "jwt_hs_fallback", False)
+    def should_be_unavailable_without_any_key(self) -> None:
+        """RS256-only：无任何 RSA 密钥即拿不到公钥，验签不可用。"""
         assert jk.verification_status() == "unavailable"
 
     def should_be_ok_with_local_public_key(self, monkeypatch) -> None:
@@ -162,7 +150,6 @@ class TestRefreshFromJwks:
         """端到端：JWKS → 缓存 → ``public_key()`` → 真的能验一枚 RS256 token。"""
         private, _ = _keypair()
         monkeypatch.setattr(settings, "auth_http_url", "http://auth:8001")
-        monkeypatch.setattr(settings, "jwt_algorithm", "RS256")
         _install_client(monkeypatch, _jwks_for(private))
 
         assert jk.verification_status() == "unavailable"  # 拉之前：不可用
@@ -240,8 +227,10 @@ def _stub_other_probes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestReadinessReportsVerifyKey:
     async def should_be_ready_when_key_available(
-        self, probe_app, _stub_other_probes
+        self, probe_app, _stub_other_probes, monkeypatch
     ) -> None:
+        _, pem = _keypair()
+        monkeypatch.setattr(settings, "jwt_public_key", SecretStr(pem))
         resp = await _readiness(probe_app)
         assert resp.status_code == 200
         assert resp.json()["verify_key"]["status"] == "up"
@@ -249,8 +238,7 @@ class TestReadinessReportsVerifyKey:
     async def should_be_503_when_rs256_key_missing(
         self, probe_app, _stub_other_probes, monkeypatch
     ) -> None:
-        """RS256 部署却拿不到公钥：验签为「暂不可用」→ 不入流（503），但进程仍然活着。"""
-        monkeypatch.setattr(settings, "jwt_algorithm", "RS256")
+        """拿不到公钥：验签为「暂不可用」→ 不入流（503），但进程仍然活着。"""
         resp = await _readiness(probe_app)
         assert resp.status_code == 503
         body = resp.json()
@@ -263,7 +251,6 @@ class TestReadinessReportsVerifyKey:
     ) -> None:
         """就绪探测会**就地拉一次** JWKS：AUTH 晚起也能在不重启的情况下被接上。"""
         private, _ = _keypair()
-        monkeypatch.setattr(settings, "jwt_algorithm", "RS256")
         monkeypatch.setattr(settings, "auth_http_url", "http://auth:8001")
         _install_client(monkeypatch, _jwks_for(private))
 

@@ -7,7 +7,6 @@ import pytest
 from core.config import Settings
 
 _SECRETS = {
-    "jwt_secret": "j" * 48,
     "totp_encryption_key": "t" * 48,
     "verification_code_pepper": "v" * 48,
 }

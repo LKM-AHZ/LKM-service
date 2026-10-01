@@ -13,7 +13,10 @@ from urllib.parse import quote
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from auth import jwt_keys
 from core.config import settings
@@ -202,41 +205,81 @@ def generate_recovery_codes(n: int = 10) -> list[tuple[str, str]]:
     return codes
 
 
-def _derive_key() -> bytes:
-    """32-byte AES-256 key from SHA-256."""
+# TOTP 密钥加密：AES-256-GCM，对称密钥经 **HKDF-SHA256** 从 ``totp_encryption_key`` 派生，
+# 每条密文自带 16B 随机盐（HKDF 的 salt）与 12B nonce，故派生带盐、且每记录彼此独立
+# （攻击者拿到库也须对每条密文各跑一遍 KDF）。
+#
+# **格式版本化**：新版 = ``v2:`` 前缀 + base64(salt(16) || nonce(12) || ct||tag)；
+# 旧版（无前缀）= base64(nonce(12) || ct||tag)，密钥为**裸 SHA-256** 派生（无盐、无迭代）。
+# 旧版仍可解（存量兼容），但读到后由 ``service_2fa`` 升级重写为新格式，不再新增旧格式密文。
+_CIPHER_V2_PREFIX = "v2:"
+_HKDF_INFO = b"lkm:totp-secret:v2"  # 域分离：防同主密钥在别处派生出同字节
+_SALT_LEN = 16
+_NONCE_LEN = 12
+_GCM_TAG_LEN = 16
+
+
+def _hkdf_key(salt: bytes) -> bytes:
+    """HKDF-SHA256：主密钥 + 每记录盐 → 32B AES 密钥。"""
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        info=_HKDF_INFO,
+    ).derive(reveal(settings.totp_encryption_key).encode())
+
+
+def _legacy_key() -> bytes:
+    """旧版派生（裸 SHA-256，无盐无迭代）——**仅**用于解密存量密文，勿用于新写入。"""
     return hashlib.sha256(reveal(settings.totp_encryption_key).encode()).digest()
 
 
+def _unb64(value: str) -> bytes:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as err:
+        raise ValueError("malformed ciphertext") from err
+
+
+def _gcm_decrypt(key: bytes, nonce: bytes, ct: bytes) -> str:
+    try:
+        return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8")
+    except (InvalidTag, UnicodeDecodeError) as err:
+        raise ValueError("malformed ciphertext") from err
+
+
 def encrypt_secret(plain: str) -> str:
-    key = _derive_key()
-    aesgcm = AESGCM(key)
-    nonce = os.urandom(12)
-    ct = aesgcm.encrypt(nonce, plain.encode(), None)
-    # store nonce || ciphertext
-    return base64.b64encode(nonce + ct).decode("ascii")
+    """AES-256-GCM 加密，输出带版本前缀的新格式（每次随机盐 + nonce）。"""
+    salt = os.urandom(_SALT_LEN)
+    nonce = os.urandom(_NONCE_LEN)
+    ct = AESGCM(_hkdf_key(salt)).encrypt(nonce, plain.encode(), None)
+    return _CIPHER_V2_PREFIX + base64.b64encode(salt + nonce + ct).decode("ascii")
+
+
+def is_legacy_secret(cipher: str) -> bool:
+    """密文是否为旧版（无版本前缀）格式——供读到后升级重写。"""
+    return not cipher.startswith(_CIPHER_V2_PREFIX)
 
 
 def decrypt_secret(cipher: str) -> str:
-    """base64-encoded AES-GCM（nonce(12) || ciphertext||tag）。
+    """解密 ``encrypt_secret`` 产物（新旧两种格式都支持）。
 
     密文损坏/被轮换/被截断时统一抛 ``ValueError("malformed ciphertext")``：原来的
     ``base64.b64decode`` 默认丢弃非字母表字符（静默解出错字节）、坏 padding 抛
     binascii.Error、长度不足则在切片后崩、tag 不符抛 cryptography 的 InvalidTag——
     四种形态各异且都不可诊断。收成一个明确的失败，日志里一眼能区分「密文坏了」和代码 bug。
     """
-    from cryptography.exceptions import InvalidTag
+    if cipher.startswith(_CIPHER_V2_PREFIX):
+        raw = _unb64(cipher[len(_CIPHER_V2_PREFIX) :])
+        if len(raw) < _SALT_LEN + _NONCE_LEN + _GCM_TAG_LEN:
+            raise ValueError("malformed ciphertext")
+        salt = raw[:_SALT_LEN]
+        nonce = raw[_SALT_LEN : _SALT_LEN + _NONCE_LEN]
+        ct = raw[_SALT_LEN + _NONCE_LEN :]
+        return _gcm_decrypt(_hkdf_key(salt), nonce, ct)
 
-    key = _derive_key()
-    aesgcm = AESGCM(key)
-    try:
-        raw = base64.b64decode(cipher, validate=True)
-    except (binascii.Error, ValueError) as err:
-        raise ValueError("malformed ciphertext") from err
-    if len(raw) < 12 + 16:  # 12B nonce + 16B GCM tag
+    # 旧格式兜底：无盐、裸 SHA-256 派生
+    raw = _unb64(cipher)
+    if len(raw) < _NONCE_LEN + _GCM_TAG_LEN:
         raise ValueError("malformed ciphertext")
-    nonce = raw[:12]
-    ct = raw[12:]
-    try:
-        return aesgcm.decrypt(nonce, ct, None).decode("utf-8")
-    except (InvalidTag, UnicodeDecodeError) as err:
-        raise ValueError("malformed ciphertext") from err
+    return _gcm_decrypt(_legacy_key(), raw[:_NONCE_LEN], raw[_NONCE_LEN:])

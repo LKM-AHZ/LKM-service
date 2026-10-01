@@ -657,13 +657,14 @@ def test_compose_mounts_jwt_keys_and_scopes_private_key() -> None:
     assert "APISIX_JWT_PUBLIC_KEY_FILE" in _env_of("apisix-render")
 
 
-def test_k8s_private_key_secret_is_auth_only_and_optional() -> None:
-    """k8s：私钥走独立 Secret 且 optional（未生成密钥时 Pod 仍能起）。"""
+def test_k8s_private_key_secret_is_auth_only_and_required() -> None:
+    """k8s：私钥走独立 Secret，只给 auth；RS256-only 下为硬依赖（非 optional）。"""
     gateway = (
         _ROOT / "deploy" / "k8s" / "base" / "gateway" / "apisix.yaml"
     ).read_text()
     auth = (_ROOT / "deploy" / "k8s" / "base" / "app" / "auth.yaml").read_text()
     assert "lkm-jwt-signing" in auth
-    assert "optional: true" in auth.split("lkm-jwt-signing", 1)[1][:40]
+    # 硬依赖：gen-secret.sh 已强制要求密钥对，Pod 不再容忍缺失
+    assert "optional: true" not in auth.split("lkm-jwt-signing", 1)[1][:40]
     assert "lkm-jwt-signing" not in gateway  # 网关只拿公钥
     assert "APISIX_JWT_PUBLIC_KEY_FILE" in gateway
