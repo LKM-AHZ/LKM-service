@@ -200,6 +200,19 @@ class TestEncryptDecrypt:
         assert decrypt_secret(c1) == plain
         assert decrypt_secret(c2) == plain
 
+    def should_use_versioned_format_with_per_record_salt(self):
+        c1 = encrypt_secret("JBSWY3DPEHPK3PXP")
+        c2 = encrypt_secret("JBSWY3DPEHPK3PXP")
+        assert c1.startswith("v2:") and c2.startswith("v2:")
+        # 每记录随机 16B 盐（base64 前 16B）→ 两次的盐段也不同，而非仅 nonce 不同
+        assert c1[:24] != c2[:24]
+
+    def should_reject_malformed_ciphertext(self):
+        # 含无版本前缀的旧格式：不再兼容，一律按损坏拒
+        for bad in ("not-valid-base64!!", "v2:AAAA", ""):
+            with pytest.raises(ValueError, match="malformed ciphertext"):
+                decrypt_secret(bad)
+
 
 # ---------------------------------------------------------------------------
 # Password hash (argon2) —— 必须异步化，offload 到线程池避免阻塞事件循环

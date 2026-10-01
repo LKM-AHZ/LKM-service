@@ -209,9 +209,7 @@ def generate_recovery_codes(n: int = 10) -> list[tuple[str, str]]:
 # 每条密文自带 16B 随机盐（HKDF 的 salt）与 12B nonce，故派生带盐、且每记录彼此独立
 # （攻击者拿到库也须对每条密文各跑一遍 KDF）。
 #
-# **格式版本化**：新版 = ``v2:`` 前缀 + base64(salt(16) || nonce(12) || ct||tag)；
-# 旧版（无前缀）= base64(nonce(12) || ct||tag)，密钥为**裸 SHA-256** 派生（无盐、无迭代）。
-# 旧版仍可解（存量兼容），但读到后由 ``service_2fa`` 升级重写为新格式，不再新增旧格式密文。
+# **格式版本化**：``v2:`` 前缀 + base64(salt(16) || nonce(12) || ct||tag)。
 _CIPHER_V2_PREFIX = "v2:"
 _HKDF_INFO = b"lkm:totp-secret:v2"  # 域分离：防同主密钥在别处派生出同字节
 _SALT_LEN = 16
@@ -229,11 +227,6 @@ def _hkdf_key(salt: bytes) -> bytes:
     ).derive(reveal(settings.totp_encryption_key).encode())
 
 
-def _legacy_key() -> bytes:
-    """旧版派生（裸 SHA-256，无盐无迭代）——**仅**用于解密存量密文，勿用于新写入。"""
-    return hashlib.sha256(reveal(settings.totp_encryption_key).encode()).digest()
-
-
 def _unb64(value: str) -> bytes:
     try:
         return base64.b64decode(value, validate=True)
@@ -249,37 +242,27 @@ def _gcm_decrypt(key: bytes, nonce: bytes, ct: bytes) -> str:
 
 
 def encrypt_secret(plain: str) -> str:
-    """AES-256-GCM 加密，输出带版本前缀的新格式（每次随机盐 + nonce）。"""
+    """AES-256-GCM 加密：``v2:`` + base64(salt(16) || nonce(12) || ct||tag)，每次随机盐 + nonce。"""
     salt = os.urandom(_SALT_LEN)
     nonce = os.urandom(_NONCE_LEN)
     ct = AESGCM(_hkdf_key(salt)).encrypt(nonce, plain.encode(), None)
     return _CIPHER_V2_PREFIX + base64.b64encode(salt + nonce + ct).decode("ascii")
 
 
-def is_legacy_secret(cipher: str) -> bool:
-    """密文是否为旧版（无版本前缀）格式——供读到后升级重写。"""
-    return not cipher.startswith(_CIPHER_V2_PREFIX)
-
-
 def decrypt_secret(cipher: str) -> str:
-    """解密 ``encrypt_secret`` 产物（新旧两种格式都支持）。
-
-    密文损坏/被轮换/被截断时统一抛 ``ValueError("malformed ciphertext")``：原来的
+    """
+    解密 ``encrypt_secret`` 产物。
+    密文损坏/被轮换/被截断/格式不符时统一抛 ``ValueError("malformed ciphertext")``：原来的
     ``base64.b64decode`` 默认丢弃非字母表字符（静默解出错字节）、坏 padding 抛
     binascii.Error、长度不足则在切片后崩、tag 不符抛 cryptography 的 InvalidTag——
     四种形态各异且都不可诊断。收成一个明确的失败，日志里一眼能区分「密文坏了」和代码 bug。
     """
-    if cipher.startswith(_CIPHER_V2_PREFIX):
-        raw = _unb64(cipher[len(_CIPHER_V2_PREFIX) :])
-        if len(raw) < _SALT_LEN + _NONCE_LEN + _GCM_TAG_LEN:
-            raise ValueError("malformed ciphertext")
-        salt = raw[:_SALT_LEN]
-        nonce = raw[_SALT_LEN : _SALT_LEN + _NONCE_LEN]
-        ct = raw[_SALT_LEN + _NONCE_LEN :]
-        return _gcm_decrypt(_hkdf_key(salt), nonce, ct)
-
-    # 旧格式兜底：无盐、裸 SHA-256 派生
-    raw = _unb64(cipher)
-    if len(raw) < _NONCE_LEN + _GCM_TAG_LEN:
+    if not cipher.startswith(_CIPHER_V2_PREFIX):
         raise ValueError("malformed ciphertext")
-    return _gcm_decrypt(_legacy_key(), raw[:_NONCE_LEN], raw[_NONCE_LEN:])
+    raw = _unb64(cipher[len(_CIPHER_V2_PREFIX) :])
+    if len(raw) < _SALT_LEN + _NONCE_LEN + _GCM_TAG_LEN:
+        raise ValueError("malformed ciphertext")
+    salt = raw[:_SALT_LEN]
+    nonce = raw[_SALT_LEN : _SALT_LEN + _NONCE_LEN]
+    ct = raw[_SALT_LEN + _NONCE_LEN :]
+    return _gcm_decrypt(_hkdf_key(salt), nonce, ct)
