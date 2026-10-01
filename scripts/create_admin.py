@@ -1,14 +1,11 @@
-"""一次性初始化脚本：创建管理员账户。
-
+"""
+一次性初始化脚本：创建管理员账户。
 **必须在 auth 容器内执行**（用户/档案真值在 `lkm_auth` 库，由 `LKM_AUTH_DB_*` 指定；
 backend 容器只有 `LKM_DB_*` 业务库，在那边跑会插错库或直接失败）：
-
     LKM_ADMIN_PASSWORD='密码' docker compose exec -e LKM_ADMIN_PASSWORD auth \
         python scripts/create_admin.py almauser 'email' 'phone'
-
     # 也可省略密码改为交互输入（getpass）
     docker compose exec -it auth python scripts/create_admin.py almauser 'email' 'phone'
-
 密码复用 auth 域的标准哈希与新会话工厂。日常建号更推荐 ``scripts/admin_ops.py create``
 （支持幂等提示、避免命令行明文密码）。
 """
@@ -37,7 +34,7 @@ def _resolve_password(cli_value: str | None) -> str:
     """取建号密码：显式位置参数（兼容旧用法，告警）> LKM_ADMIN_PASSWORD > 交互输入。"""
     if cli_value:
         print(
-            "⚠ 检测到明文密码位置参数：它会留在 shell history，且执行期间可被 ps/proc 读到；"
+            "检测到明文密码位置参数：它会留在 shell history，且执行期间可被 ps/proc 读到；"
             "建议改用 LKM_ADMIN_PASSWORD 或不传该参数以交互输入。",
             file=sys.stderr,
         )
@@ -98,15 +95,13 @@ async def main() -> None:
             print(f"[skip] 唯一约束冲突（并发或重复执行）：{username}")
             return
         await db.refresh(user)
-        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图（§5.6），否则该管理员的
-        # 快照读会被布隆误判为「从未存在」。fail-open。
+        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图，否则该管理员的快照读会被布隆误判为「从未存在」
         await bloom.add(str(user.id))
         print(
             f"[ok] 管理员创建成功: id={user.id} username={user.username} account_level={user.account_level}"
         )
 
-        # 验证登录链路：哈希可校验。用显式 raise 而非 assert——assert 在 python -O 下会被
-        # 整条剥掉，而这是新凭据的唯一自检，静默跳过等于放行一个登不上的管理员账号。
+        # 验证登录链路：哈希可校验。
         if not await verifypwd(raw_password, user.hashed_password):
             raise SystemExit(
                 "[fail] 密码哈希校验失败（哈希链路异常），请勿使用该账号并排查 hashpwd/verifypwd"

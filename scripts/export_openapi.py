@@ -1,8 +1,7 @@
-"""从代码导出 OpenAPI 快照，供离线使用或归档。
-
+"""
+从代码导出 OpenAPI 快照，供离线使用或归档。
 用法：
     uv run python scripts/export_openapi.py [--json PATH] [--yaml PATH]
-
 默认导出到 docs/openapi/auto.openapi.json（JSON）。
 运行时生成的 /redoc、/docs、/openapi.json 始终是最新契约，本脚本仅用于
 团队想要一份离线快照/做 diff 对比时手动刷新，不替代运行时文档。
@@ -35,10 +34,6 @@ def main() -> None:
     parser.add_argument("--yaml", type=Path, default=None, help="（可选）YAML 输出路径")
     args = parser.parse_args()
 
-    # 应用装配必须放在 parse_args() **之后**：import app.main 会跑 create_app()
-    # （registry.load_all / 安全中间件 fail-fast 校验 / tracing / GraphQL schema），
-    # 放模块级会让 `--help` 也依赖完整生产配置，缺 LKM_ALLOWED_HOSTS 之类环境变量时
-    # 直接以 import 期的栈失败，而不是给出一条可读的 CLI 用法。
     from app.main import app
 
     spec = app.openapi()

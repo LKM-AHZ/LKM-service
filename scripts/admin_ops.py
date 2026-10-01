@@ -1,20 +1,7 @@
-"""管理员与会话运维（auth 库真值）。
-
-**必须在 auth 容器内执行**：拆库后管理员真值（users / profiles / refresh_tokens / totp）
-在 `lkm_auth` 库，只有 auth 服务配了 `LKM_AUTH_DB_*`。backend 容器只有 `LKM_DB_*`（biz 库），
-在那边跑本脚本会连错库。
-
-    docker compose exec auth python scripts/admin_ops.py list
-    docker compose exec auth python scripts/admin_ops.py unlock alma
-    docker compose exec auth python scripts/admin_ops.py revoke alma
-    docker compose exec auth python scripts/admin_ops.py reset-2fa alma --yes
-    LKM_ADMIN_PASSWORD='密码' docker compose exec -e LKM_ADMIN_PASSWORD auth \
-        python scripts/admin_ops.py create alma e@x.com 13800000000
-
-    # 也可省略密码改为交互输入（getpass）：
-    docker compose exec -it auth python scripts/admin_ops.py create alma e@x.com 13800000000
-
-取代 OPS-CHEATSHEET.md 里那段手写 heredoc 建号命令（后者用主库会话，拆库后已失效）。
+"""
+管理员与会话运维（auth 库真值）。
+必须在 auth 容器内执行**：拆库后管理员真值（users / profiles / refresh_tokens / totp）
+在 `lkm_auth` 库，只有 auth 服务配了 `LKM_AUTH_DB_*`。backend 容器只有 `LKM_DB_*`（biz 库）
 """
 
 from __future__ import annotations
@@ -106,8 +93,8 @@ async def cmd_unlock(username: str) -> int:
 
 
 async def _revoke_sessions(db: AsyncSession, user: User) -> int:
-    """吊销该用户全部会话：``token_version++``（作废已签发 access）+ 批量撤销 refresh。
-
+    """
+    吊销该用户全部会话：``token_version++``（作废已签发 access）+ 批量撤销 refresh。
     调用方负责 commit。返回被撤销的 refresh 条数。
     """
     user.token_version += 1
@@ -120,10 +107,9 @@ async def _revoke_sessions(db: AsyncSession, user: User) -> int:
 
 
 async def cmd_revoke(username: str) -> int:
-    """吊销该用户**全部**会话（前台 + 后台）。
-
-    token_version++ 使已签发的 access token 立即失效（admin 侧还叠加 updated_at 改密撤销
-    判定），同时把未撤销的 refresh token 全部标记 revoked。
+    """
+    吊销该用户**全部**会话（前台 + 后台）。
+    token_version++ 使已签发的 access token 立即失效（admin 侧还叠加 updated_at 改密撤销判定），同时把未撤销的 refresh token 全部标记 revoked。
     """
     db = await new_auth_session()
     try:
@@ -152,8 +138,7 @@ async def cmd_reset_2fa(username: str) -> int:
             return 1
         await db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user.id))
         await db.execute(delete(TOTP).where(TOTP.user_id == user.id))
-        # 同时吊销全部会话：重置 2FA 的典型场景是「账户可能已被他人登录控制」，
-        # 不吊销的话攻击者手里的 access/refresh 仍然有效，重置等于没做。
+        # 同时吊销全部会话
         revoked = await _revoke_sessions(db, user)
         await db.commit()
         print(
@@ -170,7 +155,6 @@ async def cmd_reset_2fa(username: str) -> int:
 async def cmd_create(username: str, email: str, phone: str, password: str) -> int:
     db = await new_auth_session()
     try:
-        # 三列各自唯一，OR 可能同时命中**不同**用户：取全部命中行逐个提示，
         # 不能用 scalar_one_or_none（两个命中会抛 MultipleResultsFound 崩成 traceback）。
         existing = (
             (
@@ -215,8 +199,7 @@ async def cmd_create(username: str, email: str, phone: str, password: str) -> in
             print(f"[skip] 唯一约束冲突（并发或重复执行）：{username}")
             return 1
         await db.refresh(user)
-        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图（§5.6），否则该管理员的
-        # 快照读会被布隆误判为「从未存在」。fail-open。
+        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图，否则该管理员的快照读会被布隆误判为「从未存在」。
         await bloom.add(str(user.id))
         print(f"[ok] 管理员创建成功：id={user.id} username={user.username}")
         return 0
@@ -226,8 +209,8 @@ async def cmd_create(username: str, email: str, phone: str, password: str) -> in
 
 
 def _resolve_password(cli_value: str | None) -> str:
-    """取待建管理员的密码：显式位置参数 > ``LKM_ADMIN_PASSWORD`` > 交互式输入。
-
+    """
+    取待建管理员的密码：显式位置参数 > ``LKM_ADMIN_PASSWORD`` > 交互式输入。
     位置参数仅为兼容既有的 `admin_ops.py create <用户名> <邮箱> <手机> <密码>` 用法保留，
     但明文会留在 shell history 与进程 cmdline（容器内任意进程可经 ps/proc 读到），故告警提示。
     """

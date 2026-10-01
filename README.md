@@ -10,7 +10,7 @@
 
 - Python `>=3.13`
 - [uv](https://docs.astral.sh/uv/)（依赖和命令入口）
-- PostgreSQL；完整消息、缓存和对象存储功能还需要 Pulsar、Redis 与 S3/MinIO
+- PostgreSQL；完整消息、缓存和对象存储功能还需要 Pulsar、Redis或Dragonfly 与 S3/MinIO
 
 首次安装：
 
@@ -18,7 +18,7 @@
 uv sync
 cp .env.example .env
 ```
-
+请务必把 .env 中标注为 change-me 的部分改为真实值。
 `.env` 只用于本地配置，不得提交真实密码、JWT 密钥或内部服务令牌。
 
 ## 当前能力
@@ -224,7 +224,7 @@ uv run ruff format .          # 写入格式化结果
 uv run lint-imports    # 架构依赖边界
 ```
 
-建议提交前执行：
+建议提交前执行并保证 ty 和 ruff 无报错，pytest 仅为参考，不强求 0 error ：
 
 ```bash
 uv run pytest

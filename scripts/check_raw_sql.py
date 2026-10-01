@@ -1,22 +1,17 @@
-"""裸 SQL 门禁：业务代码走 ORM，裸 SQL 只留 DDL/探活/ClickHouse（M 类 CI 门禁）。
-
+"""
+裸 SQL 门禁：业务代码走 ORM，裸 SQL 只留 DDL/探活/ClickHouse（M 类 CI 门禁）。
 口径见 ``DEVELOPMENT.md``「类型门禁与 lint」：LKM-service 的 PostgreSQL 访问统一经
 SQLAlchemy ORM 与 :class:`core.db.repository.AsyncRepository`。裸 SQL 会绕开软删过滤等
 横切逻辑、绕开分层契约（service 只 flush、sqlalchemy import 收口在 db 层），也拿不到
 ORM 的类型安全。
-
 本脚本以 AST 静态扫描（零依赖、不需要数据库）拦截两类回潮：
-
 - ``text(...)`` / ``sa.text(...)`` 调用——SQLAlchemy 执行原生 SQL 的入口；
 - 语句以 ``SELECT `` / ``INSERT INTO`` / ``UPDATE `` / ``DELETE FROM`` 开头的字符串
   字面量（含 f-string 的静态片段）。docstring 与注释不算。
-
 ``ALLOWLIST`` 内的文件整体放行——那里是 ORM 无法表达的场景：建表/建索引/扩展装配、
 列 ``server_default`` 调 PG 函数、健康探活 ``SELECT 1``、ClickHouse 专用 client。
 放行文件仍会打印命中数，便于 review 新增用法。
-
 **不覆盖**：alembic 迁移（其本职就是 DDL）。
-
 用法：``uv run python scripts/check_raw_sql.py``（失败时非零退出）。
 """
 

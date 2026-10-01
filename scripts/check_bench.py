@@ -12,15 +12,14 @@ def _load_stats(prefix: str) -> list[dict[str, str]]:
     candidates = [
         Path(prefix + "_stats.csv"),
         Path(prefix + "_statistics.csv"),
-        # 用字符串拼接而非 Path.with_suffix：后者会把 prefix 里最后一段后缀替换掉，
-        # `bench.v2` 会被探成 `bench.csv`，与 docstring 写的裸 `{prefix}.csv` 不符。
+        # 用字符串拼接而非 Path.with_suffix：后者会把 prefix 里最后一段后缀替换掉
         Path(prefix + ".csv"),
     ]
     for path in candidates:
         if path.exists():
             with path.open(encoding="utf-8") as f:
                 return list(csv.DictReader(f))
-    # sys.exit 抛 SystemExit，函数到此即止（原先后面还留了句永不执行的 return []）
+    # sys.exit 抛 SystemExit，函数到此即止
     print(
         f"[check_bench] 未找到 locust statistics csv: {prefix}",
         file=sys.stderr,
@@ -56,7 +55,7 @@ def main() -> int:
     # locust stats csv 列名（2.x）：Type / Name / Request Count / Failure Count /
     print(f"{'Method':<6}{'Name':<52}{'#Req':>8}{'Fail%':>8} {'P95(ms)':>9}{'RPS':>12}")
     violations = 0
-    enforced: set[str] = set()  # 真正被断言的预算项，用于事后找出「一条都没匹配上」的
+    enforced: set[str] = set()  # 真正被断言的预算项
     for r in rows:
         name = r.get("Name", "") or ""
         n_req = r.get("Request Count", "0") or "0"
@@ -85,7 +84,7 @@ def main() -> int:
             ok_rps = float(rps_raw) >= rps_min
         except ValueError:
             # 预算命中却解析不出指标（列缺失/为空 "-"/本地化千分位）：必须按违规计，
-            # 否则「解析失败 → 跳过」会让门禁在最该拦下的情况下报成功（fail-open）。
+            # 否则「解析失败 → 跳过」会让门禁在最该拦下的情况下报成功。
             violations += 1
             print(
                 f"[CHECK] VIOLATION {name}: 指标无法解析 P95={p95!r}(max {p95_max}) "
@@ -94,16 +93,14 @@ def main() -> int:
             continue
         if not (ok_p95 and ok_rps):
             violations += 1
-            # 只报真正越界的那一项，并写对比较方向（P95 是上限、RPS 是下限；原先把 P95
-            # 也印成 ">=" 与断言相反，且两项一起印，看不出到底哪项破了）。
+            # 只报真正越界的那一项，并写对比较方向
             details = []
             if not ok_p95:
                 details.append(f"P95={p95}ms > {p95_max}ms")
             if not ok_rps:
                 details.append(f"RPS={rps} < {rps_min}")
             print(f"[CHECK] VIOLATION {name}: {'; '.join(details)}")
-    # 一条都没匹配上的预算项（端点名拼错/已改名）会让门禁「零断言却报成功」，
-    # 按 fail-closed 计为违规。
+    # 一条都没匹配上的预算项（端点名拼错/已改名）会让门禁「零断言却报成功」，按 fail-closed 计为违规。
     unmatched = sorted(set(budget) - enforced)
     if unmatched:
         violations += len(unmatched)

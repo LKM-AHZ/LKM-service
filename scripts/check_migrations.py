@@ -1,15 +1,10 @@
-"""迁移链体检：逐条 revision 做离线 SQL 双向生成（M6.12 CI 门禁）。
-
+"""
+迁移链体检：逐条 revision 做离线 SQL 双向生成。
 离线（``--sql``）生成不需要数据库，因此可在 CI 上零依赖运行；能挡住四类回归：
-
 - 迁移模块 import/语法错误（``upgrade`` 直接抛异常）；
 - ``down_revision`` 链断裂或分叉（alembic 拒绝解析）；
 - 迁移缺 ``downgrade()`` 实现（``downgrade --sql`` 报错）；
 - downgrade 引用了 upgrade 未创建的对象（生成期即可报错的部分）。
-
-**不覆盖**：DDL 在真实 PG 上的语义正确性（那需要真库；本仓库的验收惯例是「对目标
-revision 在最小前置表上双向实跑」，见执行路线图 §8 的迁移验证记录）。
-
 用法：``uv run python scripts/check_migrations.py``（失败时非零退出）。
 """
 
@@ -24,10 +19,6 @@ from alembic.script import ScriptDirectory
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# 进程内解析迁移链（_revisions）跑在调用者的 cwd 下，而 alembic 的 prepend_sys_path = .
-# 是相对 cwd 解析的、版本模块里又有 `import core.db.base` 这类仓库内导入——从别处调用
-# `python <repo>/scripts/check_migrations.py` 会直接 ImportError。子进程那条路（_run）
-# 显式钉了 cwd=REPO_ROOT，这里补上等价的 sys.path 入口，让两条路都不依赖调用者 cwd。
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -42,8 +33,8 @@ _RUN_TIMEOUT_S = 120
 
 
 def _run(ini: str, *args: str) -> subprocess.CompletedProcess[str]:
-    """跑一次离线 alembic 子进程；超时转成 rc=124 的「失败」结果而不是无限挂住 CI。
-
+    """
+    跑一次离线 alembic 子进程；超时转成 rc=124 的「失败」结果而不是无限挂住 CI。
     每条 revision 会起两个 `alembic --sql` 进程，卡住的 env.py（等输入 / 离线判断前
     就去连库）会让 CI 永远不结束；这里给硬上界并把它降级成普通错误项。
     """
@@ -65,12 +56,6 @@ def _run(ini: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _revisions(ini: str) -> list[tuple[str, tuple[str, ...]]]:
-    """返回 ``[(revision, 全部父 revision)]``（从 base 向 head 排列）。
-
-    merge revision 的 ``down_revision`` 是元组，这里**保留全部父节点**：原先只取
-    ``down[0]``，另一条分支的那条边（及其分支专属的 downgrade 路径）就永远不会被
-    ``--sql`` 体检覆盖到。
-    """
     script = ScriptDirectory.from_config(Config(str(REPO_ROOT / ini)))
     out: list[tuple[str, tuple[str, ...]]] = []
     for rev in reversed(list(script.walk_revisions())):

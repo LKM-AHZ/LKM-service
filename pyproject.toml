@@ -1,9 +1,7 @@
 [project]
-# name 仍是 `uv init` 的占位名：它同时被 uv.lock 记录（`name = "backend"`），改名必须同步重跑
-# `uv lock` 才能过 CI 的 `uv sync --locked`（本单元不跑 uv / 不动 lock），故只改下面这条占位描述。
 name = "backend"
-version = "0.1.0"
-description = "理科迷社区后端服务（FastAPI + SQLAlchemy + PostgreSQL + Pulsar）"
+version = "0.1.1"
+description = "理科迷社区后端服务"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
@@ -34,7 +32,6 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
     "opentelemetry-instrumentation-httpx>=0.49b0",
     "prefect>=3.8.5,<4",
-    # [async] extra 必需：不加则 get_async_client 在运行期 ImportError（缺 aiohttp）
     "clickhouse-connect[async]>=0.8",
     "meilisearch>=0.43.0",
     "opensearch-py>=3.2.0",
@@ -125,11 +122,10 @@ quote-style = "double"
 [tool.ty.environment]
 python-version = "3.13"
 
-# 架构边界门禁（四个顶层包）。
+# 架构边界门禁。
 # 允许：app → core、auth → core、boot → {app, auth, core}；
 # 禁止：core → {app, auth, boot}；app 与 auth 之间任何方向的直接 import。
-# 两侧的跨包协作一律走 core 的注册表与端口（core/ports、core/route_registry、
-# core/db/model_registry、core/task_registry），由组合根 boot/assemble 完成装配。
+# 两侧的跨包协作一律走 core 的注册表与端口，由组合根 boot/assemble 完成装配。
 [tool.importlinter]
 root_packages = ["core", "app", "auth", "boot"]
 
@@ -138,7 +134,6 @@ name = "边界: core 不依赖 app/auth/boot"
 type = "forbidden"
 source_modules = ["core"]
 forbidden_modules = ["app", "auth", "boot"]
-# 含间接依赖：core 是共享底座，任何反向边都必须为零。
 allow_indirect_imports = "false"
 
 [[tool.importlinter.contracts]]
@@ -146,7 +141,6 @@ name = "边界: app 不依赖 auth/boot"
 type = "forbidden"
 source_modules = ["app"]
 forbidden_modules = ["auth", "boot"]
-# 含间接依赖：auth 的能力只能经 core.ports 取，不能经第三方绕回 auth。
 allow_indirect_imports = "false"
 
 [[tool.importlinter.contracts]]
@@ -157,7 +151,6 @@ forbidden_modules = ["app", "boot"]
 allow_indirect_imports = "false"
 
 # 注：app.modules.rbac / app.modules.storage 之中，rbac 仍是全模块共享的鉴权原语；
-# 存储抽象（storage）已下沉 core.storage。二者都刻意不入下面的 source/forbidden 名单。
 [[tool.importlinter.contracts]]
 name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
