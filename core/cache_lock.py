@@ -1,17 +1,9 @@
-"""跨进程缓存互斥锁（蓝图 §5.6 的 L2 double-check 击穿防护）。
-
-**为什么需要**：``core/singleflight.py`` 只收敛**单进程**内的并发 miss；多副本部署下 N 个
-进程会各自回填一次 L2，DB 压力 × N。本模块提供跨进程互斥，让「仅持锁实例回填」成立。
-
+"""
+跨进程缓存互斥锁。
 **失败模式全部 fail-open**（宁可多查一次 DB，不可让读阻塞或抛错）：
-
 - 持锁者崩溃 → 锁的 TTL 自动过期，无需人工清理（无 TTL 的锁正是死锁的来源）；
-- 等锁超时（``cache_lock_wait_ms``）→ 放弃等待、走无锁直读，**不制造死锁**；记
-  ``cache_lock_total{result=timeout}`` 以便观察。
-- 释放用 ``WATCH`` + token 比对 + ``MULTI/DEL`` 乐观锁：**刻意不用 Lua**——单测环境的
-  fakeredis 没有脚本引擎，``eval`` 会抛；若被 suppress 包住就成了「锁永远删不掉」的静默
-  假绿（本仓 2026-09-22 在 ``migration_lock`` 踩过同一坑）。
-
+- 等锁超时（``cache_lock_wait_ms``）→ 放弃等待、走无锁直读，**不制造死锁**；记``cache_lock_total{result=timeout}`` 以便观察。
+- 释放用 ``WATCH`` + token 比对 + ``MULTI/DEL``
 与 ``redis.set(nx=True)`` 的既有先例（``auth/user_dim_sync.py``、``db/migration_lock.py``）
 同款原语，差别在本模块是**短 TTL + 可放弃等待**的读路径锁，不追求严格互斥。
 """
@@ -21,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -61,8 +53,8 @@ async def _wait_for_lock(client: Any, lock_key: str, token: str, ttl: int) -> bo
 
 
 async def _release(client: Any, lock_key: str, token: str) -> None:
-    """只删**自己持有的**锁：WATCH + token 比对 + MULTI/DEL。
-
+    """
+    只删**自己持有的**锁：WATCH + token 比对 + MULTI/DEL。
     不做 token 比对直接 DEL 会误删「自己超时后他人重新获取的锁」，把互斥破坏成空转。
     """
     try:
@@ -83,16 +75,15 @@ async def _release(client: Any, lock_key: str, token: str) -> None:
 
 
 @asynccontextmanager
-async def l2_lock(key: str) -> AsyncIterator[bool]:
-    """尝试获取跨进程锁，yield ``True``=持锁 / ``False``=未取到（调用方走无锁 fail-open）。
-
-    开关关闭或 Redis 不可用时恒 ``False``——此时行为与引入本模块前完全一致。
+async def l2_lock(key: str) -> AsyncGenerator[bool]:
+    """
+    尝试获取跨进程锁，yield ``True``=持锁 / ``False``=未取到（调用方走无锁 fail-open）。
+    开关关闭或 Redis 不可用时恒 ``False``。
     """
     if not settings.cache_lock_enabled:
         yield False
         return
-    # 按**底层缓存键**路由（而非派生出的 lkm:lock: 串）：锁必须与被锁的缓存值落在同一后端，
-    # 否则 double-check 失效——持锁者与读缓存者各看一个后端，锁形同虚设。
+    # 按**底层缓存键**路由：锁必须与被锁的缓存值落在同一后端，否则 double-check 失效。
     client = await redis_client.get_redis(key)
     if client is None:
         yield False

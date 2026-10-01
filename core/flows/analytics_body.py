@@ -1,14 +1,9 @@
-"""ClickHouse 分析导出的纯体层（M5 7.2.6，**无 Prefect 依赖**）。
-
+"""
+ClickHouse 分析导出的纯体层（M5 7.2.6，**无 Prefect 依赖**）。
 被两条路径共用：
 - ``app/flows/analytics.py`` 的 Prefect task（生产，带重试）；
 - ``auth/tasks.py`` 的 cron 回落直调（``LKM_PREFECT_ENABLED=false`` 或触发失败）。
-
 audit 那一路经 ``core.ports.audit`` 取 auth 能力（core 不 import auth）。
-
-刻意不 import prefect：保证回落路径与「默认关」场景零 Prefect 依赖、worker 冷启动不被拖累。
-负责开各 realm 会话并调用 owner 侧导出入口（业务库 event_failures / auth 库 audit_logs），
-不复制业务 SQL。
 """
 
 from __future__ import annotations

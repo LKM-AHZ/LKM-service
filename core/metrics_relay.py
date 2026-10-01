@@ -1,31 +1,4 @@
-"""跨进程业务指标中继：非 API 进程经 Redis 由 API 进程代报（选项③）。
-
-**问题**：Prometheus 只抓 ``backend:8000``（父仓 ``deploy/prometheus/prometheus.yml``），
-而一批业务指标是在**非 API 进程**里累加的（outbox relay 的积压/选主、content-index worker
-的事件计数、jobs cron 的对账震荡、auth 侧的审计事件、以及 API/worker/auth 三处都写的
-``notify_failed_total``/``user_snap_*``）。这些 series 在 backend 进程里恒为空或 0 ——
-``lkm-outbox.yml`` 的告警取数链路是断的（"规则在、保护假"）。
-
-**修法（用户拍板 ③）**：与 ``app/core/scheduler_state.py`` 同范式，但对象从"调度器运行态"
-换成"指标本身"：
-
-- **非 API 进程**（9 个 worker 容器 + worker-dlq + worker-scheduler + auth）按周期把
-  ``RELAYED`` 各指标的当前值（含全部 label 组合）写进 ``lkm:{env}:metrics:relay:{实例}``，
-  TTL = 3×周期；进程没了键自然过期，无需注销。
-- **API 进程**（唯一被 Prometheus 抓取的进程）周期扫描该前缀，把各实例快照聚合后落到
-  **同一批指标对象**上——指标名与类型都不变，故既有告警规则的表达式零改动。
-
-**聚合口径（必须知道的两条近似）**：
-
-1. **counter 用"本地 + 远端增量"**：远端各实例求和后，只把**增量** ``inc`` 到本地对象
-   （``_remote_totals`` 记上次基线）。远端值**下降**（worker 重启令其进程内计数归零）时只
-   重置基线、不回退——Counter 不能 ``inc`` 负数，且这样 Prometheus 侧永不出现 counter reset。
-   代价：重启丢掉的那部分计数不补，**斜率仍正确**（适配 ``increase()`` 类告警），但**不能拿
-   它当绝对总量做账**。
-2. **gauge 取跨实例 max**：多副本 relay 时非 leader 副本的快照里积压值是 0 或陈旧值，取 max
-   才不会被拉低。这只对"越大越坏"的 gauge（积压）成立——**往 ``RELAYED`` 里加会下降的 gauge
-   前必须回审这条**。
-
+"""跨进程业务指标中继：非 API 进程经 Redis 由 API 进程代报。
 Redis 不可用两侧都 fail-open：写失败只记日志；读失败保留上次值并把 ``metrics_relay_up`` 置 0
 （"不知道远端状态"与"远端异常"对告警同解——宁可吵，不可沉默）。
 """
@@ -73,10 +46,7 @@ class RelaySpec:
     metric: Any
 
 
-# 中继清单 = 唯一事实源：**在非 API 进程里被写**的业务指标，一个都不能漏（漏了就是无声丢数）。
-# 判定口径：写出点出现于 worker/scheduler/auth 任一路径即纳入；纳入无副作用（远端恒 0 时增量
-# 恒 0），遗漏才是缺陷。刻意**不含** post_created_total / search_engine_fallback_total /
-# graphql_* —— 它们的写出点全部在 API 进程内（已核对调用链）。
+# 中继清单 = 唯一事实源
 RELAYED: tuple[RelaySpec, ...] = (
     # worker-outbox（app/core/outbox_relay.py）：积压 gauge + 选主事件计数，lkm-outbox.yml 靠它判活
     RelaySpec("outbox_pending_count", "gauge", (), outbox_pending_count),
@@ -145,11 +115,8 @@ def relay_key_pattern() -> str:
 
 
 def snapshot() -> list[list[Any]]:
-    """读本进程 ``RELAYED`` 各指标的当前值：``[[name, [label_value...], value], ...]``。
-
-    只经 ``metric.collect()`` 的公开 ``Sample``（不用私有 ``_metrics``）：Counter 会多出
-    ``*_created`` 样本，靠"样本名 == 声明名"过滤（Counter 的 ``*_total`` 后缀在 collect 时
-    由 prometheus_client 自己补回，故等值成立——见 tests 的清单完整性断言）。
+    """
+    读本进程 ``RELAYED`` 各指标的当前值：``[[name, [label_value...], value], ...]``。
     """
     out: list[list[Any]] = []
     for spec in RELAYED:
@@ -202,10 +169,8 @@ _publisher: asyncio.Task[None] | None = None
 
 
 def start_publisher() -> None:
-    """在非 API 进程启动指标快照发布（幂等；未启用指标则整体不启动）。
-
-    ``run_default_worker`` 会并发跑 4 个 ``_consume``、每个 ``_consume`` 都调本函数，
-    故必须幂等——只留一个发布 task。
+    """
+    在非 API 进程启动指标快照发布（幂等；未启用指标则整体不启动）。
     """
     global _publisher
     if not settings.metrics_enabled:
@@ -244,12 +209,8 @@ def _reset_remote_totals() -> None:
 def _parse_payload(
     raw: Any, key: str = ""
 ) -> list[tuple[str, tuple[str, ...], float]] | None:
-    """把一份快照载荷解析成 ``[(name, labels, value)]``；载荷整体非法返回 None。
-
-    - **返回 None** = 载荷不是 JSON 数组（损坏）→ 调用方不计入"存活实例"。
-    - **返回 []** = 是数组但没有一条能认（指标名不在清单 / label 个数不符 / 值非数字）→
-      仍算"实例活着、只是本进程认不出它的条目"。label 个数不符 + 名不在清单是**版本偏斜**
-      （新旧进程清单不一致）的典型形态，故逐条记 DEBUG，别让它静默丢数。
+    """
+    把一份快照载荷解析成 ``[(name, labels, value)]``；载荷整体非法返回 None。
     """
     try:
         decoded = json.loads(raw)

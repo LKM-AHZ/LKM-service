@@ -1,10 +1,5 @@
-"""Infisical 启动密钥拉取（M5 7.2.3）。
-
-在 Docker ENTRYPOINT 中、任何 ``import app.*``（尤其 ``config.settings = Settings()``
-在导入期即实例化）**之前**运行：经 universal-auth machine identity 登录 Infisical，
-按项目/环境/路径拉取 raw secrets，把 ``LKM_*`` 写入 ``os.environ`` 后 exec 原 command。
-故不 import ``core.config``（避免提前求值 Settings 而漏掉刚注入的值）。
-
+"""
+Infisical 启动密钥拉取。
 语义：
 - ``LKM_INFISICAL_ENABLED`` 默认 false → 直接 exit 0（本地/dev 用 .env，零网络）。
 - 已存在的进程环境变量**优先**（compose 显式下发/本地 override 胜），Infisical 只补缺。
@@ -15,7 +10,6 @@
   优先级 **文件 > env**；文件路径未配置或文件不存在回落 env（本地开发无需建文件），
   文件存在但不可读/为空则按 ``_REQUIRED`` 处理（配置错不该被静默当成"没配"）。
   这是「零明文」的关键一步：此前 client_id/secret 只能经 env 下发（鸡生蛋，无 Infisical 可依赖）。
-
 测试：``bootstrap(environ=..., client_factory=...)`` 注入假 ``httpx.Client``（MockTransport）。
 """
 

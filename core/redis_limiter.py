@@ -1,5 +1,5 @@
-"""基于 Redis 有序集合（ZSET）的精确滑动窗口限流器（async）。
-
+"""
+基于 Redis 有序集合（ZSET）的精确滑动窗口限流器（async）。
 与旧内存滑动窗口语义一致；Redis 不可用时放行（fail-open）。
 """
 
@@ -50,8 +50,8 @@ async def _ensure_script(redis: Redis) -> str:
 
 
 class RedisRateLimiter:
-    """每个 key 维护一个 ZSET（score=时间戳、member=随机 UUID）。
-
+    """
+    每个 key 维护一个 ZSET（score=时间戳、member=随机 UUID）。
     ``fail_open=True``（默认）时 Redis 不可用/异常即放行，适合读缓存等非安全场景；
     登录、验证码、2FA 等安全限流应传 ``fail_open=False``，Redis 故障时宁可拒绝
     （fail-close），避免暴力破解防线在依赖抖动瞬间消失。
@@ -89,13 +89,6 @@ class RedisRateLimiter:
                 )
                 return await awaitable == 1
             except ResponseError as exc:
-                # 缓存的 SHA 在本进程外失效（Redis 重启 / SCRIPT FLUSH / 主从切换 /
-                # 改指其它实例）：丢弃本地缓存重载脚本再试一次，否则会被下面的兜底
-                # 当成普通异常，限流在 fail_open 下静默失效直到进程重启。
-                #
-                # 判定须同时认错误码与消息体：redis-py 8.x 起 ``str(exc)`` 只剩消息体
-                # （``'No matching script. Please use EVAL.'``），不再带 ``NOSCRIPT`` 前缀——
-                # 只查码会让本分支永不触发（2026-09-29 对真 Redis 实测发现）。
                 detail = str(exc).upper()
                 if attempt == 0 and ("NOSCRIPT" in detail or "NO MATCHING SCRIPT" in detail):
                     _script_shas.pop(redis, None)

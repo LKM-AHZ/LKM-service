@@ -1,9 +1,7 @@
-"""建表前必须就绪的 **库级共享对象**（业务库与 auth 库各自一份）。
-
+"""
+建表前必须就绪的 **库级共享对象**（业务库与 auth 库各自一份）。
 拆库后两条建库链（业务库 ``init_db`` / auth 库 ``auth.db.init``）都需要同一批
 PG 级前置对象，故从 ``app/db/init_db.py`` 抽出为共享工具，避免任何一侧反向依赖另一侧。
-
-本模块不得 import 业务模块或 auth 包。
 """
 
 from __future__ import annotations
@@ -36,8 +34,8 @@ $$ LANGUAGE plpgsql VOLATILE;
 
 
 async def _run_shared_ddl(conn: Any, sql: str, what: str) -> None:
-    """执行一条共享对象 DDL，容忍「并发下已被别的进程建好」。
-
+    """
+    执行一条共享对象 DDL，容忍「并发下已被别的进程建好」。
     本函数被多个进程/多个 xdist worker 在启动期并发调用，而 PG 对
     ``CREATE EXTENSION`` / ``CREATE OR REPLACE FUNCTION`` 的目录写入并非完全可并发
     （实测会撞 duplicate key / "tuple concurrently updated"）。这类失败等于「别人已建好」，
@@ -60,14 +58,13 @@ async def _run_shared_ddl(conn: Any, sql: str, what: str) -> None:
 
 
 async def ensure_shared_objects(conn: Any) -> None:
-    """建表前必须就绪的库级共享对象（幂等）。
-
+    """
+    建表前必须就绪的库级共享对象（幂等）。
     1. ``pg_trgm`` 扩展：M6.9 trgm 索引的 opclass 依赖它，索引 DDL 显式写
        ``public.gin_trgm_ops``，故扩展须在 public（schema-per-test 的 search_path 不含 public）。
     2. ``public.uuid_generate_v7()``：UUID 主键列的 ``server_default`` 目标（RFC 9562 uuid7，
        时间有序）。**必须在 ``create_all`` 之前建**——PG 建表即解析 DEFAULT 表达式，
        函数不存在会直接报错。建在 public，故模型侧 ``server_default`` 显式限定 schema。
-
     ``gen_random_uuid()`` 自 PG13 起是 core 内置，无需 pgcrypto 扩展。
     """
     import sqlalchemy as sa

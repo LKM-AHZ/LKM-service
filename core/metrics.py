@@ -1,8 +1,5 @@
-"""可观测基座 · Prometheus metrics（M0.5.1 端点/自动埋点；M0.5.2 业务计数定义）。
-
-与 sentry(apm.py) 平行的本体可观测接入：给 FastAPI 加自动 HTTP 埋点并暴露 /metrics
-抓取端点。语义同 Sentry：
-
+"""
+可观测基座 · Prometheus metrics。
 - 默认开启（本地无副作用收集器，成本极低）；`LKM_METRICS_ENABLED=false` 可整体关闭；
   关闭/挂载失败一律 fail-open（仅记日志，不阻塞应用启动）。
 - 幂等：同一 app 重复装配不重复注册（prometheus_client 用全局默认 REGISTRY，同名 metric
@@ -24,10 +21,6 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ---- M0.5.2 业务指标占位 ----
-# prometheus_client 全局默认 REGISTRY 唯一注册，故计数器建在模块级单例，消费方
-# import 引用即可，避免重复 `Counter(...)` 撞同名 (prometheus 对同名二次注册抛 ValueError)。
-# metrics_enabled=false 仅隐藏 /metrics 导出，计数本身照常累计（成本可忽略）。
 post_created_total = Counter(
     "post_created_total",
     "全内容产出：统一 content_items / 专栏原生发帖成功落库后 +1（label content_type）",
@@ -121,7 +114,7 @@ counts_reconcile_repeated_total = Counter(
 )
 
 
-# 审计事件消费计数（蓝图 §5.2 的 audit.* 家族）：审计此前只批量导出到 ClickHouse，属
+# 审计事件消费计数：审计此前只批量导出到 ClickHouse，属
 # 「事后可查」；这里把登录失败/权限变更变成**实时可告警**的流。action 维度取
 # ``messaging.RKEY_AUDIT_*`` 的值；告警规则见 deploy/prometheus/rules/lkm-audit.yml。
 audit_events_total = Counter(
@@ -156,13 +149,7 @@ graphql_query_depth = Histogram(
 )
 
 
-# ---- 调度器运行态（蓝图 §5.5 第 6 条「生命周期监控」）----
-# 蓝图要求「调度器运行态(启用/暂停/待触发队列)暴露指标，生命周期异常(未停残余)可观测」。
-# **取数路径**：调度器在独立 worker-scheduler 进程（§5.5-3① 拓扑），该进程既不跑 ASGI
-# 也不暴露 /metrics，故指标不由它直接 set——它把运行态写进 **Redis 心跳**，由 **API 进程**
-# （唯一被 Prometheus 抓取的进程，见父仓 prometheus.yml）的 reporter 读取后 set，与
-# ``pulsar_subscription_backlog`` 同一范式。实现见 app/core/scheduler_state.py。
-# 这四个值因此**在 backend 进程里被更新**：唯一写者 = reporter，不存在两进程各写一半。
+# ---- 调度器运行态 ----
 scheduler_up = Gauge(
     "scheduler_up",
     "调度器心跳是否新鲜：1=在跑，0=进程没了/卡死/心跳不可读（§5.5 第 6 条，告警取数点）",
@@ -182,10 +169,6 @@ scheduler_pending_jobs = Gauge(
 
 
 # ---- 跨进程指标中继的自观测（app/core/metrics_relay.py）----
-# 非 API 进程（worker/scheduler/auth）的业务指标经 Redis 快照由 API 进程代报——这两条就是
-# 那条链路的自检：instances=0 表示一个生产者的快照都读不到（进程全没 / 前缀配错 / Redis 断），
-# up=0 表示本轮没读到任何有效快照。没有它们，"中继悄悄断链 → 指标冻结在旧值"又是一层假保护。
-# 实现与聚合口径见 metrics_relay 的模块 docstring。
 metrics_relay_instances = Gauge(
     "metrics_relay_instances",
     "本轮读到的有效指标快照数（非 API 进程生产者数；0=中继无来源）",
@@ -196,15 +179,9 @@ metrics_relay_up = Gauge(
 )
 
 
-# ---- 连接池水位（蓝图 §3.3 第 3 条，标"关键"）----
-# Web 主池与 worker 批处理池各自独立（见 app/db/session.py）。size/checkedout/overflow 是
-# **瞬时量**，普通 Gauge 需要有人周期 set，会把「实时」退化成「上次任务跑时」；故用
-# Collector 在**抓取时刻**读池对象。未创建的惰性引擎不得被唤醒（走访问器会凭空建池并
-# 开连接），所以直接读 session 模块的全局单例，None 即跳过。指标命名与告警见
-# deploy/prometheus/rules/lkm-pool.yml。
+# ---- 连接池水位 ----
 class DBPoolCollector(Collector):
     """把两个 asyncpg 连接池的水位暴露为 ``db_pool_connections{pool,state}``。"""
-
     _METRIC = "db_pool_connections"
     _HELP = (
         "数据库连接池水位（pool=web|worker，state=size|checked_out|overflow|checked_in）"

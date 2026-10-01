@@ -1,17 +1,7 @@
-"""按 key 的进程内请求合并（singleflight，roadmap §5.4/§5.6 防击穿）。
-
+"""
+按 key 的进程内请求合并。
 同一进程内并发请求同一 key 时，只有一个协程真正执行 loader，其余协程复用其返回值——
 热点 key 失效瞬间不会同时打穿 AUTH/DB。
-
-本模块按**引用计数**回收 flight，key 归零（含无界 key，如 user_id 数量级）即移出字典，
-不会随 key 增长泄漏内存；``core.cache.cached_read`` 的并发单飞也复用本模块（原先自持
-常驻锁字典，键含用户可控 slug 与每次 bump 都变的版本号，字典只增不减）。
-
-- owner 以 ``asyncio.create_task(loader())`` 执行；所有调用方 ``await asyncio.shield(task)``，
-  owner 请求被取消不会连带取消共享加载（其余等待方仍拿到结果）。
-- loader 异常经 shield 传播给所有等待方；``done_callback`` 消费异常，避免 task 结束后
-  "exception was never retrieved" 告警。
-- 不再叠加跨进程 L2 互斥锁（本期从简；见路线图 §8 登记）。
 """
 
 from __future__ import annotations
@@ -39,9 +29,7 @@ def _on_task_done(key: str, flight: _Flight, task: asyncio.Task[Any]) -> None:
     if not task.cancelled():
         with suppress(Exception):
             task.exception()
-    # 最后一个等待方在任务完成前被取消时，run() 的 finally 不敢回收表项（shield 仍在跑
-    # loader），须由这里兜底回收；否则该 key 会永久驻留，后续请求会复用已完成任务的
-    # 陈旧结果。refs<=0 保证无人在等，回调与 run() 同处事件循环线程，判断是原子的。
+    # 最后一个等待方在任务完成前被取消时，run() 的 finally 不敢回收表项。
     if flight.refs <= 0 and _flights.get(key) is flight:
         _flights.pop(key, None)
 

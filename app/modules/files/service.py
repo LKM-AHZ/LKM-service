@@ -3,7 +3,7 @@ import hashlib
 import json
 import tempfile
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -234,7 +234,7 @@ async def _release_hash_lock(content_hash: str, token: str) -> None:
 
 
 @asynccontextmanager
-async def _hash_lock(content_hash: str) -> AsyncIterator[None]:
+async def _hash_lock(content_hash: str) -> AsyncGenerator[None]:
     """await 获取锁，确保拿到后在退出时释放。锁等不到/Redis 异常按放行(不阻断上传/删除)。"""
     token: str | None = None
     try:

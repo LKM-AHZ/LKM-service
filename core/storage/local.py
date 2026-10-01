@@ -1,5 +1,5 @@
-"""本地磁盘存储后端：把 ``bucket_key`` 映射到 ``root_dir`` 下的路径。
-
+"""
+本地磁盘存储后端：把 ``bucket_key`` 映射到 ``root_dir`` 下的路径。
 字节级存取，不负责内容寻址/去重策略（由 files 层决定 key 形状、计算哈希）。落盘
 逻辑收编自 ``app/modules/files/service.py`` 的 ``_write_upload``/``_stream_to_disk_hash``
 /``_new_temp_file``，仅改变路径来源改写而保留其安全语义。

@@ -1,18 +1,5 @@
-"""通用 Repository 基类：把服务层反复出现的 CRUD 收敛成一处。
-
-设计口径（见计划批 3）：
-
-- **模型由子类类属性绑定**（``model``），主键用**运行期属性名** ``pk_attr``（默认
-  ``"id"``）解析，不绑类型——UUID 与 Integer 主键天然兼容。
-- **软删除动态判定**：模型上真有 ``deleted_at`` 列才施加过滤，无列零副作用；逃生口
-  统一是 ``include_deleted=True``。
-- **事务归属：只 flush，永不 commit/begin/begin_nested**。唯一提交主体仍是会话依赖
-  （``app/db/session.py:get_session``、``auth/db/session.py:get_auth_session``）与
-  最外层 task。基类里出现第二个提交主体会破坏「service 只 flush」契约。
-- **只 import sqlalchemy / core / core.db**，守住 import-linter 契约②
-  （``core.db`` 不得反向依赖 ``app.modules``）。业务域查询放
-  ``app/modules/<domain>/repository.py`` 的子类里。
-
+"""
+通用 Repository 基类：把服务层反复出现的 CRUD 收敛成一处。
 与 :mod:`core.db.repo` 的分工：那三个模块级函数（``get_or_raise`` / ``consume_once`` /
 ``isolated_update``）**原样保留**，各有独立语义（router 直接用、事务原语、savepoint）。
 ``consume_once`` / ``isolated_update`` 本基类不提供同名方法，避免出现两套签名；``get_or_raise``

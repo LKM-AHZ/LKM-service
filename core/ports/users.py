@@ -1,5 +1,5 @@
-"""用户/通知能力端口：渠道与 provider、用户运维操作、user_dim 对账。
-
+"""
+用户/通知能力端口：渠道与 provider、用户运维操作、user_dim 对账。
 实现由 ``auth.ports_impl`` 绑定（实现内部惰性取 auth 属性，保证既有 monkeypatch 生效）。
 所有函数都是薄转发——core 不持任何 auth 实现。
 """

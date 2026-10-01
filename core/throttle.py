@@ -1,8 +1,6 @@
-"""登录限流：委托 Redis 滑动窗口限流器；Redis 不可用时拒绝（fail-close）。
-
-密码登录是暴力破解关键路径，Redis 抖动时宁可拒绝登录也不能放开防爆破面，
-故这里显式 fail_open=False。限流参数（IP/全局次数、窗口秒）统一读 settings
-（LKM_LOGIN_* 可覆盖）。
+"""
+登录限流：委托 Redis 滑动窗口限流器；Redis 不可用时拒绝（fail-close）。
+密码登录是暴力破解关键路径
 """
 
 from core.config import settings
@@ -15,8 +13,8 @@ from core.secrets import reveal
 
 
 async def check_password_login_rate_limit(ip_address: str) -> None:
-    """对密码登录尝试应用 IP 和全局限流。
-
+    """
+    对密码登录尝试应用 IP 和全局限流。
     Redis 已在栈上（``redis_url`` 非空）但运行期不可用时**拒绝（fail-close）**，
     不放开防爆破面；未配置 Redis 时无分布式限流依赖可失败，放行保持原语义。
     """

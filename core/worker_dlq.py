@@ -1,9 +1,8 @@
-"""死信消费者：消费 Pulsar ``system/dlq`` 订阅，把每条死信落库 dlq_messages 供人工重投/审计。
-
+"""
+死信消费者：消费 Pulsar ``system/dlq`` 订阅，把每条死信落库 dlq_messages 供人工重投/审计。
 Pulsar DeadLetterPolicy 在消费失败重投超限后把消息投到 ``persistent://lkm/system/dlq``；
 本订阅消费并落库（落库成功即 ack 移出 broker，后续从 DB 治理）。重投走 admin 端点
 re-publish 回原 routing_key。
-
 死信消息的 routing_key 从消息 properties 还原（发布时写入），attempts 取 Pulsar
 ``redelivery_count``。DLQ topic 的消费自身不再触发死信转发（Pulsar 不会对已死信消息
 二次投死信），故无循环风险。
@@ -104,7 +103,7 @@ async def consume_dlq() -> None:
     """DLQ 消费者主循环（进程入口在 ``boot.workers.dlq``，那里先装配再调用本函数）。"""
     # 非 ASGI 进程：初始化 provider 才能导出消费 span（默认关时 no-op）
     setup_tracing(service_suffix="-dlq")
-    # 跨进程指标中继（选项③）：人工重投走的 messaging.publish 会写 notify_failed_total，
+    # 跨进程指标中继：人工重投走的 messaging.publish 会写 notify_failed_total，
     # 而本进程不暴露 /metrics——快照交给 API 进程代报。
     metrics_relay.start_publisher()
     await messaging.run_subscription(messaging.SUB_DLQ.name, _on_dlq)

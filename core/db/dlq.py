@@ -1,9 +1,8 @@
-"""死信落库表：``dlq_messages``。
-
+"""
+死信落库表：``dlq_messages``。
 原先挂在 ``app.modules.admin.models`` 下，但死信的**生产方**是 ``core.worker_dlq``
 （core 侧进程），若表定义留在 app，core 就不得不反向 import 业务模块。故随 core/boot
 拆分下沉至此——表名与列定义与迁移完全一致，admin 侧（``dlq_router``）改从本模块引用。
-
 时间列遵循既有约定：用 ``UTCDateTime`` 类型 + ``now_iso()`` 默认值。勿用裸 ``DateTime``
 / ``datetime.now(UTC)``。
 """

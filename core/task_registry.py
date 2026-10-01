@@ -1,17 +1,8 @@
-"""任务注册表：模块声明 handler 归属订阅，worker 按注册表通用分派（计划 §6.2）。
-
+"""
+任务注册表：模块声明 handler 归属订阅，worker 按注册表通用分派。
 目标：**加任务不再改 worker.py**。每个业务模块在自己的 ``tasks.py`` 里用 ``register_task``
 把 handler 注册到某个 Pulsar 订阅名下；worker 进程入口（worker_*.py → run_*_worker）触发
 各模块 tasks 导入（副作用注册），再从本注册表读出该订阅的 handler 表即可。
-
-订阅本身（订阅名 → topic / 关注的 routing_key）的单一事实源是
-``core.messaging.SUBSCRIPTIONS``；本模块只负责"哪个订阅消费哪些 fn"，不重复存 topic/routing，
-避免两处声明漂移。
-
-本模块不 import 任何业务模块：需要预注册的 ``tasks`` 模块由各顶层包自己的 bootstrap
-（``app.bootstrap`` / ``auth.bootstrap``）经 :func:`register_module` 登记字符串路径，
-装配根（``boot.assemble``）再统一触发 :func:`import_task_modules`——core 因而对 app/auth
-零依赖，两个方向都不产生 import。
 """
 
 from __future__ import annotations
@@ -30,18 +21,13 @@ _TASK_HANDLERS: dict[str, dict[str, Callable[..., Any]]] = {}
 _CRON_JOBS: list[dict[str, Any]] = []
 
 # 全量导入是否已执行（显式标志，**不能用「注册表非空」代替**）：
-# 任一模块的 ``tasks.py`` 被单独导入就会填 ``_TASK_HANDLERS``（如仅导入
-# ``notification.tasks`` 只注册 handler、无 cron），若据此判定「已注册」就会跳过全量导入，
-# 使 cron 声明与其余模块 handler 永久缺失（scheduler 拿到 0 个 job，2026-09-18 定位）。
 _tasks_imported = False
 
 
 def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> None:
-    """登记一条 cron 任务：到点由 scheduler 发布 ``fn`` 到 ``routing_key``。
-
+    """
+    登记一条 cron 任务：到点由 scheduler 发布 ``fn`` 到 ``routing_key``。
     ``cron`` 为 APScheduler ``CronTrigger.from_crontab`` 可解析的 crontab 表达式
-    （如 ``"0 * * * *"`` 每小时整点、``"0 4 * * 4"`` 每周四 04:00）。
-    重复 job_id 会告警并覆盖。
     """
     from core import event_contract
 
@@ -73,8 +59,8 @@ def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> N
 
 
 def cron_jobs() -> list[dict[str, Any]]:
-    """当前全部已登记的 cron 任务（scheduler 聚合数据源）。
-
+    """
+    当前全部已登记的 cron 任务（scheduler 聚合数据源）。
     逐条返回**副本**（同 :func:`handlers_for` 的拷贝语义）：调用方若就地对 job 做归一化/
     加字段（如把 cron 表达式换成 Trigger 后写回 dict），改到的是注册表的单一事实源，
     后续 build_scheduler 会拿到被污染的声明。
@@ -94,13 +80,10 @@ def register_module(path: str) -> None:
 
 
 def import_task_modules() -> None:
-    """导入全部已登记的 ``tasks`` 模块触发注册（副作用，幂等）。
-
+    """
+    导入全部已登记的 ``tasks`` 模块触发注册（副作用，幂等）。
     供装配根（``boot.assemble``）、worker / scheduler / 单测在启动前调用，确保注册表被填满。
     任务逻辑内重型依赖均为函数级 import，此处仅触发注册，不拉业务整树。
-
-    置 ``_tasks_imported``：已导入的模块被 ``sys.modules`` 缓存，重复调用不会再执行注册
-    代码，故「是否跑过」只能由本标志承载（见 ``_tasks_imported`` 说明）。
     """
     global _tasks_imported
 
@@ -120,8 +103,8 @@ def ensure_tasks_registered() -> None:
 
 
 def _assert_subscription_carries(subscription: str, fn: str) -> None:
-    """装配期校验：该订阅确实能收到这个 fn（否则 handler 永不触发，且无人报错）。
-
+    """
+    装配期校验：该订阅确实能收到这个 fn（否则 handler 永不触发，且无人报错）。
     判据 = 「订阅声明的 routing_keys」∩「契约允许承载该 fn 的 routing_key」非空。两侧的事实源
     分别是 ``messaging.SUBSCRIPTIONS`` 与 ``event_contract.EVENT_CONTRACTS``，本函数只做交叉。
     """
@@ -139,11 +122,8 @@ def _assert_subscription_carries(subscription: str, fn: str) -> None:
 
 
 def register_task(subscription: str, fn: str, handler: Callable[..., Any]) -> None:
-    """注册某订阅的单个任务 handler。重复注册同一 fn 会覆盖（以最后声明为准）并告警。
-
-    **装配期即验事件契约**（三个 ``tasks.py`` 写错在进程启动时就炸，而不是等消息到了才
-    TypeError）：fn 必须已登记（``event_contract.EVENT_CONTRACTS``）、handler 形参元数接得住
-    契约实参、订阅的 routing_keys 承载得了该 fn。见 ``core/event_contract.py`` 模块头。
+    """
+    注册某订阅的单个任务 handler。重复注册同一 fn 会覆盖（以最后声明为准）并告警。
     """
     from core import event_contract
 

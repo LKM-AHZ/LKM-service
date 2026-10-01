@@ -1,15 +1,8 @@
-"""可观测基座 · OpenTelemetry 链路追踪（M5 7.2.2）。
-
+"""
+可观测基座 · OpenTelemetry 链路追踪。
 默认关闭（``settings.otel_enabled=false``）：不建 provider、不 instrument，零依赖零副作用。
 开启后把 FastAPI / SQLAlchemy / httpx 的 span 经 OTLP/HTTP 导出到 collector（本地
 ``deploy/otel`` 或外部 SigNoz），并把 trace_id/span_id 串进 JSON 日志（``core.logging``）。
-
-设计要点（对齐 ``core.apm.init_sentry`` 的 fail-open 范式）：
-- **显式传 provider**（不调 ``trace.set_tracer_provider``）：全局 provider 只能设一次，
-  测试里反复 setup/shutdown 会踩"覆盖被忽略"；显式传入使每个 setup 自足可回退。
-- span/context 存于 OTel contextvar，与全局 provider 无关 → 日志关联照常工作。
-- 导出用 ``BatchSpanProcessor``：请求热路径不阻塞；``shutdown`` 限时 flush。
-- 任何异常只记日志，绝不阻塞启动/请求。
 """
 
 from __future__ import annotations
@@ -31,8 +24,7 @@ _EXCLUDED_URLS = "/metrics,/api/v1/health,/liveness,/readiness"
 _exporter_factory: Callable[[], Any] | None = None
 
 _tracer_provider: Any = None
-# 已挂 SQLAlchemy 埋点的引擎（弱引用）：用 WeakSet 而非 id(engine)——既不阻止引擎回收
-# （测试每用例新建引擎不会堆积），也不会因对象地址被回收后复用而误判「已挂过」
+# 已挂 SQLAlchemy 埋点的引擎（弱引用）
 _sqlalchemy_engines: WeakSet[Any] = WeakSet()
 
 
@@ -72,15 +64,10 @@ def _service_name(service_suffix: str) -> str:
 
 
 def setup_tracing(app: Any = None, *, service_suffix: str = "") -> None:
-    """按配置初始化 OTel；未启用或失败则静默跳过（幂等、fail-open）。
-
+    """
+    按配置初始化 OTel；未启用或失败则静默跳过（幂等、fail-open）。
     *app* 为 FastAPI 实例时额外挂 FastAPI 埋点；worker/scheduler 等**非 ASGI 进程**
     传 ``None``——它们只需 provider + httpx，消费/调度 span 经 :func:`tracer` 产出。
-
-    **调用时机**：ASGI 进程必须在**装配期**（返回 app 前）调用。FastAPI 的中间件栈在
-    首个 ASGI 请求（含 lifespan）时由 Starlette 定型，在 lifespan 内再 ``add_middleware``
-    不会进入栈——表现为 HTTP server span **完全采集不到**，而 SQLAlchemy/httpx 埋点因
-    不依赖中间件栈照常生效（易误判为「埋点已工作」）。
     """
     global _tracer_provider
     if _tracer_provider is not None:

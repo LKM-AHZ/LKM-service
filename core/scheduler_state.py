@@ -1,16 +1,5 @@
-"""调度器运行态的跨进程暴露（蓝图 §5.5 第 6 条「生命周期监控」）。
-
-调度器跑在**独立的 worker-scheduler 进程**（§5.5-3① 的拓扑，见 ``worker_scheduler.py``），
-而 Prometheus 只抓 ``backend:8000``（父仓 ``deploy/prometheus/prometheus.yml``）——调度器
-进程内的 gauge **没有任何人抓**，直接 set 等于自娱自乐。故运行态经 **Redis 心跳**跨进程暴露，
-与 ``pulsar_lag`` 同一范式（「API 进程替非 API 进程取数」）：
-
-- **调度器进程**周期性把 ``{state, jobs, pending}`` 写进 ``scheduler:heartbeat``，TTL = 3×周期；
-  起停与每次 cron 触发都即时刷新一次，不必等下一拍。
-- **API 进程**的 reporter 周期读取并 set 到 gauge。**键不存在**（进程没了 / 卡死 / 收尾后未再
-  续写）→ ``scheduler_up=0``——这正是蓝图要的「生命周期异常（未停残余）可观测」：收尾时最后
-  一拍会带上 ``state=0`` 与残余在途数，随后 TTL 到期转 up=0。
-
+"""
+调度器运行态的跨进程暴露。
 Redis 不可用时两侧都 fail-open：写失败只记日志、读失败保持上次值并把 ``scheduler_up`` 置 0。
 后者在 Redis 故障时会误报「调度器 down」，但 Redis 是硬依赖（readiness 会先红），且「不知道
 调度器状态」与「调度器异常」对告警而言同解——宁可吵，不可沉默。

@@ -1,9 +1,8 @@
-"""读热序列化通用原语：msgspec 版 JSON 响应（roadmap §6.5.2，M5）。
-
+"""
+读热序列化通用原语：msgspec 版 JSON 响应（roadmap §6.5.2，M5）。
 分工：请求/响应**校验仍由 Pydantic v2** 负责，仅出端口序列化改走 msgspec（C 扩展、免中间
 dict）。本模块只放与业务无关的原语（Response + envelope），业务 Struct 镜像放各模块（如
 ``app/modules/feed/wire.py``）——遵守 import-linter「core 不依赖 modules」。
-
 - ``MsgspecJSONResponse``：starlette ``Response`` 子类，``render`` 直出 ``msgspec.json.encode``
   的 bytes（不再经 stdlib ``json.dumps`` 二次序列化）。
 - ``msgspec_ok``：包装与既有 ``err.resp_json`` 同形的 ``{code,msg,data}`` envelope，供开关开启
@@ -42,8 +41,8 @@ class Envelope(msgspec.Struct):
 
 
 def msgspec_ok(data: Any, *, headers: dict[str, str] | None = None) -> Response:
-    """构造成功响应（``code/message/data/request_id``），序列化走 msgspec。
-
+    """
+    构造成功响应（``code/message/data/request_id``），序列化走 msgspec。
     **``data`` 必须已是 msgspec 可编码的值**（本模块/各模块 ``wire.py`` 的 Struct、dict、
     list、str/int/float/bool/None、datetime/UUID/Decimal 等）。Pydantic 模型实例、任意对象、
     ``set``、``bytes`` 不在此列：``msgspec.json.encode`` 会抛 TypeError，而 ``err._wrap_result``

@@ -1,7 +1,5 @@
-"""消息总线抽象（M4）：逻辑 routing_key → Pulsar topic，业务发布/消费无感。
-
-迁移后 RabbitMQ 下线，Apache Pulsar 为唯一 broker。本模块是**唯一事实源**：
-
+"""
+消息总线抽象：逻辑 routing_key → Pulsar topic，业务发布/消费无感。
 - ``ROUTING_KEY_TOPICS``：逻辑 routing_key → ``persistent://{tenant}/{ns}/{name}`` 映射，
   业务侧只认 routing_key（send_code / notify_upload / apply_point / user.* / cron.*），
   不感知命名空间与 topic 名。
@@ -10,16 +8,12 @@
 - JSON Schema：每个 topic 挂同一 envelope JSON Schema，经 Pulsar 自带 schema registry 校验；
   envelope 为 ``{"fn": str, "args": list, "event_id"?: str}``，故用自定义 ``Schema`` 子类承载
   裸 JSON Schema（Pulsar ``JsonSchema`` 强制 avro ``Record`` dataclass，无法表达混合类型 args）。
-
 发布/消费哲学沿用旧 ``amqp`` 层：**fail-open**——未配置 broker 或投递异常时不阻塞请求
 （返回 False 由调用方降级），异常计数 ``notify_failed_total``。
-
 Pulsar 官方 Python 客户端是**同步阻塞** API，故：
 - 发布侧：producer 懒建缓存，``producer.send`` 经 ``asyncio.to_thread`` 执行。
 - 消费侧：每个订阅一个 daemon 线程跑 ``consumer.receive``，消息经
-  ``asyncio.run_coroutine_threadsafe`` 桥回主事件循环执行 async handler；成功 ack、
-  异常负确认（触发 redelivery / 死信）。
-
+  ``asyncio.run_coroutine_threadsafe`` 桥回主事件循环执行 async handler；成功 ack、异常负确认（触发 redelivery / 死信）。
 测试 seam：``set_transport(InMemoryTransport())`` 注入内存替身，默认套件不依赖真实 broker。
 """
 
@@ -71,14 +65,6 @@ RKEY_AUDIT_LOGIN_FAIL = "audit.login_fail"
 RKEY_AUDIT_PERMISSION_CHANGE = "audit.permission_change"
 
 # ---- topic 定案（tenant 取 settings.pulsar_tenant；namespace: auth / biz / system）----
-
-# 蓝图 §5.0-6：auth/biz 两命名空间的隔离**由消息层强制**，不跨命名空间直达。强制点有三：
-#   ① 命名空间白名单——`_topic` 对未知命名空间直接拒绝，拼错在 import 期即炸，而不是悄悄
-#      建出一个新命名空间（Pulsar 会为写错的名字自动建 tenant/namespace）；
-#   ② 逻辑键唯一归属——发布只经 `ROUTING_KEY_TOPICS`（dict 保证一个逻辑键只对一个 topic），
-#      业务代码拿不到「直接指名 topic」的入口；
-#   ③ 订阅不跨命名空间——每个订阅声明的 routing_keys 必须与其 topic 同命名空间，消费侧
-#      无法「一次订阅横跨 auth 与 biz」。见 `_validate_namespace_isolation`。
 NAMESPACES: frozenset[str] = frozenset({"auth", "biz", "system"})
 
 
@@ -91,10 +77,8 @@ def _topic(namespace: str, name: str) -> str:
 
 
 def namespace_of(topic: str) -> str:
-    """取 topic 全名的命名空间段（`persistent://<tenant>/<ns>/<name>`）。
-
-    刻意**不比对 tenant 字面**（只按段位解析）：tenant 来自 Settings，测试/多环境可改；
-    这里只负责把命名空间切出来，隔离判定交给 :data:`NAMESPACES`。
+    """
+    取 topic 全名的命名空间段（`persistent://<tenant>/<ns>/<name>`）。
     """
     parts = topic.split("/")
     # ["persistent:", "", tenant, namespace, ...] → 命名空间在 index 3
@@ -104,10 +88,8 @@ def namespace_of(topic: str) -> str:
 
 
 def _validate_namespace_isolation() -> None:
-    """装配期校验命名空间隔离（蓝图 §5.0-6）；违反即 import 期报错，不做静默容忍。
-
-    只校验静态声明（routing_key→topic 表、订阅清单），不碰运行时消息——运行时的隔离由
-    「发布只经逻辑键」「订阅按 predeclared topic 建 consumer」共同保证。
+    """
+    装配期校验命名空间隔离
     """
     for routing_key, topic in ROUTING_KEY_TOPICS.items():
         ns = namespace_of(topic)
@@ -128,8 +110,6 @@ def _validate_namespace_isolation() -> None:
 
 TOPIC_EMAIL = _topic("auth", "email")
 TOPIC_USER_EVENTS = _topic("auth", "user.events")
-# §5.2 的审计家族 `persistent://lkm/auth/audit.*`：每种审计语义一个 topic（与该表把
-# `emails.*` 展开成邮件类事件同构）。命名空间 auth 已由 deploy 侧建好，无需新增。
 TOPIC_AUDIT_LOGIN_FAIL = _topic("auth", "audit.login_fail")
 TOPIC_AUDIT_PERMISSION_CHANGE = _topic("auth", "audit.permission_change")
 TOPIC_NOTIFY = _topic("biz", "notify.upload")
@@ -162,8 +142,8 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
 
 @dataclass(frozen=True)
 class Subscription:
-    """一个 Pulsar 订阅（消费隔离单元）。
-
+    """
+    一个 Pulsar 订阅（消费隔离单元）。
     ``name`` 同时是消费幂等 scope（多订阅消费同一 topic 时，各自独立记账，互不跳过）。
     ``routing_keys`` 为该订阅关注的逻辑事件集合（启动校验与文档用途）。
     """
@@ -179,7 +159,7 @@ SUB_NOTIFY = Subscription("notify", TOPIC_NOTIFY, (RKEY_NOTIFY,))
 SUB_POINTS_REWARD = Subscription("points-reward", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_POINTS_STATS = Subscription("points-stats", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_POINTS_TASKS = Subscription("points-tasks", TOPIC_POINTS, (RKEY_POINTS,))
-# M6.8：站内信生成。与 points 三订阅同 topic 不同订阅名 → 各收全量、独立幂等 scope。
+# 站内信生成。与 points 三订阅同 topic 不同订阅名 → 各收全量、独立幂等 scope。
 SUB_NOTIFICATION = Subscription("notification", TOPIC_POINTS, (RKEY_POINTS,))
 SUB_USER_INVALIDATE = Subscription(
     "user-invalidate",
@@ -198,7 +178,7 @@ SUB_CONTENT_INDEX = Subscription(
     (RKEY_CONTENT_PUBLISHED, RKEY_CONTENT_UPDATED, RKEY_CONTENT_DELETED),
 )
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
-# 审计消费（§5.2 的「审计 worker」）：把 audit.* 事件实时转成指标/告警，而不是只等批量导出。
+# 审计消费：把 audit.* 事件实时转成指标/告警，而不是只等批量导出。
 # 单订阅横跨两个 topic 不可行（订阅与 topic 一一对应），故这里按**主题族**取 login_fail 作
 # 主 topic；permission_change 的订阅在同命名空间内各自登记（见 SUB_AUDIT_PERMISSION）。
 SUB_AUDIT = Subscription("audit", TOPIC_AUDIT_LOGIN_FAIL, (RKEY_AUDIT_LOGIN_FAIL,))
@@ -226,27 +206,10 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
     )
 }
 
-# 装配期即验（蓝图 §5.0-6）：任何未来新增的订阅/逻辑键若跨命名空间，在这一行就炸，
+# 装配期即验：任何未来新增的订阅/逻辑键若跨命名空间，在这一行就炸，
 # 而不是等到某个消费者误收另一命名空间的消息才发现。
 _validate_namespace_isolation()
 
-# 事件 envelope JSON Schema（Pulsar schema registry 校验用）。
-#
-# **必须写成 Avro-``record`` 形式**，不能写成标准 JSON Schema 的
-# ``{"type": "object", "properties": {...}}``：broker 侧对 JSON schema 是以 Avro 表示的
-# （``SchemaRegistryServiceImpl.getSchemaVersionBySchemaData`` 把它直接交给
-# ``org.apache.avro.Schema.Parser``）。object 形式只在「本 topic 的第一个客户端」注册时
-# 侥幸通过（该路径不解析），一旦 topic 由 **consumer 先建、producer 后注册**，兼容性检查即抛
-# ``SchemaParseException: Type not supported: object``，producer 创建超时——outbox relay 因此
-# 投不出任何事件（2026-09-18 真机定位：points.apply 四个订阅先起，relay 的 producer 全线超时，
-# M6.8「事件→站内信」链路断）。真机对照实验：record 形式在同一 topic 上 consumer+producer
-# 均 PASS 且可发消息。
-#
-# 另注：**不要加 ``"required": [...]``**——Pulsar 旧版 JSON schema 解析把 ``required`` 当
-# boolean，数组会令注册被拒（``Cannot deserialize value of type java.lang.Boolean from Array
-# value``，2026-09-17 真机定位）。``fn`` 的存在性由应用层保证：``worker._consume`` 对无
-# ``fn``/未知 ``fn`` 的消息告警后丢弃。``args`` 用宽松 union——broker 默认不校验消息体
-# （``schemaValidationEnforced=false``），且 encode/decode 由本模块自定义（见 make_event_schema）。
 EVENT_SCHEMA: dict[str, Any] = {
     "type": "record",
     "name": "EventEnvelope",
@@ -284,10 +247,6 @@ def _encode_event(obj: Any) -> bytes:
 
 
 # ---- 自定义 JSON Schema（承载裸 JSON Schema 定义，走 Pulsar schema registry）----
-# Pulsar 的 JsonSchema(record_cls) 要求 avro Record dataclass，而本项目事件 args 为混合
-# 类型列表（int/str 混排），无法用 dataclass 精确表达。故子类化 Schema，schema_type=JSON，
-# schema_definition 直接用 EVENT_SCHEMA，encode/decode 走标准 json。
-# 不缓存实例：Schema 会经 attach_client 持有 client 引用，缓存会与之生命周期耦合。
 
 
 def make_event_schema(topic: str) -> Any:
@@ -312,8 +271,8 @@ def make_event_schema(topic: str) -> Any:
 
 
 def _contract_violations(payload: Any, routing_key: str | None) -> list[str]:
-    """事件契约校验的延迟入口。
-
+    """
+    事件契约校验的延迟入口。
     ``event_contract`` 反向 import 本模块的 RKEY 常量（它按「逻辑键 → 允许的 fn」声明），
     模块级 import 会成环；放函数里只是 ``sys.modules`` 查表，成本可忽略。
     """
@@ -330,8 +289,8 @@ def _record_violation(fn: Any, side: str, problems: list[str], *, topic: str) ->
 
 
 def contract_violations(routing_key: str, payload: Any) -> list[str]:
-    """按**线上形态**校验 envelope 的事件契约；返回违约原因清单（空=合规）。
-
+    """
+    按**线上形态**校验 envelope 的事件契约；返回违约原因清单（空=合规）。
     与 :func:`permanent_failure_reason` 共用同一判据。独立暴露是为了让 relay 在**折叠**这类
     事件时能拿到结构化原因去记违约指标，而不必去解析原因字符串。
     """
@@ -345,19 +304,14 @@ def contract_violations(routing_key: str, payload: Any) -> list[str]:
 def permanent_failure_reason(
     routing_key: str, payload: Mapping[str, Any]
 ) -> str | None:
-    """判定一次发布是否属**永久失败**（重试无意义）；返回原因字符串，None = 可重试。
-
-    只覆盖 relay 侧在投递前就可确定的确定性错误（M6.3 失败分类）：
+    """
+    判定一次发布是否属**永久失败**（重试无意义）；返回原因字符串，None = 可重试。
+    只覆盖 relay 侧在投递前就可确定的确定性错误：
     - 未知 ``routing_key``：不在 ``ROUTING_KEY_TOPICS`` 里，连目标 topic 都定不出来；
     - payload 无法按线上格式编码（含非 JSON 可序列化对象）；
     - **事件契约违约**（``event_contract.payload_violations``，见该模块头）：fn 未登记、
-      实参个数/类型不符、经不允许的 routing_key 承载等。这类同样是确定性的——重试 5 次
-      只会把同一条坏消息重复投到总线上，故与上面两类同解：一次即折叠进 ``event_failures``
-      （留档、可人工重放），不占用退避窗口。
-
-    其余情况（连接失败 / 超时 / 总线不可达 / broker 拒收）一律**不**判永久——relay 不得把
-    瞬时故障折叠成失败归档，否则一次总线抖动就丢事件。schema registry 侧校验不在此判定：
-    broker 对 payload **不做任何校验**（2026-09-30 真机实测，见 ``event_contract`` 模块头）。
+      实参个数/类型不符、经不允许的 routing_key 承载等。
+    其余情况（连接失败 / 超时 / 总线不可达 / broker 拒收）一律**不**判永久
     """
     if routing_key not in ROUTING_KEY_TOPICS:
         return f"unknown routing_key={routing_key}"
@@ -374,8 +328,8 @@ def permanent_failure_reason(
 # ---- 发布 ----
 @dataclass(frozen=True)
 class MessageMeta:
-    """消费消息的元数据（业务 payload 之外的随消息信息）。
-
+    """
+    消费消息的元数据（业务 payload 之外的随消息信息）。
     - ``routing_key`` / ``fn`` 从发布时写入的 properties 还原（死信落库需 routing_key）。
     - ``redelivery_count``：Pulsar 重投次数，死信落库作 attempts。
     """
@@ -408,8 +362,8 @@ _client_lock = threading.Lock()
 
 
 def set_transport(transport: Transport | None) -> None:
-    """注入/清除发布 transport（测试用；None 恢复真实 Pulsar 路径）。
-
+    """
+    注入/清除发布 transport（测试用；None 恢复真实 Pulsar 路径）。
     同时复位「已关闭」标记：close() 兼作测试复位，注入新 transport 即代表新一轮使用。
     """
     global _transport, _closed
@@ -425,9 +379,6 @@ def _client_locked() -> Any:
 
         _client = pulsar.Client(
             settings.pulsar_url,
-            # Pulsar Python 客户端的 operation_timeout_seconds 只接受 int（传 float 直接
-            # ValueError），而 Settings 里是 float（便于配亚秒级的周期项）。故此处取整，
-            # 并下限钳到 1：该参数为 0 等于「无/瞬时超时」，比配置失误更危险。
             operation_timeout_seconds=max(1, int(settings.pulsar_operation_timeout_s)),
         )
     return _client
@@ -439,8 +390,8 @@ def _get_client_sync() -> Any:
 
 
 def _create_producer_cached(topic: str) -> Any:
-    """取/建该 topic 的 producer（缓存去重；须在线程中调用）。
-
+    """
+    取/建该 topic 的 producer（缓存去重；须在线程中调用）。
     阻塞的 ``create_producer``（含 broker 侧 schema 注册/兼容性检查，可能卡数秒）刻意
     放在锁外：``_create_consumer_sync`` 取 client 要用同一把锁，若持锁建 producer，
     一个慢 producer 会把所有订阅的建连与重建一起堵死（消费线程集体停摆）。
@@ -467,8 +418,8 @@ async def _get_producer(topic: str) -> Any:
 
 
 async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
-    """发布一条事件到 routing_key 对应 topic。fail-open：不可用/异常 → False。
-
+    """
+    发布一条事件到 routing_key 对应 topic。fail-open：不可用/异常 → False。
     - transport 已注入（测试）→ 走替身，异常计 ``notify_failed_total``。
     - 未配置消息总线（pulsar_url 空）→ False 不计数（对齐迁移前 ch None 语义）。
     - 真实 Pulsar：producer 懒建缓存，``send`` 经 ``asyncio.to_thread``（同步 API 不阻塞循环）。
@@ -482,7 +433,7 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         logger.warning("消息总线已关闭，丢弃发布 routing_key=%s", routing_key)
         return False
 
-    # 发布 span（M5 7.2.2）：未启用 tracing 时为 no-op；traceparent 注入 props 供消费端续链
+    # 发布 span：未启用 tracing 时为 no-op；traceparent 注入 props 供消费端续链
     with tracing.tracer("lkm.messaging").start_as_current_span(
         "pulsar.publish"
     ) as span:
@@ -493,17 +444,11 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         try:
             data = _encode_event(dict(payload))
         except Exception:
-            # 编码必须在 try 内：payload 含不可 JSON 序列化对象（args 里的
-            # datetime/UUID/Decimal）时 json.dumps 抛 TypeError，直接冒出会破坏本函数
-            # 声明的 fail-open 契约，且漏计 notify_failed_total。
+            # 编码必须在 try 内
             logger.exception("payload 编码失败 rk=%s", routing_key)
             notify_failed_total.inc()
             return False
-        # 事件契约校验：校的就是**即将上线的字节**（json.loads(data)），故 uuid/datetime 等
-        # native 对象在此时已是线上形态。违约不发（fail-open 语义与其它失败一致：返回 False），
-        # 但计**独立**指标而非 notify_failed_total——后者涨=broker 出问题，混入契约违约会把
-        # 告警语义搅浑。不在这里抛异常：relay 侧经 permanent_failure_reason 折叠进
-        # event_failures，直接发布口（jobs/scheduler/dlq）则按各自既有语义降级。
+        # 事件契约校验
         problems = _contract_violations(json.loads(data), routing_key)
         if problems:
             _record_violation(payload.get("fn"), "produce", problems, topic=topic)
@@ -528,10 +473,6 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             return False
         try:
             producer = await _get_producer(topic)
-            # 传 **dict** 而非已编码的 ``data``：带 schema 的 producer 在 ``send`` 内部会调
-            # ``schema.encode(content)``（即本模块的 ``_encode_event``）做编码；若再喂 bytes，
-            # 那一层会对 bytes 做 ``json.dumps`` 并抛 ``TypeError: Object of type bytes is not
-            # JSON serializable``（2026-09-18 真机：schema 注册修好后才暴露的第二层问题）。
             await asyncio.to_thread(producer.send, dict(payload), properties=props)
             return True
         except Exception:
@@ -574,8 +515,8 @@ def _handle_message(
     loop: asyncio.AbstractEventLoop,
     sub_name: str,
 ) -> None:
-    """处理一条消息：解析 → 桥回主循环执行 async handler → ack / negative_ack。
-
+    """
+    处理一条消息：解析 → 桥回主循环执行 async handler → ack / negative_ack。
     非法 JSON 直接 ack 丢弃（避免死信风暴）；handler 异常/超时 → 负确认，累计重投超限后
     由 Pulsar 投死信 topic。注意超时后协程可能仍在执行，副作用靠 handler 自身幂等兜底。
     """
@@ -611,9 +552,7 @@ def _handle_message(
         )
         future.result(timeout=JOB_TIMEOUT_S)
     except Exception:
-        # 超时/失败先尽力取消：消息马上被负确认并重投，若原协程还排在主循环里未开跑，
-        # 取消可避免同一事件长时间双跑。已在 await 中的协程取消不掉（返回 False），
-        # 那部分仍只能靠 handler 自身幂等兜底。
+        # 超时/失败先尽力取消：消息马上被负确认并重投，若原协程还排在主循环里未开跑，取消可避免同一事件长时间双跑。
         if future is not None:
             future.cancel()
         logger.exception("消费失败→负确认 subscription=%s", sub_name)
@@ -631,13 +570,8 @@ def _receive_loop(
     loop: asyncio.AbstractEventLoop,
     stop: threading.Event,
 ) -> None:
-    """订阅专用 daemon 线程主循环：建消费者 → receive(timeout) → 处理，收到 stop 后退出。
-
-    建消费者失败**不退出**，退避重试：空 topic 上多个订阅并发首订时，broker 的 schema
-    注册存在竞态——实测 4 个 points 订阅同时启动只有先到者成功，其余报
-    ``IncompatibleSchema: Topic does not have schema to check``；先到者注册完成后，重试者
-    即可订阅成功。原先「失败即 return」会让该订阅在进程生命周期内**永久失效**，只能靠重启
-    容器恢复（无状态化清空 pulsar 数据后每次重启都会踩到）。
+    """
+    订阅专用 daemon 线程主循环：建消费者 → receive(timeout) → 处理，收到 stop 后退出。
     """
     import pulsar  # 局部导入：与文件其余处一致，无总线时不硬依赖客户端
 
@@ -657,9 +591,6 @@ def _receive_loop(
                 try:
                     msg = consumer.receive(timeout_millis=1000)
                 except pulsar.Timeout:
-                    # 长轮询到期（1s 内无消息）是**正常路径**，不是异常：曾按 Exception 分支
-                    # 打整栈 + 睡 1s，导致每个 worker 每秒一条 traceback 刷日志并灌进
-                    # ClickHouse app_logs（2026-09-17 修复类型 bug 后暴露）
                     continue
                 except Exception:
                     if stop.is_set():
@@ -678,15 +609,12 @@ async def run_subscription(
     name: str,
     handler: MessageHandler,
 ) -> None:
-    """常驻消费一个订阅，直到任务被取消。未配置消息总线 → 记录并空转退出。
-
-    handler 为 async 回调（worker 侧注入 task_registry 分派 + 幂等记账）；本函数负责
-    线程生命周期与消息 ack 语义。
+    """
+    常驻消费一个订阅，直到任务被取消。未配置消息总线 → 记录并空转退出。
     """
     if not settings.message_bus_enabled:
         # 只按总线配置与否判：注入的 transport 只覆盖 publish，不提供消费能力，
-        # 总线未配置时起 daemon 线程只会用空 pulsar_url 反复建连失败（每 _CONSUMER_RETRY_S
-        # 打整栈日志），且永远收不到任何消息
+        # 总线未配置时起 daemon 线程只会用空 pulsar_url 反复建连失败
         logger.error("消息总线未配置，订阅 %s 无法启动", name)
         return
     sub = SUBSCRIPTIONS.get(name)
@@ -712,7 +640,9 @@ async def run_subscription(
 
 
 async def _release_resources() -> None:
-    """释放 producer 缓存与 client，并复位 transport（不置终态标记）。"""
+    """
+    释放 producer 缓存与 client，并复位 transport（不置终态标记）。
+    """
     global _client, _transport
     _transport = None
     with _client_lock:
@@ -729,20 +659,15 @@ async def _release_resources() -> None:
 
 
 async def close() -> None:
-    """幂等收尾：关闭 producer 缓存与客户端（**可复位**，测试/重连场景用）。
-
-    刻意不置终态标记：本函数兼作「复位单例」——测试与集成 fixture 先 close() 再指向
-    新的 broker URL 发布（tests/integration/test_pulsar_queue_integration.py），
-    若在这里判死，publish 会一律返回 False。终态关闭用 :func:`shutdown`。
+    """
+    幂等收尾：关闭 producer 缓存与客户端（**可复位**，测试/重连场景用）。
     """
     await _release_resources()
 
 
 async def shutdown() -> None:
-    """终态关闭（应用 shutdown 专用）：释放资源后置「已关闭」标记。
-
-    之后 publish 直接失败、不再惰性重建 client —— 否则进程退出阶段仍在飞的 publish
-    会把 broker 连接与后台线程带到 shutdown 之后。set_transport 会解除该标记。
+    """
+    终态关闭（应用 shutdown 专用）：释放资源后置「已关闭」标记。
     """
     global _closed
     _closed = True

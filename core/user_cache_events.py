@@ -1,13 +1,6 @@
-"""user:snap L1 失效广播（roadmap §5.6）：跨实例同步删本地 L1。
-
-L1 是各进程私有的内存缓存，失效必须广播才能让**其他** worker 也删掉本地副本。本模块
-用 Redis pub/sub 承载：
-
-- **发布方**（worker 进程消费 auth 变更事件 → ``user_cache.invalidate_user_snap``）在完成
-  L2 ``INCR epoch + DEL`` 后 publish 被失效的 L2 key。
-- **订阅方**（API 进程，``main.lifespan`` 启动常驻 task）收到后**只删本地 L1**，**不 DEL L2**
-  ——L2 已由发布方删除；订阅方再删会误删其他实例刚回填的新值，只增 miss 不增正确性。
-
+"""
+user:snap L1 失效广播：跨实例同步删本地 L1。
+L1 是各进程私有的内存缓存，失效必须广播才能让**其他** worker 也删掉本地副本。本模块用 Redis pub/sub 承载
 fail-open：Redis 未配置/不可用静默跳过；pub/sub 非持久，丢广播由 L1 短 TTL（默认 10s）
 兜底自愈——因此 L1 TTL 就是陈旧窗口上界。订阅 task 模式与 ``app/ws/manager.py`` 一致
 （常驻 + 退避重连 + cancel 收尾）。
@@ -36,8 +29,8 @@ def _channel() -> str:
 
 
 async def publish_invalidate(key: str) -> None:
-    """广播「某 L2 key 已失效」；Redis 不可用/发布失败静默（靠 L1 TTL 自愈）。
-
+    """
+    广播「某 L2 key 已失效」；Redis 不可用/发布失败静默（靠 L1 TTL 自愈）。
     **双发到所有已配置后端**：被失效的 key 可能落在任一后端（按前缀路由），而订阅方无从
     判断它属于哪个，故每个后端都发一份。订阅侧仍只订阅主后端 —— 双发已含主后端那一份，
     照常收到；重复投递对幂等的 L1 删除无害。
@@ -68,8 +61,6 @@ async def _sub_loop() -> None:
             await asyncio.sleep(1)
             continue
         # pubsub() 也放进 try：共享客户端被关闭（收尾时序）/连接池耗尽时它会抛，
-        # 放在 try 外会让异常直接冒穿 _sub_loop 而**永久**终止订阅任务（该 task 无人 await，
-        # 异常被静默丢弃），跨实例 L1 失效从此不再工作。
         pubsub: Any | None = None
         try:
             pubsub = redis.pubsub()

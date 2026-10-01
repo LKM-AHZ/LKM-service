@@ -1,14 +1,12 @@
-"""模型预注册中心：导入各模块 ``models.py``，供 SQLAlchemy registry 解析字符串关系/外键。
-
+"""
+模型预注册中心：导入各模块 ``models.py``，供 SQLAlchemy registry 解析字符串关系/外键。
 历史角色由早年的巨型 ``models.py`` 承担（单文件 import 即带出全部模型）。模型归位后各模型
 分散到各模块 ``models.py``，本模块作为"导入枢纽"——任何需要全量业务模型注册的入口
 （init_db/create_all、worker 进程、Alembic env）只要
 ``from core.db.model_registry import ensure_all_models`` 即可。
-
 **core 不知道任何业务模块名**：业务侧由 ``app.bootstrap`` 经 :func:`register_module` 登记
 字符串路径，装配根（``boot.assemble``）统一触发；auth 模型挂独立 ``AuthBase`` 元数据，
 由 ``auth.bootstrap`` 自行 import + configure，不经本模块。
-
 ``Base.registry.configure()`` 必须在全部模型注册后调用，使 relationship 字符串引用得以解析。
 重复调用是安全的（``mapperlib._configure_registries`` 在无新增 mapper 时直接返回），
 故这里不做守卫——既不再依赖 SQLAlchemy 私有属性，也顺带覆盖「之后又注册了新模型」的情况。

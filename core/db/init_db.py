@@ -1,9 +1,8 @@
-"""数据库初始化 —— Alembic 为 schema 唯一权威。
-
+"""
+数据库初始化 —— Alembic 为 schema 唯一权威。
 多 worker安全：每个 uvicorn worker 的 lifespan 都会调 init_db()。
 首次建库时并发 upgrade 会有竞态（重复建表/版本锁冲突），故用 Redis 分布式锁串行化；
 Redis 不可用（未配置/宕机，fail-open）则不设锁直接跑（dev 单 worker 本无并发）。
-
 **auth 独立库**的 schema 初始化（``init_auth_db``）按「进程=库边界」由 auth 进程自持，
 已归 ``auth.db.init``；本模块只负责业务库，不触达 auth 库。
 两条迁移链的锁按库分 key，通用实现在 ``core.db.migration_lock``。

@@ -1,9 +1,5 @@
-"""Pulsar 订阅 lag 上报（M4 可观测）。
-
-Pulsar Python 客户端不直接暴露订阅积压，故经 **Pulsar Admin REST** 周期拉取每个 topic 的
-``/admin/v2/persistent/{tenant}/{namespace}/{topic}/stats``，取
-``subscriptions.{name}.msgBacklog`` 写入 ``pulsar_subscription_backlog`` gauge。
-
+"""
+Pulsar 订阅 lag 上报。
 只在 **API 进程**（暴露 /metrics 的进程）启动；worker 进程不暴露指标端点，故不上报。
 未配置消息总线或未配 ``pulsar_admin_url`` 时整体 no-op（fail-open），不影响应用启动。
 """
@@ -113,16 +109,9 @@ def _build_probe_client(timeout: float) -> httpx.AsyncClient:
 
 
 async def probe_health(timeout_s: float | None = None) -> tuple[str, str | None]:
-    """探 Pulsar broker 健康（Admin REST ``/admin/v2/brokers/health``）。
-
-    返回 ``(status, detail)``，status ∈ ``up | disabled | error``：
-
-    - ``disabled``：未启用消息总线或未配 ``pulsar_admin_url`` → **不计入 readiness 硬依赖**
-      （单机/无总线部署语义明确），调用方不应把其当故障。
-    - ``up``/``error``：真探 Admin REST（纯文本 ``ok`` 为健康）；短超时 fail-fast，
-      探活异常一律转 ``error`` 返回、不向上抛（就绪探针不因底层抖动 500）。
-
-    复用 lag 上报的同一 Admin REST 通道与鉴权头，不新起长连（一次性短连，见 M6.2 设计）。
+    """
+    探 Pulsar broker 健康（Admin REST ``/admin/v2/brokers/health``）。
+    返回 ``(status, detail)``，status ∈ ``up | disabled | error``
     """
     if not settings.message_bus_enabled or not settings.pulsar_admin_url:
         return "disabled", "pulsar 未配置"
@@ -161,8 +150,6 @@ async def stop_lag_reporter() -> None:
     task, _task = _task, None
     if task is not None:
         task.cancel()
-        # task 可能已因未捕获异常而结束：此时 cancel 无效，await 会把任务里保存的原始异常
-        # 重新抛出，令 shutdown 阶段平白报错——记录后继续
         try:
             await task
         except asyncio.CancelledError:

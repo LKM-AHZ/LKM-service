@@ -1,5 +1,5 @@
-"""端口注册表：app 与 auth 之间「调用能力」的唯一通道。
-
+"""
+端口注册表：app 与 auth 之间「调用能力」的唯一通道。
 拆分前 app 直接 ``from auth.deps/seams/snapshot import ...``：这既让 app 依赖 auth 的实现，
 也让两侧的 import 边界无法收口。现在 core 只声明**协议与包装函数**，真正的实现由 auth 在
 自己的 bootstrap 里 :func:`install` 进来；app 只 import core。

@@ -1,5 +1,5 @@
-"""审计端口：写审计日志、导出审计到 ClickHouse、开 auth realm 会话。
-
+"""
+审计端口：写审计日志、导出审计到 ClickHouse、开 auth realm 会话。
 实现由 auth 绑定。会话类型对 core 不透明，故签名里的 ``db``/``client`` 用 ``Any``
 （core 不依赖具体会话/客户端实现）。
 """

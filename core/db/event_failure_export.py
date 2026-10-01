@@ -1,13 +1,11 @@
-"""event_failures → ClickHouse 增量导出（M5 7.2.6 路 A，owner 侧）。
-
+"""
+event_failures → ClickHouse 增量导出（M5 7.2.6 路 A，owner 侧）。
 只读业务库 ``event_failures``（outbox relay 耗竭归档），按 CH 侧 ``max(id)`` 水位增量
 批量导出。client 由调用方注入（flow 层建连），本模块不自持连接，便于单测。
-
 不变量（对齐 ``user_dim_sync`` 的 ETL 纪律）：
 - **命令数恒定**：每拍 = 1 次水位查询 + 每批 1 次 PG 查询 + 1 次 CH insert，绝不逐行；
 - **批量幂等**：水位推进 + CH ``ReplacingMergeTree`` 双保险，重跑 diff=0；
 - **窗口分批**：单批满 ``window`` 继续下一批，不足即收敛。
-
 失败语义：CH 不可达/insert 抛错时向上抛（导出侧必须重试或显式失败），绝不静默吞掉。
 """
 

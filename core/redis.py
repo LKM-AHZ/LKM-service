@@ -1,9 +1,8 @@
-"""Redis 接入层：懒初始化异步客户端，未配置/不可用时返回 None（fail-open 前提）。
-
+"""
+Redis 接入层：懒初始化异步客户端，未配置/不可用时返回 None（fail-open 前提）。
 支持**双 L2 后端并行 + 灰度**：按 key 前缀把请求路由到主后端（``redis_url``）或第二后端
 （``redis_url_secondary``，如 Dragonfly）。``get_redis(key)`` 给了 key 就据此路由，未给
 （health 探针、pub/sub 等无 key 场景）用主后端。
-
 **为什么按前缀路由即可保证一致**：key 规范是 ``lkm:{env}:{prefix}:...``（``core.cache.make_key``），
 同一前缀恒定落同一后端，故缓存/锁/版本号/epoch 不会跨后端分裂，SCAN/MGET/WATCH 多键也都落在
 单一后端内、无需合并。灰度 = 把某个域的前缀加进 ``redis_secondary_prefixes``。
@@ -52,8 +51,8 @@ def _route_target(key: str) -> str:
 
 
 def _matches(target: str, prefix: str) -> bool:
-    """``target`` 是否落在 ``prefix`` 段下 —— 必须**整段**命中（后随 ``:`` 或结束）。
-
+    """
+    ``target`` 是否落在 ``prefix`` 段下 —— 必须**整段**命中（后随 ``:`` 或结束）。
     要求整段命中是为避免 ``ip`` 误配 ``ipfoo`` 这类同词头异前缀。
     """
     if not target.startswith(prefix):
@@ -76,8 +75,8 @@ def is_enabled() -> bool:
 
 
 def secondary_configured() -> bool:
-    """第二后端是否已配置（供 health 等多后端探针判断「应当有几个后端」）。
-
+    """
+    第二后端是否已配置（供 health 等多后端探针判断「应当有几个后端」）。
     注意与 :func:`all_clients` 的区别：后者只返回**当前可用**的后端，故「配置了但连不上」
     不会出现在那里——health 需要拿本函数算出的应有数量与之比对才能发现降级。
     """
@@ -91,8 +90,7 @@ async def _connect(url: str) -> Any:
         pool = Redis.from_url(
             url,
             decode_responses=True,
-            # 每次命令的 socket 超时：Redis 半挂（网络黑洞）时命令最多等
-            # 0.5s 即抛错，由调用方 fail-open 兜底，避免无限挂起拖死事件循环。
+            # 每次命令的 socket 超时：Redis 半挂（网络黑洞）时命令最多等0.5s 即抛错
             socket_timeout=0.5,
             socket_connect_timeout=0.5,
         )
@@ -133,11 +131,10 @@ async def _get_secondary_client() -> Redis | None:
 
 
 async def get_redis(key: str | None = None) -> Redis | None:
-    """返回可用的 Redis 客户端；未启用或连接/探测失败返回 None。
-
+    """
+    返回可用的 Redis 客户端；未启用或连接/探测失败返回 None。
     - ``key`` 给了且前缀命中 ``redis_secondary_prefixes`` → 第二后端；
     - 否则（含 ``key=None`` 的无 key 场景，如 health 探针、pub/sub 频道）→ 主后端。
-
     失败时返回 None（fail-open），由调用方据此放行/回源。每次调用从共享单例返回。
     """
     global _client, _client_pool
@@ -157,8 +154,8 @@ async def get_redis(key: str | None = None) -> Redis | None:
 
 
 async def all_clients() -> list[tuple[str, Redis]]:
-    """全部**已启用且可用**的后端 ``[(label, client), ...]``，供 health 等多后端探针遍历。
-
+    """
+    全部**已启用且可用**的后端 ``[(label, client), ...]``，供 health 等多后端探针遍历。
     顺序为主后端在前；未配置的后端不出现。任一后端不可用即从列表缺席——调用方据「列表长度
     是否覆盖已配置的后端」判定整体健康。
     """
@@ -173,8 +170,8 @@ async def all_clients() -> list[tuple[str, Redis]]:
 
 
 async def close_redis() -> None:
-    """关闭并清空两个后端的单例（应用收尾调用）。幂等。
-
+    """
+    关闭并清空两个后端的单例（应用收尾调用）。幂等。
     与 ``get_redis`` 共用 ``_LOCK``：否则并发 ``get_redis`` 可能拿到一个正在 ``aclose``
     的池（连接已断），或在收尾清空后又新建一个绑在已关闭事件循环上的 client。
     """

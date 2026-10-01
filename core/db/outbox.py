@@ -1,5 +1,5 @@
-"""事务发件箱(outbox)模型与入队辅助（M1.1）。
-
+"""
+事务发件箱(outbox)模型与入队辅助（M1.1）。
 业务把"想可靠投递到消息总线的异步事件"与自身写入放同一事务（将行加入当前会话 commit），
 relay（`app/core/outbox_relay.py`）另行新会话领取并经 `core.messaging.publish` 投 Pulsar 后
 改 `published`，达成「DB 成、事件必达」的一致性。仅当 ``settings.pulsar_url`` 非空（生产/有

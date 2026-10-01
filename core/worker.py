@@ -1,9 +1,8 @@
-"""Pulsar worker：注册表驱动的订阅消费（M4）。
-
+"""
+Pulsar worker：注册表驱动的订阅消费。
 每个 worker 进程常驻消费一个（或一组）Pulsar 订阅，按 payload.fn 从注册表分发 handler。
 各模块 ``tasks.py`` 经 ``task_registry.register_task`` 把 handler 注册到订阅名下（订阅本身
 定义在 ``core.messaging.SUBSCRIPTIONS``）；**新增任务不再改本文件**。
-
 - 死信：Pulsar DeadLetterPolicy 在消费失败重投超限后投到 ``system/dlq`` topic，
   由 ``worker_dlq`` 消费落库（见 app/core/worker_dlq.py）。
 - 幂等：``_dispatch_with_dedup`` 复用 ``EventProcessed`` 账本，``scope`` = 订阅名，
@@ -47,13 +46,12 @@ async def _dispatch_with_dedup(
     *,
     scope: str = DEFAULT_SCOPE,
 ) -> None:
-    """带幂等的任务分派（供消费回调复用）。
-
+    """
+    带幂等的任务分派（供消费回调复用）。
     - payload 带 event_id（outbox relay 发布透传）→ 开临时会话查 event_processed：
       已处理 → 返回（外层对其 ack，不二次执行）；未处理 → 跑 handler，成功后记账。
     - 无 event_id（send/cron 等直发）→ 原语义直跑，不经 DB，零额外开销。
     - ``scope`` = 订阅名：同一事件被多个订阅消费（points 扇出）时各订阅独立记账，互不误跳过。
-
     **去重强度是 best-effort，不是「恰好一次」**：查账（SELECT）→ 跑 handler → 记账
     （INSERT）三步非原子，故两个并发投递可能都判定「未处理」而各跑一遍；handler 跑成功但
     记账失败/进程被杀时账本无记录，重投也会再跑一遍。之所以不做「先原子占位再跑、失败回滚」

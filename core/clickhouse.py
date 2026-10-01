@@ -1,10 +1,5 @@
-"""ClickHouse 分析管道客户端（M5 7.2.6）。
-
-蓝图《后端规划.md》§6.2：ClickHouse 承担**日志存储 / 分析 / 检索**，与 TimescaleDB
-连续聚合的「计数/度量聚合」并行互补。本模块只提供客户端基座，不承载业务 SQL——业务侧
-导出入口在 owner 域（``app/db/event_failure_export.py``、``auth/audit_export.py``），
-查询入口在 admin 只读 port。
-
+"""
+ClickHouse 分析管道客户端。
 设计要点（对齐 ``core.tracing`` 的 fail-open 范式）：
 - **默认关闭**（``settings.clickhouse_enabled=false``）：不建连接、零依赖零副作用。
 - **测试 seam**：``set_client_factory`` 注入 fake client（内存记录 query/insert、模拟水位）；
@@ -119,8 +114,8 @@ async def get_client() -> ClickHouseClient:
 
 
 async def close() -> None:
-    """幂等释放单例连接（应用 shutdown / 测试复位）。
-
+    """
+    幂等释放单例连接（应用 shutdown / 测试复位）。
     取单例在锁内：若与一次建连并发，等锁可保证「关掉的是最终那个客户端」，而不是让
     在途建连的结果在建完之后被留在 shutdown 之后（永不释放）。
     """
@@ -145,20 +140,7 @@ def result_rows(result: Any) -> list[tuple[Any, ...]]:
 
 
 async def fetch_watermark(client: ClickHouseClient, table: str) -> str | None:
-    """取 CH 表当前最大业务 id 作增量水位；空表返回 ``None``（调用方据此首次全量导出）。
-
-    业务 id 为 uuid7，CH 列类型 String：其字符串字典序与时间序一致，故 ``max(id)``
-    仍是最新已导出行。水位以字符串形式返回，PG 侧 ``Uuid`` 列与之直接比较
-    （SQLAlchemy 原生 uuid 绑定，asyncpg 接受十六进制字符串；见 export 单测）。
-
-    **空表判空必须同时认 ``None`` 与 ``""``**：CH 的 ``max()`` 在空集上不返回 NULL，而是该
-    类型的零值——``String`` 列即**空串**（整数列时代返回 0，恰好与「无水位」等价，故旧实现
-    只判 None 也不会出事）。UUID 改造后 ``id`` 变 String，若把空串当水位，PG 侧会生成
-    ``id > ''`` 直接抛 uuid 解析错（真实故障：CH 空表上的首次导出必然失败）。
-
-    ``table`` 只接受代码内常量（导出口径表名），不接受外部输入——SQL 以 f-string 拼接表名，
-    绝不拼接任何用户可控标识符。
-    """
+    """取 CH 表当前最大业务 id 作增量水位；空表返回 ``None``（调用方据此首次全量导出）。"""
     rows = result_rows(await client.query(f"SELECT max(id) FROM {table}"))
     if not rows or rows[0][0] in (None, ""):
         return None

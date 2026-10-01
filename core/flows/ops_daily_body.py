@@ -1,17 +1,8 @@
-"""运营日报的纯查询体（无 Prefect 依赖，可被 flow 或回落直调复用）。
-
-蓝图 §5.5/§6.4 把「运营日报」列为 Prefect flow。**最小版**只聚合**已经落库**的数据，不引入
-新的统计链路、不新建表：
-
+"""
+运营日报的纯查询体（无 Prefect 依赖，可被 flow 或回落直调复用）。
 - ClickHouse ``lkm.event_failures``（outbox 永久失败事件，analytics flow 每日已灌）
 - ClickHouse ``lkm.audit_logs``（auth 行为审计，同上）
 - 业务库 ``content_items``（按 ``created_at`` 的日新增数）
-
-刻意**不碰**在线口径（活跃用户 / 发帖趋势已有 admin 端点实时算）：日报的定位是**留痕**，
-不是再造一套实时统计。
-
-容错：任一路不可用（CH 未启用/查询失败）只让该路为空并告警，不影响其余——日报缺一路仍比
-整个 flow 失败有用。
 """
 
 from __future__ import annotations

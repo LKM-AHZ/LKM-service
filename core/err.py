@@ -62,21 +62,10 @@ class CommonErr(ErrCode):
     MFA_REQUIRED = NS_COMMON.err(4)  # 危险操作需重新完成 2FA（step-up）
     UNAVAILABLE = NS_COMMON.err(5)  # 依赖的后端未启用/不可达（如分析库 ClickHouse）
     TIMEOUT = NS_COMMON.err(6)  # 请求超出执行预算被硬中断（GraphQL 查询级超时）
-    # 乐观锁/版本冲突（蓝图 §6.1）：期望版本与库中现值不一致。供各业务模块的
-    # 并发更新路径复用，故定义在 common 命名空间。
     VERSION_CONFLICT = NS_COMMON.err(7)
-    # 协议型/内部缝端点的通用状态码。蓝图 §6.1 要求**所有** service/API 抛业务异常由全局
-    # handler 收敛；此前 git smart-HTTP（客户端是 ``git(1)``）与 ``/auth/internal/*`` 直接用
-    # ``HTTPException``，走的是 Starlette 默认 handler，返回 ``{"detail": ...}`` 而非统一信封。
-    # 这三个码用于把这些端点收进同一信封，同时**保持原 HTTP 状态码不变**（git 只认状态码与
-    # ``WWW-Authenticate``，不解析 body）。
     UNAUTHORIZED = NS_COMMON.err(8)
     NOT_FOUND = NS_COMMON.err(9)
     BAD_REQUEST = NS_COMMON.err(10)
-    # 唯一约束冲突的**中性兜底**（蓝图 §6.1：冲突一律 409）。此前未登记的业务约束回落到
-    # ``AuthErr.ALREADY_REGISTERED``，于是「重复收藏/重复申请」会被报成
-    # "Username or email already registered" ——状态码对、文案完全跑偏。各模块应尽量把
-    # 自己的约束名片段登记到本域语义码（见 register_unique_constraint），未登记的走这个。
     CONFLICT = NS_COMMON.err(11)
 
 
@@ -92,11 +81,7 @@ def register(errors: dict[ErrCode, tuple[int, str]]) -> None:
     ERRTABLE.update(errors)
 
 
-# —— 唯一约束名 → 语义化错误码（蓝图 §6.1）——
-# db 层不反向 import 业务模块（import-linter 的「db 不依赖 modules」契约），故用**注册表**
-# 做依赖倒置：各模块在自己的 ``errors.py`` 里登记自己的约束名片段，``app/db/session.py``
-# 只查这张表。约束名**跨环境会变**（create_all 隐式命名如 ``content_likes_pkey`` vs
-# alembic 显式命名），故按**子串**匹配而非精确匹配。
+# —— 唯一约束名 → 语义化错误码 ——
 UNIQUE_CONSTRAINT_ERRORS: dict[str, ErrCode] = {}
 
 
@@ -135,12 +120,8 @@ register(
 
 
 def err_info(errcode: ErrCode) -> tuple[int, str]:
-    """查错误码对应的 ``(status, msg)``；未注册时回退 500 并告警。
-
-    未注册的错误码（新模块的 errors.py 未被 registry 导入，或在注册副作用之前就被 raise）
-    原先会在这里 KeyError。索引点分散在 ``BizError.__init__``、``map_err``、``resp_json``，
-    后两者位于全局异常处理器内——KeyError 会把受控业务错误变成 500 + 难以定位的 traceback。
-    回退到 INTERNAL_ERROR 保证响应仍是合法错误信封，日志明确指出漏注册。
+    """
+    查错误码对应的 ``(status, msg)``；未注册时回退 500 并告警。
     """
     info = ERRTABLE.get(errcode)
     if info is None:
@@ -165,8 +146,7 @@ class BizError(Exception):
     ) -> None:
         self.errcode = errcode
         self.detail = detail or err_info(errcode)[1]
-        # 随错误一并下发的响应头（如 git smart-HTTP 401 的 ``WWW-Authenticate`` 挑战头——
-        # 少了它 ``git`` 不会提示输入凭据，属协议必需）。全局 handler 会把它交给 resp_json。
+        # 随错误一并下发的响应头
         self.headers = headers
         # 不调 super().__init__ 会让 exc.args 为空、str(exc) 变成空串：
         # logger.exception / 错误上报器这类按异常文本格式化的地方会丢掉消息与错误码
@@ -192,10 +172,6 @@ def map_err(exc: Exception) -> tuple[int, ErrCode, str]:
     return status, CommonErr.INTERNAL_ERROR, msg
 
 
-# 429/503 的「带重试语义」（蓝图 §6.1「409 / 429 带重试语义」）：这两类状态表示
-# 「稍后重试可能成功」，用 Retry-After 给出可重试信号。取值用固定常量而非配置项——
-# 现有 429（验证码限流/板块日发帖上限）都是分钟级窗口，没有真实自由度，加配置只会多一个
-# 漂移点。调用方若显式传了 Retry-After（如上游更精确的窗口），以调用方为准。
 _RETRY_AFTER_SECONDS = 60
 
 
@@ -208,8 +184,7 @@ def resp_json(
 ) -> JSONResponse:
     status, msg = err_info(errcode)
     out_headers = dict(headers) if headers else {}
-    # 大小写不敏感地看调用方是否已给：HTTP 头名不区分大小写，用 == 判断会对
-    # "retry-after" 误判为缺失，进而发出重复头
+    # 大小写不敏感地看调用方是否已给：HTTP 头名不区分大小写
     if status in (429, 503) and not any(
         k.lower() == "retry-after" for k in out_headers
     ):
@@ -230,10 +205,8 @@ def resp_json(
 def respond[**P, R](
     func: Callable[P, Coroutine[Any, Any, R]],
 ) -> Callable[P, Coroutine[Any, Any, Response]]:
-    """装饰器：将返回值通过 ERRTABLE 包装。
-
-    仅承担 FastAPI 端点（当前全部为 async def），返回类型保持 Coroutine 交给 FastAPI await。
-    端点若已返回 ``Response``（如读热路径 msgspec 预编码响应，见 ``core.wire``）则原样透传。
+    """
+    装饰器：将返回值通过 ERRTABLE 包装。
     """
 
     @functools.wraps(func)
@@ -249,9 +222,7 @@ def _wrap_result(result: Any) -> Response:
     if isinstance(result, Response):
         return result
     if isinstance(result, tuple) and isinstance(result[0], ErrCode):
-        # 只认 (errcode, payload) 这一种形状：旧实现用 len(...) >= 2，多出来的元素会被
-        # 静默丢弃并按 (errcode, payload) 回应。长度不符按内部错误回应 + 留日志（仍是合法
-        # 错误信封），不猜语义、也不丢数据。
+        # 只认 (errcode, payload) 这一种形状
         if len(cast(Any, result)) != 2:
             logger.error(
                 "endpoint returned an (errcode, ...) tuple with %d elements, expected 2",
@@ -268,12 +239,6 @@ def _wrap_result(result: Any) -> Response:
     if isinstance(result, PageData):
         extra["X-Total"] = str(result.total)
     return resp_json(CommonErr.OK, data=result, headers=extra)
-
-
-# ========== M3 peer: 自 auth.errors 并入共享 (AuthErr) ==========
-# AuthErr 原为 app/modules/auth/errors.py 私有；现并入共享 core.err，
-# 使 core.throttle / core.db.session 等 monolith 共享层无需反向 import auth 包。
-# 定义与 register 映射原样迁移，行为零变化。auth/errors.py 改为仅私有重导出。
 
 
 class AuthErr(ErrCode):
@@ -304,18 +269,12 @@ class AuthErr(ErrCode):
     OAUTH_EMAIL_ALREADY_REGISTERED = NS_AUTH.err(25)
     TOO_LARGE = NS_AUTH.err(26)
     AVATAR_NOT_FOUND = NS_AUTH.err(27)
-    # 唯一约束冲突的语义化细分（蓝图 §6.1）：注册/改资料撞 email / username 唯一键时
-    # 回一个能指明的码，而不是笼统的 ALREADY_REGISTERED（判定见 app/db/session.py）。
     EMAIL_TAKEN = NS_AUTH.err(28)
     USERNAME_TAKEN = NS_AUTH.err(29)
 
 
 register(
     {
-        # 蓝图 §6.1：唯一约束冲突属 409（与同表其余「已存在/重复」语义的码一致，如
-        # OAUTH_EMAIL_TAKEN=409、各业务模块的 *_TAKEN/ALREADY_* 亦为 409）。业务码数值不变，
-        # 只动 HTTP 状态——前端只按 body.code 判成功、非 2xx 统一走 HTTP_CLIENT_ERROR，
-        # 不依赖具体状态码，故不破契约。
         AuthErr.ALREADY_REGISTERED: (409, "Username or email already registered"),
         AuthErr.INVALID_CREDENTIALS: (401, "Invalid username or password"),
         AuthErr.USER_NOT_FOUND: (401, "User not found"),
@@ -354,7 +313,5 @@ register(
     }
 )
 
-# 用户域唯一约束的语义化（蓝图 §6.1）。在此登记（AuthErr 与本注册表同文件），
-# 使 db 层只查 core 注册表、不反向 import auth 包/业务模块。
 register_unique_constraint("email", AuthErr.EMAIL_TAKEN)
 register_unique_constraint("username", AuthErr.USERNAME_TAKEN)

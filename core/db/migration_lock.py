@@ -1,8 +1,7 @@
-"""Redis 迁移锁：串行化多 worker 并发的 Alembic upgrade。
-
+"""
+Redis 迁移锁：串行化多 worker 并发的 Alembic upgrade。
 业务库与 auth 库是两条独立迁移链，各自用不同 key 上锁（互不阻塞），故锁工具从
 ``app/db/init_db.py`` 抽出为共享模块，由两侧调用方自行传入 key。
-
 Redis 不可用（未配置/宕机）→ fail-open 不设锁直接跑（幂等 no-op）。
 """
 

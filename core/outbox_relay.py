@@ -1,14 +1,5 @@
-"""outbox relay：领取 pending 事件投递到消息总线并置 published（M1.1）。
-
-多副本 leader 选举（M1.2）：`run_outbox_loop` 在 Redis 可用时，以租约键（SET NX EX）维护
-「同一时刻仅持租约副本 poll」，其余副本记录 `[follower] 不轮询` 并按周期重试；失联副本
-租约 TTL 到期即被接管、事件无缝续投。Redis 未启用（单 owner 开发）时退化为原始单进程
-串行 poller，与改动前一致。投递语义=`messaging.publish` 成功即 published。
-未配置消息总线 → enqueue 已被 `app/db/outbox.enqueue_outbox` gate 掉不会入队，因此本
-poll 也空转退出，与 worker "无 broker 降级空转返回" 一致。
-
-`relay_poll` 刻意收敛为**纯函数**（不启动任何循环/会话生命周期），单测经 monkeypatch /
-session_factory seam 注入即可直接驱动；租约判定只出现在 `run_outbox_loop` 运行层。
+"""
+outbox relay：领取 pending 事件投递到消息总线并置 published。
 """
 
 import asyncio
@@ -49,8 +40,8 @@ _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:64]
 
 
 def _scan_window_start(now: datetime) -> datetime | None:
-    """扫描窗口的时间下界（批 2，TimescaleDB hypertable 的 chunk 裁剪）。
-
+    """
+    扫描窗口的时间下界
     ``outbox_scan_window_s <= 0`` 时返回 None（不限窗）。它只用于让规划器跳过
     ``created_at`` 过旧的分区，**不改变「哪些事件可投」的语义**——窗口外的行会被
     Timescale 保留策略 DROP（两者阈值刻意对齐，见 ``init_db._RETENTION_POLICIES``）；
@@ -62,13 +53,11 @@ def _scan_window_start(now: datetime) -> datetime | None:
 
 
 def _claimable(now: datetime) -> tuple[Any, ...]:
-    """可领取窗口的 WHERE 条件：到期待投 **且** 未被别的进程有效认领（M6.3）。
-
+    """
+    可领取窗口的 WHERE 条件：到期待投 **且** 未被别的进程有效认领
     锁列（`locked_at/locked_by`）此前只建不用；现在领取即写、投递后清，并叠加陈旧阈值：
     `locked_at` 比 TTL 更早的行视为「持有者已崩溃」，可被重新领取——否则持锁进程崩溃会让
     该行永久卡死。未到期（`locked_at` 新鲜）的行留给持有者，别的副本不抢。
-
-    另叠加 ``created_at`` 时间窗（批 2，见 :func:`_scan_window_start`）。
     """
     stale_before = now - timedelta(seconds=settings.outbox_lock_ttl_s)
     conds: list[Any] = [
@@ -94,28 +83,7 @@ def _clear_lock(msg: OutboxMessage) -> None:
 async def relay_poll(
     batch: int = 100, *, session_factory: SessionFactory | None = None
 ) -> int:
-    """扫一批到期的 pending 事件投递；返回本轮成功(published)事件数。
-
-    语义：
-    - 领取窗口 = `status=pending AND next_retry_at<=now` **且未被有效认领**
-      （`locked_at IS NULL OR locked_at < now-lock_ttl`，见 :func:`_claimable`），
-      按 attempt 升序（少重试者在先），`FOR UPDATE SKIP LOCKED` 避免与并发 poller 阻塞互等。
-    - 领取即写 `locked_at/locked_by` 并 commit（释放行级锁、留下跨事务的认领标记），
-      投递尝试结束（成功或失败）即 :func:`_clear_lock`——标记只用于「同刻不被两个副本各取走」，
-      不改变退避语义；持标记进程崩溃 → 超 `outbox_lock_ttl_s` 后该行可被重新领取。
-    - 投递（`messaging.publish(routing_key, parsed)`）成功 → `published_at=now, status=published`。
-    - **永久失败分类**（M6.3）：投递前经 `messaging.permanent_failure_reason` 判定
-      （未知 routing_key / payload 不可编码）→ **不消耗重试额度**，一次即折叠进 `event_failures`；
-      其余失败视为瞬时（总线不可达等）→ `attempt_count += 1`，达 `MAX_TRIES` 折叠归档，
-      否则指数退避 `next_retry_at = now + 2**attempt s`（cap 1h）保持 pending 待下轮。
-    - 每事件独立 flush/commit，单条失败不影响其余。
-    - 多副本注（M1 gate review 收钝）：同刻唯一 poll 仍由 leader 租约(M1.2)保证；本层的
-      SKIP LOCKED + 认领标记是 leader 内多线程/接管窗口的兜底。最外正确性仍靠消费端
-      event_id 幂等 + handler 硬次级幂等(points ref 唯一 / notify GETDEL)。
-    - 可观测（M0.5.2）：每轮末尾统计表内仍 `status=pending`（含退避等待下一轮）件数
-      set 到 `outbox_pending_count` gauge 供积压看板。投递失败计数不在此重复——提交经
-      `messaging.publish`，其抛出/不可用路径已由 messaging 层自身计 `notify_failed_total`。
-    """
+    """扫一批到期的 pending 事件投递；返回本轮成功(published)事件数。"""
     factory = session_factory or new_session
     db = await factory()
     succeeded = 0
@@ -149,8 +117,6 @@ async def relay_poll(
 
         for msg in rows:
             # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
-            # （M1.3；见 app/db/event_processed.py）。fn/args 原样保留；event_id 也正是 envelope
-            # 契约允许的第三个键（多余键会判违约，见 core/event_contract.py）。
             payload = {**msg.payload_json, "event_id": msg.event_id}
             reason = messaging.permanent_failure_reason(msg.routing_key, payload)
             if reason is not None:
@@ -244,16 +210,7 @@ async def archive_published(
     batch: int | None = None,
     session_factory: SessionFactory | None = None,
 ) -> int:
-    """把**已投递且超过保留期**的行迁到 `outbox_archived` 冷表后从 outbox 删除（M6.3）。
-
-    纪律：**先归档后删**（同一事务内先 insert 冷副本再 delete 原行）——删除是不可逆操作，
-    蓝图为它定的前提是「先留冷副本」，故本函数是唯一允许删已发布行的入口。
-
-    - 只动 `status=published AND published_at < now-retention` 的行；pending/failed 一律不碰
-      （它们仍在生命周期中：pending 待投、failed 理论上不会留在 outbox——达上限即折叠）。
-    - `SKIP LOCKED` + 批上限：与服务化 relay 并发时不会互锁，单轮工作量有界。
-    - 返回本轮归档（=删除）条数；无候选返回 0。
-    """
+    """把**已投递且超过保留期**的行迁到 `outbox_archived` 冷表后从 outbox 删除"""
     retention = (
         settings.outbox_archive_retention_s if retention_s is None else retention_s
     )
@@ -308,14 +265,7 @@ async def archive_published(
         await db.close()
 
 
-# ---- λ leader 租约原语（M1.2，仿 cache.py make_key / _PING_TIMEOUT fail-open）----
-# 租约键采用 cache.py 的命名规范 `lkm:{env}:outbox:leader`，与其它 Redis 键共用 env 隔离。
-# 原语对命令异常一律 fail-open 返回「未取得/未续成」，由 run_outbox_loop 据此保守地不轮询
-# （宁可短暂积压也不多副本重复投），与限流器 fail 语义分场景定性一致。
-
-
-# 「Redis 已配置但不可用」的告警去重标记：get_redis() 的 fail-open 让它与「未配置」都
-# 表现为 None，此分支每 interval 走一次，不去重会把日志刷满
+# ---- λ leader 租约原语 ----
 _redis_degraded_warned = False
 
 
@@ -399,16 +349,7 @@ async def _release_lease(redis: Any, token: str) -> None:
 
 
 async def run_outbox_loop() -> None:
-    """独立进程主循环：周期 poll outbox（未配置消息总线空转退出，语义同 worker）。
-
-    - 未配置消息总线：空转退出（enqueue 已被 gate，无事件可 poll）。
-    - Redis 未启用/不可用（单 owner 开发）：直接串行 poll，等同改动前 M1.1 行为。
-    - Redis 可用：以租约维持 leader 权。每个 tick 先 reconcile：仍是 leader 则续约 poll；
-      已让出/未持有则尝试 NX 抢占——占不到说明被别的副本持有，记 `[follower] 不轮询`
-      并按 interval 重试，直到原 leader 失联 TTL 到期被接管为新 leader。失联接管延迟
-      上界 ≈`outbox_leader_ttl_s`。ttl(60s) 远大于 interval(2s)，故每 tick 续一次足额，
-      不会抖动抢主。
-    """
+    """独立进程主循环：周期 poll outbox。"""
     if not settings.message_bus_enabled:
         logger.error("消息总线不可用，outbox relay 空转退出")
         return
@@ -419,8 +360,7 @@ async def run_outbox_loop() -> None:
         settings.outbox_leader_ttl_s,
     )
     token: str | None = None
-    # 归档节流（M6.3）：启动即允许首轮（清历史积压），此后按 interval 周期执行；只由
-    # 当前 poll 者做（单 owner 或 leader），与 poll 同循环、不另起任务。
+    # 归档节流：启动即允许首轮（清历史积压），此后按 interval 周期执行；只由当前 poll 者做，与 poll 同循环、不另起任务。
     next_archive_at = datetime.now(UTC)
 
     async def _poll_tick() -> bool:
@@ -454,11 +394,7 @@ async def run_outbox_loop() -> None:
         try:
             redis = await redis_client.get_redis(_lease_key())
             if redis is None:
-                # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll，等同 M1.1。
-                # 「已配置但暂时不可用」走同一分支：这里刻意继续投递（fail-open 保可用性），
-                # 同时告警一次——若改成直接跳过，Redis 一挂 outbox 投递就整体停摆；而 poll
-                # 走 SKIP LOCKED，多副本并发只会各取不相交的一批行。丢租约的代价仅是多副本
-                # 下并发轮询（部署清单 replicas=1，且消费者按 event_id 幂等）。
+                # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll
                 token = None
                 _warn_redis_degraded_once(redis_client.is_enabled())
                 await _poll_tick()

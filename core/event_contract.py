@@ -1,23 +1,6 @@
-"""事件契约：``fn`` → 参数形状 + 承载它的逻辑 routing_key（**唯一事实源**）。
-
-为什么契约必须在应用层
---------------------
-事件 envelope 是通用的 ``{fn, args, event_id}``，而 **broker 侧的 schema registry 不校验
-payload**。2026-09-30 在真 broker（standalone 3.3.0）上实测：
-
-- 开 ``schemaValidationEnforced=true``（命名空间 ``set-schema-validation-enforce -e``）后，
-  违约 payload（``fn`` 为整数 / ``args`` 为字符串 / 整条不成形）**照样投递成功**；
-- 把 ``fn`` 收紧成 Avro ``enum`` 后，发送**未声明**的 fn 也照样成功；
-- 该开关真正生效的只有一条：**topic 已有 schema 时，未声明 schema 的 producer 接不进来**
-  （``IncompatibleSchema``）；且 topic 尚无 schema 时无 schema 的 producer 反而能抢先建出
-  无 schema 的 topic。
-- 消费者不带 schema 也不受影响。
-
-即 broker 层最多保证「谁在发」，**保证不了「发的是什么」**——只开那个开关就是一句虚假保证。
-（部署侧该开关仍开，见 ``deploy/pulsar/entrypoint.sh``；其确切语义写进 DEPLOYMENT.md。）
-
-因此「事件契约」= 本模块的声明式登记表 + 三处校验点：
-
+"""
+事件契约：``fn`` → 参数形状 + 承载它的逻辑 routing_key（**唯一事实源**）。
+事件契约」= 本模块的声明式登记表 + 三处校验点：
 1. **装配期**（``task_registry.register_task`` / ``register_cron_job``）：handler 的形参个数
    必须与契约的必填/总个数相容——写错在进程启动时即炸，而不是等某条消息到了才 TypeError。
    （worker 用 ``handler(*args)`` **按位置**展开，故校验的是元数而非形参名；同名 fn 的多个
@@ -27,7 +10,6 @@ payload**。2026-09-30 在真 broker（standalone 3.3.0）上实测：
    False；``messaging.permanent_failure_reason`` 同步把违约判为**永久失败**，使 relay 把它
    折叠进 ``event_failures``（可人工重放）而不是重试 5 次再丢。
 3. **消费期**（``worker._on_payload``）：违约消息 ack 丢弃并计违约指标（确定性坏消息重投无益）。
-
 **参数类型按「线上 JSON 形态」声明**，不按 Python 标注：``uuid.UUID`` 过 JSON 后是 str，
 ``datetime`` 同理；handler 上的类型标注表达的是意图（且本仓并不一致），不能当契约。
 """
@@ -63,8 +45,7 @@ from core.messaging import (
 
 logger = logging.getLogger("lkm.event_contract")
 
-# envelope 允许出现的键（多一个都算违约：``enqueue_outbox`` 的 payload 是 {fn,args}，
-# relay 再注入 event_id）。历史上曾靠「多余键对 handler 无害」放行，这里收紧。
+# envelope 允许出现的键
 _ENVELOPE_KEYS: Final = frozenset({"fn", "args", "event_id"})
 
 # 线上 JSON 形态的类型字面量（json.loads 之后的确切类型）
@@ -73,8 +54,8 @@ _WIRE_KINDS: Final = frozenset({"str", "int", "float", "bool", "list", "dict"})
 
 @dataclass(frozen=True)
 class Arg:
-    """契约里的一个位置实参（描述**线上**形态）。
-
+    """
+    契约里的一个位置实参（描述**线上**形态）。
     ``optional`` 只允许出现在尾部（模块导入期自检），表示发布方可以不带该实参（对应
     handler 上的默认值）。
     """
@@ -87,8 +68,8 @@ class Arg:
 
 @dataclass(frozen=True)
 class EventContract:
-    """一个 ``fn`` 的事件契约。
-
+    """
+    一个 ``fn`` 的事件契约。
     ``routing_keys``：允许承载该 fn 的逻辑键（发布方**必须**其中之一，装配期校验 cron 声明）。
     ``note``：谁在发、谁在收，供审计时人读。
     """
@@ -193,8 +174,8 @@ EVENT_CONTRACTS: dict[str, EventContract] = {
 
 
 def _validate_registry(contracts: dict[str, EventContract] | None = None) -> None:
-    """装配期自检登记表（拼错的 kind / 可选项不在尾部 / 未知 routing_key 在 import 期即炸）。
-
+    """
+    装配期自检登记表（拼错的 kind / 可选项不在尾部 / 未知 routing_key 在 import 期即炸）。
     ``contracts`` 仅为可测试性留口（默认校验本模块的 :data:`EVENT_CONTRACTS`）。
     """
     for fn, contract in (EVENT_CONTRACTS if contracts is None else contracts).items():
@@ -216,9 +197,6 @@ def _validate_registry(contracts: dict[str, EventContract] | None = None) -> Non
 
 
 _validate_registry()
-
-
-# ---- 校验 ----
 
 
 def _value_matches(value: Any, arg: Arg) -> bool:
@@ -244,10 +222,9 @@ def _value_matches(value: Any, arg: Arg) -> bool:
 def payload_violations(
     payload: Mapping[str, Any] | Any, routing_key: str | None = None
 ) -> list[str]:
-    """校验一条**线上形态**（json.loads 之后）的 envelope；返回违约原因清单，空=合规。
-
-    ``routing_key`` 给定时连带校验「该 fn 确实允许经这个逻辑键承载」；消费侧拿不到
-    properties 时可传 None 只校验 fn/args。
+    """
+    校验一条**线上形态**（json.loads 之后）的 envelope；返回违约原因清单，空=合规。
+    ``routing_key`` 给定时连带校验「该 fn 确实允许经这个逻辑键承载」；消费侧拿不到properties 时可传 None 只校验 fn/args。
     """
     if not isinstance(payload, Mapping):
         return [f"payload 非对象（{type(payload).__name__}）"]
@@ -325,11 +302,9 @@ def record_violation(
 
 
 def handler_violation(fn: str, handler: Callable[..., Any]) -> str | None:
-    """校验 handler 的形参元数与契约相容；返回违约原因，None=相容。
-
-    相容条件（见模块头：dispatch 是 ``handler(*args)`` 按位置展开，故只校验元数）：
-    ``handler 必填形参数 <= 契约必填实参数`` 且 ``handler 位置形参总数 >= 契约实参数上限``
-    ——这样契约允许的任何一种实参个数，handler 都接得住。
+    """
+    校验 handler 的形参元数与契约相容；返回违约原因，None=相容。
+    相容条件（见模块头：dispatch 是 ``handler(*args)`` 按位置展开，故只校验元数）
     """
     contract = EVENT_CONTRACTS.get(fn)
     if contract is None:

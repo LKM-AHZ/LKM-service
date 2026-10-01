@@ -1,13 +1,9 @@
-"""数据库声明基座：Base / Mixin / UTCDateTime / 时间辅助函数。
-
+"""
+数据库声明基座：Base / Mixin / UTCDateTime / 时间辅助函数。
 跨模块共享的 ORM 基础设施集中于此（计划 §2 db/base.py）。各模块 ``models.py``
 从本模块 import ``Base``/``UUIDPrimaryKeyMixin``/``SoftDeleteMixin``/``UTCDateTime``/
 ``now_iso``/``expires_at``。本模块不依赖任何业务模块，保证 ``core/``、``db/`` 层不反向
 依赖业务（import-linter 契约）。
-
-注意：必须确保全部模块 ``models.py`` 都被导入后 SQLAlchemy 的 mapper registry
-才会在 ``configure()`` 时解析到所有 relationship 字符串引用（见 db/registry 侧的
-模型预注册）。
 """
 
 from __future__ import annotations

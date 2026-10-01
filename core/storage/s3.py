@@ -1,5 +1,5 @@
-"""S3/MinIO 存储后端：把 ``bucket_key`` 存到 ``prefix`` 下的真实 S3 key。
-
+"""
+S3/MinIO 存储后端：把 ``bucket_key`` 存到 ``prefix`` 下的真实 S3 key。
 与 :class:`~core.storage.local.LocalStorage` 一样字节级、不负责内容寻址/去重
 （由 files 层决定 key 形状）。所有网络 I/O 经 ``asyncio.to_thread`` 调度，避免阻塞事件循环。
 """

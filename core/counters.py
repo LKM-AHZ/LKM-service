@@ -1,18 +1,12 @@
-"""互动计数 Redis 增量原语（M6.10）。
-
-设计口径（详见执行路线图 §8 登记）:
-
+"""
+互动计数 Redis 增量原语。
+设计口径:
 - **单向增量**：写路径只向 Redis ``INCRBY`` 一个差值（``+1``/``-1``），不读改写、
   不做「DB 计数 ±1」的热点行争用。DB 计数列由 ``flush`` 周期落库。
 - **真相源是明细表**：Redis 只是「尚未落库的差值」缓冲，不是计数权威；权威由
   ``reconcile`` 从明细行 ``COUNT(*)`` 重算（可证伪：二次对账 diff=0）。
 - **fail-open**：Redis 未启用/不可达时 ``bump_counter`` 返回 ``False``，调用方回退
   到原有的「原子 UPDATE DB」路径，行为与引入本链路前一致。
-
-本模块只依赖 Redis，不 import 任何业务模型（sqlalchemy 列映射在
-``app.modules.content.counters``）；键规范与 ``core.cache`` 一致（``lkm:{env}:...``）。
-
-键：``lkm:{env}:count:{field}|{obj_id}``，值 = 待落库差值（可为负，表示净减）。
 """
 
 from __future__ import annotations
@@ -42,8 +36,8 @@ def counter_key(field: str, obj_id: uuid.UUID) -> str:
 
 
 def parse_counter_key(key: str) -> tuple[str, uuid.UUID] | None:
-    """从 Redis 键解析 ``(field, obj_id)``；非计数键返回 ``None``。
-
+    """
+    从 Redis 键解析 ``(field, obj_id)``；非计数键返回 ``None``。
     ``obj_id`` 统一返回 ``uuid.UUID``（与写侧 :func:`counter_key` 收到的类型一致，也与
     ``content_items.id`` 等主键类型一致）；Redis 键里是 ``str(uuid)``，此处解析回对象。
     """
@@ -81,7 +75,7 @@ async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
 
 async def pending_delta(field: str, obj_id: uuid.UUID) -> int:
     """当前未落库差值（Redis 不可用/无键 → 0）。用于返回「DB 值 + 增量」的即时读数。"""
-    key = counter_key(field, obj_id)  # 同 bump_counter：校验失败必须外抛，不吞成 0
+    key = counter_key(field, obj_id)  # 校验失败必须外抛，不吞成 0
     client = await redis_client.get_redis(key)
     if client is None:
         return 0
@@ -97,8 +91,8 @@ async def pending_delta(field: str, obj_id: uuid.UUID) -> int:
 
 
 async def drain_counters() -> dict[tuple[str, uuid.UUID], int]:
-    """原子取走全部待落库差值（``GETDEL``），返回 ``{(field, obj_id): delta}``。
-
+    """
+    原子取走全部待落库差值（``GETDEL``），返回 ``{(field, obj_id): delta}``。
     用 ``SCAN`` 而非维护 pending 集合：无「集合成员与实际键不同步」的竞态窗口，
     并发新增的键会被下一轮 SCAN 扫到（最坏是晚一轮落库，且对账兜底）。
     取走即清零——若随后 DB 写入失败，差值丢失（宁少不重），由对账收敛回真值。

@@ -8,14 +8,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from core.secrets import reveal
 
 # 存在即安全的非生产占位桶：仅当显式认领 dev/local/test 才允许占位密钥。
-# 刻意不包含 ""：显式把 LKM_ENV 设成空串即按生产 fail-fast。
-# 注意「LKM_ENV 未设置」并不 fail-fast —— env 字段默认值是 "dev"，缺失即按 dev 宽松放行，
 # 所以生产部署必须显式设 LKM_ENV=production（漏设的代价是占位密钥被放行）。
 _PERMISSIVE_ENVS: set[str] = {"dev", "local", "test"}
 
 # 开发兜底的 CORS 来源白名单（本地前端：社区站 astro/管理台 vite）。
-# 生产必须显式配置 LKM_CORS_ORIGINS —— 由 ``assert_web_security_configured()`` 在
-# HTTP 服务进程装配期强制（见该方法 docstring 说明为何不放进逐进程校验器）。
+# 生产必须显式配置 LKM_CORS_ORIGINS
 _DEV_CORS_ORIGINS: tuple[str, ...] = (
     "http://localhost:4321",
     "http://localhost:5173",
@@ -31,8 +28,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 运行环境：字段默认 "dev"，故 LKM_ENV **未设置**时按 dev 宽松放行；只有显式设成 ""
-    # 或 production 等非宽松值才收紧（fail-fast 校验见 _no_insecure_secrets_outside_dev）。
+    # 运行环境：字段默认 "dev"，故 LKM_ENV **未设置**时按 dev 宽松放行
     # 生产必须显式设 LKM_ENV=production。
     env: str = "dev"
 
@@ -40,17 +36,9 @@ class Settings(BaseSettings):
     app_version: str = "0.0.1"
     api_prefix: str = "/api/v1"
 
-    # ---- 公网安全面（M6.1）----
     # HTTP 服务进程（backend / auth）的 Host 头白名单，逗号分隔；"*" = 不校验。
-    # 留空在 dev 等价 "*"；生产由 ``assert_web_security_configured()`` 在应用装配期强制显式给值。
-    # 注意须把**内网服务名/回环**一并列入（backend,auth,127.0.0.1,localhost），否则容器
-    # healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 而长期 unhealthy。
     allowed_hosts: str = ""
     # CORS 显式来源白名单，逗号分隔（如 http://localhost:4321,http://localhost:5173）。
-    # **仅本地开发有效**：生产不挂应用层 CORSMiddleware，CORS 唯一权威是 APISIX
-    # （deploy/apisix/apisix.yaml 的 cors 插件）——生产流量必经网关，两边各挂一份只会
-    # 变成需要人工同步的第二真相源。未配则取 _DEV_CORS_ORIGINS 兜底。
-    # 装配层保证「"*" 与 allow_credentials 不并存」（见 core/middleware.py）。
     cors_origins: str = ""
 
     db_host: str = "localhost"
@@ -62,43 +50,30 @@ class Settings(BaseSettings):
     # 连接池（PostgreSQL/asyncpg 生效）
     db_pool_size: int = 10
     db_pool_max_overflow: int = 20
-    # 取连接前 ping 探活，剔除坏连接，避免陈旧连接 0 连接时的短暂出错
+    # 取连接前 ping 探活，剔除坏连接
     db_pool_pre_ping: bool = True
-    # 连接回收与取连接等待（蓝图 §3.3 明确列出 ``pool_recycle``；池满时按「等待 + 超时」
-    # 处理而非无上限开池）。recycle 是**主动轮换**：连接存活超期即回收重建，避免被中间网络
-    # 设备静默掐断的陈旧连接被复用——与 pre_ping（取用时才探活）互补。timeout 是池满后
-    # 等待空闲连接的**上限**，超时即抛（拒绝崩溃，不做无限等待）。
+    # 连接回收与取连接等待recycle 是**主动轮换**：连接存活超期即回收重建
     db_pool_recycle_s: int = 1800
     db_pool_timeout_s: float = 30.0
-    # worker / 后台批处理的**独立**池（蓝图 §3.3「不同组件独立连接池」标"关键"）：
-    # outbox relay、APScheduler 任务、各 worker 的周期突发走这里的池，不与 Web 请求争抢——
-    # 否则一次全量 ETL/对账就能把在线请求的连接挤干。尺寸刻意小于 Web 池（批处理并发有限，
-    # 且它本就不该抢占在线配额）。
+    # worker / 后台批处理的**独立**池：
     db_worker_pool_size: int = 5
     db_worker_pool_max_overflow: int = 10
 
-    # JWT 签名（RS256-only，蓝图 §4.2）：auth 持私钥签发，backend/网关持公钥验签。
-    # 不支持 HS256 对称签名——配了 RSA 私钥即用 RS256；缺密钥时签发期 RuntimeError、
-    # 验签期一律拒（readiness 如实报「验签不可用」，见 auth/jwt_keys.verification_status）。
+    # JWT 签名：auth 持私钥签发，backend/网关持公钥验签。
     jwt_private_key: SecretStr | None = None
     jwt_public_key: SecretStr | None = None
     # 亦可给 PEM 文件路径（k8s Secret 卷 / compose 只读挂载）；内联值优先于文件。
     jwt_private_key_file: str = ""
     jwt_public_key_file: str = ""
     # 运行期从 AUTH ``/.well-known/jwks.json`` 拉取验签公钥的**刷新间隔**（秒）。
-    # 蓝图 §2 第 2 条：本地无公钥时可从 JWKS 拉取并缓存。仅在「本地没有公钥」时才真正发请求；
-    # 拉到后仍按此间隔重拉，以便 AUTH 换钥后（重启换文件）无需重启验签方。
     jwks_refresh_s: int = 300
-    # 缓存防穿透的布隆过滤器（蓝图 §5.6「非法/不可枚举 key 用布隆过滤器挡非法形态」）：
-    # 与空值缓存互补——空值缓存挡「合法但查无」，布隆挡「不可能存在」的 id。
-    # capacity/error_rate 决定位数组大小与哈希轮数；容量偏小只会推高误判率（→ 多漏拦，仍正确）。
+    # 缓存防穿透的布隆过滤器：
     bloom_filter_enabled: bool = True
     bloom_filter_capacity: int = 100_000
     bloom_filter_error_rate: float = 0.001
-    # 白名单「已预热」标记的存活秒数：**门禁**——标记在才允许据布隆拒绝，过期即自动退回
-    # 「不拦」（fail-open）。预热任务每日重跑，取 7 天容错窗口；任务长期停摆则自动失效。
+    # 白名单「已预热」标记的存活秒数
     bloom_filter_seed_ttl_s: int = 7 * 24 * 3600
-    # 帖详情读缓存 TTL（蓝图 §5.6 缓存对象表 `cache:content:{id}`，秒级短 TTL + 事件失效）。
+    # 帖详情读缓存 TTL。
     content_detail_cache_ttl_s: int = 60
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
@@ -106,14 +81,7 @@ class Settings(BaseSettings):
     # 后台 cookie 会话：access cookie 存活分钟（refresh 天数复用 refresh_token_expire_days）
     admin_access_cookie_minutes: int = 15
 
-    # 登录限流安全参数（见 backend_auth_security 记忆）：IP/全局每次数量与窗口秒。
-    #
-    # **与网关限流的分工，不是重复**（`deploy/apisix/apisix.yaml` 的 auth-login 路由另有
-    # 60/60s 的 limit-count，两者语义不同、数值刻意不同，不必同步）：
-    #   网关：按 remote_addr 的粗粒度削峰，policy=local（各实例独立计数），把洪水挡在应用前。
-    #   此处：**账号级精确锁定** —— 用户名级 + 真实 IP 级（经 `core.client_ip` 读 X-Real-IP）
-    #         的 Redis 滑动窗口，跨实例共享；只有这一层才会真正锁账号。
-    # 调参请按各自语义调：这里的 IP/全局阈值是"防爆破"，网关那边是"防洪水"。
+    # 登录限流安全参数
     login_ip_max_per_min: int = 20
     login_global_max_per_min: int = 200
     login_window_seconds: int = 60
@@ -143,69 +111,42 @@ class Settings(BaseSettings):
     files_store_dir: str = "files_store"
     max_upload_bytes: int = 100 * 1024 * 1024  # 单文件上传上限 100MB
     redis_url: SecretStr = SecretStr(
-        ""  # 空串 = 未启用 Redis；非空走 redis://[user:pass@]host:port[/db]
+        ""  # 空串 = 未启用 Redis
     )
 
-    # ---- 双 L2 后端并行 / 灰度（按 key 前缀路由）----
-    # 第二后端 URL（如 Dragonfly）。**空 = 不启用并行**，行为与单后端完全一致。
+    # 第二后端 URL（如 Dragonfly）
     redis_url_secondary: SecretStr = SecretStr("")
-    # 逗号分隔的路由前缀：命中的 key 走 secondary，其余走 redis_url。
-    # 前缀是相对于 ``make_key`` 产物 ``lkm:{env}:`` 之后的部分（如 ``user:snap``、``feed``），
-    # 裸键用其字面前缀（如 ``upload:``、``jti:block:``、``ip:``；须显式列出，避免 ``ip`` 误配
-    # ``ipfoo``）。灰度 = 把某域前缀加进来（或移出去）。**同一前缀恒定落同一后端**，故缓存/锁/
-    # 版本号/epoch 的一致性天然成立，SCAN/MGET/WATCH 多键也不必跨后端合并。
     redis_secondary_prefixes: str = ""
 
-    # ---- 双级缓存 L1（本地进程内，roadmap §5.6）----
-    # user:snap 热读的进程内首级缓存：短 TTL、有界，仅加速不具权威（L2/DB 仍是权威）。
-    # 失效经 Redis pub/sub 广播到各实例（见 core/user_cache_events.py）；Redis 未启用时
-    # L1 一并关闭（无法跨实例失效，不冒陈旧风险）。
+    # user:snap 热读的进程内首级缓存。
+    # 失效经 Redis pub/sub 广播到各实例（见 core/user_cache_events.py）；
+    # Redis 未启用时L1 一并关闭（无法跨实例失效，不冒陈旧风险）。
     user_snap_l1_enabled: bool = True
-    # L1 短 TTL（秒）：同时是 pub/sub 丢广播时的陈旧窗口上界。
     user_snap_l1_ttl_s: float = 10.0
-    # L1 最大条目数（LRU 逐出），防 user 数增长导致进程内存无界。
     user_snap_l1_maxsize: int = 10000
-    # 单用户读请求合并（singleflight）：同进程并发 miss 只放一个真去调 AUTH/DB。
     user_snap_singleflight_enabled: bool = True
-    # ---- 跨进程缓存锁（B4，蓝图 §5.6 的 L2 double-check）----
-    # 多副本下让「仅持锁实例回填 L2」成立（singleflight 只收敛单进程）。全程 fail-open：
-    # 等锁超时即无锁直读，不阻塞请求；持锁者崩溃由 TTL 自解。
+    # 多副本下让「仅持锁实例回填 L2」成立（singleflight 只收敛单进程）
     cache_lock_enabled: bool = True
     cache_lock_ttl_s: float = 5.0
     cache_lock_wait_ms: int = 200
 
-    # ---- 读热路径序列化（msgspec，roadmap §6.5.2）----
-    # timeline/feed 读热列表在 Pydantic 校验后改用 msgspec 出端口（降 CPU）。关闭即回退
-    # 既有 Pydantic model_dump + stdlib json 路径（逐字节一致），作回滚开关。
+    # timeline/feed 读热列表在 Pydantic 校验后改用 msgspec 出端口（降 CPU）
     read_msgspec_enabled: bool = True
 
-    # ---- GraphQL 防护（M6.4）----
-    # 默认值由前端现有查询集实测校准（2026-09-17：最大深度 5，取 2× 余量）后写死；
+    # 默认值由前端现有查询集实测校准后写死；
     # 前端加查询撞阈值时按需放宽，不随请求动态调整。
     graphql_max_depth: int = 10
-    # 查询成本上限（§2 第 2 条「field cost 而非词法代理」）：按 schema 真实的字段/列表规模
-    # 计分，见 app/api/graphql.py 的 QueryCostLimiter。**0 = 关闭该项**（不注册该限制器，
-    # 需要完全免限时用，生产不建议）。默认 1000 的余量经校准：带变量 pageSize 的真实前端
-    # 查询约 140 分（7× 余量），完整 introspection 亦远低于阈值 → GraphiQL 开箱可用。
+    # 查询成本上限：按 schema 真实的字段/列表规模计分
     graphql_max_cost: int = 1000
-    # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver，令查询以受控错误收束——**不能**中断
-    # 单个已在 await 中的 resolver（见 app/api/graphql.py 的局限说明），只保证扇出型慢查询
-    # 尽快收束。响应仍是 HTTP 200 + `errors`（前端可见「哪一层被拒」）。
+    # 查询级时间预算（秒）：预算耗尽后拒绝后续 resolver
     graphql_timeout_s: float = 5.0
-    # HTTP 兜底超时（秒）：§2 第 3 条要求「查询级执行超时**与** HTTP 兜底超时」两条。
-    # 兜底必须**显著宽于**查询级预算，否则它会把上面那条的「HTTP 200 + errors」抢先换成
-    # 504（中间件从请求进入即计时，必然早于引擎内的预算起点）。它唯一要覆盖的场景是
-    # 「协程已卡在 await 里、resolver 边界检查再也跑不到」——那时只有墙钟硬中断能救。
+    # HTTP 兜底超时（秒）
     graphql_hard_timeout_s: float = 10.0
-    # GraphQL 端点基址：多端点版本化为 ``{graphql_path}/{version}``，无版本路径
-    # ``{graphql_path}`` = 最新版别名。收在此处避免路径字面量散落在 main/中间件/网关三处。
+    # GraphQL 端点基址
     graphql_path: str = "/graphql"
 
-    # ---- 消息总线（Apache Pulsar，M4 全量迁移）----
-    # 空串 = 未启用消息总线（发布 fail-open 返回 False、outbox 不入队、relay 空转）。
-    # 非空走 pulsar://host:6650（或 pulsar+ssl://）。
     pulsar_url: str = ""
-    # Pulsar Admin REST 基址（如 http://pulsar:8080），供 lag 上报拉取订阅 stats。
+    # Pulsar Admin REST 基址，供 lag 上报拉取订阅 stats。
     pulsar_admin_url: str = ""
     # Admin REST 鉴权令牌（standalone 本地可空；生产设置）。
     pulsar_admin_token: SecretStr = SecretStr("")
@@ -215,92 +156,68 @@ class Settings(BaseSettings):
     pulsar_dlq_max_redeliver: int = 1
     # lag 上报周期（秒）；API 进程统计各订阅 msgBacklog 到 Prometheus gauge
     pulsar_lag_interval_s: float = 30.0
-    # 调度器运行态心跳周期（秒，§5.5 第 6 条）：worker-scheduler 进程写 Redis 心跳、
+    # 调度器运行态心跳周期（秒）：worker-scheduler 进程写 Redis 心跳、
     # API 进程的 reporter 据此 set gauge；心跳 TTL 取本值的 3 倍（无需另配）。
     scheduler_heartbeat_interval_s: float = 10.0
-    # readiness 探 broker 健康的 Admin REST 超时（秒）：短超时 fail-fast，防不可达的
-    # Pulsar 把就绪探针挂死在连接等待上
+    # readiness 探 broker 健康的 Admin REST 超时（秒）
     pulsar_probe_timeout_s: float = 2.0
-    # 探活「up」结果的缓存秒数：就绪探针可能被高频打，避免每次真打 Admin REST；
-    # 只缓存成功（error 不缓存 → 恢复立即可见，也不会把 stale 健康当就绪）
+    # 探活「up」结果的缓存秒数：就绪探针可能被高频打，避免每次真打 Admin REST
     pulsar_probe_cache_s: float = 5.0
     # Pulsar 客户端操作超时（秒）
     pulsar_operation_timeout_s: float = 30.0
 
     # outbox relay（app/core/outbox_relay.py run_outbox_loop）
-    outbox_relay_interval_s: float = 2.0  # relay 轮询周期（含 follower 重试等待间隔）
-    # Redis leader 租约 TTL：多副本部署下同一时刻仅持租约副本 poll；worker 失联后接管
-    # 延迟上界≈该 TTL。基值取「远大于单轮 poll 耗时 + 单 tick 周期」，防无故障抢主抖动。
+    outbox_relay_interval_s: float = 2.0  # relay 轮询周期
     outbox_leader_ttl_s: float = 60.0
-    # 行级认领标记（locked_at/locked_by）的陈旧阈值：超过该时长仍被标记的行视为「持有者
-    # 已崩溃」，可被重新领取（防某行被崩溃进程永久占住）。基值须远大于单批投递耗时。
     outbox_lock_ttl_s: float = 300.0
-    # 已 published 行的归档保留期与单轮归档批大小（M6.3）：relay 把超过保留期的已投行
-    # 先复制到 outbox_archived 冷表再删除，避免 outbox_events 随时间无限增长。
-    outbox_archive_retention_s: float = 604800.0  # 7 天
+    outbox_archive_retention_s: float = 604800.0
     outbox_archive_batch: int = 500
-    # 归档动作的触发间隔（秒）：relay 主循环按此节流执行归档，不另起循环。
     outbox_archive_interval_s: float = 3600.0
-    # 领取/归档查询的时间窗下界（秒，批 2）：outbox_events 是 TimescaleDB hypertable
-    # （按 created_at 分区），把扫描限定在 created_at >= now-window 可让规划器做 chunk
-    # 裁剪、只扫近期分区，避免随表增大而全分区扫描。基值与 Timescale 保留策略阈值对齐
-    # （30 天）——窗口外的行会被保留策略 DROP，故不改变可达事件的投递语义；设 <=0
-    # 关闭窗口（普通 PG 上无 chunk 收益，且极陈旧滞留行此时可被投递）。
     outbox_scan_window_s: float = 2592000.0
 
     # ---- 内容域领域事件（content.*，外部检索引擎增量同步的单一数据源）----
-    # 关 = 内容落库不入 outbox（回退到「检索引擎无增量来源」的旧态）。只发可见性变化：
-    # published/updated/deleted；草稿态不发（未发布内容不对外可见，索引侧无需感知）。
     content_events_enabled: bool = True
 
-    # ---- 检索（M6.9 的 P1 = PG FTS；B2 落地 P2/P3 外部引擎）----
+    # ---- 检索 ----
     # 引擎择一：pg（默认，零外部依赖）/ meilisearch（P2）/ opensearch（P3）。
-    # 非 pg 时读路径走外部引擎、调用失败 fail-open 回落 PG；写路径经 content.* 事件
-    # 增量同步（见 modules/search/sync.py），存量由 reindex flow 全量重建。
     search_engine: Literal["pg", "meilisearch", "opensearch"] = "pg"
-    # 事件驱动索引同步开关：关 = 只记账不写索引（外部引擎维护期降噪用）
+    # 事件驱动索引同步开关：
     search_sync_enabled: bool = True
     search_sync_batch_size: int = 200
-    # Meilisearch（P2）；api_key 为 master/search key，无鉴权实例留空
+    # Meilisearch（P2）
     search_meili_url: str = ""
     search_meili_api_key: SecretStr = SecretStr("")
     search_meili_index: str = "content"
-    # OpenSearch（P3）；http_auth 仅在 user 非空时启用
+    # OpenSearch（P3）
     search_opensearch_url: str = ""
     search_opensearch_user: str = ""
     search_opensearch_password: SecretStr = SecretStr("")
     search_opensearch_index: str = "content"
 
-    # ---- 互动计数（B3）：写穿 vs M6.10 的 Redis write-behind ----
+    # ---- 互动计数 ----
     # true（默认）：点赞/收藏/评论与明细同事务原子改计数列，读数为真值。
-    # false：回退 Redis 增量 + 每分钟 flush（保留该路径仅为可回滚）。
+    # false：回退 Redis 增量 + 每分钟 flush
     counters_write_through: bool = True
 
-    # ---- interaction 域（M6.6）----
-    # 浏览记录保留期（天）：cron 每天删除超期行。view_logs 是高频写表，须有明确上界
-    # （行数上界是「用户数 × 内容数」，但历史内容多的站点仍需按时间收敛）。
+    # ---- interaction 域 ----
+    # 浏览记录保留期（天）：cron 每天删除超期行。
     interaction_view_log_retention_days: int = 90
 
-    # ---- feed/timeline 物化（M6.11）----
-    # fanout 写放大封顶：一条内容的受众（关注作者 ∪ 关注版块）超过此数即整条跳过写扩散，
-    # 只把作者记入 Redis 大 V 集合，由读路径实时补拉（既不写放大也不丢内容）。
+    # ---- feed/timeline 物化 ----
+    # fanout 写放大封顶：一条内容的受众超过此数即整条跳过写扩散，只把作者记入 Redis 大 V 集合，由读路径实时补拉。
     feed_fanout_max_followers: int = 2000
     # 新关注一位作者时回填其最近 N 条内容进该关注者的物化 feed（0 = 不回填）。
     feed_backfill_limit: int = 50
-    # ---- 时间线全量回填（B5，feed-backfill flow / CLI）----
+    # ---- 时间线全量回填 ----
     # 每源每批处理条数（越大越快、单事务越长）；起始时间留空 = 自最早（全量）。
     feed_backfill_batch_size: int = 500
     feed_backfill_since: str = ""
 
-    # ---- notification 域（M6.8）----
-    # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为
-    # 一条（payload.count 累加），防「一次动作扇出大量通知」的通知风暴。0 = 关闭聚合。
+    # ---- notification 域 ----
+    # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为一条（payload.count 累加）
     notification_aggregate_window_s: float = 3600.0
 
-    # ---- Prefect 编排（M5 7.2.5，复杂数据管道 DAG/重试/回填）----
-    # 默认关：cron 消费者直调既有函数（现状路径），不依赖 Prefect server，测试/部署零改动。
-    # 开启后 handler 经 run_deployment 触发 flow（timeout=0 立即返回，不占 JOB_TIMEOUT）；触发
-    # 失败 fail-open 回落直调，保证 crash-safety 对账不漏跑。
+    # ---- Prefect 编排 ----
     prefect_enabled: bool = False
     # Prefect API 基址（如 http://prefect-server:4200/api）；prefect_enabled 时必填
     prefect_api_url: str = ""
@@ -308,38 +225,24 @@ class Settings(BaseSettings):
     prefect_deployment: str = ""
     # API 鉴权 token；自托管无鉴权可空
     prefect_api_token: SecretStr = SecretStr("")
-    # analytics 导出 flow 的目标名，形如 "<flow 名>/<deployment 名>"，如
-    # analytics-clickhouse-export/analytics-export；留空则不触发 analytics flow（回落直调导出）。
     prefect_analytics_deployment: str = ""
-    # 运营日报 flow 的目标名，形如 "ops-daily-report/ops-daily"；留空则不触发 flow（回落直调
-    # 纯体层 collect_daily_report）。
+    # 运营日报 flow 的目标名
     prefect_ops_daily_deployment: str = ""
-    # deployment **注册**参数（``app/flows/deploy.py`` 由 prefect-init 一次性调用）：此前
-    # 该模块直接 ``os.getenv`` 读同名变量，蓝图 §6.5.1「不散落 os.getenv」要求收口到 Settings。
-    # 名字与部署侧下发的一字不差（env_prefix=LKM_），故部署契约零变化。
     prefect_work_pool: str = "lkm"
     prefect_source: str = "/app"
     prefect_flow_deployment_name: str = "reconcile"
-    # 用户维表全量对账的最大拍数（防「每拍都恰好满窗口」时无界循环）。
+    # 用户维表全量对账的最大拍数
     user_dim_reconcile_max_rounds: int = 200
 
-    # ---- bot 面板 SSO 协议（LKM-bot 并轨，§8 #48）----
-    # 票据的跨系统协议值：签发侧（auth）与消费侧（bot 面板）必须逐字相同，默认值不得单边改。
-    # 此前在 auth/bot_sso.py 里用 ``os.environ.get`` 直接读同名变量，现收口于此（§6.5.1）；
-    # env 名不变，compose/k8s 的下发无需改动。
+    # ---- bot 面板 SSO 协议----
     bot_sso_audience: str = "lkm:bot"
     bot_sso_type: str = "bot_sso"
     bot_sso_issuer: str = "lkm-auth"
-    #: 注意这个值就是**铸票门禁本身**：调低它等于把门禁降级（普通用户等级即可持票换管理员
-    #: 面板会话）。两侧必须同值。
     bot_sso_account_level: str = "admin"
-    #: 票据 TTL（秒）；签发侧消费，配大了会被 bot_sso._TTL_MAX_SECONDS 钳住。
     bot_sso_ttl_seconds: int = 60
 
-    # ---- ClickHouse 分析管道（M5 7.2.6，日志/失败事件/审计分析）----
-    # 默认关：不建连接、导出 no-op、admin 查询端点返回 503（不返回空数据造成假绿）。
-    # 开启需 `--profile clickhouse` 起 clickhouse + vector，并把本组配置下发到
-    # backend / jobs worker / prefect-worker。
+    # ---- ClickHouse 分析管道 ----
+    # 默认关：不建连接、导出 no-op、admin 查询端点返回 503。
     clickhouse_enabled: bool = False
     # HTTP 接口基址（如 http://clickhouse:8123；https 走 8443 且 secure）
     clickhouse_url: str = ""
@@ -355,28 +258,16 @@ class Settings(BaseSettings):
     # 生产必须设置固定随机值，供桶通知 webhook 的 Authorization: Bearer 头校验。
     files_notify_token: SecretStr = SecretStr("")
 
-    # AUTH 读面 HTTP seam（M3 B1.2）：单体单用户快照 miss 回填可跨进程改走 AUTH 读端点。
-    #   auth_http_url:   AUTH 进程/服务基址（如 http://auth:8001，不带 api_prefix；本仓库
-    #                     内部 client 在运行时拼接 settings.api_prefix）。空串 = 关闭缝
-    #                     （默认）→ 快照 miss 继续单体/进程内直读业务 DB（既存 A6 语义零改动）。
-    #   auth_http_token: 该内部读端点共享令牌（Bearer）。生产设置固定随机长值；URL 非空而
-    #                     token 为空时 seam 不启用（fail-closed，端点一律 401、client fail-open）。
-    #   auth_http_timeout_s: 单次 internal read 超时；AUTH 不可达/超时 → client 抛 → seam
-    #                     fail-open 回落本进程 DB（读不被某死/慢 AUTH 楔住）。见 B1.2 report。
+    # AUTH 读面 HTTP seam：单体单用户快照 miss 回填可跨进程改走 AUTH 读端点。
     auth_http_url: str = ""
     auth_http_token: SecretStr = SecretStr("")
     auth_http_timeout_s: float = 3.0
-    # 蓝图 §5.4「HTTP 客户端(httpx)设超时/重试/熔断」——上项是超时，下面是重试与熔断。
-    # 重试只在**连接层**（httpx transport retries，安全幂等：GET/被拒连接），不重试 5xx/4xx
-    # ——业务性失败重试会放大副作用，且鉴权缝（fail-closed）重试会拖长拒绝时延。
     auth_http_retries: int = 2
-    # 熔断：连续失败达阈即打开，冷却期内直接短路（fail-open 缝回退本地、fail-closed 缝拒绝），
-    # 避免 AUTH 进程宕机时每次请求都白等一个超时。冷却后半开试探一次。
+    # 熔断：连续失败达阈即打开，冷却期内直接短路，避免 AUTH 进程宕机时每次请求都白等一个超时。冷却后半开试探一次。
     auth_http_circuit_failures: int = 5
     auth_http_circuit_reset_s: float = 30.0
 
-    # AUTH 独立库：auth 自持数据在专属第二个 PostgreSQL（独立 schema/engine）。
-    # auth_* 键与 monolith 的 db_* 正交，统一标准只用 PostgreSQL(asyncpg)。
+    # AUTH 独立库
     auth_db_host: str = "localhost"
     auth_db_port: int = 5432
     auth_db_name: str = "lkm_auth"
@@ -387,34 +278,26 @@ class Settings(BaseSettings):
     auth_db_pool_pre_ping: bool = True
 
     # schema 初始化策略（开发默认 create_all，免维护增量迁移）：
-    #   False（默认）→ init_db 用 Base.metadata.create_all()，只建缺失表、不 ALTER、
-    #                  不依赖 Alembic；开发新增表只改 models.py 即可，无需手写迁移文件。
-    #             局限：不处理已有表的列变更、不记录 schema 版本（无法增量升级老库）。
-    #   True        → 走 Alembic 增量迁移（schema 唯一权威、可回滚、可升级老库）。
-    # 建议：生产/有历史数据的环境显式设 LKM_USE_ALEMBIC=true；本地从零开发用默认
-    # create_all 免去每张新表写迁移的负担。迁移文件（alembic/versions/*）保留作生产后备。
+    #   False（默认）→ init_db 用 Base.metadata.create_all()，只建缺失表
+    #   True→ 走 Alembic 增量迁移（schema 唯一权威、可回滚、可升级老库）
+
     use_alembic: bool = False
 
     # Sentry APM：空串 = 不加载（dev/test 默认关闭，避免拖启动）；配置 DSN 才接入
     sentry_dsn: SecretStr = SecretStr("")
     # Sentry 性能采样率（0~1）；仅 DSN 非空时才生效。
-    # 越界值（如误填 50）在装配期就报错：sentry-sdk 对越界采样率只在内部记 error 并使采样
-    # 失效，表现为「初始化成功但 tracing 静默全关」，很难排查
     sentry_traces_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
-    # Prometheus metrics（M0.5.1）：默认开（本地无副作用收集器，成本极低）；
-    # 显式 LKM_METRICS_ENABLED=false 可整体关闭（fail-open，不阻塞启动）
+    # Prometheus metrics：默认开（本地无副作用收集器，成本极低）；
+    # 显式 LKM_METRICS_ENABLED=false 可整体关闭
     metrics_enabled: bool = True
     # /metrics 暴露根路径（不经 api_prefix，供 Prometheus 探抓）
     metrics_endpoint: str = "/metrics"
-    # 跨进程指标中继周期（秒）：非 API 进程多久把本进程指标快照写进一次 Redis，也是 API 进程
-    # 的读取周期。默认与父仓 prometheus.yml 的 scrape_interval(15s) 对齐——比抓取更密没有收益
-    # （中间几拍读者看不到），更疏则指标在抓取点上的新鲜度变差。
+    # 跨进程指标中继周期（秒）：非 API 进程多久把本进程指标快照写进一次 Redis
     metrics_relay_interval_s: float = 15.0
 
-    # ---- 链路追踪（OpenTelemetry，M5 7.2.2）----
+    # ---- 链路追踪 ----
     # 默认关：dev/test 不埋点、不依赖 collector；生产置 true 且给 OTLP endpoint 才生效。
-    # 全程 fail-open：初始化/导出异常只记日志，绝不阻塞启动或请求。
     otel_enabled: bool = False
     # service.name 覆盖；空则用 app_name（+ auth 进程后缀 -auth）
     otel_service_name: str = ""
@@ -438,15 +321,14 @@ class Settings(BaseSettings):
     s3_access_key: SecretStr = SecretStr("")
     s3_secret_key: SecretStr = SecretStr("")
     s3_prefix: str = "files"  # 桶内 key 前缀
-    # 寻址风格（蓝图 §6.3）：S3/MinIO 常用 path-style，OSS/COS 多用 virtual-host。
-    # 公网 client 单列一项——预签名 URL 的 host 形式由它决定（须与实际请求 host 一致）。
+    # 寻址风格：S3/MinIO 常用 path-style，OSS/COS 多用 virtual-host。
     s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
     s3_public_addressing_style: Literal["path", "virtual", "auto"] = "path"
 
     @model_validator(mode="after")
     def _no_insecure_secrets_outside_dev(self) -> "Settings":
-        """生产（非宽松环境）必须提供真实密钥，禁止用 change-me 占位或空串启动。
-
+        """
+        生产（非宽松环境）必须提供真实密钥，禁止用 change-me 占位或空串启动。
         宽松环境（dev/local/test/未设）放行，保证本地开发与测试套件不受影响。
         """
         env = (self.env or "").strip().lower()
@@ -472,15 +354,10 @@ class Settings(BaseSettings):
                 insecure.append(name)
             elif len(v) < 32:
                 insecure.append(f"{name}(too short)")
-        # pepper 要求是「独立密钥」（字段注释如此要求）：与 totp 同值即报错。
-        # 空/占位值上面已标记，这里跳过以免重复上报。
         pepper = reveal(self.verification_code_pepper)
         if pepper and pepper == reveal(self.totp_encryption_key):
             insecure.append("verification_code_pepper==totp_encryption_key")
 
-        # 注：不在此强制 db_password/redis_url —— 各 worker 进程 env 集不同（如
-        # worker-scheduler 不接 DB/Redis），按进程强校验会误杀。仅在「用到了才校验」的
-        # 条件字段上补强（storage_backend=s3 的 S3 键、配了 AUTH URL 的 seam token）。
         if self.storage_backend == "s3":
             for name, value in (
                 ("s3_access_key", self.s3_access_key),
@@ -488,7 +365,7 @@ class Settings(BaseSettings):
             ):
                 if _bad(reveal(value)):
                     insecure.append(name)
-        # AUTH seam 配齐 URL 即须成对给 token（否则端点一律 401，身份读全线降级）
+        # AUTH seam 配齐 URL 即须成对给 token（否则端点一律 401）
         if self.auth_http_url and _bad(reveal(self.auth_http_token)):
             insecure.append("auth_http_token(missing while auth_http_url set)")
         # Prefect 编排启用即须给 API 基址与目标 deployment（否则触发必失败）
@@ -501,9 +378,7 @@ class Settings(BaseSettings):
         # ClickHouse 分析后端启用即须给 HTTP 基址（否则客户端建连必失败）
         if self.clickhouse_enabled and not self.clickhouse_url:
             insecure.append("clickhouse_url(required while clickhouse_enabled=true)")
-        # RS256-only 下缺 RSA 密钥不在此强制：各进程 env 集不同（只验签方只需公钥、
-        # worker 不碰 JWT），按进程强校验会误杀。缺钥由 readiness 探针如实上报、
-        # 签发侧由 jwt_keys.encode 抛 RuntimeError 表达（与旧设计一致）。
+        # RS256-only 下缺 RSA 密钥不在此强制：各进程 env 集不同。缺钥由 readiness 探针如实上报、签发侧抛 RuntimeError。
 
         if insecure:
             raise ValueError(
@@ -514,8 +389,8 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """生产（非宽松环境）才允许 HttpOnly cookie 走 Secure。
-
+        """
+        生产（非宽松环境）才允许 HttpOnly cookie 走 Secure。
         宽松环境（dev/local/test/未设）为 False，cookie 走 http 便于本地联调；
         生产（如 LKM_ENV=production）为 True，要求 https 传输 cookie。
         """
@@ -533,17 +408,10 @@ class Settings(BaseSettings):
         return parsed or list(_DEV_CORS_ORIGINS)
 
     def assert_web_security_configured(self) -> None:
-        """HTTP 服务进程装配期校验：生产必须显式给 Host 白名单。
-
-        刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 校验器：该器按进程执行，
-        而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀（见路线图 §8 #16 同款
-        取舍）。本方法只由 ``app.main.create_app`` / ``auth.main.create_auth_app``
-        调用——即真正对外承载请求的进程，缺失即启动失败，不靠"配了才生效"的静默降级。
-
-        ``LKM_CORS_ORIGINS`` **不在**必填项内：生产不挂应用层 CORS，该值在生产不生效，
-        唯一权威是 APISIX 的 ``cors`` 插件（见 core/middleware.py 的取舍说明）。
-
-        dev/local/test 直接放行，保持本地零配置可跑。
+        """
+        HTTP 服务进程装配期校验：生产必须显式给 Host 白名单。
+        刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 
+        校验器：该器按进程执行，而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀。
         """
         if not self.is_production:
             return
@@ -555,8 +423,8 @@ class Settings(BaseSettings):
 
     @property
     def message_bus_enabled(self) -> bool:
-        """消息总线是否启用（pulsar_url 非空）。
-
+        """
+        消息总线是否启用（pulsar_url 非空）。
         发布 fail-open、outbox 入队 gate、relay 空转判定统一引用此属性。
         """
         return bool(self.pulsar_url)
@@ -585,10 +453,8 @@ settings = Settings()
 
 
 def is_test_env() -> bool:
-    """是否处于测试运行：``LKM_ENV=test`` 或 pytest 注入的 ``PYTEST_RUNNING``。
-
-    集中一处，避免各模块各自 ``os.environ.get(...)`` 拼同一判据（蓝图 §6.5.1「不散落
-    os.getenv」）。``PYTEST_RUNNING`` 是 pytest 运行时注入的探针而非应用配置，故不放进
-    Settings；``LKM_ENV`` 走 ``settings.env``（已经是它的唯一读点）。
+    """
+    是否处于测试运行：``LKM_ENV=test`` 或 pytest 注入的 ``PYTEST_RUNNING``。
+    集中一处，避免各模块各自 ``os.environ.get(...)`` 拼同一判据。
     """
     return settings.env == "test" or bool(os.environ.get("PYTEST_RUNNING"))
