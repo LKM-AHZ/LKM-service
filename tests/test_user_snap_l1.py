@@ -27,6 +27,7 @@ _SNAP = {
 
 @pytest.fixture(autouse=True)
 async def reset_redis_globals() -> AsyncIterator[None]:
+    local_cache.reset()
     await redis_mod.close_redis()
     redis_mod._client = None
     redis_mod._client_pool = None
@@ -34,6 +35,7 @@ async def reset_redis_globals() -> AsyncIterator[None]:
     await redis_mod.close_redis()
     redis_mod._client = None
     redis_mod._client_pool = None
+    local_cache.reset()
 
 
 def _enable_fake_redis(monkeypatch: Any) -> Any:
@@ -70,6 +72,30 @@ async def test_l2_hit_backfills_l1_then_l1_serves(monkeypatch: Any) -> None:
     assert await uc.read_snap(7) == _SNAP  # 仍由 L1 命中（证明 L1 生效）
     sv, data = await uc.read_snap_with_version(7)
     assert sv == 5 and data == _SNAP
+
+
+async def test_batch_read_only_fetches_l1_misses(monkeypatch: Any) -> None:
+    fake = _enable_fake_redis(monkeypatch)
+    first_key = uc.get_user_cache_key(7)
+    second_key = uc.get_user_cache_key(8)
+    second = {**_SNAP, "user_id": 8, "username": "alice"}
+    local_cache.l1_set(first_key, {"sv": 1, "data": _SNAP}, ttl=60)
+    await fake.set(second_key, json.dumps({"sv": 2, "data": second}), ex=300)
+    original_mget = fake.mget
+    requested: list[list[str]] = []
+
+    async def mget(keys: list[str]) -> Any:
+        requested.append(keys)
+        return await original_mget(keys)
+
+    async def no_bloom(_ids: list[str]) -> set[str]:
+        return set()
+
+    monkeypatch.setattr(fake, "mget", mget)
+    monkeypatch.setattr(uc.bloom, "definitely_absent_many", no_bloom)
+    assert await uc.read_snaps([7, 8]) == {7: _SNAP, 8: second}
+    assert requested == [[second_key]]
+    assert local_cache.l1_get(second_key) == {"sv": 2, "data": second}
 
 
 async def test_write_if_newer_mirrors_l1(monkeypatch: Any) -> None:
@@ -130,3 +156,90 @@ async def test_redis_disabled_l1_not_served(monkeypatch: Any) -> None:
     key = uc.get_user_cache_key(7)
     local_cache.l1_set(key, {"sv": 1, "data": _SNAP}, ttl=60)
     assert await uc.read_snap(7) is None  # Redis 关闭 → 整个缓存（含 L1）关闭
+
+
+@pytest.mark.parametrize("mode", ["single", "batch", "version"])
+async def test_invalidation_during_l2_read_cannot_restore_stale_l1(
+    monkeypatch: Any, mode: str
+) -> None:
+    key = uc.get_user_cache_key(7)
+    old_raw = json.dumps({"sv": 1, "data": _SNAP})
+
+    class SlowRedis:
+        async def get(self, requested: str) -> str:
+            assert requested == key
+            local_cache.l1_delete(key)  # 模拟订阅在 Redis GET 的 await 期间收到失效
+            return old_raw
+
+        async def mget(self, requested: list[str]) -> list[str]:
+            assert requested == [key]
+            local_cache.l1_delete(key)
+            return [old_raw]
+
+    async def get_redis(_key: str) -> SlowRedis:
+        return SlowRedis()
+
+    async def no_bloom(_ids: list[str]) -> set[str]:
+        return set()
+
+    monkeypatch.setattr(uc, "_get_redis", get_redis)
+    monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
+    monkeypatch.setattr(uc.bloom, "definitely_absent_many", no_bloom)
+    if mode == "single":
+        assert await uc.read_snap(7) == _SNAP
+    elif mode == "batch":
+        assert await uc.read_snaps([7]) == {7: _SNAP}
+    else:
+        assert await uc.read_snap_with_version(7) == (1, _SNAP)
+    assert local_cache.l1_get(key) is None
+
+
+async def test_concurrent_new_l1_value_survives_old_l2_result(monkeypatch: Any) -> None:
+    key = uc.get_user_cache_key(7)
+    newer = {**_SNAP, "display_name": "Newer"}
+
+    class SlowRedis:
+        async def get(self, _key: str) -> str:
+            local_cache.l1_set(key, {"sv": 2, "data": newer}, ttl=60)
+            return json.dumps({"sv": 1, "data": _SNAP})
+
+    async def get_redis(_key: str) -> SlowRedis:
+        return SlowRedis()
+
+    monkeypatch.setattr(uc, "_get_redis", get_redis)
+    monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
+    assert await uc.read_snap(7) == _SNAP
+    assert local_cache.l1_get(key) == {"sv": 2, "data": newer}
+
+
+@pytest.mark.parametrize("interleaving", ["invalidate", "newer_write"])
+async def test_cas_mirror_does_not_undo_later_local_change(
+    monkeypatch: Any, interleaving: str
+) -> None:
+    fake = _enable_fake_redis(monkeypatch)
+    key = uc.get_user_cache_key(7)
+    newer = {**_SNAP, "display_name": "Newer"}
+    original_pipeline = fake.pipeline
+
+    def pipeline(*args: Any, **kwargs: Any) -> Any:
+        pipe = original_pipeline(*args, **kwargs)
+        original_execute = pipe.execute
+
+        async def execute() -> Any:
+            result = await original_execute()
+            if interleaving == "invalidate":
+                local_cache.l1_delete(key)
+            else:
+                await fake.set(key, json.dumps({"sv": 2, "data": newer}), ex=300)
+                local_cache.l1_set(key, {"sv": 2, "data": newer}, ttl=60)
+            return result
+
+        pipe.execute = execute
+        return pipe
+
+    monkeypatch.setattr(fake, "pipeline", pipeline)
+    assert await uc.write_if_newer(7, _SNAP, source_version=1, expected_epoch=0)
+    if interleaving == "invalidate":
+        assert local_cache.l1_get(key) is None
+    else:
+        assert local_cache.l1_get(key) == {"sv": 2, "data": newer}

@@ -132,13 +132,8 @@ async def read_snap_state(
     L1 命中直接返回（免 L2 往返）；L1 miss 才查 L2，L2 命中后按 L1 TTL 回填本地。L1 条目
     仅作镜像，脏形态（非 dict）即删，不放大既有 ``_from_cache_dict`` 的脏缓存问题。
     **负值不进 L1**（L1 是正向值镜像，短 TTL 的负值不必占本地内存）。
-    **L1 回填不做 epoch 守卫（已知窗口，属设计取舍）**：本协程在 ``await redis.get(key)``
-    期间若发生失效（另一实例 INCR epoch + DEL snap，本进程订阅任务删 L1 时 L1 尚为空），
-    恢复后会把刚读到的旧值写进 L1，而 L1 命中不再看 L2/epoch → 该旧值可被服务至多
-    ``user_snap_l1_ttl_s``（默认 10s）。要收紧需在 GET 之前与恢复之后各读一次 epoch
-    （每次回填多两次 Redis 往返）并丢弃跨失效窗口的读值；鉴于 L1 的定位就是「TTL 有界的
-    只读镜像、不具权威」（见模块 docstring）且默认 TTL 仅 10s，此处保留窗口并在此明示。
-    同一模式亦见 :func:`read_snap_with_version` 与 :func:`read_snaps`。
+    L2 读取期间若本进程收到失效广播或另一协程已回填目标键，放弃本次 L1 回填。
+    pub/sub 本身不保证送达，丢广播仍由 L1 短 TTL（默认 10s）兜底。
     """
     redis = await _get_redis(_snap_key(user_id))
     if redis is None:
@@ -153,6 +148,7 @@ async def read_snap_state(
                 return False, _normalize_snap(data)
             local_cache.l1_delete(key)
         user_snap_cache_total.labels("l1", "miss").inc()
+    revision = local_cache.l1_invalidation_revision()
     try:
         raw = await redis.get(key)
     except Exception:
@@ -179,10 +175,11 @@ async def read_snap_state(
         data = _normalize_snap(data)
         if _l1_on():
             sv = payload.get("sv")
-            local_cache.l1_set(
+            local_cache.l1_set_if_unchanged(
                 key,
                 {"sv": _to_int(sv) if sv is not None else None, "data": data},
                 jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
+                revision,
             )
         return False, data
     except Exception:
@@ -223,17 +220,19 @@ async def read_snaps_state(
     out: dict[uuid.UUID, dict[str, Any]] = {}
     negative: set[uuid.UUID] = set()
     pending: list[uuid.UUID] = []
-    for uid in user_ids:
+    entries = local_cache.l1_multi_get([_snap_key(uid) for uid in user_ids]) if l1 else []
+    for index, uid in enumerate(user_ids):
         if l1:
-            entry = local_cache.l1_get(_snap_key(uid))
+            entry = entries[index]
             if isinstance(entry, dict) and isinstance(entry.get("data"), dict):
                 user_snap_cache_total.labels("l1", "hit").inc()
                 out[uid] = _normalize_snap(entry["data"])
                 continue
-            if entry is not None and not isinstance(entry, dict):
+            if entry is not None:
                 local_cache.l1_delete(_snap_key(uid))  # 脏形态即删，不放大问题
             user_snap_cache_total.labels("l1", "miss").inc()
         pending.append(uid)
+    revision = local_cache.l1_invalidation_revision()
     if pending:
         # 白名单布隆拦截（§5.6）：确定不存在的 id 直接并入 negative，省掉后面的 mget 与上游回退。
         absent = await bloom.definitely_absent_many([str(uid) for uid in pending])
@@ -266,10 +265,11 @@ async def read_snaps_state(
         out[uid] = data
         if l1:
             sv = payload.get("sv")
-            local_cache.l1_set(
+            local_cache.l1_set_if_unchanged(
                 _snap_key(uid),
                 {"sv": _to_int(sv) if sv is not None else None, "data": data},
                 jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
+                revision,
             )
     return negative, out
 
@@ -303,6 +303,7 @@ async def read_snap_with_version(
                 sv = entry.get("sv")
                 return (int(sv) if sv is not None else None), _normalize_snap(data)
             local_cache.l1_delete(key)
+    revision = local_cache.l1_invalidation_revision()
     try:
         raw = await redis.get(key)
     except Exception:
@@ -316,10 +317,11 @@ async def read_snap_with_version(
         if isinstance(data, dict):
             data = _normalize_snap(data)
         if _l1_on() and isinstance(data, dict):
-            local_cache.l1_set(
+            local_cache.l1_set_if_unchanged(
                 key,
                 {"sv": sv, "data": data},
                 jitter_ttl(settings.user_snap_l1_ttl_s, lower_only=_L1_TTL_LOWER_ONLY),
+                revision,
             )
         return sv, data
     except Exception:
@@ -376,18 +378,30 @@ async def write_if_newer(
                         return False
                     pipe.multi()
                     pipe.set(key, value, ex=jitter_ttl(ttl_seconds))
+                    revision = local_cache.l1_invalidation_revision()
                     await pipe.execute()
                     # L2 CAS 成功（权威已接受）才镜像进 L1；拒绝/异常一律不碰 L1，
                     # 避免用陈旧值覆盖本地更新值。负值不进 L1（L1 只镜像正向值）。
-                    if _l1_on() and not negative:
-                        local_cache.l1_set(
-                            key,
-                            {"sv": source_version, "data": data},
-                            jitter_ttl(
-                                settings.user_snap_l1_ttl_s,
-                                lower_only=_L1_TTL_LOWER_ONLY,
-                            ),
-                        )
+                    if (
+                        _l1_on()
+                        and not negative
+                        and revision == local_cache.l1_invalidation_revision()
+                    ):
+                        existing = local_cache.l1_get(key)
+                        # 两个 CAS 都可能在 L2 成功，但旧调用的响应晚于新调用；
+                        # L1 镜像仍须按来源版本单调更新。
+                        if not (
+                            isinstance(existing, dict)
+                            and _to_int(existing.get("sv")) > source_version
+                        ):
+                            local_cache.l1_set(
+                                key,
+                                {"sv": source_version, "data": data},
+                                jitter_ttl(
+                                    settings.user_snap_l1_ttl_s,
+                                    lower_only=_L1_TTL_LOWER_ONLY,
+                                ),
+                            )
                     return True
                 except WatchError:
                     await pipe.reset()
@@ -413,7 +427,7 @@ async def write_negative(user_id: uuid.UUID, expected_epoch: int) -> bool:
     )
 
 
-def _extract_sv(raw_snap: str) -> int | None:
+def _extract_sv(raw_snap: str | bytes) -> int | None:
     """从存内快照 JSON 里抽 sv 作 int；失败/缺失返回 None（保守视作不可比则不放行拒写条件）。"""
     try:
         sv = json.loads(raw_snap).get("sv")

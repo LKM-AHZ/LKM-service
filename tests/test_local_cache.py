@@ -49,6 +49,37 @@ async def test_lru_eviction_on_maxsize() -> None:
     assert local_cache.l1_get("c") == 3
 
 
+def test_multi_get_preserves_order_and_lru(monkeypatch: Any) -> None:
+    local_cache.reset(maxsize=2)
+    monkeypatch.setattr(local_cache, "_now", lambda: 100.0)
+    local_cache.l1_set("a", "A", ttl=10)
+    local_cache.l1_set("b", "B", ttl=10)
+    assert local_cache.l1_multi_get(["a", "missing", "a"]) == ["A", None, "A"]
+    local_cache.l1_set("c", "C", ttl=10)
+    assert local_cache.l1_get("b") is None
+    assert local_cache.l1_get("a") == "A"
+
+
+def test_conditional_fill_rejects_invalidation_and_newer_value() -> None:
+    local_cache.reset()
+    revision = local_cache.l1_invalidation_revision()
+    local_cache.l1_delete("key")  # 失效时键尚不存在，也必须阻止在途旧回填
+    assert not local_cache.l1_set_if_unchanged("key", "old", 60, revision)
+    assert local_cache.l1_get("key") is None
+
+    revision = local_cache.l1_invalidation_revision()
+    local_cache.l1_set("key", "new", 60)
+    assert not local_cache.l1_set_if_unchanged("key", "old", 60, revision)
+    assert local_cache.l1_get("key") == "new"
+
+
+def test_conditional_fill_accepts_unchanged_key() -> None:
+    local_cache.reset()
+    revision = local_cache.l1_invalidation_revision()
+    assert local_cache.l1_set_if_unchanged("key", "value", 60, revision)
+    assert local_cache.l1_get("key") == "value"
+
+
 def test_reset_clears(monkeypatch: Any) -> None:
     local_cache.l1_set("k", "v", ttl=60)
     local_cache.reset()
