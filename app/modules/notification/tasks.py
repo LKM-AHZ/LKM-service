@@ -164,12 +164,14 @@ async def notify_from_point_event(
     db = await new_session()
     pending: list[tuple[uuid.UUID, uuid.UUID, str, dict[str, Any], bool]] = []
     try:
-        targets = await _resolve_targets(db, event, ref_id)
+        targets = [
+            t
+            for t in await _resolve_targets(db, event, ref_id)
+            if t.owner_id != actor_id
+        ]
         if targets:
             actor_name = await _actor_name(db, actor_id)
             for t in targets:
-                if t.owner_id == actor_id:
-                    continue  # 自己触发的不通知自己
                 enabled = await is_type_enabled(db, t.owner_id, t.kind)
                 row = await create_notification(
                     db,
@@ -198,7 +200,9 @@ async def notify_from_point_event(
         if not enabled:
             continue
         count = int(payload.get("count", 1) or 1)
-        event_id = f"notification:{nid}" if count <= 1 else f"notification:{nid}:{count}"
+        event_id = (
+            f"notification:{nid}" if count <= 1 else f"notification:{nid}:{count}"
+        )
         await publish_notification(
             user_id,
             {

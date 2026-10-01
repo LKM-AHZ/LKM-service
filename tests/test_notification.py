@@ -1,12 +1,14 @@
-"""notification 域（M6.8）：站内信产生（含聚合/偏好门控）、已读、偏好、token、
+"""notification 域：站内信产生（含聚合/偏好门控）、已读、偏好、token、
 以及消费者侧「事件 → 通知 + WS 推送」链路。
 """
 
+import asyncio
 import uuid
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.modules.content.models import (
     Board,
@@ -217,6 +219,93 @@ class TestService:
 
         assert len(await _rows(db, uid)) == 2, "已读通知不再参与聚合"
 
+    async def test_aggregate_refreshes_latest_payload(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ) -> None:
+        uid = await _mk_user(auth_db, "n3_latest")
+        actor = await _mk_user(auth_db, "n3_latest_actor")
+        first = await create_notification(
+            db,
+            user_id=uid,
+            type=NotificationType.CONTENT_COMMENTED,
+            actor_id=actor,
+            target_id=_TARGET_ID,
+            payload={"comment_id": "old", "title": "旧标题"},
+        )
+        merged = await create_notification(
+            db,
+            user_id=uid,
+            type=NotificationType.CONTENT_COMMENTED,
+            actor_id=actor,
+            target_id=_TARGET_ID,
+            payload={"comment_id": "new", "title": "新标题"},
+        )
+
+        assert merged.id == first.id
+        assert merged.payload == {
+            "comment_id": "new",
+            "title": "新标题",
+            "count": 2,
+        }
+
+    async def test_concurrent_aggregate_creates_one_row(self, db: AsyncSession) -> None:
+        """独立连接同时创建同一聚合键时，只保留一条并累计次数。"""
+        assert db.bind is not None
+        engine = create_async_engine(db.bind.url, poolclass=NullPool)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        uid, actor = uuid.uuid4(), uuid.uuid4()
+        first_created = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def first() -> None:
+            async with maker() as session:
+                await create_notification(
+                    session,
+                    user_id=uid,
+                    type=NotificationType.CONTENT_LIKED,
+                    actor_id=actor,
+                    target_id=_TARGET_ID,
+                )
+                first_created.set()
+                await release_first.wait()
+                await session.commit()
+
+        async def second() -> None:
+            async with maker() as session:
+                await create_notification(
+                    session,
+                    user_id=uid,
+                    type=NotificationType.CONTENT_LIKED,
+                    actor_id=actor,
+                    target_id=_TARGET_ID,
+                )
+                await session.commit()
+
+        first_task = asyncio.create_task(first())
+        try:
+            await asyncio.wait_for(first_created.wait(), 5)
+            second_task = asyncio.create_task(second())
+            await asyncio.sleep(0.05)
+            release_first.set()
+            await asyncio.wait_for(asyncio.gather(first_task, second_task), 5)
+            async with maker() as session:
+                rows = (
+                    (
+                        await session.execute(
+                            select(Notification).where(Notification.user_id == uid)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            assert len(rows) == 1
+            assert rows[0].payload["count"] == 2
+        finally:
+            release_first.set()
+            if not first_task.done():
+                await first_task
+            await engine.dispose()
+
     async def test_mark_read_scoped_to_own_rows(
         self, db: AsyncSession, auth_db: AsyncSession
     ) -> None:
@@ -317,15 +406,27 @@ class TestConsumeEvents:
         assert version == row.id.int  # WS version 用 uuid 的 128 位整数
 
     async def test_self_like_not_notified(
-        self, db: AsyncSession, auth_db: AsyncSession, patched_handler: list
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        patched_handler: list,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         author = await _mk_user(auth_db, "a3")
         item_id = await _mk_item(db, author)
+        looked_up: list[uuid.UUID] = []
+
+        async def _snapshot(_db: AsyncSession, *, user_id: uuid.UUID) -> _FakeSnap:
+            looked_up.append(user_id)
+            return _FakeSnap()
+
+        monkeypatch.setattr(notif_tasks, "get_user_snapshot", _snapshot)
 
         await notif_tasks.notify_from_point_event(author, "like", f"item:{item_id}")
 
         assert await _rows(db, author) == []
         assert patched_handler == []
+        assert looked_up == [], "自触发事件无需查询触发者展示名"
 
     async def test_comment_notifies_author_and_parent_author(
         self, db: AsyncSession, auth_db: AsyncSession, patched_handler: list

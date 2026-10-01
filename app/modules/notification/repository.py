@@ -11,6 +11,8 @@ from __future__ import annotations
 import datetime
 import uuid
 
+from sqlalchemy import select, text
+
 from app.modules.notification.models import (
     Notification,
     NotificationPreference,
@@ -22,6 +24,21 @@ from core.db.repository import AsyncRepository
 class NotificationRepository(AsyncRepository[Notification]):
     model = Notification
 
+    async def lock_aggregate_key(
+        self,
+        *,
+        user_id: uuid.UUID,
+        type: str,
+        actor_id: uuid.UUID,
+        target_id: uuid.UUID,
+    ) -> None:
+        """在当前事务内串行化同一聚合键的写入。"""
+        key = f"notification:{user_id}:{type}:{actor_id}:{target_id}"
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": key},
+        )
+
     async def find_recent_unread(
         self,
         *,
@@ -31,16 +48,22 @@ class NotificationRepository(AsyncRepository[Notification]):
         target_id: uuid.UUID,
         since: datetime.datetime,
     ) -> Notification | None:
-        """聚合窗口内同一 (actor, target) 的最近一条未读通知（id 倒序取首）。"""
-        return await self.get_one(
-            Notification.user_id == user_id,
-            Notification.type == type,
-            Notification.actor_id == actor_id,
-            Notification.target_id == target_id,
-            Notification.read_at.is_(None),
-            Notification.created_at >= since,
-            order_by=Notification.id.desc(),
+        """锁住窗口内最新未读行，避免与标记已读并发时继续聚合。"""
+        stmt = (
+            select(Notification)
+            .where(
+                Notification.user_id == user_id,
+                Notification.type == type,
+                Notification.actor_id == actor_id,
+                Notification.target_id == target_id,
+                Notification.read_at.is_(None),
+                Notification.created_at >= since,
+            )
+            .order_by(Notification.created_at.desc(), Notification.id.desc())
+            .limit(1)
+            .with_for_update()
         )
+        return (await self.db.execute(stmt)).scalars().first()
 
 
 class NotificationPreferenceRepository(AsyncRepository[NotificationPreference]):

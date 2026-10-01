@@ -62,9 +62,12 @@ async def create_notification(
 
     不 commit——与调用方事务同生共死（消费者侧由 tasks.py 提交）。
     """
-    now = datetime.datetime.now(datetime.UTC)
     repo = NotificationRepository(db)
     if actor_id is not None and target_id is not None and aggregate_window_s > 0:
+        await repo.lock_aggregate_key(
+            user_id=user_id, type=type, actor_id=actor_id, target_id=target_id
+        )
+        now = datetime.datetime.now(datetime.UTC)
         existing = await repo.find_recent_unread(
             user_id=user_id,
             type=type,
@@ -74,13 +77,17 @@ async def create_notification(
         )
         if existing is not None:
             merged = dict(existing.payload or {})
-            merged["count"] = int(merged.get("count", 1)) + 1
+            count = int(merged.get("count", 1)) + 1
+            # 展示与跳转字段取本次事件，避免合并后仍指向旧评论。
+            merged.update(payload or {})
+            merged["count"] = count
             # 赋新 dict：JSONB 无变更追踪，原地改不会被 SQLAlchemy 感知
             existing.payload = merged
             existing.created_at = now
             await repo.flush()
             return existing
 
+    now = datetime.datetime.now(datetime.UTC)
     return await repo.add(
         Notification(
             user_id=user_id,
