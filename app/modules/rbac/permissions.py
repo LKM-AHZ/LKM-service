@@ -51,6 +51,7 @@ class Permission(StrEnum):
     admin_content_review = "admin.content_review"
     admin_moderation_manage = "admin.moderation_manage"
     admin_analytics_view = "admin.analytics_view"
+    admin_events_manage = "admin.events_manage"
     # 对象级权限点（配 require_owner 依赖内查属主）
     article_owner_publish = "article.owner_publish"
     article_owner_comment_delete = "article.owner_comment_delete"
@@ -198,6 +199,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.admin_content_review),
         Grant(Permission.admin_moderation_manage),
         Grant(Permission.admin_analytics_view),
+        Grant(Permission.admin_events_manage),
         Grant(Permission.board_owner_manage),
         Grant(Permission.article_owner_publish),
         Grant(Permission.article_owner_comment_delete),

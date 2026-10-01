@@ -2,6 +2,7 @@
 
 响应统一走 ``@respond`` 包络（``{code, msg, data}``），与其余 admin 端点一致；
 前端 ``readAdminResp`` 依赖该包络解析。
+读取需要 ``admin.events_manage``；重投和丢弃还需要后台 2FA 信任。
 """
 
 import uuid
@@ -12,12 +13,15 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.deps import require_admin
+from app.modules.admin.deps import require_admin, require_admin_2fa
+from app.modules.admin.permissions import require_permission
+from app.modules.rbac.permissions import Permission
 from core import worker_dlq
 from core.common import ApiResp, ListData
 from core.config import settings
+from core.contracts import CurrentUser
 from core.db.dlq import DlqMessage
-from core.db.session import get_session
+from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/admin/dlq", tags=["admin-dlq"])
@@ -45,9 +49,10 @@ class _RequeueBody(BaseModel):
 async def list_dlq(
     status: str = "pending",
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    db: AsyncSession = Depends(get_session),
-    _cur: Any = require_admin,
+    db: AsyncSession = Depends(get_read_session),
+    cur: CurrentUser = require_admin,
 ) -> ListData[_DlqItem]:
+    await require_permission(db, cur, Permission.admin_events_manage)
     rows = (
         (
             await db.execute(
@@ -82,8 +87,9 @@ async def requeue_dlq(
     dlq_id: uuid.UUID,
     body: _RequeueBody | None = None,
     db: AsyncSession = Depends(get_session),
-    _cur: Any = require_admin,
+    cur: CurrentUser = require_admin_2fa,
 ) -> dict[str, Any]:
+    await require_permission(db, cur, Permission.admin_events_manage)
     ok = await worker_dlq.requeue(
         db,
         dlq_id,
@@ -97,8 +103,16 @@ async def requeue_dlq(
             raise BizError(CommonErr.INVALID_INPUT, "死信不存在或非 pending")
         if not settings.message_bus_enabled:
             raise BizError(CommonErr.UNAVAILABLE, "死信重投失败：下游消息总线不可用")
-        rk = m.routing_key if body is None or body.routing_key is None else body.routing_key
-        payload = (m.payload_json or {}).get("payload") if body is None or body.payload is None else body.payload
+        rk = (
+            m.routing_key
+            if body is None or body.routing_key is None
+            else body.routing_key
+        )
+        payload = (
+            (m.payload_json or {}).get("payload")
+            if body is None or body.payload is None
+            else body.payload
+        )
         if not isinstance(payload, dict):
             raise BizError(CommonErr.INVALID_INPUT, "死信 payload 无效")
         reason = worker_dlq.messaging.permanent_failure_reason(rk, payload)
@@ -113,8 +127,9 @@ async def requeue_dlq(
 async def discard_dlq(
     dlq_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
-    _cur: Any = require_admin,
+    cur: CurrentUser = require_admin_2fa,
 ) -> dict[str, Any]:
+    await require_permission(db, cur, Permission.admin_events_manage)
     # 只允许将 pending 死信标为 discarded。
     m = await db.scalar(
         select(DlqMessage).where(DlqMessage.id == dlq_id).with_for_update()

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
 from auth.models import Profile, User
+from core.db.dlq import DlqMessage
 from tests.conftest import DB, Client
 
 # 不存在的后台内容条目 id（uuid7 形态），用于越过 2FA 后落到 service 未命中路径。
@@ -32,8 +33,6 @@ async def db(fused_db_session: AsyncSession) -> AsyncSession:
 @pytest.fixture(autouse=True)
 async def _seam_for_admin(auth_seam_fused) -> None:
     """admin 端点解析 current admin user 走 auth seam → fused 里的 auth 表。"""
-
-
 
 
 async def _mk_user(
@@ -209,3 +208,53 @@ class TestAdminMe:
         assert r.status_code == 200
         assert r.json()["data"]["account_level"] == "admin"
         assert r.json()["data"]["role"] == "super_admin"
+
+
+class TestAdminEventOperations:
+    @pytest.mark.parametrize("path", ["/admin/dlq", "/admin/event-failures"])
+    async def test_list_requires_events_permission(
+        self, db: DB, client: Client, path: str
+    ) -> None:
+        u = await _mk_user(db, "org_events_list", role="org_member")
+        _set_admin_cookie(client, u)
+        assert (await client.get(f"/api/v1{path}")).status_code == 403
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            f"/admin/dlq/{_MISSING_ITEM_ID}/requeue",
+            f"/admin/dlq/{_MISSING_ITEM_ID}/discard",
+            f"/admin/event-failures/{_MISSING_ITEM_ID}/replay",
+        ],
+    )
+    async def test_write_requires_mfa_and_events_permission(
+        self, db: DB, client: Client, path: str
+    ) -> None:
+        u = await _mk_user(db, "org_events_write", role="org_member")
+        _set_admin_cookie(client, u)
+        assert (await client.post(f"/api/v1{path}")).status_code == 401
+        _set_admin_cookie(client, u, mfa_verified=True)
+        assert (await client.post(f"/api/v1{path}")).status_code == 403
+
+    @pytest.mark.parametrize("path", ["/admin/dlq", "/admin/event-failures"])
+    async def test_super_admin_can_list_with_grant(
+        self, db: DB, client: Client, path: str
+    ) -> None:
+        await _seed_perm(db, "admin:super_admin", "admin.events_manage")
+        u = await _mk_user(db, "super_events_list", role="super_admin")
+        _set_admin_cookie(client, u)
+        assert (await client.get(f"/api/v1{path}")).status_code == 200
+
+    async def test_super_admin_can_discard_pending_dlq_with_mfa(
+        self, db: DB, client: Client
+    ) -> None:
+        await _seed_perm(db, "admin:super_admin", "admin.events_manage")
+        u = await _mk_user(db, "super_events_discard", role="super_admin")
+        row = DlqMessage(routing_key="event.apply_point", status="pending")
+        db.add(row)
+        await db.flush()
+        _set_admin_cookie(client, u, mfa_verified=True)
+        resp = await client.post(f"/api/v1/admin/dlq/{row.id}/discard")
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"ok": True}
+        assert row.status == "discarded"

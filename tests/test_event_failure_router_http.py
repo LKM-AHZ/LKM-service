@@ -16,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
+from app.modules.admin.models import RolePermission
+from app.modules.rbac.permissions import Permission
 from auth.models import Profile, User
 from core.config import settings
 from core.db.event_failure import EventFailure
@@ -43,6 +45,11 @@ async def _admin(db: DB) -> User:
     db.add(user)
     await db.flush()
     db.add(Profile(user_id=user.id, role="super_admin", nickname="ef_admin"))
+    db.add(
+        RolePermission(
+            role_name="admin:super_admin", permission=Permission.admin_events_manage
+        )
+    )
     await db.flush()
     return user
 
@@ -92,16 +99,14 @@ class TestEventFailureAdminHttp:
             )
             is not None
         )
-        archived = await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
+        archived = await db.scalar(
+            select(EventFailure).where(EventFailure.id == failure_id)
+        )
         assert archived is not None and archived.replayed_at is not None
 
-    async def test_unknown_id_is_not_found(
-        self, db: DB, client: Client
-    ) -> None:
+    async def test_unknown_id_is_not_found(self, db: DB, client: Client) -> None:
         _set_admin_cookie(client, await _admin(db))
-        r = await client.post(
-            f"/api/v1/admin/event-failures/{uuid.uuid4()}/replay"
-        )
+        r = await client.post(f"/api/v1/admin/event-failures/{uuid.uuid4()}/replay")
         assert r.status_code == 404
         assert r.json()["data"] is None
 

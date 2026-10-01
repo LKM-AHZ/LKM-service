@@ -8,6 +8,7 @@
 归档副本只能躺在表里。本路由补上这条通道。
 
 响应统一走 ``@respond`` 包络（``{code, data, message, request_id}``），与其余 admin 端点一致。
+读取需要 ``admin.events_manage``；重放还需要后台 2FA 信任。
 """
 
 import uuid
@@ -18,12 +19,15 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.deps import require_admin
+from app.modules.admin.deps import require_admin, require_admin_2fa
+from app.modules.admin.permissions import require_permission
+from app.modules.rbac.permissions import Permission
 from core import messaging
 from core.common import ApiResp, ListData
 from core.config import settings
+from core.contracts import CurrentUser
 from core.db.event_failure import EventFailure, replay_failure
-from core.db.session import get_session
+from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
 
 router = APIRouter(prefix="/admin/event-failures", tags=["admin-event-failures"])
@@ -51,9 +55,10 @@ class _ReplayBody(BaseModel):
 @respond
 async def list_event_failures(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    db: AsyncSession = Depends(get_session),
-    _cur: Any = require_admin,
+    db: AsyncSession = Depends(get_read_session),
+    cur: CurrentUser = require_admin,
 ) -> ListData[_EventFailureItem]:
+    await require_permission(db, cur, Permission.admin_events_manage)
     rows = (
         (
             await db.execute(
@@ -88,8 +93,9 @@ async def replay_event_failure(
     failure_id: uuid.UUID,
     body: _ReplayBody | None = None,
     db: AsyncSession = Depends(get_session),
-    _cur: Any = require_admin,
+    cur: CurrentUser = require_admin_2fa,
 ) -> dict[str, Any]:
+    await require_permission(db, cur, Permission.admin_events_manage)
     ok = await replay_failure(
         db,
         failure_id,
@@ -105,8 +111,14 @@ async def replay_event_failure(
             raise BizError(CommonErr.CONFLICT, "该失败事件已重放")
         if not settings.message_bus_enabled:
             raise BizError(CommonErr.UNAVAILABLE, "重放失败：消息总线未启用")
-        rk = row.routing_key if body is None or body.routing_key is None else body.routing_key
-        payload = row.payload_json if body is None or body.payload is None else body.payload
+        rk = (
+            row.routing_key
+            if body is None or body.routing_key is None
+            else body.routing_key
+        )
+        payload = (
+            row.payload_json if body is None or body.payload is None else body.payload
+        )
         reason = messaging.permanent_failure_reason(
             rk, {**payload, "event_id": row.event_id}
         )
