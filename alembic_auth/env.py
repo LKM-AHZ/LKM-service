@@ -1,9 +1,5 @@
-"""AUTH 独立库 Alembic environment（M3.B S1 第二迁移链，online/offline 通用）。
-
-独立 database 承载 auth 自持表；只针对 ``AuthBase``/``auth_metadata``（app/db/auth_base.py）。
-S1–S5 auth.models 仍挂在 monolith Base 上、auth_metadata 为空，此链仅空跑占位；
-S5 把 auth.models 迁到 AuthBase 后，本链经 autogenerate 产出具体的 auth 库迁移。
-``alembic -c alembic.auth.ini`` 驱动时 URL 取自 ``settings.auth_database_url``（async→sync）。
+"""
+AUTH 独立库 Alembic environment（M3.B S1 第二迁移链，online/offline 通用）。
 """
 
 import sys
@@ -11,9 +7,6 @@ from logging.config import fileConfig
 from pathlib import Path
 
 # 让 alembic 能找到 app / auth 包（从仓库根 sys.path 挂载）。
-# 注：ini 的 prepend_sys_path 已由 alembic 在加载本文件之前挂好仓库根
-# （alembic/script/base.py：``sys.path[:0] = prepend_sys_path``），这里只是非 CLI 驱动路径的
-# 兜底；先判重再插入，避免同一路径被重复堆进 sys.path。
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)

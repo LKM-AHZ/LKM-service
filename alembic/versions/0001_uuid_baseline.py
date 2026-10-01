@@ -1,9 +1,14 @@
-"""uuid baseline
-
+"""
+uuid baseline
 Revision ID: 0001_uuid_baseline
-Revises: 
+Revises:
 Create Date: 2026-09-18 23:40:21.559710
-
+- 乐观锁 ``version`` 列（蓝图 §6.1）直接写进 ``content_items`` / ``boards`` / ``articles``
+  的 create_table，无需事后 ``add_column``；
+- ``upload_sessions`` 表（预签名直传元数据落 DB）作为普通建表；
+- ``points_ledger`` 直接建成能承载 continuous aggregate 的形态：复合主键
+  ``(created_at, id)`` + 含分区列的幂等唯一约束（约束名 ``uq_points_ledger_ref`` 不变，
+  ``pg_upsert`` 按名解析 arbiter），hypertable 装配并入下方 ``TIMESCALE_DDL``。
 """
 from typing import Sequence, Union
 
@@ -21,13 +26,10 @@ down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# 前置共享对象（内联以保持迁移自包含，不 import 应用代码）。
 # 所有 UUID 主键列的 server_default 都指向它；PG 建表即解析 DEFAULT 表达式，
 # 函数不存在会直接报错，故必须在首个 create_table 之前建出。
-# uuid7 变体：48 位放 unix epoch 的「微秒/4096 刻度」（≈4.096ms 粒度，见下方 us >> 12），
+# uuid7 变体：48 位放 unix epoch 的「微秒/4096 刻度」
 # 低 12 位亚刻度填入 rand_a——时间有序，保证 order_by(id) 与游标分页语义与整数自增一致。
-# 注意：这 48 位**不是** RFC 9562 规定的 unix_ts_ms，按「毫秒」解码会得到偏小约 4096 倍的时间
-# （2026 年会读成 ~1978），外部工具请按上述刻度换算。
 UUID7_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
 DECLARE
@@ -45,33 +47,35 @@ END;
 $$ LANGUAGE plpgsql VOLATILE;
 """
 
-# 建表**后置**：TimescaleDB 装配（批 2，路线图 §8 #40）——outbox 两表转 hypertable、
-# 冷表列式压缩、outbox_events 保留策略兜底。`outbox_events` 刻意**不压缩**：它有热更新
-# （relay 反复 UPDATE status/attempt_count/locked_at），压缩 chunk 默认不可 DML，会把
-# 滞留行变成永久投不出（详见 app/db/init_db.py 同名注释）。
-#
-# 整段用 DO 块做**能力探测**：扩展不存在（普通 PG 镜像 / CI 临时 PG）时只告警，两表保持
-# 普通表——主键里多一列 created_at 无副作用，投递语义完全不变。必须经 EXECUTE/PL 运行时
-# 解析：直接写 `create_hypertable(...)` 时扩展缺失会让**整个基线在解析期**失败，连普通
-# 表都建不出来。内层 BEGIN...EXCEPTION 是隐式 savepoint，失败不会污染外层迁移事务。
+# 建表**后置**：TimescaleDB 装配——outbox 两表转 hypertable、
+# 冷表列式压缩、outbox_events 保留策略兜底；`points_ledger` 转 hypertable。
+# `outbox_events` 刻意**不压缩**：它有热更新（relay 反复 UPDATE status/attempt_count/
+# locked_at），压缩 chunk 默认不可 DML，会把滞留行变成永久投不出）。
+# 整段用 DO 块做**能力探测**：扩展不存在（普通 PG 镜像 / CI 临时 PG）时只告警，各表保持
+# 普通表——主键里多一列 created_at 无副作用，投递/流水语义完全不变。必须经 EXECUTE/PL
+# 运行时解析：直接写 `create_hypertable(...)` 时扩展缺失会让**整个基线在解析期**失败，
+# 连普通表都建不出来。内层 BEGIN...EXCEPTION 是隐式 savepoint，失败不会污染外层迁移事务。
 TIMESCALE_DDL = """
 DO $$
 BEGIN
   BEGIN
     CREATE EXTENSION IF NOT EXISTS timescaledb;
   EXCEPTION WHEN OTHERS THEN
-    RAISE WARNING 'timescaledb 不可用，outbox 两表保持普通表：%', SQLERRM;
+    RAISE WARNING 'timescaledb 不可用，outbox/points_ledger 保持普通表：%', SQLERRM;
   END;
 
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
     -- 整段装配再包一层 EXCEPTION：扩展在、但装配本身失败（版本差异导致函数签名不符、
     -- 托管实例权限不足、表无法转换）时只告警，不中断整条基线迁移。内层 savepoint 回滚后
-    -- 两表保持普通表可用，与上面「失败仅告警不中断」的约定一致。
+    -- 各表保持普通表可用，与上面「失败仅告警不中断」的约定一致。
     BEGIN
       PERFORM create_hypertable('outbox_events', 'created_at',
           chunk_time_interval => INTERVAL '7 days',
           if_not_exists => TRUE, migrate_data => TRUE);
       PERFORM create_hypertable('outbox_archived', 'created_at',
+          chunk_time_interval => INTERVAL '7 days',
+          if_not_exists => TRUE, migrate_data => TRUE);
+      PERFORM create_hypertable('points_ledger', 'created_at',
           chunk_time_interval => INTERVAL '7 days',
           if_not_exists => TRUE, migrate_data => TRUE);
       ALTER TABLE outbox_archived SET (
@@ -83,7 +87,7 @@ BEGIN
       PERFORM add_retention_policy('outbox_events', INTERVAL '30 days',
           if_not_exists => TRUE);
     EXCEPTION WHEN OTHERS THEN
-      RAISE WARNING 'timescaledb 装配失败，outbox 两表保持普通表：%', SQLERRM;
+      RAISE WARNING 'timescaledb 装配失败，outbox/points_ledger 保持普通表：%', SQLERRM;
     END;
   END IF;
 END $$;
@@ -93,7 +97,6 @@ END $$;
 def upgrade() -> None:
     """Upgrade schema."""
     # 建表前置共享对象一：pg_trgm 扩展——content_items 的 trgm GIN 索引 opclass
-    # （索引 DDL 显式写 public.gin_trgm_ops）依赖它
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public")
     # 建表前置共享对象二：uuid7 生成函数（所有 UUID 主键列的 server_default 目标）
     op.execute(UUID7_FUNCTION_SQL)
@@ -169,6 +172,7 @@ def upgrade() -> None:
     sa.Column('require_certified', sa.Boolean(), nullable=False),
     sa.Column('daily_post_limit', sa.Integer(), nullable=False),
     sa.Column('is_public', sa.Boolean(), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
@@ -273,7 +277,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'item_type', 'source_id', name='uq_feed_item')
     )
-    op.create_index('ix_feed_items_source', 'feed_items', ['item_type', 'source_id'], unique=False)
+    op.create_index('ix_feed_items_source', 'feed_items', ['source_id', 'item_type'], unique=False)
     op.create_index('ix_feed_items_user_cursor', 'feed_items', ['user_id', 'created_at', 'id'], unique=False)
     op.create_table('library_files',
     sa.Column('uploader_id', sa.Uuid(), nullable=False),
@@ -379,8 +383,12 @@ def upgrade() -> None:
     sa.Column('ref_id', sa.String(length=128), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('user_id', 'ref_type', 'ref_id', name='uq_points_ledger_ref')
+    # hypertable 的每个唯一索引都必须含分区列 created_at：复合主键并入 created_at；
+    # 幂等键 (user_id, ref_type, ref_id) 同理并入（约束名不变，pg_upsert 按名解析 arbiter）。
+    # 代价：DB 级幂等由「强保证」降为「同微秒才生效」，真实幂等由 points/service.py::reward
+    # 的按用户行锁 + get_by_ref 预检承担（详见 points/models.py 类 docstring）。
+    sa.PrimaryKeyConstraint('created_at', 'id'),
+    sa.UniqueConstraint('user_id', 'ref_type', 'ref_id', 'created_at', name='uq_points_ledger_ref')
     )
     op.create_index('ix_ledger_created_delta', 'points_ledger', ['created_at', 'delta'], unique=False)
     op.create_table('project_applications',
@@ -397,6 +405,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('uq_project_applications_pending', 'project_applications', ['applicant_id', 'title'], unique=True, postgresql_where=sa.text("status = 'pending'"))
     op.create_table('projects',
     sa.Column('title', sa.String(length=100), nullable=False),
     sa.Column('summary', sa.String(length=300), nullable=False),
@@ -564,6 +573,15 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('key')
     )
+    op.create_table('upload_sessions',
+    sa.Column('upload_id', sa.String(length=64), nullable=False),
+    sa.Column('uploader_id', sa.Uuid(), nullable=False),
+    sa.Column('storage_key', sa.String(length=512), nullable=False),
+    sa.Column('meta', sa.Text(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint('upload_id')
+    )
+    op.create_index('ix_upload_sessions_created', 'upload_sessions', ['created_at'], unique=False)
     op.create_table('user_balances',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('balance', sa.Integer(), nullable=False),
@@ -619,6 +637,7 @@ def upgrade() -> None:
     sa.Column('likes', sa.Integer(), nullable=False),
     sa.Column('comments', sa.Integer(), nullable=False),
     sa.Column('bookmarks', sa.Integer(), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
@@ -641,6 +660,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_blog_comments_parent_id'), 'blog_comments', ['parent_id'], unique=False)
+    op.create_index(op.f('ix_blog_comments_series_id'), 'blog_comments', ['series_id'], unique=False)
     op.create_table('blog_content',
     sa.Column('series_id', sa.Uuid(), nullable=False),
     sa.Column('path', sa.String(length=500), nullable=False),
@@ -662,6 +683,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['series_id'], ['blog_series.id'], ),
     sa.PrimaryKeyConstraint('user_id', 'series_id')
     )
+    op.create_index(op.f('ix_blog_stars_series_id'), 'blog_stars', ['series_id'], unique=False)
     op.create_table('board_bans',
     sa.Column('board_id', sa.Uuid(), nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
@@ -879,6 +901,7 @@ def upgrade() -> None:
     sa.Column('bookmark_count', sa.Integer(), nullable=False),
     sa.Column('forward_count', sa.Integer(), nullable=False),
     sa.Column('counts_reconciled_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('published_at', sa.DateTime(timezone=True), nullable=True),
@@ -897,7 +920,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_content_items_qa_question_id'), 'content_items', ['qa_question_id'], unique=False)
     op.create_index('ix_content_published', 'content_items', ['published_at'], unique=False)
     op.create_index('ix_content_search_vector', 'content_items', ['search_vector'], unique=False, postgresql_using='gin')
-    op.create_index('ix_content_slug', 'content_items', ['slug'], unique=False)
+    op.create_index('ix_content_slug', 'content_items', ['slug'], unique=True)
     op.create_index('ix_content_status_pinned', 'content_items', ['status', 'is_pinned', 'id'], unique=False)
     op.create_index('ix_content_title_trgm', 'content_items', ['title'], unique=False, postgresql_using='gin', postgresql_ops={'title': 'public.gin_trgm_ops'})
     op.create_index('ix_content_type_status_created', 'content_items', ['content_type', 'status', 'created_at', 'id'], unique=False)
@@ -943,6 +966,7 @@ def upgrade() -> None:
     )
     op.create_index('ix_interaction_view_user_viewed', 'interaction_view_logs', ['user_id', 'viewed_at'], unique=False)
     op.create_index('ix_interaction_view_viewed', 'interaction_view_logs', ['viewed_at'], unique=False)
+    op.create_index('ix_interaction_view_content', 'interaction_view_logs', ['content_id'], unique=False)
     # ### end Alembic commands ###
     # 全部表建完后置：TimescaleDB 装配（hypertable 要求表已存在；失败仅告警不中断）
     op.execute(TIMESCALE_DDL)
@@ -950,8 +974,13 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
+    # continuous aggregate `points_daily` 由应用启动时装配（core/db/init_db.py），不在本迁移内建，
+    # 但它依赖 points_ledger 这个 hypertable——不先拆视图，DROP TABLE 会被 PG 以「被依赖」拒绝。
+    # 幂等（IF EXISTS）：无 timescaledb 的环境下是空操作。
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS points_daily")
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_index('ix_interaction_view_viewed', table_name='interaction_view_logs')
+    op.drop_index('ix_interaction_view_content', table_name='interaction_view_logs')
     op.drop_index('ix_interaction_view_user_viewed', table_name='interaction_view_logs')
     op.drop_table('interaction_view_logs')
     op.drop_index('ix_interaction_fav_user_created', table_name='interaction_favorites')
@@ -998,9 +1027,12 @@ def downgrade() -> None:
     op.drop_table('board_follows')
     op.drop_index('ix_board_bans_board_user', table_name='board_bans')
     op.drop_table('board_bans')
+    op.drop_index(op.f('ix_blog_stars_series_id'), table_name='blog_stars')
     op.drop_table('blog_stars')
     op.drop_index(op.f('ix_blog_content_series_id'), table_name='blog_content')
     op.drop_table('blog_content')
+    op.drop_index(op.f('ix_blog_comments_parent_id'), table_name='blog_comments')
+    op.drop_index(op.f('ix_blog_comments_series_id'), table_name='blog_comments')
     op.drop_table('blog_comments')
     op.drop_index('ix_articles_published', table_name='articles')
     op.drop_index('ix_articles_category_published', table_name='articles')
@@ -1011,6 +1043,8 @@ def downgrade() -> None:
     op.drop_table('user_dim')
     op.drop_table('user_behavior_stats')
     op.drop_table('user_balances')
+    op.drop_index('ix_upload_sessions_created', table_name='upload_sessions')
+    op.drop_table('upload_sessions')
     op.drop_table('task_definitions')
     op.drop_table('tags')
     op.drop_index(op.f('ix_starhope_questions_user_id'), table_name='starhope_questions')
@@ -1034,6 +1068,7 @@ def downgrade() -> None:
     op.drop_index('ix_qa_answer_question', table_name='qa_answers')
     op.drop_table('qa_answers')
     op.drop_table('projects')
+    op.drop_index('uq_project_applications_pending', table_name='project_applications', postgresql_where=sa.text("status = 'pending'"))
     op.drop_table('project_applications')
     op.drop_index('ix_ledger_created_delta', table_name='points_ledger')
     op.drop_table('points_ledger')

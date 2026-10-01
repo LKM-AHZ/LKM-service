@@ -59,8 +59,8 @@ def run_migrations_offline() -> None:
 
 
 def _sync_url(url: str) -> str:
-    """Alembic 在同步上下文跑——把 asyncpg 驱动换成同步 psycopg2。
-
+    """
+    Alembic 在同步上下文跑——把 asyncpg 驱动换成同步 psycopg2。
     settings.database_url 是 ``postgresql+asyncpg``；alembic(postgresql://)*不可直接用，
     回落 psycopg2（装同步驱动）。
     """
@@ -70,8 +70,8 @@ def _sync_url(url: str) -> str:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' (live-database) mode.
-
+    """
+    Run migrations in 'online' (live-database) mode.
     Creates an Engine and associates a connection with the context.
     统一 PostgreSQL 目标。
     """
