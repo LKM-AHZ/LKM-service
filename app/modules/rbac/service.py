@@ -46,18 +46,19 @@ async def check_owner(
     id_field: str,
     permission: Permission,
 ) -> None:
-    """对象级权限断言：拥有该 owner 权限点（admin 代管/板块负责人）即放行；
-    否则查库判 ``resource.{id_field} == cur.id``。不满足抛 FORBIDDEN。
+    """对象级权限断言：资源属主直接放行，否则检查代管权限点。
+
+    先确认资源存在且未软删；普通属主无需再查角色权限映射。
 
     *permission* 是对象级权限点（如 ``content_owner_delete``）；非属主的管理员
     通过拥有该权限点获得代管资格（如 super_admin）。
     """
-    role = composible_role(cur.account_level, cur.role)
-    if await role_has_permission(db, role, permission):
+    owner_row = await ResourceRepository(db).get_owner_row(model, obj_id, id_field)
+    if owner_row is None:
+        raise BizError(CommonErr.FORBIDDEN)
+    if owner_row[0] == cur.id:
         return
 
-    obj = await ResourceRepository(db).get_by_model(model, obj_id)
-    if obj is None:
-        raise BizError(CommonErr.FORBIDDEN)
-    if getattr(obj, id_field) != cur.id:
+    role = composible_role(cur.account_level, cur.role)
+    if not await role_has_permission(db, role, permission):
         raise BizError(CommonErr.FORBIDDEN)
