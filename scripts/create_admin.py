@@ -12,7 +12,6 @@ backend 容器只有 `LKM_DB_*` 业务库，在那边跑会插错库或直接失
 
 import asyncio
 import getpass
-import os
 import sys
 
 from sqlalchemy import select
@@ -22,6 +21,8 @@ from auth.db.session import dispose_auth_engine, new_auth_session
 from auth.entities import Profile, User
 from auth.seams import hashpwd, verifypwd
 from core import bloom
+from core.config import settings
+from core.secrets import reveal
 
 _USAGE = (
     "用法：python scripts/create_admin.py <用户名> <邮箱> <手机> [密码]\n"
@@ -39,7 +40,7 @@ def _resolve_password(cli_value: str | None) -> str:
             file=sys.stderr,
         )
         return cli_value
-    env_pw = os.environ.get("LKM_ADMIN_PASSWORD")
+    env_pw = reveal(settings.admin_password)
     if env_pw:
         return env_pw
     return getpass.getpass("管理员密码: ")

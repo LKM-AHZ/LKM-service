@@ -80,6 +80,12 @@ class Settings(BaseSettings):
 
     # 后台 cookie 会话：access cookie 存活分钟（refresh 天数复用 refresh_token_expire_days）
     admin_access_cookie_minutes: int = 15
+    # 一次性运维脚本与压测入口也统一走 Settings；敏感值不进入 repr。
+    admin_password: SecretStr = SecretStr("")
+    admin_2fa_dump: str = ""
+    bench_user: str = "bench_user"
+    bench_password: SecretStr = SecretStr("")
+    bench_auth_login_url: str = "http://auth:8001/api/v1/auth/login/password"
 
     # 登录限流安全参数
     login_ip_max_per_min: int = 20

@@ -5,9 +5,9 @@
 ``LKM_CLICKHOUSE_EXPORT_WINDOW`` 被 flows 又读了一遍）。
 
 允许的例外（逐条给出理由，且**按文件**而非按名字白名单，缩小漂移面）：
-- ``app/core/config.py``：``is_test_env`` 读 pytest 注入的 ``PYTEST_RUNNING``——它是测试运行
+- ``core/config.py``：``is_test_env`` 读 pytest 注入的 ``PYTEST_RUNNING``——它是测试运行
   探针而非应用配置；``LKM_ENV`` 已走 ``settings.env``。
-- ``app/core/secrets_bootstrap.py``：它的**职责**就是把 Infisical 拉到的东西写进 ``os.environ``
+- ``core/secrets_bootstrap.py``：它的**职责**就是把 Infisical 拉到的东西写进 ``os.environ``
   （在 Settings 之前跑的引导层），不读即无法工作。
 - ``app/modules/content/blog/git_http.py``：``os.environ.copy()`` 是给 git 子进程备环境，
   不是读配置项。
@@ -19,11 +19,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_PACKAGES = ("app", "auth")
+_PACKAGES = ("app", "auth", "boot", "core", "scripts", "loadtest")
 #: 允许出现 ``os.environ`` 的文件（理由见模块 docstring）。
 _ALLOWED_ENVIRON_FILES = {
-    "app/core/config.py",
-    "app/core/secrets_bootstrap.py",
+    "core/config.py",
+    "core/secrets_bootstrap.py",
     "app/modules/content/blog/git_http.py",
     "auth/tasks.py",
 }
@@ -153,3 +153,21 @@ def test_bot_sso_ttl_is_clamped() -> None:
     assert _clamp_ttl(-5) == 60
     assert _clamp_ttl(120) == 120
     assert _clamp_ttl(99999) == _TTL_MAX_SECONDS
+
+
+def test_operator_and_loadtest_env_names_map_to_settings(monkeypatch) -> None:
+    """脚本仍接受原有环境变量名；敏感字段由 SecretStr 承载。"""
+    from core.config import Settings
+    from core.secrets import reveal
+
+    monkeypatch.setenv("LKM_ADMIN_PASSWORD", "operator-secret")
+    monkeypatch.setenv("LKM_ADMIN_2FA_DUMP", "1")
+    monkeypatch.setenv("LKM_BENCH_USER", "loadtest-user")
+    monkeypatch.setenv("LKM_BENCH_PASSWORD", "loadtest-secret")
+    monkeypatch.setenv("LKM_BENCH_AUTH_LOGIN_URL", "http://auth:8001/login")
+    fresh = Settings()
+    assert reveal(fresh.admin_password) == "operator-secret"
+    assert fresh.admin_2fa_dump == "1"
+    assert fresh.bench_user == "loadtest-user"
+    assert reveal(fresh.bench_password) == "loadtest-secret"
+    assert fresh.bench_auth_login_url == "http://auth:8001/login"

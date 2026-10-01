@@ -23,6 +23,21 @@ logger = logging.getLogger("lkm.init_db")
 
 _MIGRATION_LOCK_KEY = "lkm:migration:lock"
 
+# 已有大表的自动加性同步不能在应用启动事务里执行长锁 DDL。
+# 初建空表仍由 create_all 建全量 schema；存量库超过此物理体量或已转 hypertable 后，缺列须先走
+# scripts/online_ddl.py 的分阶段迁移，索引走 CONCURRENTLY。
+_ONLINE_DDL_TABLES = frozenset(
+    {
+        "content_items",
+        "content_comments",
+        "outbox_events",
+        "outbox_archived",
+        "interaction_view_logs",
+        "points_ledger",
+    }
+)
+_ONLINE_DDL_MIN_BYTES = 64 * 1024 * 1024
+
 #: schema 就绪后需执行的幂等 seed 步骤（``async (db) -> int``，返回插入行数）。
 #: 由各顶层包 bootstrap 登记（如 ``app.bootstrap`` 登记 seed_rbac）——core 因而不知道
 #: 任何业务 seed 模块名。
@@ -81,10 +96,44 @@ def _sync_additive_schema(conn: Any) -> list[str]:
     for table in Base.metadata.tables.values():
         if table.name not in existing_tables:
             continue
+        large_existing = False
+        if table.name in _ONLINE_DDL_TABLES:
+            relation_bytes = conn.execute(
+                sa.text("SELECT pg_total_relation_size(to_regclass(:name))"),
+                {"name": table.name},
+            ).scalar_one()
+            large_existing = (relation_bytes or 0) >= _ONLINE_DDL_MIN_BYTES
+            # hypertable 根表的 pg_total_relation_size 不含各 chunk，可能只有几 KB。
+            # 一旦转成 hypertable，就始终走在线 DDL，不以根表体量作判断。
+            if not large_existing and table.name in {
+                "outbox_events",
+                "outbox_archived",
+                "points_ledger",
+            }:
+                has_timescale_view = conn.execute(
+                    sa.text("SELECT to_regclass('timescaledb_information.hypertables')")
+                ).scalar_one()
+                if has_timescale_view is not None:
+                    large_existing = bool(
+                        conn.execute(
+                            sa.text(
+                                "SELECT EXISTS (SELECT 1 FROM "
+                                "timescaledb_information.hypertables "
+                                "WHERE hypertable_schema = current_schema() "
+                                "AND hypertable_name = :name)"
+                            ),
+                            {"name": table.name},
+                        ).scalar_one()
+                    )
         have_cols = {c["name"] for c in inspector.get_columns(table.name)}
         for col in table.columns:
             if col.name in have_cols:
                 continue
+            if large_existing:
+                raise RuntimeError(
+                    f"大表 {table.name} 缺少列 {col.name}；请先用 "
+                    "scripts/online_ddl.py 分阶段迁移，再发布新代码"
+                )
             if not col.nullable and col.server_default is None:
                 # NOT NULL 且无 SQL 侧默认：已存行的表上 ADD COLUMN 必然失败，硬来会让
                 # 应用起不来（比缺列更糟）。跳过并告警——这类列须人工迁移（alembic 或
@@ -116,6 +165,14 @@ def _sync_additive_schema(conn: Any) -> list[str]:
         have_idx = {i["name"] for i in inspector.get_indexes(table.name)}
         for index in table.indexes:
             if index.name in have_idx:
+                continue
+            if large_existing:
+                logger.warning(
+                    "大表 %s 缺少索引 %s；请用 scripts/online_ddl.py index "
+                    "并发创建，启动事务不会自动建索引",
+                    table.name,
+                    index.name,
+                )
                 continue
             ddl = str(CreateIndex(index).compile(dialect=conn.dialect))
             sp = conn.begin_nested()
@@ -508,5 +565,3 @@ async def _init_db_schema() -> None:
         await _seed_base_data()
     finally:
         await release_migration_lock(held, _MIGRATION_LOCK_KEY)
-
-

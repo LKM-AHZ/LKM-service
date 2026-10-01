@@ -19,6 +19,7 @@ from sqlalchemy import select
 from auth.db.session import dispose_auth_engine, new_auth_session
 from auth.entities import User
 from auth.seams import setup_2fa_begin, setup_2fa_complete, totp_code, totp_now
+from core.config import settings
 
 _DUMP_ENV = "LKM_ADMIN_2FA_DUMP"
 _DUMP_PATH = Path(".admin_2fa_dump")
@@ -62,7 +63,7 @@ async def main() -> None:
             )
         await db.commit()
 
-        if os.environ.get(_DUMP_ENV) != "1":
+        if settings.admin_2fa_dump != "1":
             print(
                 f"[ok] 已为 {username} 启用 2FA；凭据未输出"
                 f"（需导出请设 {_DUMP_ENV}=1）"

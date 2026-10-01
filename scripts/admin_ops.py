@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
-import os
 import sys
 
 from pydantic import TypeAdapter, ValidationError
@@ -23,7 +22,9 @@ from auth.entities import TOTP, Profile, RecoveryCode, RefreshToken, User
 from auth.schemas import Password
 from auth.seams import hashpwd
 from core import bloom
+from core.config import settings
 from core.db.base import now_iso
+from core.secrets import reveal
 
 # 与 API 侧同一个密码策略类型（auth/schemas.Password）：脚本建号也必须过同一道校验，
 # 否则运维能直接建出 `1` 这种弱口令管理员，绕开注册/改密端点的约束。
@@ -221,7 +222,7 @@ def _resolve_password(cli_value: str | None) -> str:
             file=sys.stderr,
         )
         return cli_value
-    env_pw = os.environ.get("LKM_ADMIN_PASSWORD")
+    env_pw = reveal(settings.admin_password)
     if env_pw:
         return env_pw
     return getpass.getpass("管理员密码: ")

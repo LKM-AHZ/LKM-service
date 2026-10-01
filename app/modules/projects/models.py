@@ -12,7 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
-    text,
+    column,
 )
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -82,7 +82,7 @@ class ProjectApplication(UUIDPrimaryKeyMixin, Base):
             "applicant_id",
             "title",
             unique=True,
-            postgresql_where=text("status = 'pending'"),
+            postgresql_where=column("status") == "pending",
         ),
     )
 

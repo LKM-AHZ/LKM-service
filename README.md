@@ -189,6 +189,28 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 - 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（**1 条 UUID baseline**，全库主键为 uuid7）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`），`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`（主键同样含分区列）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
 - AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，19 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `0001_auth_baseline`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
+大表（`content_items`、`content_comments`、outbox、浏览日志、积分流水）超过 64 MiB
+或已转 Timescale hypertable 时，启动过程不会自动对既有表加列/建索引。
+先运行 `python -m scripts.online_ddl --help`，按 `add-column` → `backfill` →
+`index` → `set-not-null` 分阶段执行；默认仅打印 SQL，显式 `--apply` 才连接业务库。
+具体发布顺序及示例见父仓库 `DEPLOYMENT.md`。
+
+## CI 生产部署
+
+GitHub Actions 的 `deploy` 仅在 `master`/`main` 手动触发，在 `production`
+environment 中推送带 commit SHA 的镜像，并更新已有集群的 15 个后端
+Deployment，等待 rollout 成功。先在父仓库部署 Kubernetes 清单，再于本仓库设置：
+
+- 仓库变量 `REGISTRY_IMAGE`（如 `ghcr.io/lkm-ahz/lkm-service`）；可选
+  `REGISTRY_HOST`、`REGISTRY_USER`、`KUBE_NAMESPACE`。
+- `production` environment secret `KUBE_CONFIG_B64`：专用 kubeconfig 文件的
+  base64 编码，身份需有目标 namespace 的 Deployment `get`、`patch`、`watch` 权限。
+- 使用非 GHCR 镜像仓时，另设 `production` environment secret `REGISTRY_TOKEN`。
+  私有镜像仓还须在集群预置 imagePullSecret。
+
+一次性 `prefect-init` Job 不参与滚动更新；Flow 定义变化时按父仓库
+`deploy/k8s/README.md` 重新创建该 Job。
+
 ## 运行
 
 ```bash
@@ -214,17 +236,17 @@ uv run pytest                   # 默认排除 integration 标记
 uv run pytest -m integration    # 需要真实 Redis 等外部依赖
 ```
 
-如果安装了项目开发依赖，可以继续运行静态检查（当前门禁：**ty 0 诊断 + ruff 干净**；`basedpyright` 已降级为可选）：
+如果安装了项目开发依赖，可以继续运行静态检查（CI 中 `ruff` 阻断、`ty` 暂为非阻断；`basedpyright` 已降级为可选）：
 
 ```bash
-uv run ty check       # 硬门禁：类型检查 0 诊断
+uv run ty check       # 目前有存量诊断，CI 提供非阻断可见性
 uv run ruff check     # 代码风格 / 静态检查
 uv run ruff format --check .  # 只检查格式
 uv run ruff format .          # 写入格式化结果
 uv run lint-imports    # 架构依赖边界
 ```
 
-建议提交前执行并保证 ty 和 ruff 无报错，pytest 仅为参考，不强求 0 error ：
+建议提交前运行这些检查，并优先保证阻断门禁通过：
 
 ```bash
 uv run pytest

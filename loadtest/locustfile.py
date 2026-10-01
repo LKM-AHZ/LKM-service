@@ -23,21 +23,20 @@ boards / articleCategories）与 REST ``/api/v1/health``；以及一组低频 au
       --headless -u 50 -r 5 -t 60s --only-summary
 """
 
-import os
-
 from locust import HttpUser, between, task
+
+from core.config import settings
+from core.secrets import reveal
 
 # auth 登录探测：密码登录走 Redis 限流，负载下多数会被限流拒(ACCOUNT_LOCKED)，属预期。
 # 凭据一律从环境取——明文密码写进仓库等于把 bench 账号密码公开（会被 secret scanner 抓，
 # 也可能被真账号复用）；密码默认留空表示「未配置」，此时登录只用来观测 4xx 分支。
-_LOGIN_USER = os.environ.get("LKM_BENCH_USER", "bench_user")
-_LOGIN_PASSWORD = os.environ.get("LKM_BENCH_PASSWORD", "")
+_LOGIN_USER = settings.bench_user
+_LOGIN_PASSWORD = reveal(settings.bench_password)
 
 # auth 路由必须打 **auth 进程**：backend 无 LKM_AUTH_DB_* 配置，打它上面的 auth 路由会因
 # 连不上 lkm_auth 而 500（已知架构事实）。用绝对 URL 覆盖 HttpUser 的 host。
-_AUTH_LOGIN_URL = os.environ.get(
-    "LKM_BENCH_AUTH_LOGIN_URL", "http://auth:8001/api/v1/auth/login/password"
-)
+_AUTH_LOGIN_URL = settings.bench_auth_login_url
 
 _GRAPHQL = "/graphql"
 
