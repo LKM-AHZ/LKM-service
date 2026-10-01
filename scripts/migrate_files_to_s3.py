@@ -10,13 +10,23 @@ S3 用同形 key + ``s3_prefix``（S3Storage 内部拼接 prefix）。本脚本�
 import asyncio
 import hashlib
 from pathlib import Path
+
 from core.config import settings
 from core.storage.factory import get_storage
 
 
+def _local_files(root: Path) -> list[Path]:
+    return sorted(path for path in root.rglob("*") if path.is_file())
+
+
+def _sha3_file(path: Path) -> str:
+    with path.open("rb") as fh:
+        return hashlib.file_digest(fh, "sha3_256").hexdigest()
+
+
 async def _migrate() -> None:
     root = Path(settings.files_store_dir)
-    if not root.exists():
+    if not await asyncio.to_thread(root.exists):
         print(f"[skip] {root} 不存在，无存量")
         return
 
@@ -29,12 +39,11 @@ async def _migrate() -> None:
     storage = get_storage()
     moved = 0
     failed = 0
-    for dest in sorted(p for p in root.rglob("**/*") if p.is_file()):
+    for dest in await asyncio.to_thread(_local_files, root):
         rel = dest.relative_to(root).as_posix()  # 形如 <hash[:2]>/<hash>
         try:
             # 流式哈希：整文件 read_bytes 在 max_upload_bytes（默认 100MB）下单文件即等量内存峰值
-            with dest.open("rb") as fh:
-                local_hash = hashlib.file_digest(fh, "sha3_256").hexdigest()
+            local_hash = await asyncio.to_thread(_sha3_file, dest)
         except OSError as exc:
             failed += 1
             print(f"[fail] {rel}: 读取失败 {exc}")

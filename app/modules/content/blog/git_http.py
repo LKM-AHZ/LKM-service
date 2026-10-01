@@ -90,7 +90,7 @@ async def _resolve_series(db: AsyncSession, repo_name: str) -> BlogSeries | None
     )
 
 
-async def _resolve_series_id(db: AsyncSession, repo_name: str) -> int | None:
+async def _resolve_series_id(db: AsyncSession, repo_name: str) -> uuid.UUID | None:
     """repo_name → blog_series.id；无记录（孤儿仓库）返回 None。"""
     series = await _resolve_series(db, repo_name)
     return series.id if series is not None else None

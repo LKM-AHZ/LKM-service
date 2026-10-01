@@ -63,14 +63,14 @@ def _flow_span(traceparent: str) -> Any:
 
 async def _export_failures(*, window: int) -> int:
     """业务库 event_failures → CH（复用无 Prefect 依赖的纯体层，与回落直调同源）。"""
-    from app.flows.analytics_body import run_event_failures_export
+    from core.flows.analytics_body import run_event_failures_export
 
     return await run_event_failures_export(window=window)
 
 
 async def _export_audits(*, window: int) -> int:
     """auth 库 audit_logs → CH（复用无 Prefect 依赖的纯体层）。"""
-    from app.flows.analytics_body import run_audit_logs_export
+    from core.flows.analytics_body import run_audit_logs_export
 
     return await run_audit_logs_export(window=window)
 

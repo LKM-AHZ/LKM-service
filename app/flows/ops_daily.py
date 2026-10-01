@@ -45,7 +45,7 @@ def _flow_span(traceparent: str) -> Any:
 
 async def _collect(*, days: int) -> dict[str, Any]:
     """复用无 Prefect 依赖的纯体层（与 CLI/回落直调同源）。"""
-    from app.flows.ops_daily_body import collect_daily_report
+    from core.flows.ops_daily_body import collect_daily_report
 
     return await collect_daily_report(days=days)
 

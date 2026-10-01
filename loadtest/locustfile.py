@@ -70,7 +70,7 @@ class LKMReadUser(HttpUser):
             try:
                 if resp.json().get("errors"):
                     resp.failure(f"graphql errors: {resp.json()['errors'][:1]}")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 resp.failure("non-json body")
 
     @task(6)

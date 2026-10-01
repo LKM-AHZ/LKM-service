@@ -1,4 +1,4 @@
-"""运营日报 flow（蓝图 §5.5/§6.4）：纯编排、CH 未启用时的降级、注册表接线。
+"""运营日报 flow：纯编排、CH 未启用时的降级、注册表接线。
 
 hermetic：不碰 Prefect engine（编排注入普通函数），也不连 ClickHouse（未启用即短路）。
 """
@@ -9,11 +9,19 @@ from typing import Any
 
 import pytest
 
-from app.flows.ops_daily import orchestrate_ops_daily
+from app.flows.ops_daily import _collect, orchestrate_ops_daily
 from core import clickhouse
 from core.flows import ops_daily_body
 from core.messaging import SUB_JOBS
 from core.task_registry import ensure_tasks_registered, handlers_for
+
+
+async def test_collect_calls_moved_report_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_report(*, days: int) -> dict[str, Any]:
+        return {"window_days": days}
+
+    monkeypatch.setattr(ops_daily_body, "collect_daily_report", fake_report)
+    assert await _collect(days=7) == {"window_days": 7}
 
 
 async def test_orchestrate_passes_window_and_returns_report() -> None:
