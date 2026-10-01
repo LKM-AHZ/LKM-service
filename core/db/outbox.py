@@ -20,13 +20,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from core.config import settings
 from core.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
 
-# outbox 状态机：入队即 pending → relay 投成功置 published；投不出的行由 relay **直接摘除**
-# 迁入 event_failures（不留 failed 行——`status=failed` 从未被写入，见 event_failure 模块 docstring）
+# outbox 事件由 pending 转为 published；永久失败时转存 event_failures。
 OUTBOX_PENDING = "pending"
 OUTBOX_PUBLISHED = "published"
 OUTBOX_FAILED = "failed"
 
-# 单事件最多尝试次数（达上限不再投，防无限重试污染总线）；指数退避秒(cap)
+# 单事件重试次数与退避上限。
 MAX_TRIES = 5
 _BACKOFF_CAP_S = 3600
 
@@ -51,11 +50,10 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
 
     __tablename__: str = "outbox_events"
 
-    # 幂等键：普通表 outbox_event_keys 担保全局唯一，本表约束仍须包含分区列。
     event_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    # 逻辑主题 = 现有 topic exchange routing_key（event.apply_point/…），relay 按它 publish
+    # relay 按 routing_key 发布事件。
     routing_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    # 携带 {fn,args,…} 完整 dict（worker 按 payload["fn"] 分派）；原生 JSONB 存 dict
+    # payload_json 保存完整任务载荷。
     payload_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
@@ -63,8 +61,6 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
         String(16), nullable=False, default=OUTBOX_PENDING, index=True
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # primary_key=True 是与 mixin 的 id 组成复合主键 (created_at, id)：hypertable 的
-    # 分区列必须出现在主键里（见类 docstring）。写入仍由 Python 侧 default 提供值。
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, primary_key=True
     )
@@ -82,7 +78,6 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
 
     __table_args__: tuple = (
         Index("ix_outbox_scan", "status", "next_retry_at"),
-        # 原为列上的 unique=True；hypertable 要求唯一索引含分区列，故并入 created_at。
         UniqueConstraint("event_id", "created_at"),
     )
 
@@ -111,7 +106,6 @@ def _jsonable(value: Any) -> Any:
 
 async def _legacy_event_exists(db: AsyncSession, event_id: str) -> bool:
     """迁移前未入键表的显式 ID，按现有索引检查热表与两张归档表。"""
-    # 延迟导入避免 event_failure -> outbox 的模块级循环依赖。
     from core.db.event_failure import EventFailure
     from core.db.outbox_archive import OutboxArchived
 
@@ -145,9 +139,6 @@ async def enqueue_outbox(
     eid = event_id or uuid.uuid4().hex
     if replay and event_id is None:
         raise ValueError("replay requires an event_id")
-    # hypertable 的唯一约束必须带 created_at，因此另用普通表做全局唯一裁决。
-    # INSERT 与 outbox 行共用业务事务；回滚时键也回滚。重放持有同一键的行锁，
-    # 串行检查活跃行，允许原失败记录重新投递且不产生并发双入队。
     inserted = await db.scalar(
         insert(OutboxEventKey)
         .values(event_id=eid, created_at=now_iso())

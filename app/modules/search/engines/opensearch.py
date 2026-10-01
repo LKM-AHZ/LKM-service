@@ -24,7 +24,6 @@ from app.modules.search.engines.base import IndexDoc
 
 logger = logging.getLogger(__name__)
 
-# 蓝图 §6.5.3 的索引文档结构 → OpenSearch mapping（tags/keywords 是数组，故 keyword）
 _MAPPING: dict[str, Any] = {
     "mappings": {
         "properties": {
@@ -47,7 +46,6 @@ _MAPPING: dict[str, Any] = {
 
 _SEARCH_FIELDS = ["title^3", "excerpt^2", "content", "summary", "tags", "keywords"]
 
-# 单次 bulk 的条目上限（bulk body 是 2 行/文档，避免请求体过大）
 _BULK_CHUNK = 500
 
 

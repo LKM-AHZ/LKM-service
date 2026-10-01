@@ -58,8 +58,6 @@ async def _create_auth_all() -> None:
     register_models()
     engine = get_auth_engine()
     async with engine.begin() as conn:
-        # auth 库是**独立 database**，其 public schema 与业务库互不相通，
-        # uuid7 函数须各自建一份（表的 id 列 server_default 指向 public.uuid_generate_v7()）。
         await ensure_shared_objects(conn)
         await conn.run_sync(auth_metadata.create_all)
 

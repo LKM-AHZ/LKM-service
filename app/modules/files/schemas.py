@@ -23,8 +23,6 @@ class FileCreate(BaseModel):
     @field_validator("tags", mode="before")
     @classmethod
     def _normalize_tags(cls, v: object) -> list[str]:
-        # 入参侧与 FileInfo 出参侧同口径：JSON 串/非列表（dict/int/…）一律经 parse_tags
-        # 归一，否则畸形 form 值会在端点内抛 ValidationError（500 而非 422）
         return parse_tags(v)
 
 
@@ -61,8 +59,6 @@ class UploadInitResp(BaseModel):
 
     @model_validator(mode="after")
     def _check_direct_fields(self) -> "UploadInitResp":
-        # 前端按 mode 分叉：direct 必带 upload_id + presigned_url，
-        # 缺一个就会出现「空 upload_id 去 confirm」的下游错误，故在构造处就拒绝
         if self.mode == "direct" and not (self.upload_id and self.presigned_url):
             raise ValueError("direct 模式必须返回 upload_id 与 presigned_url")
         return self

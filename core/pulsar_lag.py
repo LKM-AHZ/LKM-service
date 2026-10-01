@@ -57,8 +57,6 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
                         subscription=name, topic=topic
                     ).set(backlog)
                 except Exception:
-                    # 单个订阅条目异常（msgBacklog 为 null / 条目不是 dict）不能让同 topic
-                    # 其余订阅停止更新——否则它们会一直停留在上一周期的陈旧 gauge 值
                     logger.warning(
                         "lag 单订阅解析失败 topic=%s sub=%s", topic, name, exc_info=True
                     )
@@ -70,9 +68,6 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
 async def _run() -> None:
     while True:
         try:
-            # client 构造放进轮内：它（以及 _collect_once 顶部取 header/发请求）一旦抛错，
-            # 原实现会让 _run 直接结束——task 转为 done 后没人重建上报器，lag 指标静默
-            # 永久停更。轮级兜底 + 下界 sleep 保证「失败也继续按周期重试」。
             async with httpx.AsyncClient(
                 base_url=settings.pulsar_admin_url, timeout=10.0
             ) as client:

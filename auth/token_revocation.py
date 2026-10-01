@@ -32,10 +32,8 @@ from core.redis import get_redis
 logger = logging.getLogger("lkm.auth.token_revocation")
 
 _PREFIX = "jti:block:"
-# token_version 预检键：存该用户**当前最新**版本，即「可接受的最低版本」；token 携带版本更低
-# 即已陈旧。
+# token_version 预检键保存可接受的最低版本。
 _TV_PREFIX = "tv:min:"
-# 兜底 TTL：取不到 exp 时用 access token 上限，避免黑名单条目永不过期而无限累积
 _MAX_TTL_S = 900
 
 

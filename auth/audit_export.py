@@ -60,9 +60,6 @@ async def export_audit_logs(
     ``max_batches`` 防高写入下无界循环；超出即返回，剩余由下次周期继续。主键为 uuid7，
     水位取字符串形式（CH String 列，字典序即时间序）；CH 空表返回 ``None`` 时首次全量。
     """
-    # window<=0 → LIMIT 0 → 立刻 break 并返回 0，与「确实没有可导出行」无法区分；
-    # max_batches<=0 → 循环体一次都不进。两者都属配置错（如 LKM_CLICKHOUSE_EXPORT_WINDOW
-    # 配成 0/负数），按本模块「绝不静默」的约定当场抛错，而不是让导出永久静默停摆。
     if window <= 0 or max_batches <= 0:
         raise ValueError(
             f"window/max_batches 必须为正整数（window={window}, max_batches={max_batches}）"
@@ -84,8 +81,6 @@ async def export_audit_logs(
         if len(rows) < window:
             break
     else:
-        # 跑满 max_batches 且最后一批仍是满的 → 还有积压没导完（for-else 只在没 break 时走）。
-        # 只返回行数会让「导出持续落后」看起来像正常收敛，故留一条告警供运维发现。
         logger.warning(
             "audit 导出跑满 max_batches=%d 仍未收敛（本次已导 %d 行），仍有积压留待下次周期",
             max_batches,

@@ -171,9 +171,6 @@ def _bucket_key_of(f: LibraryFile) -> str | None:
     return _build_bucket_key(f.sha3_hash) if f.sha3_hash else None
 
 
-# /preview（inline）允许的类型白名单：mime_type 由上传方给出，只有这些类型能按原
-# Content-Type 内联返回；其余（尤其 text/html、image/svg+xml）降级为附件下载，
-# 否则审核通过的 HTML/SVG 会在 API 源上被当页面渲染（存储型 XSS）
 _INLINE_SAFE_TYPES: frozenset[str] = frozenset(
     {
         "application/pdf",
@@ -191,10 +188,6 @@ _INLINE_SAFE_TYPES: frozenset[str] = frozenset(
 )
 
 
-# ---- 内容哈希级互斥（串行化「去重复用」与「末引用物理删除」，防 TOCTOU）----
-# delete_file 在"引用归零"时物理删 blob，create_file 可能在删除的前后复用同一 blob。
-# 二者对同一 content_hash 的决策必须互斥，否则出现空引用/孤儿 blob。Redis 有则用
-# 分布式锁（跨 worker 生效），无则退回进程内锁（单 worker / 测试语义仍正确）。
 _HASH_LOCK_TTL_SECONDS = 30
 _hash_locks_inproc: dict[str, asyncio.Lock] = {}
 # 进程内锁没有"值"的概念，用固定 token 占位，使持有者判定在两种后端下一致
@@ -241,8 +234,6 @@ async def _hash_lock(content_hash: str) -> AsyncGenerator[None]:
         token = await _acquire_hash_lock(content_hash)
     except Exception:
         token = None
-    # 拿不到锁（并发争抢或 Redis 抖动）→ 重验仍可能竞争，但返回 None 不额外报错；
-    # 为不放大风险，拿不到时也照常放行（原语义），锁主要串行化常规并发窗口。
     try:
         yield
     finally:
@@ -328,9 +319,6 @@ async def create_file(
     total, content_hash, buf = await asyncio.to_thread(_buffer_and_hash, stream, limit)
     bucket_key = _build_bucket_key(content_hash)
 
-    # 落盘（写字节的细节交给 storage 层）；dedup 语义：已存在则复用、不重写。
-    # 与 delete_file 的末引用物理删除互斥（按 content_hash 加锁），避免并发删除
-    # 恰在 exists→save 间隙把复用的 blob 删空造成空引用。
     saved: dict[str, object] | None = None
     try:
         async with _hash_lock(content_hash):
@@ -349,7 +337,6 @@ async def create_file(
     if saved is not None:
         storage_path = str(saved["storage_path"])
     else:
-        # 复用既有物理文件：storage_path 须与首写时后端实际返回的一致，保证元数据不漂移。
         storage_path = _storage_path_for(content_hash)
 
     repo = LibraryFileRepository(db)
@@ -404,8 +391,6 @@ async def review_file(
         raise BizError(FileErr.INVALID_STATUS, detail="Invalid review status")
 
     repo = LibraryFileRepository(db)
-    # 行锁读取：两个管理员并发审核同一 PENDING 文件时，串行化「读 PENDING → 改 status」
-    # 的读改写，避免都通过 PENDING 检查后 last-write-wins 造成状态/加分不确定。
     f = await repo.get_locked(file_id)
     if f is None:
         raise BizError(FileErr.NOT_FOUND, detail="File not found")
@@ -459,8 +444,6 @@ async def delete_file(
     await repo.flush()
 
     if old_hash:
-        # 物理删除决策与 create_file 的去重复用互斥（按 content_hash 加锁）：
-        # 加锁后重算引用，防止并发创建/删除的 TOCTOU 把仍被引用的 blob 删空。
         async with _hash_lock(old_hash):
             remaining = await repo.count_live_by_hash(old_hash)
             await repo.sync_ref_count(old_hash)
@@ -527,8 +510,6 @@ def _serve(
         disposition = "attachment"
         media_type = "application/octet-stream"
 
-    # 头只能含 latin-1 可编码字节，中文等非 ASCII 文件名按 RFC 5987 filename* 编码，
-    # 同时给一个 ASCII 化的 filename 兜底，保证旧客户端也能识别。
     ascii_fallback = (
         f.original_name.encode("ascii", "ignore").decode("ascii") or "download"
     )
@@ -538,7 +519,6 @@ def _serve(
     )
     headers = {
         "Content-Disposition": cd,
-        # 文件端点需登录私有：禁 public immutable，避免未经授权的内容被缓存/跨代理复用
         "Cache-Control": "private, no-store",
         # 禁内容嗅探（老浏览器可能把八位字节流嗅探成 HTML）
         "X-Content-Type-Options": "nosniff",
@@ -558,8 +538,6 @@ async def serve_content(
     _require_approved(f, action="preview" if disposition == "inline" else "download")
     key = _bucket_key_of(f)
     if key is None:
-        # 无哈希列的行定位不到对象（download_url 对同一情况已抛 NOT_FOUND，两处口径须一致）；
-        # 否则会把空 key 交给 storage.open（Local 后端即 root 前缀路径）
         raise BizError(FileErr.NOT_FOUND, detail="File has no storage key")
     # 预检对象存在性：响应头一旦发出，生成器里的存储错误无法再变成 404/500
     # （客户端会收到 200 + 截断体）。这里先探一次，把缺失/failed blob 拦在响应之前。
@@ -669,7 +647,6 @@ async def _register_from_upload(
                 await _safe_delete(storage, key)
                 raise
         await _safe_delete(storage, key)
-    # storage_path 按 backend 与 create_file 对齐：直传与普通上传的条目不可区分
     storage_path = _storage_path_for(content_hash)
     # 登记 PENDING（tags 标记里是 JSON 数组，转回 JSON 字符串存储，与 create_file 一致）
     f = LibraryFile(
@@ -694,8 +671,6 @@ async def _register_from_upload(
         await repo.sync_ref_count(content_hash)
         await repo.flush()
     except Exception:
-        # 入库失败且本次 row 未插入成功（count_by_hash 看不到它）：仅当 hash_key 在本次是
-        # 唯一引用（<=1）时才回收磁盘，避免误删其他条目共享的物理文件。与 create_file 一致。
         if await repo.count_by_hash(content_hash) <= 1:
             with suppress(BizError, OSError):  # 尽力清理，不覆盖原始入库异常
                 await _get_storage().delete(hash_key)

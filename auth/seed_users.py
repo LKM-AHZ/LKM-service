@@ -32,8 +32,6 @@ from auth.db.session import new_auth_session
 from auth.models import Profile, User
 from core import bloom
 
-# 演示用户一律不可登录：口令位是哨兵串，绝非任何真实口令的合法哈希。同时它与
-# `_SEED_AUTHOR_USERNAME` 同名标识出「这是 seed 造的」，运维可据此识别/清理。
 _SEED_PASSWORD_SENTINEL = "!seed-only-no-login"
 
 _session_factory: Callable[[], Awaitable[AsyncSession]] = new_auth_session
@@ -80,8 +78,6 @@ async def ensure_demo_user(
         if profile is None:
             db.add(Profile(user_id=user_id, nickname=nickname))
         await db.commit()
-        # 演示用户的 id 会被业务行引用、并可能经 follow 等读路径查快照 → 同样要入白名单位图，
-        # 否则 follow 演示作者会被布隆误判为「从未存在」。fail-open。
         await bloom.add(str(user_id))
         return user_id
     except Exception:

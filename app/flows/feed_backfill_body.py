@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("lkm.flows.feed_backfill")
 
-# 「最早」哨兵：PG timestamptz 的下界远早于此，用固定值而非 datetime.min 以免时区/精度问题
 _EARLIEST = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
 

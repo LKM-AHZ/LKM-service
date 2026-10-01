@@ -66,10 +66,6 @@ async def record_processed(
         await db.commit()
         return True
     except IntegrityError:
-        # 并发重复标记：另一消费者已抢先落账，视为已记账不报错。
-        # 但 IntegrityError 也可能是**别的**约束失败（NOT NULL/FK/CHECK 等）：一律当
-        # 「已记账」会让消费者误跳过该事件的副作用，故回滚后复查——行确实在才算重复，
-        # 否则原样抛出，让失败走重投/DLQ 而不是静默丢副作用。
         await db.rollback()
         if await already_processed(db, event_id, scope=scope):
             return False

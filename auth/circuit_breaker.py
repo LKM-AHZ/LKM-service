@@ -68,7 +68,6 @@ class CircuitBreaker:
                     self._probing = True
                     return True
                 return False
-            # HALF_OPEN：只放行一枚试探，其余请求继续短路，避免探针风暴压垮刚恢复的 AUTH。
             if self._probing:
                 return False
             self._probing = True

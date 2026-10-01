@@ -42,8 +42,6 @@ from .schemas import DimUserRow
 # 单次查询行数上限：本读口是无鉴权内部 port，正常消费方分页读，不需要一次拉全表
 _MAX_LIMIT = 500
 
-# LIKE 转义（与 app/modules/search/repository.py 同口径）。不能直接 import 那边的私有
-# 助手：import-linter 合同禁止业务模块间任意依赖，dim_report→search.repository 未在豁免列。
 _LIKE_ESCAPE = "\\"
 
 
@@ -95,7 +93,6 @@ async def list_user_dim(
         await db.execute(stmt.order_by(UserDim.user_id.desc()).offset(offset).limit(limit))
     ).scalars()
 
-    # PII(email) 仅在 gate 开启时才落进响应；否则一律 None（离线副本 PII 不外泄/横向散布）
     items = [
         DimUserRow(
             user_id=d.user_id,

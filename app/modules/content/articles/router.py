@@ -60,7 +60,6 @@ async def add_article_comment(
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> ArticleCommentOut:
-    # 返回序列化后的 schema，避免 @respond 直接 model_dump 无法处理 ORM 对象
     return ArticleCommentOut.model_validate(
         await create_article_comment(db, slug, cur.id, body.content, body.parent_id)
     )
@@ -83,8 +82,6 @@ async def remove_article_comment(
         "user_id",
         Permission.article_owner_comment_delete,
     )
-    # check_owner 已做对象级授权（属主或持 article.owner_comment_delete 的 super_admin），
-    # service 层不再重复属主校验，故传 as_admin=True 跳过其内部 owner 检查。
     await delete_article_comment(db, comment_id, cur.id, as_admin=True)
     return None
 
@@ -116,8 +113,6 @@ async def patch_article(
     try:
         return await update_article_ex(db, slug, patch, is_super=True)
     except VersionConflictError as exc:
-        # CAS 是 service 内的首个写操作（此前只有读/校验），冲突时无半成品需回滚；
-        # 直接带出哨兵异常里的当前值即可。
         return (exc.errcode, exc.current)
 
 

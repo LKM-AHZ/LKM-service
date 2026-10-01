@@ -24,8 +24,6 @@ logger = logging.getLogger("lkm.scheduler_state")
 
 HEARTBEAT_KEY = "scheduler:heartbeat"
 
-# TTL 取周期的 3 倍：允许漏两拍（写失败/短暂不可用）而不误判 down，同时又能在一个合理
-# 窗口内发现「进程真的没了」。不单列配置项——它没有独立自由度，随周期缩放即可。
 _TTL_MULTIPLIER = 3
 
 # —— 调度器进程内的运行态（唯一写者：worker-scheduler 进程）——
@@ -118,7 +116,6 @@ async def collect_once(redis: Any | None = None) -> None:
         except (TypeError, ValueError):
             logger.warning("调度器心跳载荷损坏，按 down 处理")
     if payload is None:
-        # 键不存在/损坏：进程没了、卡死、或 Redis 断——都按「不可认为在跑」处置
         scheduler_up.set(0)
         scheduler_state.set(0)
         return
@@ -134,13 +131,11 @@ _task: asyncio.Task[None] | None = None
 async def _run_reporter() -> None:
     from core.config import settings
 
-    # 下界 1s，理由同 run_heartbeat
     period = max(settings.scheduler_heartbeat_interval_s, 1.0)
     while True:
         try:
             await collect_once()
         except Exception:
-            # 轮级兜底：任一轮异常不得让 reporter 永久停更（否则指标静默冻结在旧值）
             logger.exception("调度器运行态上报轮次异常，跳过本轮")
         await asyncio.sleep(period)
 

@@ -47,7 +47,6 @@ async def update_profile(
     if info.avatar is not None:
         profile.avatar = info.avatar
     await ProfileRepository(db).flush()
-    # 快照 display_name/avatar 一并依赖 Profile.nickname/avatar（A6）→ 变更须失效 user:snap。
     await events.notify_user_updated(user_id)
 
 
@@ -127,7 +126,6 @@ async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) ->
     if old_key:
         with suppress(BizError):
             await _get_storage().delete(old_key)
-    # 头像为展示 URL（immutable 指纹 key），Profile.avatar 变更须同步失效 user:snap。
     await events.notify_user_updated(user_id)
     return new_key
 
@@ -153,8 +151,6 @@ async def serve_avatar(db: DbSession, user_id: uuid.UUID) -> StreamingResponse:
         except BizError as exc:
             if exc.errcode == StorageErr.NOT_FOUND:
                 return
-            # 后端/权限/IO 类故障不能在此静默吞掉：响应头已发出无法改状态码，但至少
-            # 上抛让连接中断并留下栈（否则客户端拿到 200 + 截断图片，故障无迹可查）。
             raise
 
     return StreamingResponse(

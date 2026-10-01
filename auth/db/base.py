@@ -23,7 +23,4 @@ class AuthBase(DeclarativeBase):
     """AUTH 独立库 ORM 根（auth.models 的 18 张表都挂在它上）。"""
 
 
-# 聚合句柄：AUTH 库所有自持表的 metadata（供 create_all / alembic autogenerate 引用）。
-# 使用前须确保已导入 auth.models（否则注册表为空）；auth.db.init.register_models / 各迁移
-# 与单测都以此为前置。
 auth_metadata = AuthBase.metadata

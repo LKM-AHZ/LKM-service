@@ -105,8 +105,6 @@ async def isolated_update(db: AsyncSession, stmt: Update) -> None:
             stmt,
         )
     except Exception:
-        # 其它 DBAPI 失败（StatementError/ProgrammingError/InterfaceError/DataError…）：
-        # 原先不回滚就往外抛，savepoint 悬着、会话进入 failed 状态，调用方后续语句全废
         await _safe_rollback(sp)
         raise
 

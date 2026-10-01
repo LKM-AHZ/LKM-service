@@ -22,21 +22,12 @@ class SavedFile(TypedDict):
 
 
 class StorageBackend(Protocol):
-    # 两个后端都按「同步、二进制、可读」使用该流（Local 丢进线程池逐块读、S3 逐 part
-    # 同步发送），故显式标注 IO[bytes]——传异步迭代器/文本流会在类型层面即被拦下
     async def save(
         self, stream: IO[bytes], /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile: ...
 
-    # 异步生成器方法：真实后端经 `async def open(...) ... yield` 实现，其可调用类型为
-    # Callable 返回 AsyncIterator[bytes]；故协议用普通 def（非 async）标注生成器函数形态，
-    # 使 AsyncGenerator <: AsyncIterator 满足结构兼容（async def + body=`...` 会被 ty 当协程返回，不匹配）
     def open(self, bucket_key: str) -> AsyncIterator[bytes]: ...
 
-    # 仅 S3 后端可用的方法（Local 无 confirm/副本流程，调用即 NotImplementedError）。
-    # 现存唯一调用点是直传登记（files.service._register_from_upload），而直传流程只在
-    # S3 下存在（Local 的 upload-init 返回 mode=sync），故不会落到 Local；
-    # 将来新增调用方必须先确认后端为 S3。
     async def copy(self, src: str, dest: str) -> None: ...
 
     async def delete(self, bucket_key: str) -> None: ...

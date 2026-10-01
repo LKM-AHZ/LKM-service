@@ -73,7 +73,6 @@ class Column(UUIDPrimaryKeyMixin, Base):
     description: Mapped[str] = mapped_column(String(300), nullable=False)
     slug: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)
     cover_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # —— 栏目展示字段（供前端社区「专栏」页富展示，见 docs 方案）——
     author_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     author_title: Mapped[str | None] = mapped_column(String(80), nullable=True)
     author_bio: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -181,9 +180,6 @@ class ContentStatus(StrEnum):
     REJECTED = "rejected"
 
 
-# M6.9 搜索 P1：可检索文本 → tsvector 生成列的表达式（写入时由 PG 自动维护）。
-# ``simple`` 分词不识别中文（连续中文整段视为一个 lexeme），中文子串检索由
-# ``pg_trgm`` GIN 索引承担（见下方 ix_content_*_trgm），两者互补。
 SEARCH_VECTOR_SQL = (
     "to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(excerpt,'') || "
     "' ' || coalesce(content,'') || ' ' || coalesce(summary,'') || ' ' || "
@@ -218,15 +214,7 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
             "id",
         ),
         Index("ix_content_published", "published_at"),
-        # 唯一索引：应用层 _require_unique_slug 是 check-then-insert，注释里明确写了
-        # 「DB 侧唯一索引兜底」——此前只有非唯一索引，并发建项/发布可落两条同 slug，
-        # 而 get_by_slug 用 get_one，命中多行会直接抛错。slug 可空，PG 允许多个 NULL。
         Index("ix_content_slug", "slug", unique=True),
-        # M6.9 搜索 P1：tsvector 生成列 GIN（英文/数字词）+ pg_trgm GIN（中文子串
-        # ILIKE '%x%'）。trgm opclass 属 pg_trgm 扩展，**显式限定 public**——否则
-        # 索引 DDL 依赖连接的 search_path（测试库 schema-per-test 不含 public 时会
-        # 解析不到 opclass 而建表失败）。扩展由迁移 / init_db / tests/conftest 保证
-        # 装在 public。
         Index("ix_content_search_vector", "search_vector", postgresql_using="gin"),
         Index(
             "ix_content_title_trgm",
@@ -269,7 +257,6 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str | None] = mapped_column(String(8), nullable=True)
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    # M6.9 搜索 P1：物化 tsvector（生成列，插入/更新时 PG 自动维护，应用不写）
     search_vector: Mapped[Any] = mapped_column(
         TSVECTOR,
         Computed(SEARCH_VECTOR_SQL, persisted=True),
@@ -285,17 +272,9 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     comment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     bookmark_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     forward_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # M6.10 计数对账：本行计数最后一次**因对账被修正**的时刻（NULL = 从未偏差）。
-    # 不是「上次扫描时刻」——故连续两次对账第二次不再触碰任何行，收敛可证伪。
     counts_reconciled_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
-    # 乐观锁版本号（蓝图 §6.1）：经 ``AsyncRepository.update_cas`` 的成功更新 +1。
-    # ⚠️ 边界：未经 update_cas 的就地 ORM 写（如 publish_blog_item 的「同 slug 重发」）
-    # 不递增本列——ContentItem 目前无公开更新端点，接入时须一并改走 CAS。
-    # ``server_default="1"`` 必须有——create_all 通道的 ``_sync_additive_schema`` 只兜
-    # 「可空/带默认」的加列，NOT NULL 且无默认的会被跳过，既有部署上就会 UndefinedColumn
-    # （登记 §8 #38）。
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )

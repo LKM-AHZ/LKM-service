@@ -18,7 +18,6 @@ from core.config import settings
 
 # 位图名字：当前唯一用途是 user id 白名单。
 _BITMAP_NAME = "user_ids"
-# 预热写入的分块大小：一个 pipeline 最多压这么多 key（× k 条 SETBIT），避免单次命令体过大。
 _ADD_CHUNK = 1000
 
 

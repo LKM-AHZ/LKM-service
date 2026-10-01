@@ -10,9 +10,6 @@ from app.modules.content.blog.errors import BlogErr
 from core.config import settings
 from core.err import BizError, CommonErr
 
-# repo_name 来自用户输入（BlogSeriesCreate.repo_name 只限长度），拼进路径前必须收敛字符集：
-# 不加限制时 "../../tmp/evil" 会让 init_bare_repo 在仓库根外建目录、delete_repo 直接
-# rmtree 根外目录。首字符限字母数字，避免 ".hidden"/"-flag" 形态。
 _SAFE_REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -50,7 +47,6 @@ def _run(
     """
     path = _repo_path(repo_name)
     if not os.path.isdir(path):
-        # 目录缺失/被删：不是「空仓库」，不能让上层把失败当无提交静默吞掉
         raise GitInfraError(BlogErr.GIT_ERROR, f"Repository missing: {repo_name}")
     cmd = ["git", "--git-dir", path, *list(args)]
     try:

@@ -45,9 +45,6 @@ class VersionConflictError(BizError):
         self.current = current
 
 
-#: 服务层的会话类型别名。service 层禁止 ``import sqlalchemy``（批 3 验收口径），
-#: 故签名里的 ``db: AsyncSession`` 统一改写为从本模块取的 ``DbSession``——同一个类，
-#: 只是把 sqlalchemy 的 import 收在 db 层内。
 DbSession = AsyncSession
 
 
@@ -70,12 +67,9 @@ class AsyncRepository[ModelT]:
     ``repo = ContentItemRepository(db)`` 构造（成本≈0），不引入 FastAPI DI。
     """
 
-    #: 被绑定的 ORM 模型（子类必须声明）。
     model: type[ModelT]
     #: 主键属性名。用属性名而非类型/列对象，兼容 UUID 与自增整数两种主键。
     pk_attr: str = "id"
-    #: CAS 冲突时「当前值」快照额外携带的关键字段名（子类按业务覆盖，如 ``("slug", "title")``）。
-    #: 基类只保证带 ``id`` 与 ``version``——那是契约要求的最小集。
     version_snapshot_fields: tuple[str, ...] = ()
 
     def __init__(self, db: AsyncSession) -> None:
@@ -325,7 +319,6 @@ class AsyncRepository[ModelT]:
         }
         for name in self.version_snapshot_fields:
             value = getattr(row, name, None)
-            # UUID / datetime 不能直接进 JSON 响应体，统一转 str（cache/响应两侧一致）
             if isinstance(value, (uuid.UUID, datetime.datetime)):
                 value = str(value)
             snapshot[name] = value
@@ -419,7 +412,6 @@ class AsyncRepository[ModelT]:
                 )
             )
         else:
-            # 两种组合会拼出非法 SQL 且只在执行期才暴露，故在构造语句前显式校验
             if not update_columns and not update_values:
                 raise ValueError(
                     "pg_upsert 非 do_nothing 时必须给出 update_columns 或 update_values"

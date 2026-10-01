@@ -58,10 +58,6 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    # configparser 把 % 当插值起始符（ini 里的 %(here)s 就靠它）。settings 的连接串用
-    # quote_plus 编码密码，密码含特殊字符时会出现裸 %XX，set_main_option 当场抛
-    # ValueError(invalid interpolation syntax) 使迁移无法启动；按 configparser 规则
-    # 把 % 转义成 %%，get_section 读回时还原为原值。
     config.set_main_option("sqlalchemy.url", _sync_url(_auth_url()).replace("%", "%%"))
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),

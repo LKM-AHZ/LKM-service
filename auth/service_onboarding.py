@@ -12,9 +12,6 @@ from auth.repository import OnboardingProgressRepository
 from auth.schemas import OnboardingState
 from core.db.repository import DbSession
 
-#: 向导最后一步（跳过时要把 step 置到这里）。事实源应与 router_onboarding.ONBOARDING_STEPS
-#: 一致——服务层不能 import router（router 已 import 本模块，会成环），故常量先落在本模块，
-#: 待 router 侧改为 `from auth.service_onboarding import ONBOARDING_LAST_STEP` 后即单一来源。
 ONBOARDING_LAST_STEP = 4
 
 

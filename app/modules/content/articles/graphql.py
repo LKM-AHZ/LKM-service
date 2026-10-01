@@ -19,10 +19,6 @@ from app.modules.content.articles.service import (
 )
 from core.err import BizError
 
-# GraphQL 分页边界：page/pageSize 是客户端可传的裸值，不夹紧会让 pageSize=0/负数直接落到
-# SQL（负 offset/limit 报错、除零）或让超大 pageSize 整表拉取并污染 service 缓存键。
-# 口径与 content/columns/graphql 的 _bounded_page_size 相同；业务模块间禁止相互 import
-# （import-linter），故就地镜像一份。
 _GRAPHQL_PAGE_SIZE = 20
 _GRAPHQL_PAGE_MAX = 100
 

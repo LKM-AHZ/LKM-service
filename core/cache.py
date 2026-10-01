@@ -30,9 +30,7 @@ logger = logging.getLogger("lkm.cache")
 TTL_ITEM_S = 300
 TTL_LIST_S = 60
 
-# TTL 随机扰动幅度。同批写入的 key 若 TTL 完全相同，会在同一刻集体过期，缓存层瞬间全量回源打 DB/AUTH。
-# 写入时按此比例摊开过期时刻，每个 key 只算一次。
-# 只适用于**缓存对象**的 TTL。
+# 缓存对象写入时按此比例扰动 TTL。
 _TTL_JITTER_RATIO = 0.3
 # 显式失效后短期保留代次，拦下失效前已开始的 loader；超过该时长的加载结果不回填。
 _INVALIDATION_GUARD_TTL_S = 60
@@ -186,7 +184,6 @@ async def collection_version(name: str) -> str:
     读集合版本号（用于列表键前缀，写后 bump 使旧列表立即失效）。
     未启用 Redis → 返回固定 "v0"，此时缓存键退化但 fail-open 直接落库也成立。
     """
-    # 版本号按 ver 前缀路由；读写必须使用同一个键和后端。
     client = await redis_client.get_redis(make_key("ver", name))
     if client is None:
         return "v0"
@@ -210,8 +207,7 @@ async def bump_collection_version(name: str) -> None:
         logger.debug("bump version skip name=%s", name)
 
 
-# 空值缓存标记：loader 返回 None（业务上不存在）时写入该标记 + 短 TTL，读取端据此
-# 在窗口内直接返回 None 而不反复调 loader，防御无效 slug/id 的缓存穿透。
+# loader 返回 None 时短暂缓存空值。
 _NULL_MARKER = "\x00__CACHE_NULL__"
 
 
@@ -240,9 +236,6 @@ async def cached_read[T](
         return cached
 
     async def _load_and_fill() -> T:
-        # 进程内已由 singleflight 收敛；这里再叠**跨进程** L2 锁，使多副本部署下也只有持锁实例回填 DB 结果。
-        # 等锁超时/Redis 锁命令失败时照常加载，但不回填，避免覆盖持锁者结果。
-        # 主动关闭跨进程锁时仍须回填，否则每次请求都会穿透到 loader。
         async with l2_lock(key) as held:
             # 等锁期间可能已有实例回填（或在无锁模式下并发回填）：先重读
             cached2 = await cache_get(key)

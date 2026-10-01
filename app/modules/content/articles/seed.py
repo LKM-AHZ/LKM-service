@@ -11,7 +11,6 @@ from app.modules.content.articles.models import Article, ArticleCategory
 from core.db.base import now_iso
 from core.db.session import new_worker_session as new_session
 
-# 文章分类种子：slug 幂等；engineering 是 blog produce 默认分类，必须存在
 _CATEGORIES: list[dict[str, int | str]] = [
     {"slug": "announcement", "title": "官方公告", "sort": 0},
     {"slug": "news", "title": "新闻", "sort": 1},
@@ -134,7 +133,6 @@ async def seed_articles(db: AsyncSession) -> int:
         if existing is not None:
             continue
         category_slug = data["category"]
-        # 不能用 assert：python -O 会把它整条剥离，校验静默消失
         if not isinstance(category_slug, str):
             raise TypeError(f"article category must be a slug string: {category_slug!r}")
         fields = {k: v for k, v in data.items() if k != "category"}
@@ -161,7 +159,6 @@ async def main() -> None:
         count = await seed_articles(db)
         print(f"seeded {count} articles")
     except Exception:
-        # 显式回滚：失败时让事务状态确定，也让运维看到明确的失败原因（而不是只有关闭时的隐式回滚）
         await db.rollback()
         raise
     finally:

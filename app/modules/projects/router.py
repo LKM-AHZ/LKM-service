@@ -85,8 +85,6 @@ async def review_app(
     _cur: Annotated[CurrentUser, require_admin_2fa],
     db: AsyncSession = Depends(get_session),
 ) -> ProjectApplicationOut:
-    # require_admin_2fa 已保证 admin 会话 + 2FA 信任；此处再叠加 projects_application_review
-    # 权限点（super_admin 有，org_member 无）。校验失败按 FORBIDDEN 返回。
     role = composible_role(_cur.account_level, _cur.role)
     if not await role_has_permission(db, role, Permission.projects_application_review):
         raise BizError(CommonErr.FORBIDDEN)

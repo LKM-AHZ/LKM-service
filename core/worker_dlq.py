@@ -37,8 +37,6 @@ def _make_model(
 ) -> DlqMessage:
     """把一条死信消息映射为 DlqMessage。"""
     if not routing_key:
-        # 不拿 topic 顶替：DLQ topic 不是合法 routing_key，重投只会以「未知 routing_key」
-        # 失败，且列表里看不出这条根本不可重投。缺失即落显式哨兵 + 告警。
         logger.warning("死信缺少 routing_key property topic=%s（标记为不可重投）", topic)
     return DlqMessage(
         routing_key=routing_key or "unknown",
@@ -47,7 +45,7 @@ def _make_model(
         attempts=attempts,
         reason=reason[:255],
         status=status,
-        # DlqMessage 的约定是 UTCDateTime + now_iso()（见其 docstring「勿用 datetime.now(UTC)」）
+        # 使用模型约定的 UTC 时间格式。
         created_at=now_iso(),
         source_message_id=source_message_id,
     )
@@ -82,14 +80,12 @@ async def requeue(
     payload: dict[str, Any] | None = None,
 ) -> bool:
     """把 pending 死信与 outbox 行同事务落库，供 relay 可靠重投。"""
-    # 行锁让两个并发人工请求串行检查 pending 状态；后到者看到 requeued 后不再入队。
+    # 行锁串行处理并发重投请求。
     m = await db.scalar(
         select(DlqMessage).where(DlqMessage.id == dlq_id).with_for_update()
     )
     if m is None or m.status != "pending":
         return False
-    # 缺 payload / payload 非对象：不能退化成「重投一个空事件」（消费端会拒收或空跑），
-    # 如实拒绝并留日志，让这条坏行可见
     parsed = (m.payload_json or {}).get("payload") if payload is None else payload
     if not isinstance(parsed, dict):
         logger.error("死信 payload 缺失/非法 id=%s，拒绝重投", dlq_id)
@@ -138,9 +134,8 @@ async def _on_dlq(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
 
 async def consume_dlq() -> None:
     """DLQ 消费者主循环（进程入口在 ``boot.workers.dlq``，那里先装配再调用本函数）。"""
-    # 非 ASGI 进程：初始化 provider 才能导出消费 span（默认关时 no-op）
+    # 初始化死信 worker 的追踪。
     setup_tracing(service_suffix="-dlq")
-    # 跨进程指标中继：人工重投走的 messaging.publish 会写 notify_failed_total，
-    # 而本进程不暴露 /metrics——快照交给 API 进程代报。
+    # 指标快照交给 API 进程上报。
     metrics_relay.start_publisher()
     await messaging.run_subscription(messaging.SUB_DLQ.name, _on_dlq)

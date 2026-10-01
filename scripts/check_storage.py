@@ -68,7 +68,6 @@ def delete_objects(client: Any, bucket: str, keys: list[str]) -> int:
     deleted = 0
     for i in range(0, len(keys), 1000):
         batch = keys[i : i + 1000]
-        # 不能加 Quiet
         resp = client.delete_objects(
             Bucket=bucket,
             Delete={"Objects": [{"Key": k} for k in batch]},
@@ -143,7 +142,6 @@ async def main() -> int:
             try:
                 removed = delete_objects(client, bucket, orphan)
             except Exception as exc:
-                # 删除是破坏性且分批进行的：失败时可能已删掉若干批，必须显式告知，并用非 0 退出码区分。
                 print(
                     f"✗ 删除孤儿对象失败（可能已有部分被删）：{exc}", file=sys.stderr
                 )

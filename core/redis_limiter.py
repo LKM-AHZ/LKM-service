@@ -34,9 +34,6 @@ redis.call('EXPIRE', KEYS[1], math.ceil(window))
 return 1
 """
 
-# 每个后端（client 实例）各自缓存自己的脚本 SHA。**不能共用一个全局值**——双后端并行时
-# 两个后端的脚本缓存互相独立，把 A 的 SHA 拿去 B 做 EVALSHA 必然 NOSCRIPT。弱引用字典
-# 随 client 回收自动清理。
 _script_shas: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 

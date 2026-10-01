@@ -117,7 +117,6 @@ async def issue_session_tokens(
     mfa_verified=True 时把 step-up 2FA 标记（含信任时刻 mfa_at，默认 now）编入 access token，
     并同步写入刷新记录，供 1 小时信任窗口与刷新轮换继承使用。
     """
-    # async 下不能对未加载的 relationship 做 lazy load，统一确保 profile 已初始化
     if "profile" not in user.__dict__:
         await db.refresh(user, attribute_names=["profile"])
     profile = user.profile
@@ -224,9 +223,6 @@ async def create_user_with_profile(db: DbSession, **fields: Any) -> User:
         handle_duplicate_user_error(exc)
     db.add(Profile(user_id=user.id, role="member"))
     await ProfileRepository(db).flush()
-    # 建号即入白名单位图（§5.6）：新 id 必须当场可见，否则紧随其后的快照读（如 follow 该新用户）
-    # 会被布隆误判为「从未存在」。放在 flush 之后（id 已生成）、commit 之前——若事务回滚，多一个
-    # 「可能在场」的位只是漏拦，不会误拒任何人。fail-open，写失败不影响建号。
     await bloom.add(str(user.id))
     return user
 
@@ -299,8 +295,6 @@ async def register_by_verify(db: DbSession, field: str, value: str) -> dict[str,
     normalized_value = channel.normalize(value)
     existing = await channel.find_user(db, normalized_value)
     if existing:
-        # 自动登录前过锁定门禁：is_locked 同时是封禁标志，否则被封账号可用邮箱/手机码
-        # 绕过封禁拿 token（本路径由验证码证明联系方式归属，无需再计密码失败次数）。
         await _check_account_locked(existing)
         await upgrade_to_normal(db, existing)
         await UserRepository(db).flush()
@@ -360,7 +354,6 @@ async def consume_pending_normal_registration(
     if pending.expires_at <= now_iso():
         raise BizError(AuthErr.TOKEN_EXPIRED, "Registration expired")
 
-    # 验证所有提交的联系方式 —— 每个提供的联系方式都必须经过验证。
     sp = await db.begin_nested()
     try:
         if pending.email:
@@ -467,9 +460,6 @@ async def login_password(
         await dummy_verify()
         raise BizError(AuthErr.INVALID_CREDENTIALS)
 
-    # M3.A残项(成功登录解锁)：记录**入库持久态**的 is_locked（在 auto-unlock 之前），供下方
-    # 成功登录把它 True→False 翻转时发出失效事件——解除 post-user.banned 的 user:snap banned 陈旧。
-    # 不可在 auto-unlock(_check_account_locked 会把过期锁的 ORM 值改 False)之后才采样，会漏翻转。
     was_locked_at_login = bool(user.is_locked)
 
     await _check_account_locked(user)
@@ -486,26 +476,13 @@ async def login_password(
         locked = await _record_failed_attempt(db, user)
         if locked:
             await log_audit(db, user.id, "account_locked", "5 failed login attempts")
-            # 锁定经 isolated_update 的 savepoint 已提交且本请求将回滚：事件必须独立于本事务
-            # 落库，否则与已提交的 is_locked=True 错位（漏失效会让 user:snap.banned 陈旧）。
             await events.notify_user_banned(user.id)
-        # §5.2 audit.login_fail：**不写 audit_logs 行**——失败登录是 DoS 敏感路径，每次失败插
-        # 一行是无界写入放大（现有代码也只在第 5 次失败时记 account_locked）。事件由
-        # auth.events 自建会话提交，因为本请求马上抛错回滚。
         await events.notify_audit_login_fail(user.id, "password_mismatch", ip_address)
         raise BizError(AuthErr.INVALID_CREDENTIALS)
 
-    # 成功 —— 通过子事务（savepoint）原子性地重置计数器，
-    # 防止调用方回滚时把失败计数器也一并回滚。
     await isolated_update(db, UserRepository(db).reset_login_failures_stmt(user.id))
     await db.refresh(user)
 
-    # M3.A残项(成功登录解锁)：若本次成功登录真把 is_locked 从 True 翻到 False（先前自动锁后、
-    # 过期锁在此刻被清除），发 user.updated 失效，令下次读 user:snap.banned=False，杜绝陈旧。
-    # 只在翻转发生时发（was_locked_at_login=True），普通成功登录 is_locked 恒 False → 零噪声不入队；
-    # 事件由 auth.events 自建业务库会话独立提交（拆库后 outbox 属业务库，见该模块 docstring），
-    # 不依赖本请求事务是否 commit。若此处无从翻转(本就 False)则不发——避免无谓回填。
-    # 镜像 A7「无东西需失效就不发」约束。
     if was_locked_at_login:
         await events.notify_user_updated(user.id)
 
@@ -556,8 +533,6 @@ async def request_magic_link(
     对于不存在的用户，响应和时序无法区分
     —— 不会创建或发送链接，但仍会消耗速率限制配额。
     """
-    # 桶必须含 purpose（docstring 承诺「每（邮箱, 用途）对 5 次/小时」）：只按 email 分桶时
-    # 某个用途耗尽配额会连带封掉同邮箱的其它用途；同时用规范化后的邮箱保证桶稳定
     rate_limit_key = f"magiclink:{_normalize_email(email)}:{purpose}"
     await check_code_rate_limit(rate_limit_key, max_count=5, window=3600)
 
@@ -602,8 +577,6 @@ async def verify_magic_link(
 
     now = now_iso()
 
-    # 原子消费：仅在尚未使用、未过期且用途匹配时才标记为已使用。
-    # 这可防止并发重放攻击。
     if not await consume_once(
         db,
         MagicLink,
@@ -636,7 +609,6 @@ async def verify_magic_link(
     if user.account_level == "local":
         raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
 
-    # 没有 TOTP 的管理员必须设置它
     if user.account_level == "admin":
         totp = await TOTPRepository(db).get_by_user(user.id)
         if not totp or not totp.enabled:
@@ -688,10 +660,6 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
         stored.user_id, AuthErr.USER_NOT_FOUND
     )
 
-    # 登录不再强制 admin MFA（对齐 GitHub 缓动）：刷新会话保持原有保证级别即可，
-    # 危险操作的安全由 admin 后台 step-up（require_admin_2fa）在请求时校验。
-    # 前台同样继承本会话的 step-up 2FA 信任原点（stored.mfa_at），
-    # 避免 15min access token 轮换把危险操作的 1 小时信任窗口重置。
     access_token, raw_new = await issue_session_tokens(
         db, user, mfa_verified=stored.mfa_verified, mfa_at=stored.mfa_at
     )

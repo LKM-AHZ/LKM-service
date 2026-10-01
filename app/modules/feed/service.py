@@ -112,8 +112,6 @@ async def _compute_scores(
         # 审校：hide 已在上游剔除；这里只取 derank 扣分（结果由 _filter_hidden 一次算好）
         mod = mods.get((it.item_type, it.id))
         penalty = max(0.0, mod.penalty) if mod is not None else 0.0
-        # 时间基分(recency*1000)保证 0 热度内容也有>0基分，使 derank 扣分可分辨；
-        # 关注权重(follow_bonus)加在前面、不被审校削减。
         base = it.sort_score * 500 + recency * 1000
         it.sort_score = base * (1.0 - penalty) + follow_bonus
     return items
@@ -188,8 +186,6 @@ async def _materialized_timeline(
         rules = await load_active_rules(db)
         kept, mods = _filter_hidden(items, rules)
         if not kept:
-            # 本页候选全被审校隐藏：不能缓存空页（客户端会在 TTL_LIST_S 内一直看到空流），
-            # 返回 {} 让 get_timeline 回退实时合流去够更老的候选
             return {}
         await _compute_scores(kept, following_ids, mods)
         kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
@@ -290,8 +286,6 @@ async def _realtime_timeline(
             a_ids = following_ids
         else:
             a_ids, b_ids = None, None
-        # 多取一条：与物化路径同口径，用「是否多出可见项」判断还有没有下一页
-        # （否则恰好凑满 limit 时会误判为到底，客户端提前结束）
         return await fetch(db, a_ids, b_ids, before_time, before_id, limit + 1)
 
     fetched: list[list[FeedItem]] = await asyncio.gather(

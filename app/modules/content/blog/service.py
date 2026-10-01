@@ -169,7 +169,6 @@ async def create_series(
     if existing:
         raise BizError(CommonErr.INVALID_INPUT, "Repository name already taken")
 
-    # git 子进程同步调用放在线程池执行，避免阻塞事件循环
     await asyncio.to_thread(git_svc.init_bare_repo, info.repo_name)
 
     series = BlogSeries(
@@ -327,8 +326,6 @@ async def create_comment(
     )
 
     if info.parent_id is not None:
-        # 必须显式过滤软删：get_or_raise 不带 deleted_at 过滤，
-        # 允许挂到已删父评论下，而 list_comments 又过滤掉该父行 → 回复会以「根评论」露面
         parent = await get_or_raise(
             db,
             BlogComment,
@@ -347,7 +344,6 @@ async def create_comment(
     )
     repo = BlogCommentRepository(db)
     await repo.add(comment)
-    # 重新用 selectinload 预载 replies，避免序列化时懒加载触发 MissingGreenlet
     loaded_comment = await repo.get_with_replies(comment.id)
     if loaded_comment is None:
         loaded_comment = comment
@@ -398,8 +394,6 @@ async def delete_comment(
     if not as_admin and comment.user_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
     author_id = comment.user_id
-    # 批 4：改软删（行保留以便恢复）；连带整棵回复树，等价硬删时代的 ORM delete-orphan 级联，
-    # 评论列表/回复树经 Repository 基类自动过滤已软删行。
     await BlogCommentRepository(db).soft_delete_subtree(comment.id)
     return author_id
 
@@ -452,7 +446,6 @@ async def write_series_file(
         )
         await repo.add(row)
     else:
-        # 内容是否变化：仅当 sha3 变化才递增 version，避免无意义的重写
         if row.sha3 != new_sha:
             row.content = content
             row.sha3 = new_sha
@@ -499,8 +492,6 @@ async def publish_series_file(
     first_line = content.split("\n", 1)[0].replace("# ", "").strip()
     title = str(override.get("title") or fm.get("title") or first_line or slug)
     category_slug = str(override.get("category") or fm.get("category") or "blog")
-    # frontmatter/override 是未类型化输入：tags 可能是逗号串（逐个字符拆成标签）、
-    # 数字（不可迭代 → TypeError）、description 可能是 int/date/list 而形参声明 str|None
     raw_tags: Any = override.get("tags") or fm.get("tags") or []
     if isinstance(raw_tags, str):
         normalized_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]

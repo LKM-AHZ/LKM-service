@@ -19,10 +19,8 @@ class Permission(StrEnum):
     content_create = "content.create"
     content_comment_create = "content.comment_create"
     content_like = "content.like"
-    # interaction 域（M6.6）
     interaction_favorite = "interaction.favorite"
     interaction_history = "interaction.history"
-    # notification 域（M6.8）
     notification_read = "notification.read"
     notification_manage = "notification.manage"
     # boards 域
@@ -134,10 +132,6 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.notification_read),
         Grant(Permission.notification_manage),
     ),
-    # grant_incubation（auth/service_authz.py）会把通过的项目申请人升为
-    # account_level=admin + profile.role=incubated_member，这是 seed 后可达的复合角色。
-    # 该角色语义仍是「普通成员」，故按 normal:member 授予成员域权限（缺失会让升格用户
-    # 直接掉到零权限）；未授予任何 admin 域权限。
     "admin:incubated_member": (
         Grant(Permission.comment_create),
         Grant(Permission.avatar_update),

@@ -38,8 +38,6 @@ def _bigv_key() -> str:
     return make_key("feed", "bigv")
 
 
-# 大 V 集合的缓存 TTL（秒）：判据来自 DB（读时现算），缓存只为省掉每次时间线读的聚合查询。
-# 缓存丢失只是多算一次，属「丢了无碍」——这正是关掉 Redis 持久化后仍正确的原因。
 _BIGV_CACHE_TTL_S = 60
 
 
@@ -119,12 +117,8 @@ async def _fanout_item(db: AsyncSession, item: FeedItem) -> int:
         db, item.author_id, item.board_id
     )
     if len(author_followers) > cap:
-        # 大 V：不写扩散，改由读路径实时补齐（避免 O(关注者) 写入突刺）。读路径的
-        # bigv_authors() 现在**按 DB 现算**，与这里的判据同源（count > cap），故无需任何标记、
-        # 也不再有「标记失败就得回退写扩散以免丢内容」的老顾虑——跳过必然能被读路径补上。
         author_followers = set()
     if len(board_followers) > cap:
-        # 版块维超限：读路径暂无版块级补拉通道，只能跳过（已知缺口，登记于路线图 §8）
         logger.warning(
             "skip board fanout for %s#%s: %d board followers exceed cap",
             item.item_type,
@@ -222,7 +216,6 @@ async def backfill_author(
     values: list[dict[str, object]] = []
     for name in feed_src.FOLLOW_SOURCES:
         fetch = feed_src.SOURCES[name]
-        # discussion 源要求 author/board 两个集合都给才按作者过滤，故传空版块集
         items: list[FeedItem] = await fetch(db, {author_id}, set(), None, None, limit)
         values.extend(
             {

@@ -141,7 +141,6 @@ class InteractionFavoriteRepository(AsyncRepository[InteractionFavorite]):
             )
             .join(ContentItem, ContentItem.id == InteractionFavorite.content_id)
             .where(InteractionFavorite.user_id == user_id)
-            # 内容软删（批 4）后不再出现在「我的收藏」里
             .where(ContentItem.deleted_at.is_(None))
             .order_by(
                 InteractionFavorite.created_at.desc(),
@@ -200,7 +199,6 @@ class InteractionViewLogRepository(AsyncRepository[InteractionViewLog]):
             )
             .join(ContentItem, ContentItem.id == InteractionViewLog.content_id)
             .where(InteractionViewLog.user_id == user_id)
-            # 内容软删（批 4）后不再出现在「我的浏览历史」里
             .where(ContentItem.deleted_at.is_(None))
             .order_by(InteractionViewLog.viewed_at.desc(), InteractionViewLog.id.desc())
             .offset(offset)

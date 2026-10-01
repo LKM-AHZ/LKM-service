@@ -90,7 +90,6 @@ def _visible_post(p: ColumnPostInfo) -> bool:
     return _s(p.status) in _VISIBLE_POST
 
 
-# GraphQL 分页上限：前端不传 pageSize 时不可给 service 传 None（否则全表拉取）
 _GRAPHQL_PAGE_SIZE = 20
 _GRAPHQL_PAGE_MAX = 100
 

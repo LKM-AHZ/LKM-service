@@ -74,7 +74,6 @@ def l1_set(key: str, value: Any, ttl: float) -> None:
     写入并设置 TTL；超容量按 LRU 逐出最旧条目。ttl<=0 视为不缓存。
     """
     if ttl <= 0 or value is None:
-        # ttl<=0 表示「本次不要缓存这条」：必须把旧条目一并清掉
         l1_delete(key)
         return
     _data[key] = (_now() + ttl, value)

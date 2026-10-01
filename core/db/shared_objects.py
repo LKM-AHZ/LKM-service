@@ -69,11 +69,6 @@ async def ensure_shared_objects(conn: Any) -> None:
     """
     import sqlalchemy as sa
 
-    # pg_trgm 必须落在 public：索引 DDL 写死了 ``public.gin_trgm_ops``。直接
-    # ``CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public`` 在「扩展已存在于别的
-    # schema」时会静默什么都不做（SCHEMA 子句被忽略），直到建索引才以
-    # 「operator class public.gin_trgm_ops does not exist」这种不知所云的错炸开，
-    # 故先查实际 schema，必要时显式迁到 public。
     ext_schema = await conn.scalar(
         sa.text(
             "SELECT n.nspname FROM pg_extension e"

@@ -57,7 +57,6 @@ from core.err import BizError, CommonErr, resp_json
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
 
 
-# -- 请求 schema（就地私有，避免依赖业务 admin schemas） -----------------------
 
 
 class _AdminLoginReq(BaseModel):
@@ -196,10 +195,6 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid") from None
     if payload.get("type") != "admin":
         raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
-    # jti 撤销判定：admin 登出按 jti 记撤销，即时失效该 cookie（不 bump token_version——那会
-    # 把该 admin 的其他设备一并踢掉）。Redis 预检命中即短路；**未命中/不可用再回查 DB 撤销表**
-    # ——关掉 Redis 持久化后 jti 黑名单不再跨重启存活，DB 才是权威（见 _revoke_jti_persistently）。
-    # 错误码与其余 admin 会话失效路径一致。
     jti = payload.get("jti")
     if await is_jti_blocked(jti) or await _jti_revoked_in_db(db, jti):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
@@ -258,10 +253,7 @@ async def admin_login(
     result = await db.execute(select(User).where(User.username == body.username))
     user = result.scalars().first()
 
-    # 统一 403：不区分"用户不存在"密码错，避免枚举账号
     if not user:
-        # 计时等化：用户不存在时也跑一次虚拟校验，否则响应耗时可用来枚举账号
-        #（与 auth/service_auth.py 的登录路径同款硬化）
         await dummy_verify()
         return resp_json(CommonErr.FORBIDDEN, detail="用户名或密码错误")
     if not await verifypwd(body.password, user.hashed_password):
@@ -273,7 +265,6 @@ async def admin_login(
     if user.is_locked and user.locked_until and user.locked_until > now_iso():
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
-    # 会话体在 commit 前快照（避免 commit 后 expire 引发的异步重载）
     access_token = create_admin_access_token(
         user
     )  # 读 id/account_level/token_version（已加载）

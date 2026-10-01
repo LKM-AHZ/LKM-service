@@ -20,7 +20,6 @@ _TASK_HANDLERS: dict[str, dict[str, Callable[..., Any]]] = {}
 # CRON_JOBS: list[dict]，含 id/trigger(cron 名)/routing_key/fn
 _CRON_JOBS: list[dict[str, Any]] = []
 
-# 全量导入是否已执行（显式标志，**不能用「注册表非空」代替**）：
 _tasks_imported = False
 
 
@@ -68,8 +67,6 @@ def cron_jobs() -> list[dict[str, Any]]:
     return [dict(job) for job in _CRON_JOBS]
 
 
-# 待导入的 tasks 模块路径（字符串，由各包 bootstrap 登记）。用字符串而非模块对象，
-# 既避免 core 在导入期就拉起业务整树，也让 core 无需知道任何业务模块名。
 _TASK_MODULES: list[str] = []
 
 

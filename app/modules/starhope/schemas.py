@@ -67,8 +67,6 @@ class StarHopeQuestionOut(_Out):
             return cast(list[str], parsed)
         if isinstance(parsed, str):
             return cast(str, parsed)
-        # 标量答案本身是纯文本（如 "2"），但与 JSON 数字同形，json.loads 解析成了 int/float；
-        # 此时应保留原始字符串，避免 Answer 被错误置空。
         if isinstance(v, str):
             return v
         return ""

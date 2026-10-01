@@ -31,7 +31,6 @@ class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    # 会话用途："web"（前台 Bearer）/"admin"（后台 cookie）。用于隔离，避免跨会话互用。
     kind: Mapped[str] = mapped_column(String(8), nullable=False, default="web")
     mfa_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # step-up 2FA 信任原点（epoch）：随刷新轮换继承，保留 1 小时信任窗口不被 15min access 轮换重置

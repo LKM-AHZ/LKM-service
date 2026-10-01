@@ -90,10 +90,6 @@ def _to_snap(user: User) -> UserSnapshot:
         role=p.role if p else None,
         account_level=user.account_level,
         banned=bool(user.is_locked),
-        # M3 残项 raw nickname：profiles.nickname 原样（空白即 None），**永不作
-        # username 回退、永不合成**——仅供需要"nickname 是否真的被设置"的消费方
-        # （如 blog/articles 组装 ProfileInfo 保 blank-when-unset）从缝读取，替代
-        # 其自身的直接 Profile 行读。``display_name`` 语义不变（仍 nickname-or-username）。
         nickname=p.nickname if p else None,
     )
 
@@ -110,8 +106,6 @@ _SNAP_FIELDS = (
 )
 
 
-# 批量读单次上限（M6.5）：业务侧分块大小与 AUTH 内部 by-ids 端点的入参上限**同一常量**
-# （router_read 引用此处，防两侧漂移）——既限单次 HTTP 体量，也限服务端一次 in_(...) 的规模。
 BATCH_IDS_MAX = 200
 
 
@@ -157,13 +151,8 @@ async def get_user_snapshot(
     """
     negative, cached = await user_cache.read_snap_state(user_id)
     if negative:
-        # 负值缓存命中：上游权威已确认该用户不存在，且仍在短 TTL 窗口内 → 直接判不存在，
-        # **不再回退上游**（这正是 §5.6 防穿透的收益）。窗口过后自然回落拉一次，
-        # 故期间新建的同 id 用户不会被长期误判。
         return None
     if cached is not None:
-        # 缓存项存在但无法重建（如冻结字段新增后旧条目缺键）≠ 用户不存在：必须回落
-        # 取回填源，否则脏缓存会让所有老用户被判为「查无此人」直到 TTL 过期。
         snap = _from_cache_dict(cached)
         if snap is not None:
             return snap
@@ -188,7 +177,6 @@ async def _load_user_snapshot(
     if negative:
         return None  # 负值命中：同 get_user_snapshot，不再回退上游
     if cached is not None:
-        # 同 get_user_snapshot：脏缓存不可重建 → 继续走本 loader 回落取源。
         snap = _from_cache_dict(cached)
         if snap is not None:
             return snap
@@ -197,8 +185,6 @@ async def _load_user_snapshot(
     fields, version = await _retrieve_fields(user_id, db)
 
     if fields is None:
-        # 权威不存在：写负值缓存（短 TTL），避免同一不存在 id 反复穿透上游（§5.6 防穿透）。
-        # 随后照常返回 None；窗口过后会再拉一次，故窗口内的新建用户不会被长期判为不存在。
         await user_cache.write_negative(user_id, expected_epoch)
         return None
 
@@ -339,9 +325,6 @@ async def _load_batch_uncached(
         logger.warning("auth_http batch read failed n=%s; skip rows", len(pending))
         return out
     for uid, (fields, source_version) in fetched.items():
-        # 权威不存在 → 不缓存缺行、不入结果（缺行 ≠ 故障）；非本批 id → 同样跳过：
-        # fetch_users_http_batch 只保证覆盖请求 id，不保证不多回，硬取 epochs[uid] 会 KeyError
-        # 并让整块被上层 except 吞掉（降级为全块空白，且看不出真实原因）。
         if fields is None or uid not in epochs:
             continue
         # 与单读同纪律：先验可重建，畸形体既不回写缓存也不透出。
@@ -370,9 +353,6 @@ async def _retrieve_fields_batch(
       纪律=缺行跳过 ≠ 故障。）
     - seam 关闭（默认）：就地 **SQL 单查询批量**读本进程 db（既有 A6 原路径、非 N+1）。
     """
-    # 白名单布隆拦截（§5.6）：本函数**不经** ``read_snaps_state``（自带一次缓存读 + 分块 HTTP），
-    # 故在此统一过滤——两条分支（seam 开/关）都覆盖。确定不存在的 id 直接按「缺行」跳过，
-    # 不再进 SQL/HTTP（缺行跳过本就是本函数的语义，故行为一致）。
     absent = await bloom.definitely_absent_many([str(uid) for uid in set(user_ids)])
     if absent:
         user_ids = [uid for uid in user_ids if str(uid) not in absent]
@@ -567,10 +547,6 @@ async def user_count_by_day(
     """
     end = start + datetime.timedelta(days=days)
     day_expr = func.date(func.timezone("UTC", User.created_at))
-    # 窗口边界须用 **UTC aware datetime** 而非 ``date``：asyncpg 绑定 date 时 PG 会按
-    # 会话时区（东八区部署实测 +08）把它转 timestamptz，使 [start, end) 整体偏移 8 小时
-    # ——右界被提前到 UTC 前一日 16:00，落在该 8 小时内新建的用户被漏计（本地凌晨跑测试
-    # 必现 user_delta=0）。用 aware datetime 比较既精确，又保留 created_at 列索引可用。
     start_dt = datetime.datetime.combine(start, datetime.time.min, tzinfo=datetime.UTC)
     end_dt = datetime.datetime.combine(end, datetime.time.min, tzinfo=datetime.UTC)
     stmt = (

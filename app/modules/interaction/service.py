@@ -112,9 +112,6 @@ async def add_favorite(
             content_id=content_id, favorited=True, bookmark_count=count
         )
 
-    # 并发下同一 (content_id, user_id) 撞复合主键由 ON CONFLICT DO NOTHING 吸收
-    # （不产生异常，无需 savepoint）：未真正插入即视为「已收藏」幂等返回——此时计数
-    # 未增，故直接返回原值而非再 bump。
     inserted = await InteractionFavoriteRepository(db).add_if_absent(
         user_id=user_id, content_id=content_id
     )
@@ -248,7 +245,6 @@ async def follow_user(
 
     created = await UserFollowRepository(db).follow(follower_id, following_id)
     if created and settings.feed_backfill_limit > 0:
-        # M6.11：新关注即回填该作者最近内容，令物化 feed 当场可用（否则要等新内容 fanout）
         await fanout.backfill_author(
             db, follower_id, following_id, settings.feed_backfill_limit
         )
@@ -263,8 +259,6 @@ async def unfollow_user(
         raise BizError(FollowErr.CANNOT_FOLLOW_SELF, "不能操作自己的关注")
     changed = await UserFollowRepository(db).unfollow(follower_id, following_id)
     if changed:
-        # M6.11：取关即清掉该作者的物化条目（否则已取关内容仍留在 feed 里）；
-        # 仍在关注的版块所覆盖的行保留（与 unfollow_board 的 keep 语义对称）。
         keep = set(await get_followed_board_ids(db, follower_id))
         await fanout.remove_author_items(db, follower_id, following_id, keep)
         await _invalidate_follow_cache(follower_id)
@@ -280,7 +274,6 @@ async def follow_board(
 
     created = await BoardFollowRepository(db).follow(follower_id, board_id)
     if created and settings.feed_backfill_limit > 0:
-        # M6.11：新关注版块即回填该版块最近讨论帖
         await fanout.backfill_board(
             db, follower_id, board_id, settings.feed_backfill_limit
         )
@@ -293,7 +286,6 @@ async def unfollow_board(
     """follower 取消关注版块（幂等）。"""
     changed = await BoardFollowRepository(db).unfollow(follower_id, board_id)
     if changed:
-        # M6.11：取关版块即清理其物化条目（保留仍因作者关注而可见的行）
         keep = set(await get_following_ids(db, follower_id))
         await fanout.remove_board_items(db, follower_id, board_id, keep)
         await _invalidate_follow_cache(follower_id)

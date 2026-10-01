@@ -68,11 +68,7 @@ class PointsLedger(UUIDPrimaryKeyMixin, Base):
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(String(50), nullable=False)
     ref_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # 幂等引用键：如 ``<question_uuid>:<answer_uuid>``（73 字符）——uuid 化后两个 36 字符
-    # uuid 加分隔已超原 String(64)，故加宽
     ref_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    # primary_key=True 是与 mixin 的 id 组成复合主键 (created_at, id)：hypertable 的分区列
-    # 必须出现在主键里（见类 docstring）。写入仍由 Python 侧 default 提供值。
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso, primary_key=True
     )

@@ -53,9 +53,6 @@ async def backfill_series_from_git(
     await get_or_raise(
         db, BlogSeries, BlogErr.SERIES_NOT_FOUND, BlogSeries.id == series_id
     )
-    # git_svc.* 是同步 subprocess 调用（单条最长 30s），必须 to_thread 放到线程池，
-    # 避免在事件循环里同步阻塞。注意：revparse → diff → read_file 存在先后依赖，
-    # 这里刻意串行；真正可并行的是下面循环内各 path 的 read_file（如需再优化可 gather）。
     new_sha = await asyncio.to_thread(git_svc.revparse_or_none, repo_name)
     if not new_sha:
         return BackfillResult()
@@ -87,10 +84,6 @@ async def backfill_series_from_git(
         try:
             content = await asyncio.to_thread(git_svc.read_file, repo_name, path)
         except BizError:
-            # diff-tree 不带 --diff-filter，删除/重命名产生旧路径也会出现在 changed 里，
-            # 而 read_file 走 `git show HEAD:<path>`（HEAD 树中已不存在）必抛 GIT_ERROR。
-            # 不在此吞掉的话，一次含删除的 push 会让整个批次回填失败（调用方 rollback）。
-            # 语义选择：仅跳过，不删对应 BlogContent 行（删除同步属产品决定，见路线图登记）。
             result.skipped.append(path)
             continue
         sha = _sha3(content)

@@ -24,7 +24,6 @@ from core.tracing import setup_tracing
 
 logger = logging.getLogger("lkm.worker")
 
-# ---- 订阅名常量（部署编排与测试引用；与 core.messaging.SUBSCRIPTIONS 对齐）----
 SEND_SUBSCRIPTION = messaging.SUB_SEND.name
 NOTIFY_SUBSCRIPTION = messaging.SUB_NOTIFY.name
 POINTS_REWARD_SUBSCRIPTION = messaging.SUB_POINTS_REWARD.name
@@ -37,7 +36,7 @@ CONTENT_INDEX_SUBSCRIPTION = messaging.SUB_CONTENT_INDEX.name
 AUDIT_SUBSCRIPTION = messaging.SUB_AUDIT.name
 AUDIT_PERMISSION_SUBSCRIPTION = messaging.SUB_AUDIT_PERMISSION.name
 
-# 死信 topic（worker_dlq 消费）
+# worker_dlq 消费的死信 topic。
 DLQ = messaging.TOPIC_DLQ
 
 
@@ -63,8 +62,6 @@ async def _dispatch_with_dedup(
         return
     db = await new_session()
     try:
-        # 事务级锁在 commit/rollback 自动释放；哈希碰撞最多额外串行，不会误去重。
-        # DB 故障必须负确认，不能继续执行后 ack，否则账本不可用时会重复副作用。
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"{scope}:{eid}"},
@@ -86,20 +83,15 @@ async def _consume(subscription_name: str) -> None:
 
     成功 → ack；handler 异常/超时 → core.messaging 负确认（重投超限后进死信）。
     """
-    # worker 进程不是 ASGI app：初始化 provider + httpx，让消费 span（含从消息属性
-    # extract 出的上游 trace 上下文）能真正导出；不配 LKM_OTEL_ENABLED 时是 no-op。
+    # 初始化 worker 的追踪和指标上报。
     setup_tracing(service_suffix="-worker")
-    # 跨进程指标中继（选项③）：本进程不暴露 /metrics，故把业务指标快照写进 Redis 交给 API
-    # 进程代报。放在这里可一处覆盖全部 worker（send/notify/points×3/notification/
-    # content-index/default）；幂等——run_default_worker 的 4 个并发 _consume 只起一个发布 task。
     metrics_relay.start_publisher()
 
     handlers = task_registry.handlers_for(subscription_name)
 
     @log_exceptions
     async def _on_payload(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
-        # 契约错误属于毒消息；负确认后交由死信存档，供人工修复与重放。
-        # routing_key 取自发布时写的 properties，缺失时退化为只校验 fn/args。
+        # 契约错误负确认；缺少 routing_key 时只校验 fn/args。
         problems = event_contract.payload_violations(
             payload, meta.properties.get("routing_key")
         )
@@ -124,7 +116,6 @@ async def _consume(subscription_name: str) -> None:
     await messaging.run_subscription(subscription_name, _on_payload)
 
 
-# ---- worker 入口（各 worker_*.py 调用）----
 
 
 async def run_send_worker() -> None:

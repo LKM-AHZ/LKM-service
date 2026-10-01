@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import Any
 
-#: 装配完整进程（backend / worker）时必须全部绑定的端口。
 REQUIRED_PORTS: tuple[str, ...] = (
     "authz",
     "authz_session",

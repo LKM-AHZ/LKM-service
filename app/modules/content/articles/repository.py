@@ -55,7 +55,6 @@ def _fts_search_stmt(q: str) -> tuple[Any, Any]:
     )
     query = func.plainto_tsquery("simple", q)
     fts = vector.bool_op("@@")(query)
-    # FTS 命中且带相关度；仅子串命中者（无 FTS 相关度）也须给出、排序在后。
     return or_(fts, contains), func.ts_rank(vector, query)
 
 
@@ -91,8 +90,6 @@ class ArticleRepository(AsyncRepository[Article]):
         stmt = (
             select(Article)
             .where(cond)
-            # 仅子串命中（无 FTS 相关度）为 NULL → 排到 FTS 命中之后；
-            # 同相关度无稳定次序会让 offset 分页重复/漏行，故补唯一键兜底
             .order_by(rank.desc().nulls_last(), Article.id.desc())
             .offset(offset)
             .limit(limit)

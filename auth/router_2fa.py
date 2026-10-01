@@ -189,8 +189,6 @@ async def verify_2fa(
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """在登录时使用临时令牌和 TOTP / 恢复码验证 2FA。"""
-    # 按用户分桶（而非全站共享）：防止单个攻击者刷错耗尽共享额度封锁所有用户的 2FA
-    # 登录。临时令牌可解码出 user_id；无法解码（本就会 400）用低熵兜底桶，避免泄漏失败面。
     try:
         _raw_uid = security.decode_temp_token(body.temp_token).get("user_id")
         _v_uid = str(_raw_uid) if _raw_uid else "0"

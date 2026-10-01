@@ -24,13 +24,11 @@ from core.metrics import user_snap_cache_total
 
 logger = logging.getLogger("lkm.user_cache")
 
-# 失效代次哨兵键不存在时视作 epoch 0（首次失效 INCR 会 0 → 1，把捕获 0 的在途回填全拒掉）。
+# 失效代次键不存在时视作 epoch 0。
 _EPOCH_ABSENT = 0
-# 乐观锁（WATCH/MULTI CAS）重试上限：真并发竞态下的 WatchError 重试；超上限保守拒写（安全侧）。
+# WATCH 冲突达到重试上限后停止回填。
 _MAX_CAS_RETRY = 8
 
-# —— 负值缓存 ——
-# 对「上游权威已确认不存在」的 user_id 写入负值信封，短 TTL，避免不存在的 id 反复穿透到AUTH/DB。
 _NEG_SV = 0
 _NEG_TTL_S = 30  # 短 TTL：真实用户随后被创建时，最多 30s 后即可见（远短于正常快照 TTL）
 _L1_TTL_LOWER_ONLY = True  # L1 的 TTL 是「丢广播时的陈旧窗口上界」，只可向下扰动（见 jitter_ttl）
@@ -106,8 +104,7 @@ async def current_epoch(user_id: uuid.UUID) -> int:
     try:
         raw = await redis.get(ekey)
         if raw is None:
-            # 非 0 起始值：让「初始化」与「重启后重新初始化」都不会与重启前的捕获值相同。
-            # NX：并发下只有一方写入生效，其余读到同一个值。
+            # 初始化写入非零代次，并发调用共用已写入的值。
             await redis.set(ekey, str(time.time_ns() // 1000), nx=True)
             raw = await redis.get(ekey)
     except Exception:
@@ -156,8 +153,6 @@ async def read_snap_state(
         return False, None
     if raw is None:
         user_snap_cache_total.labels("l2", "miss").inc()
-        # 白名单布隆拦截（§5.6）：位图未预热/Redis 不可用/开关关时 definitely_absent 恒 False，
-        # 退回普通 miss（不拦）。命中即返「已确认不存在」，调用方据此不再回退上游。
         if await bloom.definitely_absent(str(user_id)):
             logger.debug("user_cache bloom-reject uid=%s", user_id)
             return True, None
@@ -167,7 +162,7 @@ async def read_snap_state(
     try:
         payload = json.loads(raw)
         if payload.get("neg"):
-            # 负值缓存命中：上游已确认不存在，窗口内不再回退上游（防穿透）
+            # 负值缓存命中后直接返回不存在。
             return True, None
         data = payload.get("data")
         if not isinstance(data, dict):
@@ -183,8 +178,7 @@ async def read_snap_state(
             )
         return False, data
     except Exception:
-        # 脏 L2 载荷（非 JSON / 非 dict）与「真 miss」在调用方看来都是 None，且此处已计过
-        # l2 hit——不留日志的话，数据格式回归会表现为「命中率很高但一直回源」，无从排查
+        # 非法 L2 载荷记日志并按未命中处理。
         logger.debug("user_cache payload 解析失败 uid=%s", user_id, exc_info=True)
         return False, None
 
@@ -212,7 +206,7 @@ async def read_snaps_state(
     """
     if not user_ids:
         return set(), {}
-    # 批量键同属 user:snap 前缀 → 取首键路由即可（同前缀恒定同后端）
+    # 批量快照键按首键选择缓存后端。
     redis = await _get_redis(_snap_key(user_ids[0]))
     if redis is None:
         return set(), {}
@@ -234,7 +228,7 @@ async def read_snaps_state(
         pending.append(uid)
     revision = local_cache.l1_invalidation_revision()
     if pending:
-        # 白名单布隆拦截（§5.6）：确定不存在的 id 直接并入 negative，省掉后面的 mget 与上游回退。
+        # 布隆过滤器确认不存在的 ID 直接并入 negative。
         absent = await bloom.definitely_absent_many([str(uid) for uid in pending])
         if absent:
             negative.update(uid for uid in pending if str(uid) in absent)
@@ -348,13 +342,9 @@ async def write_if_newer(
     """
     key = _snap_key(user_id)
     ekey = _epoch_key(user_id)
-    # snap 与 epoch 必须同后端（WATCH 跨后端无意义）——两者同前缀，按 snap 键路由即可
     redis = await _get_redis(key)
     if redis is None:
-        # fail-open：缓存不可用即「未写入」，调用方照常返回刚读到的 DB 值。
         return False
-    # default=str：快照 data 内的 user_id 是 uuid.UUID（DB 直读路径），JSON 无原生 uuid；
-    # 序列化成 str 后由读侧 _normalize_snap 还原，保证 L1/L2 与 DB 读路径类型一致。
     payload: dict[str, Any] = {"sv": source_version, "data": data}
     if negative:
         payload["neg"] = True
@@ -366,13 +356,13 @@ async def write_if_newer(
                     await pipe.watch(key, ekey)
                     cur_epoch = _to_int(await pipe.get(ekey))
                     raw_cur_snap = await pipe.get(key)
-                    # (1) 来源版本：不得以旧 sv 覆盖已缓存的更新值（等值视为幂等续写）
+                    # 仅写入不旧于缓存的来源版本。
                     if raw_cur_snap is not None:
                         cur_sv = _extract_sv(raw_cur_snap)
                         if cur_sv is not None and cur_sv > source_version:
                             await pipe.reset()
                             return False
-                    # (2) 失效代次：捕获 epoch != 当前 → 期间有失效，拒写防复活
+                    # 失效代次变化时拒绝回填。
                     if cur_epoch != expected_epoch:
                         await pipe.reset()
                         return False
@@ -380,16 +370,12 @@ async def write_if_newer(
                     pipe.set(key, value, ex=jitter_ttl(ttl_seconds))
                     revision = local_cache.l1_invalidation_revision()
                     await pipe.execute()
-                    # L2 CAS 成功（权威已接受）才镜像进 L1；拒绝/异常一律不碰 L1，
-                    # 避免用陈旧值覆盖本地更新值。负值不进 L1（L1 只镜像正向值）。
                     if (
                         _l1_on()
                         and not negative
                         and revision == local_cache.l1_invalidation_revision()
                     ):
                         existing = local_cache.l1_get(key)
-                        # 两个 CAS 都可能在 L2 成功，但旧调用的响应晚于新调用；
-                        # L1 镜像仍须按来源版本单调更新。
                         if not (
                             isinstance(existing, dict)
                             and _to_int(existing.get("sv")) > source_version
@@ -460,6 +446,5 @@ async def invalidate_user_snap(user_id: uuid.UUID) -> None:
         return
     if _l1_on():
         local_cache.l1_delete(key)
-    # 广播不受本实例 L1 开关约束：它服务的是**其它**实例的 L1——本机 user_snap_l1_enabled
-    # 为 false（滚动发布/配置不一致）不代表对端也关，漏发会让对端继续命中陈旧 L1 直到 TTL 过期
+    # 即使本实例关闭 L1，也向其他实例广播失效。
     await user_cache_events.publish_invalidate(key)

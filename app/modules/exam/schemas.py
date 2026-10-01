@@ -67,8 +67,6 @@ class ExamCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_schedule_window(self) -> ExamCreate:
-        # 反序/零长时间窗会让 _check_window 对所有考生恒判 EXAM_NOT_OPEN，
-        # 考试创建成功后却永久不可用，且报错完全不指向配置错误 → 建考前就拦下
         if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
             raise ValueError("ends_at 必须晚于 starts_at")
         return self

@@ -54,8 +54,6 @@ async def list_event_failures(
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> ListData[_EventFailureItem]:
-    # 同 dlq_router：表只增不减、payload_json 是 JSONB 全量，必须带上限拉取，否则单请求
-    # 即爆内存；按 folded_at 倒序取「最近归档的」供人工处置（id 是随机 uuid7/4，无排序意义）。
     rows = (
         (
             await db.execute(
@@ -99,9 +97,6 @@ async def replay_event_failure(
         payload=body.payload if body else None,
     )
     if not ok:
-        # ``replay_failure`` 对「归档行不存在」与「消息总线未启用」都返回 False，两者对
-        # 调用方意义完全不同（前者是取错 id，后者是环境不可用）——回滚后重读来区分，
-        # 与 dlq_router.requeue_dlq 同一处置思路。
         await db.rollback()
         row = await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
         if row is None:

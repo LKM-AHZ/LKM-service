@@ -142,8 +142,6 @@ async def admin_query_analytics(
     params["off"] = offset
     result = await client.query(
         f"SELECT {', '.join(spec.columns)} FROM {spec.table}{where_sql}"
-        # off 用 UInt64：page 只限下界，offset 是 Python 大整数，大 page 会超出 UInt32
-        # 让 CH 直接拒绑参数（500）而不是干净地返回空页
         f" ORDER BY {spec.order_by} LIMIT {{lim:UInt32}} OFFSET {{off:UInt64}}",
         params,
     )

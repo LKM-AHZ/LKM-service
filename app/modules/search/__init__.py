@@ -21,7 +21,6 @@ def __getattr__(name: str) -> Any:
             _exported_routers = [router]
         return _exported_routers
     if name == "GRAPHQL":
-        # 与 points/interaction 等模块同款：缓存单例，保证身份稳定（mod.GRAPHQL is mod.GRAPHQL）
         if _exported_graphql is None:
             _exported_graphql = []
         return _exported_graphql

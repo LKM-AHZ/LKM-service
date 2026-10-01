@@ -101,8 +101,6 @@ async def upload_file(
     # 不再各自 json.loads——前者会把非列表 JSON 变成端点内的 ValidationError
     tags_list = parse_tags(tags)
 
-    # filename / content_type 来自 multipart 分段头，无法用 Form 约束；这里把超限
-    # （original_name>255 / mime_type>100）转成受控的 INVALID_INPUT(422)，而不是 500。
     try:
         info = FileCreate(
             original_name=file.filename or "untitled",

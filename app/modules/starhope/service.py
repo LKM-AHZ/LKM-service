@@ -103,9 +103,6 @@ async def pull_entity(
         for rid, deleted_at in await repo.list_tombstones(user_id=user_id, since=since)
     ]
 
-    # server_time 必须在查询**之前**取值：客户端拿它当下一次 since 游标（updated_at >
-    # since），若在查询后才取 now，两个 SELECT 与该时刻之间提交的行 updated_at <= server_time
-    # 却不在 items 里，增量拉取永远漏掉它们（静默丢数据）
     return StarHopePullData[Any](
         items=items, tombstones=tombstones, server_time=cursor
     )
@@ -125,8 +122,6 @@ async def push_entity(
         )
 
     try:
-        # 路由侧 body 只保证 list[dict]，形状/类型校验都落在这里：pydantic 的
-        # ValidationError 是普通 ValueError，map_err 会落到 500 分支，故显式转成 400
         parsed_upserts = [in_schema.model_validate(raw) for raw in upserts]
     except ValidationError as err:
         raise BizError(

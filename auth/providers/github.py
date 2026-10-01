@@ -13,7 +13,6 @@ from core.secrets import reveal
 
 logger = logging.getLogger(__name__)
 
-# GitHub API 调用超时：避免慢 Provider / 挂起拖住 OAuth 回调请求
 _HTTP_TIMEOUT = httpx.Timeout(10.0)
 
 

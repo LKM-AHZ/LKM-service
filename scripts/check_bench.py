@@ -40,7 +40,6 @@ def _budget_map(csv_path: str) -> dict[str, tuple[float, float]]:
             try:
                 result[path] = (float(row["p95_max_ms"]), float(row["rps_min"]))
             except (KeyError, ValueError) as err:
-                # 缺列/空值/畸形数字都要指到具体行，否则只剩一个无上下文的 KeyError/ValueError
                 raise ValueError(
                     f"[check_bench] 预算表 {csv_path} 中路径 {path!r} 的预算值非法: {err}"
                 ) from err
@@ -83,8 +82,6 @@ def main() -> int:
             ok_p95 = float(p95) <= p95_max
             ok_rps = float(rps_raw) >= rps_min
         except ValueError:
-            # 预算命中却解析不出指标（列缺失/为空 "-"/本地化千分位）：必须按违规计，
-            # 否则「解析失败 → 跳过」会让门禁在最该拦下的情况下报成功。
             violations += 1
             print(
                 f"[CHECK] VIOLATION {name}: 指标无法解析 P95={p95!r}(max {p95_max}) "

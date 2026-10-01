@@ -106,8 +106,6 @@ async def handle_oauth_callback(
         user = await UserRepository(db).get_with_profile_or_raise(
             oauth.user_id, AuthErr.USER_NOT_FOUND
         )
-        # 既有绑定同样是登录：审计要像 login_password 那样每次成功都记，否则最常见的老用户
-        # 复登录在 oauth_login 审计里完全缺席（原先只有「新建用户」分支才有 log_audit）。
         await log_audit(db, user.id, "oauth_login", provider.name)
         return await _oauth_login_response(db, user)
 
@@ -178,9 +176,6 @@ async def bind_oauth(
             provider_email=info.provider_email,
         )
     except IntegrityError as exc:
-        # 上面的存在性检查与这里的 insert 不是原子：两个并发回调可能都通过检查，
-        # 由 uq_oauth_provider_user 兜底；翻译成与「已被他人绑定」同一语义的领域错误，
-        # 而不是把 IntegrityError 冒成 500。
         if is_integrity_error(exc):
             raise BizError(
                 AuthErr.OAUTH_EMAIL_TAKEN,

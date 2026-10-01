@@ -85,7 +85,6 @@ async def l2_lock(key: str) -> AsyncGenerator[bool]:
     if not settings.cache_lock_enabled:
         yield False
         return
-    # 按**底层缓存键**路由：锁必须与被锁的缓存值落在同一后端，否则 double-check 失效。
     client = await redis_client.get_redis(key)
     if client is None:
         yield False

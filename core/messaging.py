@@ -60,8 +60,6 @@ RKEY_BLOOM_SEED = "cron.bloom_seed"
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
 RKEY_CONTENT_DELETED = "event.content.deleted"
-# 审计事件（§5.2「audit.*」家族）：审计此前只落 auth 库 audit_logs 表、再由批任务灌
-# ClickHouse，**总线上零 audit 事件**；这两个键把「登录失败 / 权限变更」变成实时可告警的流。
 RKEY_AUDIT_LOGIN_FAIL = "audit.login_fail"
 RKEY_AUDIT_PERMISSION_CHANGE = "audit.permission_change"
 
@@ -172,16 +170,12 @@ SUB_JOBS = Subscription(
     TOPIC_CRON,
     (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS, RKEY_OPS_DAILY, RKEY_BLOOM_SEED),
 )
-# 外部检索索引增量同步（search 模块消费；与 PG FTS 的 P1 路径并存，引擎由配置择一）
 SUB_CONTENT_INDEX = Subscription(
     "content-index",
     TOPIC_CONTENT,
     (RKEY_CONTENT_PUBLISHED, RKEY_CONTENT_UPDATED, RKEY_CONTENT_DELETED),
 )
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
-# 审计消费：把 audit.* 事件实时转成指标/告警，而不是只等批量导出。
-# 单订阅横跨两个 topic 不可行（订阅与 topic 一一对应），故这里按**主题族**取 login_fail 作
-# 主 topic；permission_change 的订阅在同命名空间内各自登记（见 SUB_AUDIT_PERMISSION）。
 SUB_AUDIT = Subscription("audit", TOPIC_AUDIT_LOGIN_FAIL, (RKEY_AUDIT_LOGIN_FAIL,))
 SUB_AUDIT_PERMISSION = Subscription(
     "audit-permission",
@@ -207,8 +201,6 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
     )
 }
 
-# 装配期即验：任何未来新增的订阅/逻辑键若跨命名空间，在这一行就炸，
-# 而不是等到某个消费者误收另一命名空间的消息才发现。
 _validate_namespace_isolation()
 
 EVENT_SCHEMA: dict[str, Any] = {
@@ -358,8 +350,6 @@ _producers: dict[str, Any] = {}
 # 已关闭标记：close() 只清缓存不是终态，关闭后并发中的 publish/消费重连仍会惰性新建 client，
 # 把 broker 连接与后台线程带到 shutdown 之后。
 _closed = False
-# 单一线程锁保护 client/producer 创建：Pulsar 同步 API 在线程中调用；用 threading.Lock 而非
-# asyncio.Lock，避免跨事件循环（多 loop 测试/多次 asyncio.run）绑定报错。
 _client_lock = threading.Lock()
 
 
@@ -404,7 +394,6 @@ def _create_producer_cached(topic: str) -> Any:
     client = _get_client_sync()  # 短临界区：只取/建 client
     producer = client.create_producer(topic, schema=make_event_schema(topic))
     with _client_lock:
-        # 并发首建同一 topic：以先落缓存者为准，本线程多建的那个关掉，避免连接泄漏
         cached = _producers.setdefault(topic, producer)
     if cached is not producer:
         with suppress(Exception):
@@ -431,7 +420,6 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         logger.error("未知 routing_key=%s，丢弃发布", routing_key)
         return False
     if _closed:
-        # close() 之后不再新建 client/producer，否则 shutdown 会留下活着的 broker 连接与线程
         logger.warning("消息总线已关闭，丢弃发布 routing_key=%s", routing_key)
         return False
 
@@ -446,7 +434,6 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         try:
             data = _encode_event(dict(payload))
         except Exception:
-            # 编码必须在 try 内
             logger.exception("payload 编码失败 rk=%s", routing_key)
             notify_failed_total.inc()
             return False
@@ -562,7 +549,6 @@ def _handle_message(
         )
         future.result(timeout=JOB_TIMEOUT_S)
     except Exception:
-        # 超时/失败先尽力取消：消息马上被负确认并重投，若原协程还排在主循环里未开跑，取消可避免同一事件长时间双跑。
         if future is not None:
             future.cancel()
         logger.exception("消费失败→负确认 subscription=%s", sub_name)

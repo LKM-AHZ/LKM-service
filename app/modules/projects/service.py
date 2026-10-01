@@ -26,9 +26,6 @@ from core.ports.snapshot import get_user_snapshot_batch
 
 
 def _app_to_schema(a: ProjectApplication) -> ProjectApplicationOut:
-    # member_claims 在 DB 是 JSON 文本列，需显式解析（同 exam.QuestionOut.from_model 的
-    # options 坑）：不能用 model_validate 自动转换，会把字符串塞进 list 报错。
-    # 显式构造，先解析 JSON 再喂给 schema 的 list[dict] 字段。
     return ProjectApplicationOut(
         id=a.id,
         applicant_id=a.applicant_id,
@@ -66,8 +63,6 @@ async def _applicant_names(
 async def submit_application(
     db: DbSession, applicant_id: uuid.UUID, info: ProjectApplicationCreate
 ) -> ProjectApplicationOut:
-    # 同一申请人同名的 pending 申请唯一性（防重复刷单）；落库前 strip，
-    # 与 repository 的小写比较口径一致，避免 "LKM "/"LKM" 视为两条
     title = info.title.strip()
     if await ProjectApplicationRepository(db).pending_duplicate_exists(
         applicant_id=applicant_id, title=title
@@ -133,9 +128,6 @@ async def review_application(
     else:
         claims = []
 
-    # 原子占位（条件 UPDATE ... WHERE status='pending' + 受影响行数）：并发两个审核只有一个
-    # 能改到行，另一个拿到 0 → 判「已复核」。原先的读-改-写会让两个请求都通过 pending 检查，
-    # 各自建一个 Project 并各跑一次纳入升级。
     status = "approved" if body.approve else "rejected"
     claimed = await repo.update_where(
         {
@@ -178,9 +170,6 @@ async def review_application(
         ]
         member_repo = ProjectMemberRepository(db)
         await member_repo.add_all(members)
-        # 先把业务侧写入 flush 成 SQL（成员 FK/唯一约束问题在此暴露），再调度跨 realm 升权：
-        # seam 在 auth realm 独立提交，若它之后业务侧还失败，申请人会带着 admin/incubated_member
-        # 却没有项目（残留风险见路线图；补偿需 outbox/重试，属设计改动）
         await member_repo.flush()
         await _apply_incubation(db, app_.applicant_id)
     return _app_to_schema(app_)

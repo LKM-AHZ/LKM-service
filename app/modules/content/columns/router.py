@@ -79,8 +79,6 @@ async def get_applications(
     db: AsyncSession = Depends(get_read_session),
     pag: PaginateParams = Depends(PaginateDep()),
 ) -> PageData[ColumnApplicationInfo]:
-    # RequireLevel("admin") 已保证 admin 会话；此处再叠加 columns_application_review
-    # 权限点（super_admin 有，org_member 等普通 admin 无），与审核同权限（能看全部申请=能审核）。
     if not await role_has_permission(
         db,
         composible_role(cur.account_level, cur.role),
@@ -122,8 +120,6 @@ async def review_column_application(
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    # require_admin_2fa 已保证 admin 会话 + 2FA 信任（危险操作 step-up，与 boards/projects 审核一致）；
-    # 此处再叠加 columns_application_review 权限点（super_admin 有，普通 admin 无）。校验失败按 FORBIDDEN 返回。
     if not await role_has_permission(
         db,
         composible_role(cur.account_level, cur.role),

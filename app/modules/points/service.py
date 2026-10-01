@@ -91,10 +91,6 @@ async def reward(
     不一致抛 DUPLICATE_REWARD。返回本次（或既有）流水。
     """
     ledger = PointsLedgerRepository(db)
-    # 行锁必须先于幂等预检：否则同一 ref 的两个并发投递会双双通过 get_by_ref 的空判、
-    # 各做一次 apply_delta，而唯一约束只把其中一条流水 DO NOTHING 掉 → 余额被加两次，
-    # 且与流水的 balance_after 不一致。锁住该用户余额行后，「预检 → 变动 → 落流水」
-    # 对同一用户串行（不同用户互不影响）。
     await ensure_balance(db, user_id)
     await UserBalanceRepository(db).lock_for_update(user_id)
     existing = await ledger.get_by_ref(user_id, ref_type, ref_id)
@@ -162,8 +158,6 @@ async def transfer(
     if from_id == to_id:
         raise BizError(CommonErr.INVALID_INPUT, "不能转账给自己")
     ledger = PointsLedgerRepository(db)
-    # 与 reward 同理：幂等预检前先锁双方余额行（否则并发重放会各扣各加一次、流水被唯一约束
-    # 撞掉一条 → 两笔余额都错）。按 uuid 排序取锁，避免「A→B 与 B→A」相互等待成死锁。
     await ensure_balance(db, from_id)
     await ensure_balance(db, to_id)
     balance_repo = UserBalanceRepository(db)
@@ -287,11 +281,6 @@ async def leaderboard(
     """
 
     async def load() -> list[dict[str, Any]]:
-        # M3.B S5 拆库：业务库不再含 users/profiles（auth 真值迁 auth realm）。榜单只从
-        # **业务 points 表**取裸 int user_id + 分数，身份展示交由 auth 缝
-        # ``snapshot.get_user_snapshot_batch``（seam/HTTP 时读 auth realm，绝不查业务 users），
-        # 排序（分数降序、同分按 raw 昵称升序 nullsfirst、user_id 稳定）在服务端 Python 完成，
-        # 保原先 fused SQL join+ORDER 的排列契约。
         if period == "total":
             raw = await UserBalanceRepository(db).list_positive()
             rows = [(uid, balance, uid, "") for uid, balance in raw]
@@ -299,7 +288,6 @@ async def leaderboard(
             days = 1 if period == "daily" else 7
             since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
             agg = await PointsLedgerRepository(db).sum_positive_since(since)
-            # display fallback 对周期榜原为 str(uid)，恒等放兜底表沿用
             rows = [(uid, total, uid, str(uid)) for uid, total in agg]
         else:
             raise BizError(PointsErr.INVALID_PERIOD)
@@ -388,8 +376,6 @@ async def list_achievements(
         ua_rows = await UserAchievementRepository(db).list_for_user(user_id)
         for ua in ua_rows:
             progress_map[ua.achievement_id] = (ua.progress, ua.unlocked)
-        # 行为统计行整批只需一行：原先在循环里对每个无成就记录的类型各查一次（仓库是
-        # select().scalars().first()，没有 identity-map 短路）→ 典型的 N+1
         stat = await UserBehaviorStatRepository(db).get(user_id)
     out: list[AchievementOut] = []
     for a in achievements:
@@ -503,7 +489,6 @@ async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
             "today_checked": True,
         }
 
-    # 连续天数：昨日连打则 +1，否则重置为 1
     stat.checkin_streak = (
         stat.checkin_streak + 1 if stat.last_checkin_date == yesterday else 1
     )

@@ -33,10 +33,9 @@ from core.metrics import outbox_leader_total, outbox_pending_count
 
 logger = logging.getLogger("lkm.outbox")
 
-# 会话工厂类型：relay_poll 允许单测注入独立内存库会话，默认走生产 async_session(new_session)
+# relay_poll 默认使用生产会话，也可注入会话工厂。
 SessionFactory = Callable[..., Awaitable[AsyncSession]]
 
-# 本进程标识，写入 `locked_by`（M6.3）：定位「某行被哪个进程认领」，也在排障时区分副本。
 _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:64]
 
 
@@ -94,8 +93,7 @@ async def relay_poll(
     db = await factory()
     succeeded = 0
     try:
-        # 每次只领取一行。整批预领取会让末尾行在等待前面网络投递时过期，
-        # 被另一副本接管并双投。单行领取还给每次投递单独的 fencing token。
+        # 逐行认领和投递，每次认领生成独立令牌。
         for _ in range(batch):
             if can_publish is not None and not can_publish():
                 break
@@ -131,7 +129,7 @@ async def relay_poll(
                     await db.rollback()
                 break
 
-            # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
+            # 发布时透传 event_id。
             payload = {**msg.payload_json, "event_id": msg.event_id}
             reason = messaging.permanent_failure_reason(msg.routing_key, payload)
             if reason is None:
@@ -151,7 +149,7 @@ async def relay_poll(
             else:
                 ok = False
 
-            # 发布期间若锁超时并被接管，旧持有者不得再覆盖新持有者的状态。
+            # 仅当前认领者可更新投递状态。
             msg_id = msg.id
             current = await db.scalar(
                 select(OutboxMessage)
@@ -168,9 +166,6 @@ async def relay_poll(
                 continue
             msg = current
             if reason is not None:
-                # 确定性错误：重试不会变好，一次即折叠（不累加 attempt_count，不空耗退避）。
-                # 契约违约另记违约指标：这条路径**不会**走到 messaging.publish（在投递前就折叠了），
-                # 不在这里记账的话「relay 折叠掉的违约」在 /metrics 上完全不可见。
                 problems = messaging.contract_violations(msg.routing_key, payload)
                 if problems:
                     event_contract.record_violation(
@@ -208,8 +203,6 @@ async def relay_poll(
 
             msg.attempt_count += 1
             if msg.attempt_count >= MAX_TRIES:
-                # 达上限不再投：把该行折叠归档（摘出 outbox，迁出事件失败表 audit），
-                # 不再滞留 pending/failed 挤占领取窗口与积压 gauge（M1 gate review 收口）。
                 db.add(
                     EventFailure(
                         event_id=msg.event_id,
@@ -221,7 +214,7 @@ async def relay_poll(
                 )
                 await db.delete(msg)
             else:
-                # 指数退避（cap 1h）保持 pending 待下轮；幂等靠唯一 event_id，不重复入队
+                # 失败事件按指数退避保持 pending。
                 msg.next_retry_at = datetime.now(UTC) + timedelta(
                     seconds=min(2 ** int(msg.attempt_count), _BACKOFF_CAP_S)
                 )
@@ -230,8 +223,7 @@ async def relay_poll(
             logger.info("outbox relay 本轮成功 %s 条", succeeded)
         return succeeded
     finally:
-        # 积压 gauge：会话仍可分页前统计一遍仍 pending 的件数（含本轮退避、failed 摘除后的剩
-        # 余 pending）。统计失败仅记日志（gauge 保上次值），不扰动本应有的 relay 语义。
+        # 每轮更新 pending 积压量；统计失败时保留上次指标值。
         try:
             await db.rollback()
             pending_left = await db.scalar(
@@ -266,7 +258,6 @@ async def archive_published(
             OutboxMessage.published_at.is_not(None),
             OutboxMessage.published_at < cutoff,
         ]
-        # 同 relay_poll：限定 created_at 窗口让 hypertable 做 chunk 裁剪（批 2）。
         window_start = _scan_window_start(now)
         if window_start is not None:
             conds.append(OutboxMessage.created_at >= window_start)
@@ -306,7 +297,6 @@ async def archive_published(
         await db.close()
 
 
-# ---- λ leader 租约原语 ----
 _redis_degraded_warned = False
 
 
@@ -337,7 +327,7 @@ async def _acquire_lease(redis: Any, ttl_s: float) -> str | None:
         ok = await redis.set(_lease_key(), token, nx=True, ex=max(1, int(ttl_s)))
     except Exception:
         logger.exception("outbox leader 租约抢占失败，按未取得处理")
-        # 抢占异常与争用同记 contended：运维关心的是「本实例没能当选」这一事实
+        # 抢占异常与争用均记为 contended。
         outbox_leader_total.labels("contended").inc()
         return None
     if ok:
@@ -400,7 +390,7 @@ async def run_outbox_loop() -> None:
         settings.outbox_leader_ttl_s,
     )
     token: str | None = None
-    # 归档节流：启动即允许首轮（清历史积压），此后按 interval 周期执行；只由当前 poll 者做，与 poll 同循环、不另起任务。
+    # 当前轮询者启动时归档一次，之后按周期归档。
     next_archive_at = datetime.now(UTC)
 
     async def _poll_tick() -> bool:
@@ -454,20 +444,19 @@ async def run_outbox_loop() -> None:
             redis = await redis_client.get_redis(_lease_key())
             if redis is None:
                 token = None
-                # 任一 Redis 后端已配置却拿不到选主客户端，都不能按单实例开发态投递。
                 lease_backend_configured = (
                     redis_client.is_enabled() or redis_client.secondary_configured()
                 )
                 if lease_backend_configured:
                     _warn_redis_degraded_once(True)
                 else:
-                    # 未配置 Redis 的单实例开发态无需 leader 选举。
+                    # 未配置 Redis 时直接轮询。
                     await _poll_tick()
                 await asyncio.sleep(interval)
                 continue
             _reset_redis_degraded_warning()
 
-            # 已是 leader → 续约；续不上（被接管/失联）回到未持有。
+            # 当前 leader 续约失败后释放本地领导者状态。
             if token is not None:
                 if not await _renew_lease(redis, token, settings.outbox_leader_ttl_s):
                     outbox_leader_total.labels("renew_failed").inc()
@@ -479,7 +468,7 @@ async def run_outbox_loop() -> None:
                     await asyncio.sleep(interval)
                     continue
 
-            # 未持有 → 尝试抢占当选。
+            # 未持有租约时尝试抢占。
             token = await _acquire_lease(redis, settings.outbox_leader_ttl_s)
             if token is None:
                 logger.info("[follower] 不轮询, leader 由其它副本持有")
@@ -494,6 +483,4 @@ async def run_outbox_loop() -> None:
             raise
         except Exception:
             logger.exception("outbox relay 外层异常，重新进入领袖 reconcile")
-            # 失败路径也要按周期让出：持续性异常（如 Redis 已配置但不可用时反复抛错）若不
-            # sleep，会立刻重进 try，形成 CPU 空转 + 每条带完整堆栈的日志风暴
             await asyncio.sleep(interval)

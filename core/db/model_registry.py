@@ -28,7 +28,6 @@ _CORE_MODEL_MODULES: tuple[str, ...] = (
     "core.db.dlq",
 )
 
-#: 由各顶层包 bootstrap 登记的模型模块路径（字符串，避免 core 依赖业务模块名）。
 _MODEL_MODULES: list[str] = []
 
 

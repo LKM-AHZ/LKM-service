@@ -25,9 +25,6 @@ from core.config import settings
 
 logger = logging.getLogger("lkm.flows.deploy")
 
-# 注册参数收口于 Settings（蓝图 §6.5.1「不散落 os.getenv」）：env 名
-# （LKM_PREFECT_WORK_POOL / LKM_PREFECT_SOURCE / LKM_PREFECT_FLOW_DEPLOYMENT_NAME）与部署侧
-# 下发的完全一致，故 compose/k8s 无需改动。
 WORK_POOL = settings.prefect_work_pool
 # process 型 pool 不支持自定义镜像：deployment 用**本地源码路径**注册，worker 容器内
 # 直接以该路径执行（镜像即 lkm-service:latest，无需构建/推送）。
@@ -97,8 +94,6 @@ def main() -> None:
                 push=False,
             )
         except Exception as exc:
-            # 逐条隔离：任一 deployment 注册失败不能中止其余（否则后面的 flow 全没注册，
-            # 而 APScheduler 的 cron 触发会指向不存在的 deployment）。失败在末尾汇总抛出。
             logger.exception("注册 deployment 失败: %s (%s)", name, exc)
             failures.append(name)
             continue

@@ -28,8 +28,6 @@ from auth.repository import (
 from core.db.base import now_iso
 from core.db.repository import DbSession
 
-# account_level / Profile.role 的“单向提升”单调序。auth 是身份词表 owner，故把 exam/service、
-# projects/service 各自硬编码的 rank 语义集中到这里（Phase 4 由 auth 侧以此裁决是否真升）。
 _LEVEL_RANK = {"local": 0, "normal": 1, "admin": 2}
 # 考试 unlock_role 的取值域只有 columnist/author（见 exam/seed），管理侧与培育侧角色
 # （create_admin/admin_ops 写 "admin"，grant_incubation 写 "incubated_member"）排在内容
@@ -108,7 +106,6 @@ async def authorize_user(
             "role": None,
         }
 
-    # 改密撤销：签发的 iat 时间戳须 >= user.updated_at - 5s 容差
     if user.updated_at is not None and iat_ts is not None:
         try:
             token_time = _dt.datetime.fromtimestamp(float(iat_ts), tz=_dt.UTC)
@@ -241,7 +238,6 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
         await UserRepository(db).set_account_level(user_id, "admin")
         changed = True
     if cur_role == "member":
-        # cur_role 已在上面把空值归一成 "member"，原来的 ("member", "") 里 "" 分支不可达。
         await ProfileRepository(db).set_role(user_id, "incubated_member")
         changed = True
 
@@ -255,19 +251,6 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
     return 0
 
 
-# —— 跨 realm 升权写 seam 调度（M3.B S5 C，供 exam/projects 等业务 supplier 调用） ——
-#
-# S5 拆库后 auth 是 users/profiles 唯一 owner（含写），业务库不再有 auth 行。故业务侧在触发
-# 单向升权时**不能把自己的业务会话塞给 auth 的 grant 例程**（那样 UPDATE 会落到不存在的 users 表/
-# 语义错位）。本 dispatch 把 auth 写路由到正确 realm：
-#
-# - ``user_http.enabled()``（auth HTTP 缝，production 拆库态 + 测试 auth_seam_realm）
-#   → 经 ``user_http.grant_via_seam`` 走 auth 内部写端点，由 auth 进程在自持库/自测 auth realm 执行；
-# - seam OFF（蓝绿同库态/本地单库）→ 回落本模块 :func:`grant_incubation`/`grant_exam_unlock`，
-#   此时传入的 ``db`` 即含 auth 表的本地库会话（保存既有本地直写行为，零语义漂移）。
-#
-# 本 dispatch 保持业务 ↔ auth.service_authz 的既有依赖方向（exam/projects 已 import service_authz），
-# auth 真值归属不变（写始终落在 auth realm 对应会话）。返回与底层原语同义的 ``changed``(0/1)。
 
 
 async def grant_incubation_from_business(db: DbSession, user_id: uuid.UUID) -> int:

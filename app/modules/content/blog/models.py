@@ -124,8 +124,6 @@ class BlogComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__: str = "blog_comments"
 
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
-    # series_id / parent_id 都建索引：前者是「按系列列评论/计数」的热路径，
-    # 后者是回复树按父查子；原先两者全无索引，随评论量增长退化为顺序扫描
     series_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("blog_series.id"), nullable=False, index=True
     )

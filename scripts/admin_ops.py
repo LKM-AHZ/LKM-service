@@ -26,8 +26,6 @@ from core.config import settings
 from core.db.base import now_iso
 from core.secrets import reveal
 
-# 与 API 侧同一个密码策略类型（auth/schemas.Password）：脚本建号也必须过同一道校验，
-# 否则运维能直接建出 `1` 这种弱口令管理员，绕开注册/改密端点的约束。
 _PASSWORD_ADAPTER: TypeAdapter[str] = TypeAdapter(Password)
 
 
@@ -156,7 +154,6 @@ async def cmd_reset_2fa(username: str) -> int:
 async def cmd_create(username: str, email: str, phone: str, password: str) -> int:
     db = await new_auth_session()
     try:
-        # 不能用 scalar_one_or_none（两个命中会抛 MultipleResultsFound 崩成 traceback）。
         existing = (
             (
                 await db.execute(
@@ -195,12 +192,10 @@ async def cmd_create(username: str, email: str, phone: str, password: str) -> in
         try:
             await db.commit()
         except IntegrityError:
-            # 先查后插非原子：并发/重复执行时唯一约束兜底，转成友好提示而不是栈。
             await db.rollback()
             print(f"[skip] 唯一约束冲突（并发或重复执行）：{username}")
             return 1
         await db.refresh(user)
-        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图，否则该管理员的快照读会被布隆误判为「从未存在」。
         await bloom.add(str(user.id))
         print(f"[ok] 管理员创建成功：id={user.id} username={user.username}")
         return 0

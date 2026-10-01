@@ -20,7 +20,6 @@ from core.cache import make_key
 
 logger = logging.getLogger(__name__)
 
-# 允许计数化的列名白名单（防止把任意列名拼进键/UPDATE）
 COUNTER_FIELDS: frozenset[str] = frozenset(
     {"like_count", "comment_count", "bookmark_count"}
 )
@@ -59,8 +58,6 @@ def parse_counter_key(key: str) -> tuple[str, uuid.UUID] | None:
 
 async def bump_counter(field: str, obj_id: uuid.UUID, delta: int) -> bool:
     """把差值记入 Redis。返回 ``True`` 表示已入 Redis（DB 待 flush 收敛）。"""
-    # 键构造（含白名单校验）必须在 try 之外：字段名非法是调用方错误，不能与
-    # 「Redis 不可用」共用同一条 False 出口，否则会被静默导到 DB 回退路径
     key = counter_key(field, obj_id)
     client = await redis_client.get_redis(key)
     if client is None:
@@ -119,8 +116,6 @@ async def drain_counters() -> dict[tuple[str, uuid.UUID], int]:
             if delta:
                 drained[parsed] = drained.get(parsed, 0) + delta
     except Exception:
-        # 扫描中途失败：已取走的差值仍会被调用方落库（返回已收集部分），
-        # 但必须留痕——例如 Redis < 6.2 没有 GETDEL，会每轮都在这里静默中断
         logger.warning(
             "drain_counters 扫描中断，已取走 %d 项仍将落库", len(drained), exc_info=True
         )

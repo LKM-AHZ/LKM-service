@@ -80,7 +80,7 @@ async def _shutdown_step(name: str, step: Callable[[], Awaitable[object]]) -> No
         request_logger.exception("shutdown step failed name=%s", name)
 
 
-# schema 初始化失败后的指数退避区间（秒）：由下面的后台 task 承担，见 _init_db_with_retry
+# 后台 schema 初始化的重试间隔范围（秒）。
 _INIT_DB_RETRY_MIN_S = 1.0
 _INIT_DB_RETRY_MAX_S = 30.0
 
@@ -110,31 +110,18 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 可观测基座：结构化日志 + Sentry APM（均幂等；DSN 空则不加载）
     logger.setup_logging()
     init_sentry()
-    # 链路追踪（M5 7.2.2）在 create_app 装配期挂载——不能放 lifespan：Starlette 处理
-    # lifespan 请求时中间件栈已定型，此处再 instrument 不会生效，HTTP server span 采不到
-    # （SQLAlchemy/httpx 埋点不依赖中间件栈，会照常工作而掩盖问题）。SQLAlchemy 埋点须等
-    # 引擎建好，故仍留在此处。
-    # 启动不阻塞（§2 第 1 条）：schema 初始化放后台重试、不 await——DB 未就绪时进程仍要起来
-    # 并经 readiness 如实报「未就绪」，而不是起不来进 crashloop。就绪判定见 init_db 的完成标志。
     init_db_task = asyncio.create_task(_init_db_with_retry())
     instrument_sqlalchemy(get_async_engine())
-    # 不在 lifespan 等待首次连接，否则 Redis 半挂时 HTTP 探针也无法开始应答。
     await user_cache_events.start()
 
-    # 验签公钥（§2 第 2 条）：本地没有时从 AUTH `/jwks` 拉取并周期刷新。只起后台 task，
-    # 不 await 网络（启动不阻塞）；拿不到就由 readiness 如实报「验签不可用」，进程照活。
     await start_verify_key_refresh()
 
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
 
     # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
     start_lag_reporter()
-    # 可观测（§5.5-6）：调度器运行态上报——调度器在独立进程、不暴露 /metrics，
-    # 故由本进程读它的 Redis 心跳并 set gauge（同 lag 上报范式）
     start_scheduler_reporter()
-    # 可观测（跨进程指标中继，选项③）：worker/scheduler/auth 进程的业务指标经 Redis 快照
-    # 由本进程（唯一被 Prometheus 抓取的进程）聚合后落到同名指标上——见 metrics_relay。
-    # 本进程**只消费不生产**：它自己的写入已直接进本地指标，再发布会被重复计一遍。
+    # 聚合 worker、scheduler 和 auth 的 Redis 指标快照。
     start_metrics_relay_reporter()
 
     yield
@@ -145,10 +132,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     except asyncio.CancelledError:
         pass
     except Exception:
-        # 非取消类异常不得打断收尾：它会使后续资源全部泄漏
+        # 清理异常只记日志，继续释放其他资源。
         request_logger.exception("background cleanup task failed during shutdown")
 
-    # 收尾 schema 初始化重试 task：不取消的话它会继续访问下面已释放的引擎/连接池
+    # 关闭前取消 schema 初始化任务。
     init_db_task.cancel()
     try:
         await init_db_task
@@ -157,17 +144,12 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     except Exception:
         request_logger.exception("schema init task failed during shutdown")
 
-    # 逐步骤兜底（顺序不变）：任一 close 抛错都不能跳过其余释放，否则连接泄漏
-    # 收尾 WebSocket 事件的 Redis 订阅 task，避免泄漏连接
     await _shutdown_step("ws_manager", manager.close)
-    # 收尾 L1 失效广播订阅 task（须在 close_redis 前，避免关连接竞态）
     await _shutdown_step("user_cache_events", user_cache_events.stop)
     # 收尾验签公钥刷新 task（唯一在途的出站请求在此被取消）
     await _shutdown_step("verify_key_refresh", stop_verify_key_refresh)
-    # 收尾 Pulsar lag 上报、producer/client（若曾发布过），避免连接泄漏
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
     await _shutdown_step("scheduler_state", stop_scheduler_reporter)
-    # 收尾跨进程指标中继上报 task（须在 close_redis 前，避免关连接竞态）
     await _shutdown_step("metrics_relay", stop_metrics_relay_reporter)
     await _shutdown_step("messaging", messaging.shutdown)
     # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）
@@ -182,7 +164,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
 
 def create_app() -> FastAPI:
-    # 聚合装配：registry.load_all() 触发各模块错误码注册（防漏配导致 500）
+    # 加载业务模块与错误码。
     registry.load_all()
 
     application = FastAPI(
@@ -191,13 +173,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # GraphQL 查询级**硬**超时（§2 第 3 条）：**最先加 → 最内层**用户中间件。
-    # 两个理由都不是风格问题：
-    # ① 它超时靠取消内层 task 生效，而 `_log_requests` 是 BaseHTTPMiddleware（内部另起
-    #    anyio task group）——把它圈进取消边界会让取消在跨 task 的 cancel scope 上收尾，
-    #    收益为零、风险不小；放在 `_log_requests` **之内**即绕开。
-    # ② 放在内层后，504 仍会经 `_log_requests` 记录、并带上外层的安全头与 X-Request-ID
-    #    （反过来则超时请求在访问日志里彻底消失，而那正是最需要排查的请求）。
     application.add_middleware(GraphQLHTTPMiddleware)
 
     @application.middleware("http")
@@ -243,13 +218,8 @@ def create_app() -> FastAPI:
             )
             raise
 
-    # 公网安全面（M6.1）：TrustedHost + CORS 白名单 + 安全响应头。**最后加 → 最外层**，
-    # 使访问日志与其下全部业务路由、以及 TrustedHost/CORS 的拒答响应都带上安全头。
-    # 生产缺 LKM_ALLOWED_HOSTS/LKM_CORS_ORIGINS 时在此 fail-fast（不静默降级）。
     install_security_middleware(application)
 
-    # 链路追踪（M5 7.2.2）：**装配期**挂载，须在返回 app 前——见 lifespan 顶部说明。
-    # 放在安全中间件之后 → OTel 成为最外层中间件，span 覆盖整个请求处理链。
     setup_tracing(application)
 
     application.include_router(api_router, prefix=settings.api_prefix)

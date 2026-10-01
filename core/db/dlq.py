@@ -41,7 +41,6 @@ class DlqMessage(UUIDPrimaryKeyMixin, Base):
     requeued_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
-    # broker 消息 ID 保证 DLQ 消费者在「落库成功、ack 前崩溃」后不会再插第二条。
     source_message_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )

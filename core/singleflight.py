@@ -60,8 +60,6 @@ async def run[T](
     finally:
         async with _guard:
             flight.refs -= 1
-            # 任务未完成时不回收：否则最后一个等待方被取消会留下在途 loader 却清掉表项，
-            # 后续同 key 请求再起一个并发 loader（去重失效）；留给 done 回调回收。
             if (
                 flight.refs <= 0
                 and flight.task.done()

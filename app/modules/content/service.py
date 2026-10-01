@@ -195,8 +195,6 @@ async def list_items(
     )
 
 
-# 视图计数写会话缝：GraphQL 用只读会话不能写，故 bump 自建独立写会话。
-# 默认 new_session()；测试可替换为 conftest 内存会话以断言落库（仿 blog git _session_factory）。
 async def _new_write_session() -> DbSession:
     from core.db.session import new_session
 
@@ -278,8 +276,6 @@ async def get_item(
 ) -> ContentItemInfo:
     repo = ContentItemRepository(db)
     if bump_view:
-        # 原子 +1（原先 read-modify-write 并发会丢计数）；置于读缓存前，使下面的实时叠加
-        # 能看到本次自增。
         await repo.bump_view_count(item_id)
 
     async def _load() -> dict[str, Any]:
@@ -416,7 +412,6 @@ async def delete_item(
     await repo.soft_delete(item)
     # 帖详情缓存失效（§5.6「事件刷新」）：软删后详情不得再从缓存命中旧快照
     await clear_item_detail_cache(item_id)
-    # 索引删除通知：软删时行仍在、status 未变，须显式传 deleted
     await enqueue_content_event(db, item, CONTENT_ACTION_DELETED)
     # 懒 import：feed 域反向依赖 content.models（既有读缝），模块级导入会绕成环
     from app.modules.feed.fanout import remove_source_item
@@ -440,7 +435,6 @@ async def like_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> in
 
     await ContentLikeRepository(db).create(content_id=item_id, user_id=user_id)
     await enqueue_points_event(db, user_id, "like", f"item:{item_id}")
-    # M6.10：计数走 Redis 增量链路（明细行已落库，是真相源）；Redis 不可用则直改 DB
     return await bump_content_counter(db, item_id, "like_count", 1)
 
 
@@ -514,7 +508,6 @@ async def create_comment(
             parent_id=info.parent_id,
         )
     )
-    # M6.10：评论计数同走计数链路（评论明细行已落库，是真相源）
     await bump_content_counter(db, item_id, "comment_count", 1)
     await enqueue_points_event(db, user_id, "comment", f"comment:{comment.id}")
 
@@ -556,7 +549,6 @@ async def publish_blog_item(
         existing.status = ContentStatus.PUBLISHED
         existing.published_at = existing.published_at or _now()
         await repo.flush()
-        # 同 slug 重发 = 更新既有行 → 详情缓存须失效（内容/标题已变）
         await clear_item_detail_cache(existing.id)
         await enqueue_content_event(db, existing)
         return existing.id
@@ -741,8 +733,6 @@ async def create_post(
         status=ColumnPostStatus.PUBLISHED,
         published_at=now_iso(),
     )
-    # M0.5.2：专栏原生发帖走独立 column_posts 表（不经统一 content_items），
-    # 单独按 column_post_native 计一次产出，避免被漏计。
     post_created_total.labels("column_post_native").inc()
     return ColumnPostInfo.model_validate(post)
 
@@ -879,7 +869,6 @@ def _assert_owner(
 async def submit_application(
     db: DbSession, applicant_id: uuid.UUID, info: BoardApplicationCreate
 ) -> BoardApplicationOut:
-    # slug 为全局唯一命名空间：既不能与已存在的板块冲突，也不能与待审申请冲突
     if await BoardApplicationRepository(db).slug_taken(info.slug):
         raise BizError(BoardErr.SLUG_CONFLICT)
     if await BoardRepository(db).slug_taken(info.slug):
@@ -895,9 +884,6 @@ async def submit_application(
     return _bb_application_to_schema(app_)
 
 
-# 板块申请审核：与 columns 的 review_application 语义/签名不同（都叫同名，
-# 迁入 content 单一 service 后须区内唯一名），故加 boards 前缀；boards/service.py
-# 以原同名 `review_application` 重导出，保持 boards/router 与测试的既有调用不变。
 async def review_board_application(
     db: DbSession,
     application_id: uuid.UUID,
@@ -908,8 +894,6 @@ async def review_board_application(
     app_ = await repo.get_or_raise(application_id, BoardErr.APPLICATION_NOT_FOUND)
     if app_.status != "pending":
         raise BizError(BoardErr.APPLICATION_ALREADY_REVIEWED)
-    # 通过前先核对该申请 slug 是否已被现有 Board 占用；若占用则提前报冲突，
-    # 不修改申请状态，避免状态被标记 approved/reviewed 却未真正创建板块的不一致局面。
     if body.approve and await BoardRepository(db).slug_taken(app_.slug):
         raise BizError(BoardErr.SLUG_CONFLICT)
     app_.status = "approved" if body.approve else "rejected"
@@ -1038,7 +1022,6 @@ async def create_question(
         await spend(db, author_id, total, "qa_escrow", "qa_question", str(q.id))
     if info.images:
         await repo.add_images(q.id, info.images)
-    # 论坛可见：QA 提问同步落一条 content_items（content_type='qa'，挂 qa board）
     await _sync_question_content_item(db, author_id, q)
     await db.flush()
     await bump_collection_version("qa")

@@ -12,12 +12,10 @@ from core import metrics_relay, scheduler_state
 from core.scheduler import build_scheduler
 from core.tracing import setup_tracing, shutdown_tracing
 
-# 先装配（登记模型/任务/端口）再启动消费：否则 worker 会「未知任务 ack 丢弃」
 assemble()
 
 logger = logging.getLogger("lkm.scheduler")
 
-# 收尾等待在途作业的上界（秒）：超时即强停，避免一个长任务把进程收尾无限拖住。
 _SHUTDOWN_WAIT_S = 10.0
 
 
@@ -85,7 +83,6 @@ async def _graceful_shutdown(sched: AsyncIOScheduler) -> None:
                 _SHUTDOWN_WAIT_S,
             )
         except Exception:
-            # gather(return_exceptions=True) 正常不抛；兜底避免收尾路径被意外异常打断
             logger.exception("scheduler 收尾：等待在途作业异常，继续强停")
     # wait=False：AsyncIOExecutor 不支持 wait，残余 task 由其 shutdown 取消收口
     sched.shutdown(wait=False)
@@ -98,8 +95,6 @@ async def _main() -> None:
     sched = build_scheduler()
     sched.start()
     scheduler_state.note_started(len(sched.get_jobs()))
-    # 运行态心跳（§5.5-6）：本进程不暴露 /metrics，故把状态写进 Redis 交给 API 进程的
-    # reporter 上报；TTL 到期即意味着本进程已亡，API 侧 scheduler_up 转 0。
     heartbeat = asyncio.create_task(scheduler_state.run_heartbeat())
     # 跨进程指标中继（选项③）：本进程写 notify_failed_total（cron 发布失败路径）且不暴露
     # /metrics，快照同样交给 API 进程代报。
@@ -110,7 +105,6 @@ async def _main() -> None:
     finally:
         # 优雅关闭：先拒新触发，等当前作业完成或超时强停（见 _graceful_shutdown 的实况说明）
         await _graceful_shutdown(sched)
-        # 收尾前补最后一拍（state=0 + 残余在途数），让 API 侧立刻看到「已停」而不是等 TTL
         await scheduler_state.write_heartbeat()
         heartbeat.cancel()
         with suppress(asyncio.CancelledError):

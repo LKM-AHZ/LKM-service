@@ -87,8 +87,6 @@ class JsonFormatter(logging.Formatter):
             )
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
-        # default=str 兜底：datetime/ORM 对象/set 等不可序列化值原先会让 json.dumps 抛错，
-        # 被 Handler.emit → handleError 吞掉后**整条日志**丢失（只剩一个 traceback）
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 

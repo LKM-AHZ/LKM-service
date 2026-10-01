@@ -74,9 +74,6 @@ class Project(UUIDPrimaryKeyMixin, Base):
 class ProjectApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "project_applications"
     __table_args__ = (
-        # 同申请人同名的 pending 申请唯一（部分唯一索引）：应用层是 check-then-insert，
-        # 并发两次提交都能看到「不存在」而各插一行，绕过防刷；且一旦复核为 approved/
-        # rejected 就允许再次申请同名项目，故用 WHERE status='pending' 的部分索引。
         Index(
             "uq_project_applications_pending",
             "applicant_id",

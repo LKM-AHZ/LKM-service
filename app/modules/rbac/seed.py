@@ -44,8 +44,6 @@ async def seed_rbac(db: AsyncSession) -> int:
     if not rows:
         return 0
 
-    # 先对账删除：DEFAULT_GRANTS 仍管理的角色下、已从代码里移除的授权行必须清掉，
-    # 否则 role_permissions（运行时真相源）会保留代码已删除的权限，两处长期漂移
     for role_name, grants in DEFAULT_GRANTS.items():
         allowed = [g.permission.value for g in grants]
         await db.execute(

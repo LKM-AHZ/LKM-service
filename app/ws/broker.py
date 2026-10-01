@@ -89,8 +89,6 @@ async def publish(
     try:
         data = json.dumps(body, ensure_ascii=False)
     except (TypeError, ValueError):
-        # 序列化失败属调用方编程错误（payload 含不可 JSON 序列化对象），不得与
-        # 「Redis 不可用」的 fail-open 混为一谈：留日志并抛出，让问题暴露
         logger.warning(
             "ws publish payload 不可序列化: channel=%s",
             ws_channel(user_id, channel),

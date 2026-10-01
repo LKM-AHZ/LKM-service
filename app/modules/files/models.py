@@ -93,7 +93,6 @@ class UploadSession(Base):
     uploader_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     # 直传落地的随机对象 key（``up/<uid>``）：清扫据此删对象
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    # 登记所需的完整元数据（JSON），与原先 Redis 标记的值逐字相同
     meta: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

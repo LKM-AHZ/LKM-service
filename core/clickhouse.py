@@ -47,9 +47,6 @@ class ClickHouseClient(Protocol):
 # 测试 seam：注入 fake 客户端工厂（同步或 async 返回均可）
 _client_factory: Callable[[], Any] | None = None
 _client: Any = None
-# 建/关单例的互斥：工厂是网络 I/O（await 期间会挂起），非原子的先查后建会让并发调用
-# 各建一个客户端，败者被覆盖后永不 close（连接池泄漏）；close 与建连并发时也会把新建的
-# 客户端丢在 shutdown 之后，故两边共用同一把锁
 _client_lock = asyncio.Lock()
 
 

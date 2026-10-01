@@ -38,21 +38,11 @@ from core.config import settings
 #: bot 面板 SSO 专属 audience（与 lkm:admin / 前台会话隔离）。部署层暴露为
 #: LKM_BOT_SSO_AUDIENCE（见 x-bot-sso-env）：这是票据的**隔离边界**，多面板部署可能要区分。
 BOT_SSO_AUD = settings.bot_sso_audience
-#: 票据类型，bot 侧显式校验。部署层暴露为 LKM_BOT_SSO_TYPE——签发/消费两侧是唯一配对，
-#: 改它必须两侧同值，否则票据被对面拒收（type 不符即拒）。
 BOT_SSO_TYPE = settings.bot_sso_type
-#: 签发方标识：bot 侧验签时校验 ``iss``（本次补齐的漏洞）。部署层暴露为 LKM_BOT_SSO_ISSUER
-#: ——签发方身份随环境而变的可能性最大（多租户/多套 auth），且必须两侧同值。
 BOT_SSO_ISSUER = settings.bot_sso_issuer
-#: 票据只换**管理员**面板会话，故 account_level 是协议的一部分（bot 侧同样校验）。
-#: 部署层暴露为 LKM_BOT_SSO_ACCOUNT_LEVEL——但注意**这个值就是铸票门禁本身**：
-#: :func:`mint_ticket` 与 ``router_bot_sso`` 都拿它做相等比较，调低它等于把门禁降级
-#: （设成普通用户等级，普通用户即可持票换管理员面板会话）。两侧必须同值。
 BOT_SSO_ACCOUNT_LEVEL = settings.bot_sso_account_level
 
 
-#: TTL 上界（秒）。票据在 iframe URL query 里明文传递，会进浏览器历史/代理日志，
-#: 故上界的意义是「即使配错也不会长期可重放」——60s 默认够一次重定向往返，5 分钟已很宽裕。
 _TTL_MAX_SECONDS = 300
 #: TTL 下界/兜底：宁可 60s，也不让签发出一个荒谬的有效期。
 _TTL_DEFAULT_SECONDS = 60
@@ -68,9 +58,6 @@ def _clamp_ttl(value: int) -> int:
     return min(value, _TTL_MAX_SECONDS)
 
 
-#: 票据有效期（秒）。票据经 iframe URL query 传递，必须短到「来不及被日志/历史二次利用」，
-#: 又要容得下浏览器一次重定向的往返。部署层暴露为 LKM_BOT_SSO_TTL_SECONDS——仅签发侧消费
-#: （消费侧由 PyJWT 按 ``exp`` 自行判定），故调整不影响对面；配大了也会被上界钳住。
 BOT_SSO_TTL_SECONDS = _clamp_ttl(settings.bot_sso_ttl_seconds)
 
 

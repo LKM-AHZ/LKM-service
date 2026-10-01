@@ -135,12 +135,8 @@ async def _fetch_discussion(
     conditions: list[Any] = [
         ContentItem.content_type == "discussion",
         ContentItem.status == ContentStatus.PUBLISHED,
-        # 内容软删（批 4）：实时合流兜底路径同样不得返回已删内容
         ContentItem.deleted_at.is_(None),
     ]
-    # follow 模式：关注作者 或 关注版块；hot 模式两者皆 None 不限制。
-    # 只看 author_ids 是否为 None（与其它源同款）：原先要求两者都非 None，调用方若只给
-    # author_ids（版块上下文未加载）会静默返回**全站**讨论帖，是个无声的越权/串流面。
     if author_ids is not None:
         author_cond = ContentItem.author_id.in_(author_ids)
         if board_ids:
@@ -157,8 +153,6 @@ async def _fetch_discussion(
     )
     stmt = select(ContentItem).where(*conditions).order_by(*order_by).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
-    # author_name 由 service 合流后统一批量填充（见 service.get_timeline 的 _fill_authors），
-    # 避免同一作者在多源各查一次；此源只返回 author_id。
     return [
         FeedItem(
             item_type="discussion",

@@ -82,12 +82,6 @@ async def _get_or_create_stats(
         stat = await db.get(UserBehaviorStat, user_id)
     if stat is None:
         stat = UserBehaviorStat(user_id=user_id, stats={})
-        # 用 savepoint 承载插入；并发撞主键只回滚本 savepoint，而非 db.rollback()
-        # 整事务——否则会连带回滚调用方本事务里未提交的其它写（如 worker 里 reward()
-        # 已写入的 ledger 流水），导致发分后续又因重试被跳过，数据不一致。
-        # db.add 必须在 begin_nested() **之后**：savepoint 回滚只 expunge 快照之后新增的
-        # 对象，若在快照前 add，回滚后该 pending 行仍留在 session.new，后续 flush/autoflush
-        # 会再 INSERT 撞主键，抛未捕获的 IntegrityError 拖垮整个事务。
         sp = await db.begin_nested()
         try:
             db.add(stat)

@@ -56,10 +56,6 @@ def _status() -> ModuleStatus:
     )
 
 
-# 板块写端点**不做缓存失效**：boards 目前没有读缓存（list_boards/get_board_ex 直读 DB，
-# content_items 才走版本号缓存）。原先此处的 bump_collection_version("boards") 与
-# make_key("boards:item") 删除都是空转（全仓无人读这两个键），只会给人「陈旧板块数据已被
-# 处理」的错觉。将来若给 boards 加读缓存，须同时给下面的禁言/解禁端点补失效。
 router = APIRouter(prefix="/boards", tags=["content", "boards"])
 
 
@@ -99,8 +95,6 @@ async def review_app(
     _cur: Admin2FADep,
     db: AsyncSession = Depends(get_session),
 ) -> BoardApplicationOut:
-    # Admin2FADep 已保证 admin 会话 + 2FA 信任；此处叠加 boards_review_application
-    # 权限点（super_admin 有，org_member 无）。校验失败按 FORBIDDEN 返回。
     role = composible_role(_cur.account_level, _cur.role)
     if not await role_has_permission(db, role, Permission.boards_review_application):
         raise BizError(CommonErr.FORBIDDEN)

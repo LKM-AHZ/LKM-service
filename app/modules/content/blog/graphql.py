@@ -139,8 +139,6 @@ def _comment_author(c: BlogCommentInfo) -> GraphSeriesCommentAuthor:
 
 
 def _map_comment(c: BlogCommentInfo, *, depth: int = 0) -> GraphSeriesComment:
-    # 展开深度上限：深层回复链或脏数据里的 parent_id 环会让递归无限展开并抛
-    # RecursionError，整条 GraphQL 查询随之失败；到顶后截断 replies 而不是报错
     replies = (
         [_map_comment(r, depth=depth + 1) for r in c.replies]
         if depth < _MAX_COMMENT_DEPTH

@@ -108,7 +108,6 @@ async def cleanup_expired_challenges() -> None:
     while True:
         await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         try:
-            # S5 拆库后 PasskeyChallenge 在 auth 独立库 → 必须用 auth 会话，不能用业务 new_session。
             db = await new_auth_session()
             try:
                 now = now_iso()
@@ -195,7 +194,6 @@ async def begin_passkey_registration(db: DbSession, user_id: uuid.UUID) -> dict:
         attestation=AttestationConveyancePreference.NONE,
         authenticator_selection=AuthenticatorSelectionCriteria(
             authenticator_attachment=AuthenticatorAttachment.PLATFORM,
-            # 强制本地用户验证（指纹/面容等），保证无密码登录的防冒用强度
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
         exclude_credentials=exclude_credentials,

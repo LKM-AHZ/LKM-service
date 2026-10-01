@@ -170,7 +170,6 @@ def _generate_recovery_txn_id() -> str:
     return secrets.token_hex(32)
 
 
-#: admin 恢复发起的一律文案：两个分支必须逐字相同，否则响应体差异就是 admin 账号枚举 oracle。
 _ADMIN_RECOVER_BEGIN_MSG = (
     "If the account is eligible, recovery instructions have been sent."
 )
@@ -184,9 +183,6 @@ async def recover_admin_begin(
     """第 1 步：启动管理员恢复。服务层负责生成验证码并通过 background_tasks 发送。"""
     user = await UserRepository(db).find_by_email_or_phone(contact)
 
-    # 恒定时序：无论邮箱/手机是否注册为 admin，都在分支前执行一次等成本的
-    # argon2 虚拟哈希——避免「存在=不发散(快)、不存在=跑 dummy_verify(慢)」的
-    # 耗时差被攻击者当作账号枚举 oracle。
     await dummy_verify()
 
     if user and str(user.account_level) == "admin":
@@ -282,7 +278,6 @@ async def recover_admin_verify_totp(
         raise BizError(AuthErr.TOKEN_INVALID, "Invalid 2FA temp token") from exc
 
     user_id: Any = payload.get("user_id", payload.get("sub"))
-    # JWT 落 JSON，uuid 以字符串回读；与 UUID 列比较须归一字符串形式
     if str(user_id) != str(txn.user_id):
         raise BizError(
             AuthErr.TOKEN_INVALID, "Token user does not match recovery transaction user"
@@ -296,7 +291,6 @@ async def recover_admin_verify_totp(
             AuthErr.TOKEN_INVALID, "Token does not match this recovery transaction"
         )
 
-    # 必须已被 /auth/2fa/verify 消费 —— 在成功的 2FA 之后
     token_hash = hashlib.sha256(temp_token.encode()).hexdigest()
     usage = await TempTokenUsageRepository(db).find_recovery_usage(
         token_hash=token_hash, user_id=user_id, txn_id=txn_id

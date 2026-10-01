@@ -193,11 +193,7 @@ async def admin_trend(
         消费方是 biz 表（posts 等仍在 biz realm），不做跨库假设。"""
         out: dict[date, int] = {}
         try:
-            # 统一按 UTC 分桶：PG 的 func.date(timestamptz) 会先按会话时区(本地+08)取日，
-            # 与“以 UTC 今天为基准”偏移一天；故先 AT TIME ZONE 'UTC' 变 naive-UTC 再取日。
             day_expr = func.date(func.timezone("UTC", col))
-            # 右界同理须用 UTC aware datetime：date 参数会被 PG 按会话时区解释而整体
-            # 偏移（见 auth.snapshot.user_count_by_day 同款说明）。
             start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
             # 与 auth 侧 user_count_by_day 同口径：闭开区间 [start, start+days)，
             # 少了右界会把未来 created_at（时钟偏移/导入数据）也扫进来并产出区间外的 key
@@ -220,8 +216,6 @@ async def admin_trend(
                 out[date.fromisoformat(r0[:10])] = int(r[1] or 0)
         return out
 
-    # 数据按 UTC 存储/分桶，基准须用 UTC 的"今天"，否则本地时区偏移（东8区凌晨）
-    # 会让 start 与分桶错位一天（跨天不 flaky，同 admin_trend 既有语义）。
     start = datetime.now(UTC).date() - timedelta(days=days - 1)
     # user 增量：auth authoritative（auth.snapshot 的 UTC 分桶，.where created_at >= start
     # 且 < start+days 只覆盖窗口；窗口内缺日由下方循环补 0）

@@ -110,8 +110,6 @@ def get_channel(channel_key: str) -> Any:
     try:
         return CHANNELS[channel_key]
     except KeyError:
-        # 未知 key 是调用方传错值：抛领域错误（可归因、可映射状态码），而不是让裸 KeyError
-        # 冒到上层变成不可解释的 500 —— 与本模块其它缝的错误翻译风格保持一致
         raise BizError(CommonErr.INVALID_INPUT, f"unknown channel: {channel_key}") from None
 
 
@@ -165,10 +163,6 @@ async def mint_bot_sso_ticket(
     except UserHttpUnavailable as exc:
         raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from None
     except Exception as exc:
-        # 本函数是上面那条 fail-closed 承诺的唯一落点，但 UserHttpUnavailable 盖不住全部
-        # 「不可达/畸形」：auth_http_url 非法时 httpx 抛的是 InvalidURL（ValueError 子类，
-        # **不是** httpx.HTTPError），惰性建 client 也可能抛别的。故这里兜底翻译，
-        # 原始异常留在 __cause__ 里供排查，绝不让裸异常穿过这条缝。
         raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from exc
 
 

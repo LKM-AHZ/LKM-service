@@ -79,14 +79,9 @@ async def _sub_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # 退避重连要可观测：否则订阅长期失败只表现为「实时失效不生效」，无任何日志
             logger.warning("L1 失效订阅异常，退避重连", exc_info=True)
             await asyncio.sleep(1)
         finally:
-            # 取消/异常两条路径都要关掉订阅连接：原先只在 except Exception 里关，
-            # CancelledError 分支直接 raise 就漏了——每次 stop()（应用收尾）都会泄漏一条
-            # 池连接并留下服务端悬挂订阅，正是 docstring 承诺要收尾的东西。
-            # 吞掉关闭自身的异常（含二次投递的 CancelledError），别让它顶掉原始退出原因
             if pubsub is not None:
                 with suppress(Exception, asyncio.CancelledError):
                     await pubsub.aclose()
@@ -95,8 +90,6 @@ async def _sub_loop() -> None:
 async def stop() -> None:
     """收尾：取消订阅 task（幂等）。须在 redis 客户端关闭前调用。"""
     global _sub_task
-    # 取 task 与置空必须在 start() 的同一把锁内完成：否则 start() 若插在「读」与「cancel」
-    # 之间新建了 task，stop 取消的是旧 task，新订阅者无人取消（收尾后被留在运行中）
     async with _start_lock:
         task, _sub_task = _sub_task, None
     if task is not None and not task.done():

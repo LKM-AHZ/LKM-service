@@ -32,9 +32,6 @@ from auth.circuit_breaker import auth_http_breaker
 from core.config import settings
 from core.secrets import reveal
 
-# 冻结只读字段（与 auth.snapshot.UserSnapshot 完全一致）；缺任一字段即判畸形 → fail-open。
-# raw nickname 已加入快照缝冻结字段（M3.A 残项），HTTP OFF/ON 两侧 `_SNAP_FIELDS` 须同源，
-# 否则 HTTP 缝响应会因缺 nickname 被本 client 判畸形。nickname 非 PII/凭证，缝可承载。
 _SNAP_FIELDS: tuple[str, ...] = (
     "user_id",
     "username",
@@ -136,8 +133,6 @@ async def fetch_user_http_payload(
         raise UserHttpUnavailable(f"auth_http unexpected status {resp.status_code}")
 
     payload = _coerce_json(resp)
-    # 区分「显式 data: null」（权威不存在）与「压根没有 data 键」（信封畸形）：后者按
-    # fail-open 契约必须抛 Unavailable 让调用方回落 DB，绝不能当作用户不存在。
     if "data" not in payload:
         raise UserHttpUnavailable("auth_http payload missing data")
     data_obj = payload["data"]
@@ -232,7 +227,6 @@ def _to_fields_or_unavailable(data: Any) -> dict[str, Any]:
     return {f: data[f] for f in _SNAP_FIELDS}
 
 
-# —— 授权判定 seam（M3.B S3）：monolith deps 把“会话存活/失效/角色政令”委托给 auth 权威 ——
 
 _AUTHZ_FIELDS: tuple[str, ...] = ("ok", "account_level", "role")
 
@@ -290,16 +284,6 @@ async def authorize_via_seam(
     }
 
 
-# —— 升权写面 seam（M3.B S5 C）：业务把单向升权（解锁考试/纳入成员）交给 auth 权威写 ——
-#
-# S5 拆库后业务库不再有 users/profiles（auth 是身份词表唯一 owner，含写）。当业务进程确需把
-# 用户"单向升权"（exam 通过→exam_unlock；projects 审核通过→incubation）落为 auth 真值时，只能
-# 经 AUTH 内部写端点 ``/auth/internal/grant`` 打到 auth 进程（auth 自持库事务内 execute+commit）。
-# 本函数是该写面 HTTP client：URL/作法与 :func:`authorize_via_seam` 一致；不触业务 DB 会话。
-#
-# **fail-closed**（写不可静默流失）：调用方只在 ``enabled()``（url+token 都配齐）时进入本函数；
-# 任一网络/超时/4xx/5xx/畸形 → 抛 ``UserHttpUnavailable``，由 supplier 向上传播，绝不让"升权落空"
-# 被当成成功（否则审核标记 approved 而用户未真升权 → 语义漂移）。调用方负责按信封取 ``changed``。
 
 _GRANT_FIELDS: tuple[str, ...] = ("changed",)
 
@@ -347,12 +331,6 @@ async def grant_via_seam(
         ) from None
 
 
-# —— 凭证校验缝（blog git HTTP-Basic 写/读路径）：凭证直读必须落在 auth 库内 ——
-#
-# 拆库后业务库不再有 users 表，git 的 Basic 认证不能再就地查 User（那是 UndefinedTable）。auth
-# 侧 ``/auth/internal/verify-password`` 已提供权威校验；本函数是该端点 client。与快照读缝的
-# **fail-open** 相反，本缝 **fail-closed**：调用方只在 ``enabled()``（url+token 都配齐）时进入，
-# 任一端不通/畸形 → 抛 ``UserHttpUnavailable``，由调用方按认证失败收场，绝不回落业务库。
 
 _VERIFY_FIELDS: tuple[str, ...] = ("ok", "user_id", "username")
 
@@ -398,14 +376,6 @@ async def verify_password_via_seam(*, username: str, password: str) -> dict[str,
     }
 
 
-# —— bot 面板 SSO 铸票缝（面板并入社区后台）：票据签发原语在 auth 域（私钥只在此）——
-#
-# 社区后台进程（business）不持签发私钥，只能经本 client 把「代表某 admin 铸一张一次性票据」
-# 交给 auth 进程。消费方是 ``app/modules/admin/bot_router`` 的 ``/admin/bot/sso-ticket``，
-# 该端点已被 ``require_admin``（seam-only）裁决过管理员身份，此处再经 auth 独立复核。
-#
-# **fail-closed**：任一端不回 200／畸形 → 抛 ``UserHttpUnavailable``，调用方转 UNAVAILABLE 而
-# 非"静默不发票"（发不出票只是需要手动登录，但必须让运维看见是缝坏了还是配置漏了）。
 
 _BOT_TICKET_FIELDS: tuple[str, ...] = ("ticket", "expires_in")
 
@@ -425,8 +395,6 @@ async def mint_bot_sso_ticket(
     )
 
     if resp.status_code != 200:
-        # 403 理论上不可达（调用方持 seam 裁决过的 admin），若出现说明两进程口径漂移，
-        # 与网络故障同样按"缝不可用"上报，绝不静默降级。
         raise UserHttpUnavailable(
             f"auth_http bot-ticket unexpected status {resp.status_code}"
         )
@@ -436,8 +404,6 @@ async def mint_bot_sso_ticket(
         if f not in payload:
             raise UserHttpUnavailable(f"auth_http bot-ticket missing field {f}")
     ticket = payload["ticket"]
-    # 必须显式校验：str(None) == "None" 是个非空字符串，原实现会把空票当有效票据返回，
-    # 调用方再把它拼成 SSO iframe URL 发出去（违背「绝不返回空票」的 fail-closed 契约）。
     if not isinstance(ticket, str) or not ticket:
         raise UserHttpUnavailable(f"auth_http bot-ticket malformed ticket={ticket!r}")
     try:

@@ -29,7 +29,6 @@ REFRESH_NAME = "admin_refresh"
 ACCESS_TOKEN_MINUTES = settings.admin_access_cookie_minutes
 # 与前台分离的 audience：后台 access cookie 只认本 audience，防被其它会话冒用。
 _ADMIN_AUD = "lkm:admin"
-# cookie Path 需覆盖 admin 后台全部路径，故扩展到整个 API 前缀而非 /admin 子路径。
 COOKIE_PATH = f"/{settings.api_prefix.strip('/')}"
 # 危险操作 step-up 2FA 的信任窗口：验证通过后 1 小时内不再重复要求（前台与后台同值）。
 MFA_TRUST_SECONDS = 3600
@@ -144,8 +143,6 @@ async def get_optional_user(
     try:
         return await get("authz").resolve_current_user(token, db)
     except (BizError, PyJWTError) as exc:
-        # 可选依赖确实不该抛错，但吞掉要留痕：否则「account state 服务不可用」这类
-        # 基础设施故障在线上表现为「偶尔匿名」，没有任何可查的线索
         import logging
 
         logging.getLogger("lkm.ports.authz").debug("optional auth ignored: %s", exc)

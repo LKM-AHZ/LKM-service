@@ -36,7 +36,6 @@ def _guard_oauth_query(
     """
     if error:
         if error == "access_denied":
-            # 用户主动取消：400 + 专属错误码，前端可据此静默回登录页而不是报错
             raise BizError(AuthErr.OAUTH_CANCELED, error_description or None)
         raise BizError(
             AuthErr.OAUTH_PROVIDER_ERROR,
@@ -78,8 +77,6 @@ async def github_bind_redirect(
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, str]:
     """返回用于绑定的 OAuth 授权 URL（从 JS 客户端调用）。"""
-    # 必须带上发起者 id：state 记录的 user_id 是回调侧唯一的归属依据，缺了它
-    # bind_oauth 会以 "Bind session lost its owner" 拒绝，绑定流程恒不可用。
     url = await service_oauth.get_github_auth_url(db, purpose="bind", user_id=_cur.id)
     return {"url": url}
 

@@ -39,18 +39,10 @@ search_engine_fallback_total = Counter(
     "外部检索失败回落 PG 的次数（label engine=meilisearch|opensearch）",
     ("engine",),
 )
-# 消息总线投递失败（publish 抛错 / 不可用），供错误率看板；未配置 broker 属 fail-open
-# 不计。由 messaging.publish 唯一计数：outbox relay 经同一 publish 投递，其抛出路径已
-# 被此处捕获，relay 不再重复 inc（防同一异常 double-count）。
 notify_failed_total = Counter(
     "notify_failed_total",
     "消息总线投递失败次数（publish 抛错 / 不可用，unified at messaging.publish）",
 )
-# 事件契约违约计数（`app/core/event_contract.py`）：side=produce（messaging.publish 拒发，
-# relay 侧另有 permanent_failure_reason 折叠进 event_failures）| consume（worker 丢弃坏消息）。
-# fn 取契约登记表里的名字，未登记/非字符串统一归到 "<unknown>"——否则任何脏 payload 都能凭空
-# 造出 label 维度（label 无界 = 指标基数爆炸），与 audit_events_total 的白名单同理。
-# 两侧都有写出点（consume 侧在 worker 进程），故已进 metrics_relay.RELAYED。
 event_contract_violations_total = Counter(
     "event_contract_violations_total",
     "事件契约违约次数（side=produce|consume；detail 见日志）",
@@ -63,18 +55,11 @@ outbox_pending_count = Gauge(
     "outbox_pending_count",
     "outbox_events 中 status=pending 的积压事件数（relay 每轮末尾上报）",
 )
-# outbox relay 领导者选举事件（蓝图 §5.1 第 7 条：「无 leader 或选主抖动即告警」）。
-# event=acquired（本实例当选）/ contended（有他人在跑，正常）/ renew_failed（续约失败，
-# 失联/被接管前兆）/ stale_reclaimed（接管了陈旧锁）。renew_failed 持续增长或 acquired
-# 频繁交替 = 选主抖动，会让 relay 停摆或抢主风暴——故本指标是那条告警的取数点。
 outbox_leader_total = Counter(
     "outbox_leader_total",
     "outbox relay 领导者选举事件（event=acquired|contended|renew_failed|stale_reclaimed）",
     ("event",),
 )
-# Pulsar 各订阅 lag（msgBacklog）：由 API 进程的 lag 上报器（app/core/pulsar_lag.py）
-# 周期从 Pulsar Admin REST 拉取后 set，供「某订阅故障/消费滞后」隔离看板。worker 进程
-# 不暴露 /metrics，故只在 API 进程上报。标签 = (subscription, topic)。
 pulsar_subscription_backlog = Gauge(
     "pulsar_subscription_backlog",
     "Pulsar 订阅积压消息数 msgBacklog（API 进程周期上报）",
@@ -88,9 +73,6 @@ user_snap_cache_total = Counter(
     "user:snap 双级缓存命中/未命中（layer=l1|l2, result=hit|miss）",
     ("layer", "result"),
 )
-# 跨进程缓存锁（B4，蓝图 §5.6 的 L2 double-check）：result=acquired（拿到锁，负责回填）
-# / timeout（等锁超时后走无锁直读）/ error（锁命令失败，立即降级）。
-# timeout 上升说明回填耗时或实例数偏多；error 上升说明 Redis 故障。
 cache_lock_total = Counter(
     "cache_lock_total",
     "跨进程缓存锁结果（result=acquired|timeout|error）",
@@ -105,19 +87,12 @@ user_snap_singleflight_total = Counter(
 )
 
 
-# 计数对账震荡信号（蓝图 §5.6「同一批 key 多轮 diff 不降反升即判震荡」）：
-# 连续两轮对账都需要修正**同一个** content 计数 key，说明漂移正在被反复制造——典型原因是
-# 写方向被破坏（出现双向互写）或计数口径与明细不一致。本计数上升即需人工介入排查，
-# 而不是让对账在"改了又漂、漂了又改"里空转。
 counts_reconcile_repeated_total = Counter(
     "counts_reconcile_repeated_total",
     "连续两轮对账都需修正的计数 key 数（对账震荡信号，>0 需人工查写方向）",
 )
 
 
-# 审计事件消费计数：审计此前只批量导出到 ClickHouse，属
-# 「事后可查」；这里把登录失败/权限变更变成**实时可告警**的流。action 维度取
-# ``messaging.RKEY_AUDIT_*`` 的值；告警规则见 deploy/prometheus/rules/lkm-audit.yml。
 audit_events_total = Counter(
     "audit_events_total",
     "已消费的审计事件数（action=login_fail|permission_change；§5.2）",
@@ -125,8 +100,6 @@ audit_events_total = Counter(
 )
 
 
-# GraphQL 查询耗时（M6.4）：从 operation 开始到执行收束（含解析/校验/执行），供只读端点
-# 的性能看板；被防护拒绝的查询同样计入（耗时短，正是防护生效的形态）。
 graphql_query_duration_seconds = Histogram(
     "graphql_query_duration_seconds",
     "GraphQL 单次操作耗时（秒，含解析/校验/执行；M6.4）",
@@ -139,10 +112,6 @@ graphql_query_rejected_total = Counter(
     "GraphQL 查询被防护拒绝次数（reason=depth|complexity|timeout；M6.4）",
     ("reason",),
 )
-# GraphQL 文档的**声明深度分布**（蓝图 §2 第 5 条「执行时间 / 深度分布 / 被拒查询数」三件套
-# 之一，此前只有前两者）。深度值直接取自 ``QueryDepthLimiter`` 的校验回调，故与
-# ``LKM_GRAPHQL_MAX_DEPTH`` **同一口径**（strawberry 侧计数：叶字段计 0、非叶字段自 1 起，
-# introspection 字段不计）——分布右移即「客户端查询正在变深」的先行信号，无需等被拒才可见。
 graphql_query_depth = Histogram(
     "graphql_query_depth",
     "GraphQL 单次操作的声明深度分布（与 graphql_max_depth 同口径；§2 第 5 条）",
@@ -217,7 +186,6 @@ class DBPoolCollector(Collector):
                     "checked_in": pool.checkedin(),
                 }
             except Exception:
-                # 池实现可能不支持这些方法：抓取路径绝不能因单池失败而整体 500
                 logger.exception("读取 %s 连接池水位失败，本池本次不导出", pool_name)
                 continue
             for state, value in states.items():
@@ -225,8 +193,7 @@ class DBPoolCollector(Collector):
         yield gauge
 
 
-# 模块级单例：重复调用 register_* 或重复 create_app 都只注册一次
-# （prometheus_client 对同名指标/同一 collector 二次注册抛 ValueError）。
+# Collector 在进程内只注册一次。
 _pool_collector: DBPoolCollector | None = None
 
 
@@ -239,9 +206,6 @@ def register_pool_metrics_collector() -> DBPoolCollector:
     try:
         REGISTRY.register(collector)
     except ValueError:
-        # 已在 REGISTRY 里（典型：importlib.reload 把上面的模块级单例重置了）。复用既有
-        # 实例而不是抛错，否则 reload 后每个请求都可能因重复注册炸掉；找不到同类型实例
-        # 说明是别的命名冲突，原样上抛。
         for existing in REGISTRY._collector_to_names:  # type: ignore[attr-defined]
             if isinstance(existing, DBPoolCollector):
                 _pool_collector = existing
@@ -259,9 +223,6 @@ def setup_metrics(app: FastAPI) -> None:
     if not settings.metrics_enabled:
         logger.info("Prometheus metrics 已关闭（LKM_METRICS_ENABLED=false）")
         return
-    # 幂等按 app 判定：不能用模块级标志（测试会多次 create_app，每个 app 都需要自己的
-    # /metrics 与埋点），只有对**同一个 app** 重复调用才该短路，否则会重复挂 instrumentator
-    # 中间件并重复注册同名路由
     if any(
         getattr(route, "path", None) == settings.metrics_endpoint
         for route in app.routes

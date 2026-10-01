@@ -47,8 +47,6 @@ _DEFAULT_WINDOW = _resolve_default_window()
 
 def _flow_span(traceparent: str) -> Any:
     """把 flow 执行挂到触发方 trace（跨进程续链，fail-open）。"""
-    # docstring 承诺 fail-open：埋点问题绝不能阻断导出。tracing 依赖初始化失败、
-    # traceparent 非法导致 span 创建抛错时，降级为无 span 继续跑
     try:
         from core.tracing import extract_context, tracer
 
@@ -75,8 +73,6 @@ async def _export_audits(*, window: int) -> int:
     return await run_audit_logs_export(window=window)
 
 
-# Prefect task 包装：生产获得重试与运行状态；纯函数体可被编排层注入替换（测试用普通
-# 函数，避免触碰 Prefect engine）。
 @task(name="analytics-export-failures", retries=3, retry_delay_seconds=30)
 async def export_failures_task(*, window: int) -> int:
     return await _export_failures(window=window)
@@ -114,7 +110,6 @@ async def orchestrate_analytics_export(
     for err in errors:
         logger.error("analytics 导出一路失败: %r", err, exc_info=err)
     if errors:
-        # 两路都已尝试（gather 保证互不阻塞），再抛出第一处错误让 Prefect/cron 感知失败
         raise errors[0]
     return {"event_failures": results[0], "audit_logs": results[1]}
 

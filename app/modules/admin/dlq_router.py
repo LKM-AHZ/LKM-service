@@ -48,8 +48,6 @@ async def list_dlq(
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> ListData[_DlqItem]:
-    # id 是 UUIDPrimaryKeyMixin 的随机 UUID，无时间单调性，按它排序拿不到「最新死信」；
-    # 且 DLQ 只增不减，必须带上限拉取（payload_json 是 JSONB 全量），否则单请求即爆内存。
     rows = (
         (
             await db.execute(
@@ -93,9 +91,6 @@ async def requeue_dlq(
         payload=body.payload if body else None,
     )
     if not ok:
-        # requeue 对「状态非法」与「下游发布失败」都返回 False（worker_dlq 的既有签名），
-        # 但两者对调用方意义完全不同：把 MQ 故障当 400 参数错误报会给前端与监控双重误导。
-        # 故先回滚（顺带释放 requeue 的 FOR UPDATE 行锁）再重读状态来区分。
         await db.rollback()
         m = await db.scalar(select(DlqMessage).where(DlqMessage.id == dlq_id))
         if m is None or m.status != "pending":
@@ -120,8 +115,7 @@ async def discard_dlq(
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> dict[str, Any]:
-    # 行锁读 + 状态校验，与 worker_dlq.requeue 同一状态机：只允许 pending → discarded。
-    # 不校验状态会让「已 requeued/已被处理」的记录被覆盖，并发 requeue/discard 也会互相覆盖。
+    # 只允许将 pending 死信标为 discarded。
     m = await db.scalar(
         select(DlqMessage).where(DlqMessage.id == dlq_id).with_for_update()
     )

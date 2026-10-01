@@ -47,7 +47,6 @@ def _resolve_password(cli_value: str | None) -> str:
 
 
 async def main() -> None:
-    # 先校验参数个数：原先直接取 argv[1..4]，少参会抛裸 IndexError，多参会被静默忽略
     if not 4 <= len(sys.argv) <= 5:
         print(_USAGE, file=sys.stderr)
         sys.exit(2)
@@ -56,9 +55,6 @@ async def main() -> None:
 
     db = await new_auth_session()
     try:
-        # 幂等：已存在则提示退出，避免唯一约束冲突。
-        # 三列各自唯一，OR 可能同时命中**不同**用户，故取全部命中行逐个提示，
-        # 不能用 scalar_one_or_none（多命中会抛 MultipleResultsFound 崩成 traceback）。
         existing = (
             (
                 await db.execute(
@@ -91,12 +87,10 @@ async def main() -> None:
         try:
             await db.commit()
         except IntegrityError:
-            # 先查后插非原子：并发/重复执行时唯一约束兜底，转成友好提示而不是栈。
             await db.rollback()
             print(f"[skip] 唯一约束冲突（并发或重复执行）：{username}")
             return
         await db.refresh(user)
-        # 绕过 create_user_with_profile 直接建号，须自行补白名单位图，否则该管理员的快照读会被布隆误判为「从未存在」
         await bloom.add(str(user.id))
         print(
             f"[ok] 管理员创建成功: id={user.id} username={user.username} account_level={user.account_level}"

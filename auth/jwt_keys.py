@@ -35,8 +35,6 @@ logger = logging.getLogger("lkm.auth.jwt_keys")
 
 RS256 = "RS256"
 
-#: APISIX 网关消费者的 ``key`` 必须与 token 里该 claim 相同（jwt-auth 靠它查消费者）。
-#: 「网关可验签但不可签发」的取舍与 schema 细节见路线图 §8 #43。
 GATEWAY_KEY = "lkm"
 
 
@@ -166,11 +164,6 @@ def jwks_document() -> dict[str, Any]:
     return {"keys": [jwk]}
 
 
-# ─────────── 运行期公钥获取：JWKS 客户端（蓝图 §2 第 2 条）───────────
-# 本地注入（env / ``*_file``）是**首选**来源；都为空时若配了 ``auth_http_url``，则从 AUTH 的
-# ``/.well-known/jwks.json`` 拉取并缓存——「只验签不签发」的进程因此可以完全不带密钥文件上线。
-# 拉取失败一律 **fail-open**：进程照常活，readiness 如实报「验签不可用」（见 verification_status），
-# 绝不因取不到公钥而崩溃或阻止启动。
 
 #: 运行期从 JWKS 拉到的公钥 PEM（本地有钥时不会被使用/写入）。
 _fetched_public_pem: str | None = None
@@ -241,7 +234,6 @@ async def refresh_public_key_from_jwks() -> bool:
         base = (settings.auth_http_url or "").strip().rstrip("/")
         if not base:
             return False
-        # JWKS 挂在站点根（不经 api_prefix，见 auth/router_jwks.py），故这里不拼 api_prefix。
         url = f"{base}/.well-known/jwks.json"
         async with _build_jwks_client() as client:
             resp = await client.get(url)

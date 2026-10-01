@@ -96,8 +96,6 @@ _SPEC_BY_NAME = {spec.name: spec for spec in RELAYED}
 # 本实例标识：写进快照键，多副本互不覆盖；hostname+pid 在容器内唯一。
 _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:128]
 
-# TTL 取周期的 3 倍：允许漏两拍（写失败/短暂不可用）而不误判"生产者在"，同时又能在一个合理
-# 窗口内发现"进程真的没了"。理由与取值同 scheduler_state。
 _TTL_MULTIPLIER = 3
 
 
@@ -133,7 +131,6 @@ def snapshot() -> list[list[Any]]:
                         ]
                     )
         except Exception:
-            # 单个指标取值失败不能让整份快照丢失——其余指标照常上报
             logger.warning("指标取值失败 name=%s", spec.name, exc_info=True)
     return out
 
@@ -253,7 +250,6 @@ def _apply_counter(name: str, labels: tuple[str, ...], total: float) -> None:
         child = spec.metric if not spec.labelnames else spec.metric.labels(*labels)
         child.inc(delta)
     except Exception:
-        # 施加失败不更新基线，下一轮重试（否则这段增量被永久吞掉）
         logger.warning(
             "远端计数施加失败 name=%s labels=%s", name, labels, exc_info=True
         )
@@ -281,7 +277,6 @@ async def collect_once(redis: Any | None = None) -> None:
         else await redis_client.get_redis(relay_key_pattern())
     )
     if client is None:
-        # 读不到远端状态：按"不可认为中继在跑"处置，但不改动任何业务指标的上次值
         metrics_relay_up.set(0)
         return
 
@@ -327,13 +322,11 @@ _task: asyncio.Task[None] | None = None
 
 
 async def _run_reporter() -> None:
-    # 下界 1s，理由同 run_publisher
     period = max(settings.metrics_relay_interval_s, 1.0)
     while True:
         try:
             await collect_once()
         except Exception:
-            # 轮级兜底：任一轮异常不得让 reporter 永久停更（否则指标静默冻结在旧值）
             logger.exception("指标中继上报轮次异常，跳过本轮")
         await asyncio.sleep(period)
 

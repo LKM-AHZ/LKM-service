@@ -16,8 +16,6 @@ _exported_snapshot: Any | None = None
 
 def __getattr__(name: str) -> Any:
     global _exported_routers, _exported_graphql, _exported_snapshot
-    # 统一只读身份缝（A1）：惰性载入，保持 `import auth` 绝对轻量零循环。
-    # 业务域展示性身份读取只经 auth.snapshot（见 M3 spec 读缝契约）。
     if name in ("UserSnapshot", "get_user_snapshot", "get_user_snapshot_batch"):
         if _exported_snapshot is None:
             # 显式 import_module：`from auth import snapshot as ...` 依赖「__getattr__ 抛
@@ -56,8 +54,6 @@ def __getattr__(name: str) -> Any:
             ]
         return _exported_routers
     if name == "GRAPHQL":
-        # auth 域不贡献 GraphQL 类型（与 app/modules/admin/__init__.py 同为显式空占位，
-        # 不是漏接线）；给稳定单例而非每次新建列表，避免消费方对返回值做修改时被静默丢弃
         if _exported_graphql is None:
             _exported_graphql = []
         return _exported_graphql

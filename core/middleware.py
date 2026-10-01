@@ -81,8 +81,6 @@ class SecurityHeadersMiddleware:
         self.app = app
         self._headers: list[tuple[bytes, bytes]] = [
             (b"x-content-type-options", b"nosniff"),
-            # 本仓 API 全是 JSON、从无被第三方嵌套的文档面，故 none 不构成功能回归；个别
-            # 端点若需自定 CSP，可显式设同名头覆盖（本中间件用 setdefault）。
             (b"content-security-policy", b"frame-ancestors 'none'"),
             (b"x-frame-options", b"DENY"),
             (b"referrer-policy", b"strict-origin-when-cross-origin"),
@@ -147,7 +145,6 @@ class GraphQLHTTPMiddleware:
             await _send_graphql_timeout(send, scope)
             return
 
-        # 版本取**已匹配路由的路径模板**而非原始 URL，避免手写段解析与挂载方式漂移
         version = _explicit_graphql_version(scope)
         for message in buffered:
             if message["type"] == "http.response.start" and version:
@@ -206,8 +203,6 @@ def install_security_middleware(application: FastAPI) -> None:
         )
     # 安全头先加 → 外层：TrustedHost/CORS 的拒答也带安全头
     application.add_middleware(SecurityHeadersMiddleware, hsts=settings.is_production)
-    # request_id **最后加 → 这一组最外层**：连 CORS 预检、TrustedHost 拒答也带 X-Request-ID。
-    # 必须比 app.main._log_requests 更外层，访问日志才读得到本次请求的 id（见该中间件）。
     application.add_middleware(RequestIdMiddleware)
 
 

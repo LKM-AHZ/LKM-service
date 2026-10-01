@@ -77,7 +77,6 @@ async def invalidate_user_snap(user_id: int) -> None:
 
         await refresh_user_dim_event(user_id)
     except Exception:
-        # B0.2 离线写，fail-open：绝不让 dim ETL 故障反过来影响在线失效语义
         logger.exception("user_dim 事件刷新失败(在线失效已完成) user_id=%s", user_id)
 
 
@@ -96,8 +95,6 @@ async def record_audit_event(
     """
     from core.metrics import audit_events_total
 
-    # action 直接取 routing key（路由键本身就是审计语义），只认白名单以免任何 payload 都能
-    # 造出任意 label 维度（label 无界 = 指标基数爆炸）。
     known = {RKEY_AUDIT_LOGIN_FAIL, RKEY_AUDIT_PERMISSION_CHANGE}
     if action not in known:
         logger.warning("audit 事件携带未知 action=%r，已忽略", action)
@@ -296,8 +293,6 @@ register_cron_job(
     routing_key=RKEY_BLOOM_SEED,
     fn="seed_user_id_bloom",
 )
-# jti 撤销表过期清理：每日 04:00（排在以上各步之后）。关掉 Redis 持久化后撤销记录的 TTL
-# 从 Redis 键的 ex 迁到本表的 expires_at，需主动清理，否则无界累积。
 register_cron_job(
     job_id="purge_revoked_access_tokens",
     cron="0 4 * * *",  # 每日 04:00

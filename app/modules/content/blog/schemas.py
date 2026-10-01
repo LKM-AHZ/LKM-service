@@ -87,8 +87,6 @@ class BlogCommentInfo(BaseModel):
     @field_validator("replies", mode="before")
     @classmethod
     def _ignore_orm_replies(cls, v: Any) -> Any:
-        # 只丢弃 ORM 关系集合（树由 service 手动拼装，避免懒加载与重复展开）；
-        # 其余来源（显式传入的嵌套 dict/模型）照常参与校验，不再一律置空静默丢数据
         if isinstance(v, InstrumentedList):
             return []
         return v

@@ -100,7 +100,6 @@ def _cron(fn: str, routing_key: str) -> EventContract:
     )
 
 
-# ---- 契约登记表（唯一事实源；新增/改动事件必须同时改这里）----
 EVENT_CONTRACTS: dict[str, EventContract] = {
     c.fn: c
     for c in (
@@ -206,7 +205,6 @@ def _value_matches(value: Any, arg: Arg) -> bool:
     if kind == "str":
         return isinstance(value, str)
     if kind == "int":
-        # bool 是 int 的子类，但线上 True/1 语义完全不同，必须排除
         return isinstance(value, int) and not isinstance(value, bool)
     if kind == "float":
         return isinstance(value, (int, float)) and not isinstance(value, bool)

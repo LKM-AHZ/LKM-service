@@ -26,7 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # core / auth / app 均为顶层包与生产代码，同受裸 SQL 门禁约束。
 SCAN_ROOTS = [REPO_ROOT / "core", REPO_ROOT / "app", REPO_ROOT / "auth"]
 
-#: 整体放行的文件 -> 放行原因。新增条目须确认是 ORM 无法表达的场景。
 ALLOWLIST: dict[str, str] = {
     "core/db/init_db.py": "建表/索引/扩展装配与 TimescaleDB 策略，DDL 无法 ORM 化",
     "core/db/shared_objects.py": "库级共享对象（pg_trgm / uuid_generate_v7）DDL，无法 ORM 化",
@@ -136,8 +135,6 @@ def main() -> int:
     scanned: set[str] = set()
     for scan_root in SCAN_ROOTS:
         if not scan_root.is_dir():
-            # rglob 对不存在的目录静默返回空 → 扫描根改名/搬迁后门禁会「零命中通过」，
-            # 这里必须显式报错，否则 CI 绿灯是假的。
             scan_errors.append(f"扫描根不存在或不是目录：{scan_root}")
             continue
         for path in sorted(scan_root.rglob("*.py")):
@@ -185,7 +182,6 @@ def main() -> int:
                 file=sys.stderr,
             )
         if scan_errors:
-            # 与裸 SQL 无关的门禁自身故障单列一段：否则读者会照着 ALLOWLIST 提示去排查语法错误。
             print("扫描未完成（门禁自身故障，与裸 SQL 无关）：", file=sys.stderr)
             for e in scan_errors:
                 print(f"  - {e}", file=sys.stderr)

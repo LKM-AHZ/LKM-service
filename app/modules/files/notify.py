@@ -106,8 +106,6 @@ async def _enqueue_upload(upload_id: str) -> None:
         return  # dev/无 broker：outbox 门控等价直发被跳过，不落积压不影响回执
     db = None
     try:
-        # 建会话也放进 try：引擎未初始化 / 连接池取连接失败时，异常原先会冒穿
-        # _enqueue_upload，让 webhook 回 500（MinIO 据此重投），与「入队异常不影响回执」相悖
         db = await new_session()
         await enqueue_outbox(
             db, RKEY_NOTIFY, {"fn": "notify_upload", "args": [upload_id]}
@@ -141,7 +139,6 @@ async def notify_object(
     try:
         payload: Any = await request.json()
     except (json.JSONDecodeError, ValueError):
-        # 仍回 200（避免 MinIO 重投），但必须留痕：静默丢弃会让配错/签名错误的发送方无从发现
         logger.warning("notify_object 收到非 JSON 请求体，按无记录处理")
         payload = {}
 

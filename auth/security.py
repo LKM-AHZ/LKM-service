@@ -57,9 +57,6 @@ async def dummy_verify() -> None:
 _ACCESS_TYPE = "access"
 _TEMP_TYPE = "temp"
 
-# JWT audience：区分互不混用的令牌，防止 token 被误喂给其他端点。
-# 后台 admin cookie 的 audience 由 auth.admin_session._ADMIN_AUD 定义（本模块只签发前台
-# access 与一次性 temp），故不在此重复声明——那会是一份会漂移的第二事实源。
 _AUD_WEB = "lkm:web"  # 前台 Bearer access
 _AUD_TEMP = "lkm:temp"  # 一次性 temp（2FA/recovery/setup）
 
@@ -76,7 +73,6 @@ def create_access_token(
     now = int(time.time())
     verified_at = mfa_at if mfa_at is not None else now
     payload: dict[str, Any] = {
-        # JWT 载荷要经 json.dumps，UUID 必须转字符串；读侧由 deps 还原为 UUID
         "user_id": str(user_id),
         "account_level": account_level,
         "role": role,
@@ -205,11 +201,6 @@ def generate_recovery_codes(n: int = 10) -> list[tuple[str, str]]:
     return codes
 
 
-# TOTP 密钥加密：AES-256-GCM，对称密钥经 **HKDF-SHA256** 从 ``totp_encryption_key`` 派生，
-# 每条密文自带 16B 随机盐（HKDF 的 salt）与 12B nonce，故派生带盐、且每记录彼此独立
-# （攻击者拿到库也须对每条密文各跑一遍 KDF）。
-#
-# **格式版本化**：``v2:`` 前缀 + base64(salt(16) || nonce(12) || ct||tag)。
 _CIPHER_V2_PREFIX = "v2:"
 _HKDF_INFO = b"lkm:totp-secret:v2"  # 域分离：防同主密钥在别处派生出同字节
 _SALT_LEN = 16

@@ -247,7 +247,6 @@ async def main() -> None:
     db = await new_session()
     try:
         created = await seed_exams(db)
-        # seed_exams 只用 flush（供测试回滚），CLI 灌入需落库，故此处提交
         await db.commit()
         print(f"seeded {created} exams")
     finally:

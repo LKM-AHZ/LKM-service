@@ -22,7 +22,6 @@ from app.modules.search.engines.base import IndexDoc
 
 logger = logging.getLogger(__name__)
 
-# Meilisearch filter 是表达式字符串（无参数化），值必须白名单化后才可拼接
 _SAFE_FILTER_VALUE = re.compile(r"^[a-z0-9_]{1,20}$")
 
 # 可检索/可过滤字段设置：searchable 决定全文匹配面，filterable 决定能按 content_type 过滤

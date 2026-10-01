@@ -132,12 +132,6 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 也无 request/trace 关联，线上定位几乎无从下手。
     app_logging.setup_logging()
     init_sentry()
-    # 链路追踪在 create_auth_app 装配期挂载（不能放 lifespan：中间件栈已定型，
-    # instrument 不生效、HTTP span 采不到；详见 core.tracing.setup_tracing 说明）
-    # 启动不阻塞（§2 第 1 条）：auth 库 schema 初始化放后台重试、不 await——DB 未就绪时进程
-    # 仍要起来并经 readiness 报「未就绪」，而不是起不来。auth 表已迁出单体 Base.metadata，
-    # 无其他进程会建它们，故建它们仍是本进程的职责（业务库 schema 归 backend 进程）。
-    # 建库成功后接着预热 user id 白名单位图（同一后台 task 内串行，故顺序天然有保证）
     init_db_task = asyncio.create_task(_startup_preheat_bloom())
     # 跨进程指标中继（选项③）：本进程写 user_snap_cache_total / user_snap_singleflight_total /
     # notify_failed_total，且刻意不挂 /metrics（见 create_auth_app 说明）——快照交给 API 进程代报。
@@ -153,7 +147,6 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             pass
         except Exception:
             logger.exception("auth schema init task failed during shutdown")
-        # 指标发布 task 须在 close_redis 前收尾（键有 TTL，不 cancel 也能收敛，这里只为不留悬挂 task）
         await metrics_relay.stop_publisher()
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
         shutdown_tracing()
@@ -170,14 +163,10 @@ def create_auth_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # 公网安全面（M6.1）：与单体共用同一装配（Host 白名单 / CORS 白名单 / 安全头，
-    # HSTS 仅生产）——auth 承载 /api/v1/auth/* 对外面，语义须与 backend 一致。
     install_security_middleware(application)
 
-    # 链路追踪（M5 7.2.2）：auth 进程独立 service 名；**装配期**挂载（见 lifespan 说明）
     setup_tracing(application, service_suffix="-auth")
 
-    # 与单体一致的 error 语义映射（BizError / 校验错误 / 兜底 500），保证 auth 端点错误口径一致
     application.add_exception_handler(BizError, _on_err)
     application.add_exception_handler(RequestValidationError, _on_err)
     application.add_exception_handler(Exception, _on_err)
@@ -186,7 +175,6 @@ def create_auth_app() -> FastAPI:
     for _r in _AUTH_ROUTERS:
         application.include_router(_r, prefix=settings.api_prefix)
     application.include_router(health_auth.router)
-    # JWKS（批 5）：规范位置在站点根，故不走 api_prefix
     application.include_router(router_jwks.router)
 
     return application

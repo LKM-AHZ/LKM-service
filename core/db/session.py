@@ -18,8 +18,6 @@ from core.err import (
     unique_constraint_errcode,
 )
 
-# —— 主库（monolith，realm="default"）的惰性单例。M3.B 物理拆目标：monolith 主进程
-# 只触达 database_url（auth 独立库走单独的 auth/db/session.py，主进程不侧挂）。
 _async_engine: AsyncEngine | None = None
 _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 # worker / 后台批处理的独立引擎与会话工厂（蓝图 §3.3「不同组件独立连接池」标"关键"）：
@@ -27,8 +25,6 @@ _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 # 连接挤干。两者共用同一把 _engine_lock（成对创建，见下）。
 _worker_engine: AsyncEngine | None = None
 _WorkerSessionLocal: async_sessionmaker[AsyncSession] | None = None
-# 惰性单例的双检锁（见 get_async_engine 注释）：sync 依赖可能来自线程池，故用
-# threading.Lock 而非 asyncio.Lock（后者会绑定事件循环）
 _engine_lock = threading.Lock()
 # PostgreSQL SQLSTATE：唯一约束冲突
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
@@ -149,8 +145,6 @@ async def get_read_session() -> AsyncIterator[AsyncSession]:
     db = _get_async_session_local()()
     try:
         yield db
-        # 正常路径：只读，无提交意图；显式回滚以防解析器意外写入被残留到下一次。
-        # 但「只读会话被写脏」是数据完整性 bug 的征兆，静默丢弃会让它永久不可见：先告警
         if db.new or db.dirty or db.deleted:
             logger.warning(
                 "get_read_session 检测到未提交写入（new=%d dirty=%d deleted=%d），已丢弃",
@@ -233,7 +227,6 @@ async def dispose_engine() -> None:
         await _async_engine.dispose()
         _async_engine = None
         _AsyncSessionLocal = None
-    # worker 引擎同样要释放，否则测试逐测重建时旧池会泄漏连接
     if _worker_engine is not None:
         await _worker_engine.dispose()
         _worker_engine = None

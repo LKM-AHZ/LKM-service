@@ -73,10 +73,6 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     except (PyJWTError, ValueError) as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
 
-    # jti 撤销预检（§4.2/§5.6）：登出/单设备撤销后**立即**拒；放在 DB 查询之前正是「快速
-    # 预检」的意义。命中必拒；Redis 不可用时 is_jti_blocked 返回 False 跳过，由下面的 DB
-    # 判据（token_version / 改密撤销）兜底。无 jti 的旧 token 自动跳过（灰度零破坏）。
-    # 错误码与 token_version 拒绝保持同码同文案，不因撤销来源不同而改变客户端语义。
     if await is_jti_blocked(payload.get("jti")):
         raise BizError(
             AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
@@ -85,22 +81,16 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     raw_user_id = payload.get("user_id")
     if not raw_user_id:
         raise BizError(AuthErr.TOKEN_INVALID, "Token missing user_id")
-    # JWT 载荷只能带字符串（json 无 uuid 类型），读侧统一还原为 UUID
     try:
         user_id = uuid.UUID(str(raw_user_id))
     except ValueError as exc:
         raise BizError(AuthErr.TOKEN_INVALID, "Token user_id malformed") from exc
 
-    # token_version 撤销预检（§4.2）：改密/封号/全端登出 bump 版本后，缓存里的新版本高于
-    # token 携带版本即直接拒，避免旧 access 在有效期内持续打主服务。仍只是「加拒」——未命中/
-    # 版本相等都不放行，下面 DB/seam 权威判据照走（DB 为最终判据）。错误码/文案与下面
-    # token_version 拒绝路径完全一致，不因撤销来源不同改变客户端语义。
     if await token_version_is_stale(user_id, payload.get("token_version")):
         raise BizError(
             AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
         )
 
-    # —— M3.B S3 seam：鉴权缝开启时把“锁定/token_version/改密撤销/权威角色档”判给 auth ——
     if seam_enabled():
         return await _resolve_via_seam(
             user_id,
@@ -128,9 +118,6 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
             AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
         )
 
-    # 密码更改会撤销现有访问令牌
-    # JWT iat 必须 >= user.updated_at（允许 5 秒时钟偏差容差）
-    # user.updated_at 为 timezone-aware datetime，可直接与 iat 时间相减
     if user.updated_at:
         token_iat = payload.get("iat")
         if token_iat is not None:
@@ -175,7 +162,6 @@ def _fail_current_user(cause: object | None) -> BizError:
         return BizError(AuthErr.USER_NOT_FOUND)
     if cause == CAUSE_NOT_ADMIN:
         return BizError(CommonErr.FORBIDDEN, "Insufficient permission")
-    # cause 未知或缺省：一律按不可用拒（fail-closed，鉴权绝不保守放行）
     return BizError(AuthErr.TOKEN_INVALID, "Account state cannot be proven")
 
 
@@ -241,21 +227,16 @@ async def get_optional_user(
     db: AsyncSession = Depends(get_auth_session),
 ) -> CurrentUser | None:
     """可选 JWT 认证依赖。不抛出ERROR"""
-    # 复用 _bearer_token：否则 scheme 大小写/空白规则会在必选与可选两条路径上各写一遍、日后漂移
     token = _bearer_token(authorization)
     if token is None:
         return None
     try:
         return await _resolve_current_user(token, db)
     except (BizError, PyJWTError) as exc:
-        # 可选依赖确实不该抛错，但吞掉要留痕：否则「account state 服务不可用」这类
-        # 基础设施故障在线上表现为「偶尔匿名」，没有任何可查的线索
         logger.debug("optional auth ignored: %s", exc)
         return None
 
 
-# RequireLevel 与 MFA_TRUST_SECONDS 收敛到 core.ports.authz（app 与 auth 同源，
-# 避免两份实现漂移）；其内部经端口回调本模块的 _resolve_current_user，无循环。
 
 
 async def get_current_user_2fa(

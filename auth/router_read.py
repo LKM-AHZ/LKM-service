@@ -85,9 +85,6 @@ def _parse_ids(ids: str) -> list[uuid.UUID]:
     上限用 ``snapshot.BATCH_IDS_MAX``（与业务侧分块同一常量）——超限直接拒，不静默截断：
     截断会让调用方以为全部取到，属静默错答案。去重避免同 id 重复占额度与重复行。
     """
-    # 先按原始长度粗筛：下面的 BATCH_IDS_MAX 只数「解析成功且去重后」的 id，切分/解析的
-    # 开销原本只受 ASGI 请求行长度限制。本端点文档承诺 fail-closed，故显式给出上界，
-    # 不依赖前置服务器/代理的限额。每个 id 最长 36 字符（UUID 文本）+ 1 个分隔符。
     if len(ids) > (36 + 1) * snap_mod.BATCH_IDS_MAX:
         raise BizError(
             CommonErr.BAD_REQUEST,

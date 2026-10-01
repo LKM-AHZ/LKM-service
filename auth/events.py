@@ -65,16 +65,11 @@ async def _enqueue_committed(
     失败只记日志、不外抛（fail-open）：事件不可达不该把登录/授权这类主流程带崩。
     ``what`` 仅用于日志，便于定位是哪个发射口出的问题。
     """
-    # 与 `enqueue_outbox` 同一道总开关（未配总线 → 不入队）。在此提前返回是为了**不白开
-    # 一个业务库会话**：dev/测试常态下总线是关的，逐个发射点去建连纯属浪费，且会在测试
-    # 里无故建起业务库的模块级 engine 单例。
     if not settings.message_bus_enabled:
         return
 
     db: AsyncSession | None = None
     try:
-        # 会话获取也放进 try：new_session 可能因懒建引擎失败（库不可达/配置缺失）而抛，
-        # 那同样属于本函数承诺吞掉的失败面。
         db = await new_session()
         await enqueue_outbox(db, routing_key, payload)
         await db.commit()

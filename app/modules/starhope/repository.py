@@ -60,7 +60,6 @@ class StarHopeRepository(AsyncRepository[Any]):
         与 JSON 序列化后的字段；``deletes`` 每项为 ``(id, deleted_at)``。冲突口径：
         已软删行仅被更新的 incoming 复活；incoming 不新于现存 ``updated_at`` 时跳过。
         """
-        # 批量取回现有记录（**含已软删**——复活判定需要 deleted_at），避免 N+1。
         ids = {rid for rid, _, _ in upserts} | {rid for rid, _ in deletes}
         existing_map: dict[str, Any] = {}
         if ids:
@@ -97,9 +96,6 @@ class StarHopeRepository(AsyncRepository[Any]):
             existing = existing_map.get(rid)
             if existing is None:
                 continue
-            # 与 upsert 分支同为 LWW：比的是该行「最后一次写入」（墓碑时间或内容更新时间），
-            # 而不是只看墓碑——后者会让陈旧的 tombstone 覆盖更新的编辑，也会重复墓碑化
-            # 一条已被复活（deleted_at is None）的行。时间戳同域：都用客户端值，不再混入服务端 now。
             last_write = existing.deleted_at or existing.updated_at
             if deleted_at > last_write:
                 existing.deleted_at = deleted_at

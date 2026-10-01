@@ -18,11 +18,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set the database URL
-# configparser 把 % 当插值起始符（ini 里的 %(here)s 靠它）。settings 的连接串用 quote
-# 编码密码，密码含保留字符时会出现裸 %XX，set_main_option 会当场抛
-# ValueError(invalid interpolation syntax) 让迁移根本起不来（实测）。按 configparser
-# 规则转义成 %%，get_main_option/get_section 读回时还原成原值。
+# 按 configparser 规则转义连接串中的百分号。
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Import all models so metadata is fully populated for autogenerate
@@ -30,8 +26,6 @@ from app import bootstrap as app_bootstrap
 from core.db.base import Base
 from core.db.model_registry import ensure_all_models
 
-# 业务模型模块须先登记：core 不再知道任何业务模块名（见 core/db/model_registry.py）。
-# 漏登记会让 autogenerate 看不到业务表，生成「删表」的破坏性迁移。
 app_bootstrap.register()
 ensure_all_models()
 
@@ -44,8 +38,6 @@ def run_migrations_offline() -> None:
     Configures the context with just a URL, not an Engine.
     Calls to ``context.execute()`` emit the given SQL to the script output.
     """
-    # 与 online 路径同一口径：离线生成 SQL 也要走同步方言，否则读的是 import 时写入的
-    # asyncpg URL，产物按 asyncpg 方言渲染、且要额外依赖 async 驱动可导入
     url = _sync_url(config.get_main_option("sqlalchemy.url") or "")
     context.configure(
         url=url,

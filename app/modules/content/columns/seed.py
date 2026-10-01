@@ -23,7 +23,6 @@ from core.db.base import now_iso
 from core.db.session import new_worker_session as new_session
 from core.ports.users import ensure_demo_user
 
-# 种子专栏归属的演示作者用户名（避免依赖具体本地用户）
 _SEED_AUTHOR_USERNAME = "column_seed_author"
 _SEED_AUTHOR_NICKNAME = "理科迷专栏编辑"
 
@@ -211,9 +210,6 @@ async def seed_columns(db: AsyncSession) -> int:
         if existing is not None:
             continue
         board_id = await _board_id(db, data.get("board_slug"))
-        # 先建申请记录并 flush，才能把 column.application_id 回填——真实审核流
-        # （service._ensure_column_for_application）就是这么做的。原先申请行建了但没回链，
-        # 结果 applicationId 对每个种子专栏都是 null、申请行成了孤儿。
         application = ColumnApplication(
             user_id=owner_id,
             title=str(data["title"]),

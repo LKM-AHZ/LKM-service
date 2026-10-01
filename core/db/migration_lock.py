@@ -20,17 +20,11 @@ logger = logging.getLogger(__name__)
 
 MIGRATION_LOCK_TTL = 120  # 秒：迁移超时上限后锁自动过期
 MIGRATION_LOCK_POLL = 0.3  # 轮询间隔
-# 等待上限须 >= TTL：锁的最长寿命就是 TTL，等得比它短意味着只要对方迁移稍慢，
-# 本 worker 就放弃等待并**并行**起第二条 alembic upgrade —— 恰好在真正争用的场景
-# 绕过本模块要提供的串行化（原值 8s 远小于 120s 的 TTL）。
 MIGRATION_LOCK_WAIT = MIGRATION_LOCK_TTL + MIGRATION_LOCK_POLL
 
 # 本进程实际持有锁时写入的 token（按 key）。释放时比对 token 才删，防误删别人的锁。
 _tokens: dict[str, str] = {}
 
-# 持有期间的后台续期任务（key → (task, stop_event)）。MIGRATION_LOCK_TTL 是锁的最长寿命，
-# 而真实迁移经 asyncio.to_thread 跑、耗时不可控：不续期时慢迁移（大表/锁等待）会中途丢锁，
-# 下个 worker 等满 WAIT 后就会并行起第二条 alembic upgrade，正是本模块要串行化掉的场景。
 _renewers: dict[str, tuple[asyncio.Task[None], asyncio.Event]] = {}
 
 _RENEW_LUA = (
@@ -57,8 +51,6 @@ async def _renew_loop(
                 client.eval(_RENEW_LUA, 1, key, token, MIGRATION_LOCK_TTL),
             )
         except Exception:
-            # 续期失败不抛出（不能让后台任务的异常影响迁移主流程），但必须留痕：
-            # 持续失败意味着锁即将到期
             logger.warning("迁移锁续期失败 key=%s（锁可能到期）", key, exc_info=True)
 
 
@@ -140,8 +132,6 @@ async def acquire_migration_lock(key: str) -> bool:
                 return True
         return False  # 等待超时：照常跑（幂等 no-op）
     except Exception as exc:
-        # fail-open 不变，但必须留痕：Redis 故障会静默关掉迁移串行化
-        # （多 worker 并发 upgrade 是真实风险，不能只表现为「什么都没发生」）
         logger.warning("迁移锁获取失败 key=%s，fail-open 不设锁：%s", key, exc)
         return False
 
@@ -151,7 +141,6 @@ async def release_migration_lock(held: bool, key: str) -> None:
         return
     from core import redis as redis_client
 
-    # 先停续期再删锁：否则续期可能在删除之后又把 key 续上（留下永不释放的锁）
     await _stop_renewer(key)
     client = await redis_client.get_redis(key)
     token = _tokens.pop(key, None)

@@ -94,18 +94,12 @@ async def _connect(url: str) -> Any:
             socket_timeout=0.5,
             socket_connect_timeout=0.5,
         )
-        # 探测：PING 在极短超时内通过才视为可用。不用 assert 表达——`python -O`
-        # 会整句删除（含 wait_for），探测连同超时一起消失，不可用的 Redis 会被
-        # 当成 "可用" 缓存进 _client，与 fail-open 契约相反。
         try:
             pong = await asyncio.wait_for(pool.ping(), _PING_TIMEOUT)
             if not pong:
                 raise RuntimeError("redis ping 返回假值")
         except Exception as exc:
-            # 必须留痕：否则 URL 配错/DNS/TLS 失败/宕机都表现为「无 Redis」，限流被静默
-            # 关闭而无从排查。fail-open 返回值不变。
             logger.warning("redis ping 失败，降级为不可用: %s", exc)
-            # aclose 自身失败也要继续走降级路径，否则异常冒到外层只置空引用、池未释放
             with suppress(Exception):
                 await pool.aclose()
             return None

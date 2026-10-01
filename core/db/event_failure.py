@@ -76,7 +76,6 @@ async def replay_failure(
     body = dict(row.payload_json) if payload is None else dict(payload)
     if messaging.permanent_failure_reason(rk, {**body, "event_id": row.event_id}):
         return False
-    # 同 id 已在途时视为已经安排投递，仍标记原故障记录已重放。
     queued = await enqueue_outbox(
         db, rk, body, event_id=row.event_id, replay=True
     )

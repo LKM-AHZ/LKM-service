@@ -64,9 +64,6 @@ class RecoverPhoneRequest(BaseModel):
 class RecoverPhoneVerifyRequest(BaseModel):
     phone: str = Field(..., min_length=5, max_length=20)
     code: str = Field(..., min_length=6, max_length=6)
-    # 非 MFA 账号：本步直接用它完成重置（service_recovery.recover_by_contact 里非空校验）。
-    # MFA 账号：本步只开事务返回 txn_id/temp_token，密码改由 /recover/user/complete 接收。
-    # 故它既不是「此处不接受」也不是 deprecated——前端 useRecoveryFlow 正是按这个契约传的。
     new_password: str | None = Field(None, min_length=6)
 
 

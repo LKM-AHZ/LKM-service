@@ -23,8 +23,6 @@ def __getattr__(name: str) -> Any:
             from app.modules.content.blog.router import router as blog_router
             from app.modules.content.router import router
 
-            # 顺序 = 聚合顺序；各 router 自带 prefix（/content、/articles、/blog、/blog/git），
-            # 故合并前后 URL 完全不变
             _exported_routers = [router, articles_router, blog_router, git_router]
         return _exported_routers
     if name == "GRAPHQL":

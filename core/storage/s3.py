@@ -18,8 +18,6 @@ from core.storage.base import SavedFile
 from core.storage.errors import StorageErr
 
 _CHUNK = 1024 * 1024  # 下载读取分块
-# multipart 除末块外每块必须 >= 5 MiB（S3/MinIO 硬约束）：沿用 1 MiB 分块上传时，
-# 任何 >1 MiB 的对象都会在 complete_multipart_upload 报 EntityTooSmall
 _PART_SIZE = 5 * 1024 * 1024
 
 
@@ -56,9 +54,6 @@ def _save_multipart_sync(
             )
             parts.append({"PartNumber": len(parts) + 1, "ETag": part["ETag"]})
         if not parts:
-            # 0 字节对象：multipart 不允许 0 个 part（会走到这里），但空文件本身合法，
-            # 改用 put_object 落空对象，不能当成「超限」报 413。已创建的 multipart
-            # 须先 abort，否则返回路径绕过了下面的 except，留下孤儿分片。
             client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
             client.put_object(Bucket=bucket, Key=key, Body=b"")
             return 0
@@ -70,7 +65,6 @@ def _save_multipart_sync(
         )
         return size
     except BaseException:
-        # 出错（含超限）时中止未完成的 multipart，避免孤儿分片（中止失败不影响原异常抛出）
         with suppress(Exception):
             client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
         raise
@@ -110,9 +104,6 @@ class S3Storage:
             # 寻址风格可配（蓝图 §6.3）：OSS/COS 需 virtual-host，S3/MinIO 用 path。
             config=Config(s3={"addressing_style": addressing_style}),
         )
-        # 预签名 URL 对浏览器暴露的公网 endpoint。签名与请求 host 必须一致，故用
-        # 独立 client（endpoint=公网）生成 preset 签名，否则 host 与签名不符会 403。
-        # 空则复用内网 client（浏览器可直连时才适用）。
         self._public_client = self._client
         if public_endpoint_url:
             # MinIO 校验预签名用 SigV4；boto3 对非 AWS 标准 endpoint 默认 SigV2 会 403。
@@ -140,7 +131,6 @@ class S3Storage:
         self, stream: Any, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile:
         key = self._key(bucket_key)
-        # multipart 全程为同步 I/O（每个 part 一次调用），交给线程池执行，避免阻塞事件循环。
         try:
             size = await asyncio.to_thread(
                 _save_multipart_sync, self._client, self.bucket, key, stream, max_bytes
@@ -166,9 +156,6 @@ class S3Storage:
             raise BizError(
                 StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}"
             ) from exc
-        # 逐块读取经 to_thread 调度，避免 StreamingBody 的同步 socket I/O 阻塞事件循环。
-        # body 必须在 finally 关闭：消费方提前 break/抛错时若不关，HTTP 连接与 socket
-        # 会一直挂到 GC；流中途的网络错误也要映射成 STORE_ERROR 而不是裸 botocore 异常。
         body = resp["Body"]
         try:
             while True:
@@ -227,8 +214,6 @@ class S3Storage:
             ) from exc
 
     def presign_download(self, bucket_key: str, *, expires: int) -> str:
-        # 预签名 URL 为本地签名计算（无网络），可同步调用。
-        # 用公网 client（endpoint=public）生成，保证 URL host 与签名一致。
         return self._public_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": self._key(bucket_key)},

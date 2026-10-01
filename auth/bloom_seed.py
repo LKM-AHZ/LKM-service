@@ -34,7 +34,6 @@ logger = logging.getLogger("lkm.auth.bloom_seed")
 
 _session_factory: Callable[[], Awaitable[AsyncSession]] = new_auth_session
 
-# keyset 分页大小：uuid 可全序比较，按 ``id > cursor`` 翻页避免 OFFSET 的深分页成本。
 _PAGE = 1000
 
 

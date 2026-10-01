@@ -96,10 +96,6 @@ async def bump_content_counter(
     if settings.counters_write_through:
         return await write_through_bump(db, item_id, field, delta)
 
-    # ---- 回退路径（M6.10 的 write-behind）----
-    # 先确认内容行存在，**再**写 Redis：反过来（先 INCR 后校验）会在内容不存在/已删时
-    # 留下无人认领的增量键——本调用抛 CONTENT_NOT_FOUND，但那个 +1 不会被回滚，
-    # flush 时 UPDATE 命中 0 行而被静默丢弃，后续 id 复用还会继承这个陈旧值。
     col = _COLUMNS[field]
     base = await db.scalar(select(col).where(ContentItem.id == item_id))
     if base is None:
@@ -113,7 +109,6 @@ async def bump_content_counter(
 
 async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     """即时读数：写穿模式下即 DB 计数列；回退模式下是「DB 值 + 未落库差值」。"""
-    # 与 bump_content_counter 同口径校验：否则未支持字段名会以裸 KeyError 冒成 500
     if field not in _COLUMNS:
         raise ValueError(f"unsupported counter field: {field!r}")
     col = _COLUMNS[field]
@@ -247,11 +242,6 @@ async def reconcile_counts(
         ]
         where_conds = [ContentItem.id > last_id]
         if only_unconverged:
-            # 只扫「还没被本轮之前的对账确认收敛过」的行。**刻意不叠加 updated_at 比较**：
-            # 模型的 onupdate 用的是 Python 侧 now()（晚于下方标记用的事务级 now()），
-            # 「counts_reconciled_at < updated_at」会恒真 → 每拍重扫、增量失效。
-            # 代价：标记后**又发生漂移**的行要等日级全量兜底（only_unconverged=False）——
-            # 这正是蓝图的两级设计（秒级增量 + 日级全量）。
             where_conds.append(ContentItem.counts_reconciled_at.is_(None))
         rows = (
             await db.execute(

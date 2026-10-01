@@ -199,10 +199,6 @@ def shutdown_tracing() -> None:
     provider = _tracer_provider
     _tracer_provider = None
     _sqlalchemy_engines.clear()
-    # 卸载**不依赖 provider**：半初始化失败（已挂 instrumentor 却把 provider 置空）或上一次
-    # 卸载静默失败时，在此早退就再也没有机会卸载——进程里残留埋点，下次 setup 会叠加一层。
-    # 卸载/shutdown 失败必须留日志（模块契约「任何异常只记日志」）：静默吞掉的话，残留埋点
-    # 会继续产出/导出 span，而进程侧看不到任何异常。
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor

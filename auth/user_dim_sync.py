@@ -152,9 +152,6 @@ async def _upsert_dim_rows(
     )
     await target_db.execute(stmt)
     await target_db.flush()
-    # 返回"本次抓取的源匹配用户量"= len(rows)。离线条目一律写清(新增=insert、存量=update)，
-    # 因只对确有源(join 命中)者写，故每个匹配用户各 1 行 → len(rows) 即本次涉及的 dim 行数。
-    # (ty 的 SQLAlchemy stub 缺 rowcount；镜像 rbac/seed 用确定性计数而非结果属性。)
     return len(rows)
 
 
@@ -227,8 +224,6 @@ async def reconcile_user_dim_incremental(
     return await sync_dim_for_ids(source_db, target_db, ids)
 
 
-# 任务侧开/消费会话对的统一 seam（镜像 blog reconcile 范式）：默认生产自开两个 realm 会话；
-# 测试可 monkeypatch 指向内存/融合库会话，避免触碰真实 DB。事件与周期两条离线写路都经它。
 
 
 async def _open_session_pair() -> SessionPair:
@@ -290,9 +285,6 @@ async def reconcile_user_dim_periodic() -> int:
         if not got:
             logger.info("user_dim 对账已被其他实例执行, 本次跳过")
             return 0
-    # 会话获取也放进 try：_session_factory() 抛错（auth/业务库短暂不可用/new_auth_session 失败）
-    # 时 finally 仍要跑，否则 Redis 锁会留满 3600s TTL，之后一小时的每次对账都被静默跳过
-    # ——正是这张 crash-safety 网要防的情况。
     source_db: AsyncSession | None = None
     target_db: AsyncSession | None = None
     try:

@@ -16,9 +16,6 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-# 时间列统一写 sa.DateTime(timezone=True)：UTCDateTime 的 impl 就是 DateTime(timezone=True)，DDL 等价。
-# 基线 revision 必须自包含——import 应用代码会让「UTCDateTime 改名/挪位或 core.db.base 导入链断裂」
-# 在全新库上以 ImportError 直接打断 alembic upgrade head，且只能靠改历史 revision 才能修。
 
 # revision identifiers, used by Alembic.
 revision: str = '0001_uuid_baseline'
@@ -26,10 +23,6 @@ down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# 所有 UUID 主键列的 server_default 都指向它；PG 建表即解析 DEFAULT 表达式，
-# 函数不存在会直接报错，故必须在首个 create_table 之前建出。
-# uuid7 变体：48 位放 unix epoch 的「微秒/4096 刻度」
-# 低 12 位亚刻度填入 rand_a——时间有序，保证 order_by(id) 与游标分页语义与整数自增一致。
 UUID7_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
 DECLARE
@@ -47,14 +40,6 @@ END;
 $$ LANGUAGE plpgsql VOLATILE;
 """
 
-# 建表**后置**：TimescaleDB 装配——outbox 两表转 hypertable、
-# 冷表列式压缩、outbox_events 保留策略兜底；`points_ledger` 转 hypertable。
-# `outbox_events` 刻意**不压缩**：它有热更新（relay 反复 UPDATE status/attempt_count/
-# locked_at），压缩 chunk 默认不可 DML，会把滞留行变成永久投不出）。
-# 整段用 DO 块做**能力探测**：扩展不存在（普通 PG 镜像 / CI 临时 PG）时只告警，各表保持
-# 普通表——主键里多一列 created_at 无副作用，投递/流水语义完全不变。必须经 EXECUTE/PL
-# 运行时解析：直接写 `create_hypertable(...)` 时扩展缺失会让**整个基线在解析期**失败，
-# 连普通表都建不出来。内层 BEGIN...EXCEPTION 是隐式 savepoint，失败不会污染外层迁移事务。
 TIMESCALE_DDL = """
 DO $$
 BEGIN
@@ -368,7 +353,6 @@ def upgrade() -> None:
     sa.Column('locked_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('locked_by', sa.String(length=64), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    # hypertable 的每个唯一索引都必须含分区列：主键并入 created_at，event_id 的唯一约束同理
     sa.PrimaryKeyConstraint('created_at', 'id'),
     sa.UniqueConstraint('event_id', 'created_at')
     )
@@ -383,10 +367,6 @@ def upgrade() -> None:
     sa.Column('ref_id', sa.String(length=128), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    # hypertable 的每个唯一索引都必须含分区列 created_at：复合主键并入 created_at；
-    # 幂等键 (user_id, ref_type, ref_id) 同理并入（约束名不变，pg_upsert 按名解析 arbiter）。
-    # 代价：DB 级幂等由「强保证」降为「同微秒才生效」，真实幂等由 points/service.py::reward
-    # 的按用户行锁 + get_by_ref 预检承担（详见 points/models.py 类 docstring）。
     sa.PrimaryKeyConstraint('created_at', 'id'),
     sa.UniqueConstraint('user_id', 'ref_type', 'ref_id', 'created_at', name='uq_points_ledger_ref')
     )
@@ -1059,7 +1039,6 @@ def downgrade() -> None:
     op.drop_index('ix_reports_target', table_name='reports')
     op.drop_index('ix_reports_status_id', table_name='reports')
     op.drop_table('reports')
-    # 循环外键必须先解除：它挂在 qa_answers 上却依赖 qa_questions
     op.drop_constraint('fk_qa_answers_question_id', 'qa_answers', type_='foreignkey')
     op.drop_index('ix_qa_question_status_id', table_name='qa_questions')
     op.drop_index('ix_qa_question_category_id', table_name='qa_questions')

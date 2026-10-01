@@ -23,9 +23,6 @@ logger = logging.getLogger("lkm.init_db")
 
 _MIGRATION_LOCK_KEY = "lkm:migration:lock"
 
-# 已有大表的自动加性同步不能在应用启动事务里执行长锁 DDL。
-# 初建空表仍由 create_all 建全量 schema；存量库超过此物理体量或已转 hypertable 后，缺列须先走
-# scripts/online_ddl.py 的分阶段迁移，索引走 CONCURRENTLY。
 _ONLINE_DDL_TABLES = frozenset(
     {
         "content_items",
@@ -90,9 +87,7 @@ def _sync_additive_schema(conn: Any) -> list[str]:
     inspector = sa.inspect(conn)
     existing_tables = set(inspector.get_table_names())
 
-    # 用 tables.values() 而非 sorted_tables：本函数只做加列/加索引，不需要拓扑序，
-    # 而 sorted_tables 会因 qa_answers/qa_questions 的相互外键触发 SAWarning
-    # （测试环境 filterwarnings=["error"] 下即红）。
+    # 按登记顺序检查表的新增列和索引。
     for table in Base.metadata.tables.values():
         if table.name not in existing_tables:
             continue
@@ -135,9 +130,6 @@ def _sync_additive_schema(conn: Any) -> list[str]:
                     "scripts/online_ddl.py 分阶段迁移，再发布新代码"
                 )
             if not col.nullable and col.server_default is None:
-                # NOT NULL 且无 SQL 侧默认：已存行的表上 ADD COLUMN 必然失败，硬来会让
-                # 应用起不来（比缺列更糟）。跳过并告警——这类列须人工迁移（alembic 或
-                # 手工 ALTER + 回填），本函数只兜「可空/带默认」的加性变更。
                 logger.warning(
                     "跳过补列 %s.%s（NOT NULL 且无 server_default，需人工迁移）",
                     table.name,
@@ -187,35 +179,13 @@ def _sync_additive_schema(conn: Any) -> list[str]:
     return changed
 
 
-# ---- TimescaleDB 装配（批 2，路线图 §8 #40）----
-#
-# `outbox_events` / `outbox_archived` 转为 **hypertable**：按 ``created_at`` 自动时间分区
-# （chunk 裁剪让 relay 的领取查询只扫近期 chunk）、冷历史列式压缩、保留策略兜底。
-#
-# 与 ``outbox_archived`` 冷表归档的**分工**（两者语义重叠，必须分明）：
-#   - hypertable 管**分区与压缩**——chunk 时间裁剪、列式压缩、超期 chunk 的 DROP；
-#   - ``outbox_relay.archive_published()`` 管**可查历史**——已投递行按应用侧保留期
-#     （``outbox_archive_retention_s``，默认 7 天）迁进 ``outbox_archived`` 再删。
-# 正常路径下 outbox_events 的超期行由应用侧搬走，因此 Timescale 的保留策略只是
-# **兜底**（应用侧停摆/异常滞留时防表无限膨胀），阈值刻意远大于归档保留期。
-#
-# 装配是**可选增强**：非 Timescale 镜像（含测试用的 postgres:16-alpine）或未预加载
-# ``timescaledb`` 的实例上扩展建不起来，此时告警并整体跳过——表退化为普通表，
-# 主键里多一列 ``created_at`` 无副作用，链路的 DML 语义完全不变。
-#
-# **outbox_events 刻意不启用压缩**：本表有热更新（relay 反复 UPDATE
-# ``status``/``attempt_count``/``locked_at``/``published_at``），而压缩 chunk 默认不可
-# DML——一旦有滞留行被压进只读 chunk，relay 将永久投不出它。本表活跃窗口 ≤ 归档保留
-# 期（7 天）、体量极小，压缩收益可忽略；压缩的收益集中在只增不更的 ``outbox_archived``。
 _TIMESCALE_CHUNK_INTERVAL = "7 days"
 
 # (表名, 分区列, chunk 间隔)
 _HYPERTABLE_SPECS: tuple[tuple[str, str, str], ...] = (
     ("outbox_events", "created_at", _TIMESCALE_CHUNK_INTERVAL),
     ("outbox_archived", "created_at", _TIMESCALE_CHUNK_INTERVAL),
-    # 积分流水：纯 append、无热更新，转 hypertable 以支撑 continuous aggregate 报表
-    # （度量/行为报表，蓝图目标篇该项）。**未启用列式压缩**（首轮保守）：本表同时是 cagg
-    # 的刷新源与 `leaderboard` 的实时扫描对象，压缩与这两条读路径的交互待真机验证。
+    # 积分流水转换为 hypertable，保持未压缩。
     ("points_ledger", "created_at", _TIMESCALE_CHUNK_INTERVAL),
 )
 
@@ -231,16 +201,6 @@ _COMPRESSION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_archived", "7 day
 # outbox_archived 是「可查历史」，刻意不设，其增长由归档链路约束）
 _RETENTION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_events", "30 days"),)
 
-# ---- continuous aggregate 装配（度量/行为报表）----
-#
-# 在 hypertable 上建按时间桶预聚合的物化视图。当前唯一一项 `points_daily`：积分流水按
-# **日桶 × reason** 聚合（`reason` 即行为类型——`points/rules.py:RULE_DELTAS` 的键
-# post/comment/like/file_approved/...，写入点 `points/tasks.py` 以事件名作 reason），
-# 服务 admin 离线报表读口 `/admin/points-report`。**刻意不接 `leaderboard`**（热榜要求
-# 精确实时，读 cagg 会引入刷新滞后）。
-#
-# 刷新策略的 `end_offset` 必须 > 0（含当前未完成的桶会报错），且要显著大于
-# `schedule_interval` 的抖动；`start_offset` 是回填窗口，须覆盖报表最长期望天数。
 _CONTINUOUS_AGGREGATE_SPECS: tuple[tuple[str, str], ...] = (
     (
         "points_daily",
@@ -278,9 +238,6 @@ async def _ensure_timescaledb(conn: Any) -> bool:
         return True
     except sa.exc.DBAPIError as exc:
         await sp.rollback()
-        # 多进程并发首启（compose 下 backend+auth+9 worker 同时拉起）可能撞 DuplicateObject：
-        # 扩展其实已由别的进程建好，复查一次扩展目录，避免把它误判成「引擎不可用」而
-        # 整个进程跳过 hypertable 装配。
         exists = await conn.scalar(
             sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
         )
@@ -381,7 +338,6 @@ async def _ensure_continuous_aggregates(engine: Any) -> list[str]:
 
     auto = engine.execution_options(isolation_level="AUTOCOMMIT")
     async with auto.connect() as conn:
-        # 扩展不可用（普通 PG 镜像 / CI 临时 PG）→ 直接返回空，不去白试一遍 CREATE
         try:
             has_timescale = await conn.scalar(
                 sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
@@ -454,16 +410,11 @@ async def _create_all() -> None:
         await ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
-        # 建表之后：hypertable 转换只对已存在的表有意义；扩展不可用时静默跳过（见上）。
         if await _ensure_timescaledb(conn):
             changed = await _ensure_hypertables(conn)
             timescale_ready = True
-    # continuous aggregate **不能在事务块内创建**（TimescaleDB 限制，见该函数 docstring），
-    # 故必须等上面的事务提交之后，由它自开 AUTOCOMMIT 连接装配（依赖 hypertable 已建）。
     if timescale_ready:
         changed += await _ensure_continuous_aggregates(engine)
-    # 装配项落启动日志：否则 hypertable/cagg 静默跳过时（扩展缺失、版本不兼容、事务限制）
-    # 现场无从判断，验机只能靠手工查目录视图。
     if changed:
         logger.info("TimescaleDB 装配：%s", ", ".join(changed))
 
@@ -503,15 +454,10 @@ async def _seed_base_data() -> None:
         await db.commit()
     finally:
         await db.close()
-    # total>0 仅首启/新增数据时发生；日志级即可，避免每个 worker 启动都打印噪音
     if total:
         logger.info("seed steps inserted %d rows", total)
 
 
-# —— schema 初始化完成标志（进程内状态，供 readiness 如实上报）——
-# 启动不阻塞（本进程 lifespan 不再 await init_db）之后，进程可能在 schema 尚未就绪时就
-# 应答就绪探针。若 readiness 只探 `SELECT 1`，DB 可达但表/迁移未建时会误报 up，把流量放进
-# 一个查不了业务表的进程。故显式记录成败，readiness 并入该判定（见 health.router._probe_db）。
 _db_initialized: bool = False
 
 
@@ -548,8 +494,6 @@ async def _init_db_schema() -> None:
     from core.config import settings
 
     if not settings.use_alembic:
-        # 建表同样要上锁（理由见 _create_all docstring）；Redis 不可用时锁 fail-open，
-        # 退回「不设锁直接建」的原语义
         held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)
         try:
             await _create_all()

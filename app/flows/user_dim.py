@@ -36,9 +36,6 @@ logger = logging.getLogger("lkm.flows.user_dim")
 _DEFAULT_MAX_ROUNDS = settings.user_dim_reconcile_max_rounds
 _DEFAULT_WINDOW = 500
 
-# reconcile 模式的收敛判据要用 periodic 入口真实批大小，而它是 auth 侧固定的
-# RECONCILE_WINDOW（auth/user_dim_sync.py:64 = 500）；auth 内部模块对 app 不可见
-# （import-linter 边界合同），只能在此镜像同一常量。改 auth 侧窗口时须同步此处。
 _RECONCILE_BATCH = 500
 
 
@@ -74,7 +71,6 @@ async def _in_session(
         await target_db.rollback()
         raise
     finally:
-        # source 关闭失败不能连累 target：异常从 finally 里逃逸会让目标会话泄漏回连接池
         try:
             await source_db.close()
         finally:
@@ -104,8 +100,6 @@ async def _sync_ids(*, user_ids: list[int]) -> int:
     return await _in_session(lambda src, tgt: sync_dim_for_ids(src, tgt, user_ids))
 
 
-# Prefect task 包装：生产经 task 执行以获得失败重试与运行状态；纯函数体可被编排层
-# 注入替换（测试用普通函数，避免触碰 Prefect engine / 起临时 server）。
 @task(name="user-dim-reconcile-once", retries=3, retry_delay_seconds=30)
 async def reconcile_once_task() -> int:
     return await _reconcile_once()
@@ -151,11 +145,6 @@ async def orchestrate_user_dim(
         n = await reconcile_once()
         total += n
         rounds += 1
-        # 收敛阈值必须用 periodic 入口的真实批大小，不能用 flow 入参 window：
-        # _reconcile_once → reconcile_user_dim_periodic 内部固定按 RECONCILE_WINDOW
-        # 取批（auth/user_dim_sync.py），window 传不进去。用 window 会在 window>500
-        # 时「每拍补行恒 < window」→ 第一拍就判收敛，静默漏补；window<500 时
-        # 永远判不收敛 → 跑满 max_rounds 空转。
         if n < _RECONCILE_BATCH:
             break
     return {"mode": mode, "updated": total, "rounds": rounds}
@@ -211,8 +200,6 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=["reconcile", "incremental", "ids"],
-        # 默认 None 以便区分「未显式给 --mode」与「显式 --mode incremental」：
-        # 后者与 --ids/--backfill 冲突时必须报错，而不是被静默覆盖
         default=None,
     )
     parser.add_argument("--backfill", action="store_true", help="等价 --mode ids")

@@ -30,7 +30,6 @@ router = APIRouter(prefix="/admin", tags=["admin-data"])
 @router.get("/reports", response_model=ApiResp[PageData[AdminReportListItem]])
 @respond
 async def admin_list_reports(
-    # 白名单：拼错/大小写不对的状态原先静默返回空页，调用方分不清「没有举报」与「筛选值写错」
     status: str | None = Query(
         default=None, pattern="^(pending|resolved|dismissed)$"
     ),

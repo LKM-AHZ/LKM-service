@@ -287,8 +287,6 @@ async def verify_2fa(
     # 错误的TOTP/恢复码不会永久地消耗临时令牌或满足恢复检查。
     payload = _decode_temp_token(raw_token=temp_token)
     purpose = payload.get("purpose", "2fa")
-    # 用途白名单必须在**任何消费/第二因素动作之前**校验：原实现放在 _check_and_consume_temp_token
-    # 之后，非白名单用途的令牌会先被原子消费掉再被拒——令牌白白作废且用户无法重试。
     if purpose not in _ALLOWED_PURPOSES:
         raise BizError(
             AuthErr.TOKEN_INVALID,

@@ -87,9 +87,6 @@ async def exam_list(
 ) -> PageData[ExamOut]:
     async def load() -> dict[str, Any]:
         items, total = await list_exams(db, page=pag.page, limit=pag.limit, type_=type_)
-        # loader 必须回**可 JSON 序列化**的 dict：cache_set 里的 json.dumps(TypeError) 被静默
-        # 吞掉，返回 Pydantic 模型的话 Redis 永远写不进去，每次请求都是 miss 直查库。命中缓存
-        # 后同样按模型校验回来（与 articles/points 的缓存读写法一致）。
         return PageData(
             items=items,
             total=total,

@@ -102,8 +102,6 @@ async def qa_accept(
     cur: CurrentUser = RequireLevel("normal"),
     db: AsyncSession = Depends(get_session),
 ) -> AnswerOut:
-    # 用显式 schema 取代裸 dict：缺键/拼错/非 UUID 一律 422（原先缺键会被下游翻译成
-    # ANSWER_NOT_FOUND 404，语义误导），OpenAPI 也能正确描述入参。
     return await accept_answer(db, question_id, body.answer_id, cur.id)
 
 

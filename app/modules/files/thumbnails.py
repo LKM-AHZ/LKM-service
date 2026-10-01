@@ -33,7 +33,6 @@ _SUPPORTED_SOURCE_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"}
 )
 
-# 源图上限：再大就不值得为缩图整块读进内存（缩图本身是可选增强，不值得冒 OOM 风险）
 _MAX_SOURCE_BYTES = 20 * 1024 * 1024
 _MAX_VARIANT_BYTES = 5 * 1024 * 1024
 _WEBP_QUALITY = 82

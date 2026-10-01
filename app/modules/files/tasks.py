@@ -60,15 +60,10 @@ async def notify_upload(upload_id: str) -> None:
             )
             await db.commit()
         except Exception:
-            # 登记失败：认领已把行删掉，写回（保留原始 created_at）后重抛进死信。
-            # 恢复本身尽力而为，不覆盖原始异常（suppress 保证不 double-fail）。
             with suppress(Exception):
                 await repo.restore(session)
                 await db.commit()
             raise
-        # 缩图（蓝图 §6.3）：登记完成、对象已在内容寻址 key 上，此时生成规格图。
-        # fail-open 由 thumbnails 内部收口——缩图失败绝不影响「上传登记成功」这一语义，
-        # 否则一次转码异常会把用户刚传的图连同登记一起丢掉。
         if reg is not None:
             await generate_variants_for_library_file(db, reg.id, storage)
         # 登记成功后广播给 uploader 的 WebSocket(仅成功路径；失败走上方恢复会话+重试)。
@@ -104,7 +99,6 @@ async def cleanup_expired_uploads() -> None:
             try:
                 await storage.delete(session.storage_key)
             except Exception:
-                # 对象删除失败：保留行留待下一轮重试，否则行先没、对象永久成孤儿
                 logger.warning(
                     "cleanup storage delete failed key=%s",
                     session.storage_key,

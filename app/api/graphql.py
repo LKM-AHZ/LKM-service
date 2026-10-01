@@ -82,9 +82,6 @@ TIMEOUT_MESSAGE = "query exceeded time budget"
 # 成本超预算的固定文案（同上：分类靠模块级常量而非模糊子串匹配）。
 COST_MESSAGE = "query exceeds cost budget"
 
-# 错误消息标记 → 拒绝原因：与防护实现同源。
-# 深度用 graphql-core 的既有文案；成本与超时各用本模块的常量——用自定文案而非模糊子串，
-# 业务报错（如 "invalid refresh tokens"）就不会被误算成被拒、污染 rejected_total。
 _REASON_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("maximum operation depth",), "depth"),
     ((COST_MESSAGE,), "complexity"),
@@ -317,8 +314,6 @@ class GraphQLGuard(SchemaExtension):
     # 显式声明并置 None：旧实现用 getattr(self, "_deadline", float("inf")) 把「还没设截止
     # 时刻」默默当成无限预算，等于这条防线失效且毫无信号。正常路径下 on_operation 一定先执行。
     _deadline: float | None = None
-    # 顶级字段的串行化锁：**必须每请求一把**（扩展按类注册、strawberry 每请求实例化，
-    # 故这里在 on_operation 里新建）。跨请求共用会让无关客户端互相阻塞。
     _root_lock: asyncio.Lock | None = None
 
     def on_operation(self) -> Iterator[None]:
@@ -351,9 +346,6 @@ class GraphQLGuard(SchemaExtension):
         *args: str,
         **kwargs: Any,
     ) -> Any:
-        # 原样返回 _next 的结果（sync/async 混合由 strawberry 处理，不能在此强制 await：
-        # 同步 resolver 返回 list/dict 时 await 会抛 "object list can't be used in 'await'"）。
-        # 未初始化（没走 on_operation）按超时拒绝，而不是把预算当成无限静默放行。
         if self._deadline is None or time.perf_counter() > self._deadline:
             raise GraphQLError(TIMEOUT_MESSAGE)
         # 顶级字段（无父路径）串行进入：共享的 AsyncSession 不允许并发使用（见类 docstring）。
@@ -439,9 +431,6 @@ def build_schema(version: str = GRAPHQL_DEFAULT_VERSION) -> strawberry.Schema:
         )
     merged_query = merge_types("Query", classes)  # type: ignore[arg-type]
     extensions: list[Any] = [
-        # 深度上限 + 深度分布：直接吃 ``QueryDepthLimiter`` 的校验回调，拿到的是**它自己
-        # 算出的深度**（与 max_depth 逐字同口径），故无需再遍历一次 AST，也不会出现
-        # 「指标口径与阈值口径打架」——回调在超限报错路径上同样触发，深层被拒的查询也计数。
         lambda: QueryDepthLimiter(
             max_depth=settings.graphql_max_depth, callback=_observe_depths
         ),

@@ -7,12 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from core.secrets import reveal
 
-# 存在即安全的非生产占位桶：仅当显式认领 dev/local/test 才允许占位密钥。
-# 所以生产部署必须显式设 LKM_ENV=production（漏设的代价是占位密钥被放行）。
 _PERMISSIVE_ENVS: set[str] = {"dev", "local", "test"}
 
-# 开发兜底的 CORS 来源白名单（本地前端：社区站 astro/管理台 vite）。
-# 生产必须显式配置 LKM_CORS_ORIGINS
 _DEV_CORS_ORIGINS: tuple[str, ...] = (
     "http://localhost:4321",
     "http://localhost:5173",
@@ -28,8 +24,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 运行环境：字段默认 "dev"，故 LKM_ENV **未设置**时按 dev 宽松放行
-    # 生产必须显式设 LKM_ENV=production。
     env: str = "dev"
 
     app_name: str = "LKM-API"
@@ -52,7 +46,7 @@ class Settings(BaseSettings):
     db_pool_max_overflow: int = 20
     # 取连接前 ping 探活，剔除坏连接
     db_pool_pre_ping: bool = True
-    # 连接回收与取连接等待recycle 是**主动轮换**：连接存活超期即回收重建
+    # 连接达到回收时间后重建。
     db_pool_recycle_s: int = 1800
     db_pool_timeout_s: float = 30.0
     # worker / 后台批处理的**独立**池：
@@ -97,7 +91,6 @@ class Settings(BaseSettings):
         "change-me-totp-encryption-key-at-least-32-bytes"
     )
 
-    # 验证码 HMAC 盐值 — 必须与 totp_encryption_key 分开设置
     verification_code_pepper: SecretStr = SecretStr(
         "change-me-verification-code-pepper-at-least-32-bytes"
     )
@@ -124,23 +117,18 @@ class Settings(BaseSettings):
     redis_url_secondary: SecretStr = SecretStr("")
     redis_secondary_prefixes: str = ""
 
-    # user:snap 热读的进程内首级缓存。
-    # 失效经 Redis pub/sub 广播到各实例（见 core/user_cache_events.py）；
-    # Redis 未启用时L1 一并关闭（无法跨实例失效，不冒陈旧风险）。
     user_snap_l1_enabled: bool = True
     user_snap_l1_ttl_s: float = 10.0
     user_snap_l1_maxsize: int = 10000
     user_snap_singleflight_enabled: bool = True
-    # 多副本下让「仅持锁实例回填 L2」成立（singleflight 只收敛单进程）
+    # 仅持锁实例回填 L2。
     cache_lock_enabled: bool = True
     cache_lock_ttl_s: float = 5.0
     cache_lock_wait_ms: int = 200
 
-    # timeline/feed 读热列表在 Pydantic 校验后改用 msgspec 出端口（降 CPU）
+    # timeline/feed 列表校验后使用 msgspec 序列化。
     read_msgspec_enabled: bool = True
 
-    # 默认值由前端现有查询集实测校准后写死；
-    # 前端加查询撞阈值时按需放宽，不随请求动态调整。
     graphql_max_depth: int = 10
     # 查询成本上限：按 schema 真实的字段/列表规模计分
     graphql_max_cost: int = 1000
@@ -167,7 +155,6 @@ class Settings(BaseSettings):
     scheduler_heartbeat_interval_s: float = 10.0
     # readiness 探 broker 健康的 Admin REST 超时（秒）
     pulsar_probe_timeout_s: float = 2.0
-    # 探活「up」结果的缓存秒数：就绪探针可能被高频打，避免每次真打 Admin REST
     pulsar_probe_cache_s: float = 5.0
     # Pulsar 客户端操作超时（秒）
     pulsar_operation_timeout_s: float = 30.0
@@ -185,7 +172,7 @@ class Settings(BaseSettings):
     content_events_enabled: bool = True
 
     # ---- 检索 ----
-    # 引擎择一：pg（默认，零外部依赖）/ meilisearch（P2）/ opensearch（P3）。
+    # 检索引擎三选一，默认使用 pg。
     search_engine: Literal["pg", "meilisearch", "opensearch"] = "pg"
     # 事件驱动索引同步开关：
     search_sync_enabled: bool = True
@@ -215,7 +202,7 @@ class Settings(BaseSettings):
     # 新关注一位作者时回填其最近 N 条内容进该关注者的物化 feed（0 = 不回填）。
     feed_backfill_limit: int = 50
     # ---- 时间线全量回填 ----
-    # 每源每批处理条数（越大越快、单事务越长）；起始时间留空 = 自最早（全量）。
+    # 回填按此批量处理；起始时间留空时从最早记录开始。
     feed_backfill_batch_size: int = 500
     feed_backfill_since: str = ""
 
@@ -260,8 +247,6 @@ class Settings(BaseSettings):
     # admin 查询接口单页上限（用户传入 limit 会被裁剪到此值，防一次拖全表）
     clickhouse_query_limit_max: int = 200
 
-    # MinIO/S3 对象事件回调共享令牌：空串 = 未启用（回调端点一律 401）。
-    # 生产必须设置固定随机值，供桶通知 webhook 的 Authorization: Bearer 头校验。
     files_notify_token: SecretStr = SecretStr("")
 
     # AUTH 读面 HTTP seam：单体单用户快照 miss 回填可跨进程改走 AUTH 读端点。
@@ -269,7 +254,6 @@ class Settings(BaseSettings):
     auth_http_token: SecretStr = SecretStr("")
     auth_http_timeout_s: float = 3.0
     auth_http_retries: int = 2
-    # 熔断：连续失败达阈即打开，冷却期内直接短路，避免 AUTH 进程宕机时每次请求都白等一个超时。冷却后半开试探一次。
     auth_http_circuit_failures: int = 5
     auth_http_circuit_reset_s: float = 30.0
 
@@ -283,19 +267,15 @@ class Settings(BaseSettings):
     auth_db_pool_max_overflow: int = 20
     auth_db_pool_pre_ping: bool = True
 
-    # schema 初始化策略（开发默认 create_all，免维护增量迁移）：
-    #   False（默认）→ init_db 用 Base.metadata.create_all()，只建缺失表
-    #   True→ 走 Alembic 增量迁移（schema 唯一权威、可回滚、可升级老库）
+    # False 使用 create_all；True 执行 Alembic 迁移。
 
     use_alembic: bool = False
 
-    # Sentry APM：空串 = 不加载（dev/test 默认关闭，避免拖启动）；配置 DSN 才接入
     sentry_dsn: SecretStr = SecretStr("")
     # Sentry 性能采样率（0~1）；仅 DSN 非空时才生效。
     sentry_traces_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
-    # Prometheus metrics：默认开（本地无副作用收集器，成本极低）；
-    # 显式 LKM_METRICS_ENABLED=false 可整体关闭
+    # metrics 默认启用，可通过 LKM_METRICS_ENABLED=false 关闭。
     metrics_enabled: bool = True
     # /metrics 暴露根路径（不经 api_prefix，供 Prometheus 探抓）
     metrics_endpoint: str = "/metrics"
@@ -311,7 +291,6 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = ""
     # 额外导出头（逗号分隔 k=v，如 SigNoz ingestion key）；空则不带
     otel_exporter_otlp_headers: str = ""
-    # 单次导出超时（秒）：collector 不可达时据此快速失败，不拖 shutdown
     otel_exporter_timeout_s: float = 2.0
     # 采样率（0~1）；低流量可置 1.0
     otel_sample_ratio: float = 0.1
@@ -371,20 +350,17 @@ class Settings(BaseSettings):
             ):
                 if _bad(reveal(value)):
                     insecure.append(name)
-        # AUTH seam 配齐 URL 即须成对给 token（否则端点一律 401）
         if self.auth_http_url and _bad(reveal(self.auth_http_token)):
             insecure.append("auth_http_token(missing while auth_http_url set)")
-        # Prefect 编排启用即须给 API 基址与目标 deployment（否则触发必失败）
         if self.prefect_enabled and (
             not self.prefect_api_url or not self.prefect_deployment
         ):
             insecure.append(
                 "prefect_api_url/prefect_deployment(required while prefect_enabled=true)"
             )
-        # ClickHouse 分析后端启用即须给 HTTP 基址（否则客户端建连必失败）
         if self.clickhouse_enabled and not self.clickhouse_url:
             insecure.append("clickhouse_url(required while clickhouse_enabled=true)")
-        # RS256-only 下缺 RSA 密钥不在此强制：各进程 env 集不同。缺钥由 readiness 探针如实上报、签发侧抛 RuntimeError。
+        # RSA 密钥由 readiness 和签发路径分别检查。
 
         if insecure:
             raise ValueError(
@@ -437,8 +413,7 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        # 用 quote（空格→%20）而非 quote_plus：userinfo 段不按表单语义解码 '+',
-        # 含空格的密码用 quote_plus 会变成字面 '＋'，SQLAlchemy 侧 unquote 后密码就错了
+        # 密码使用 URL 百分号编码。
         password = urllib.parse.quote(reveal(self.db_password), safe="")
         return (
             f"postgresql+asyncpg://{self.db_user}:{password}"

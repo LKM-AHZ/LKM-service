@@ -38,8 +38,6 @@ router = APIRouter(prefix="/ws", tags=["ws"])
 _UNAUTHORIZED_CLOSE = 4401
 _BAD_REQUEST_CLOSE = 4400
 
-# 心跳间隔：超过此窗口未收到任何对端消息，则发一条 ping 探活；
-# 若对端已静默断线（NAT 过期/断网），send 会抛错从而清理僵尸连接，避免长期占内存。
 _HEARTBEAT_S = 30.0
 
 
@@ -58,8 +56,6 @@ async def _authorize(token: str) -> uuid.UUID | None:
         # 真正的鉴权失败：按未授权处理
         return None
     except Exception:
-        # 基础设施故障（DB/seam 异常）也返回 None → 客户端只会看到 4401「未授权」，
-        # 运维毫无信号，排障时与「凭据错」无法区分，故必须留痕
         logger.exception("ws 鉴权出现非鉴权类异常（按未授权关闭）")
         return None
     finally:
@@ -112,8 +108,6 @@ async def _should_keep_connection(raw: str, user_id: uuid.UUID) -> bool:
             logger.warning("ws refresh 缺 token，按未授权关闭 user=%s", user_id)
             return False
         new_uid = await _authorize(token)
-        # 关键安全约束：续期只允许「同一用户换新 token」；不同 user_id 一律拒绝，
-        # 否则续期就成了把当前连接身份换成他人的后门。
         if new_uid is None or new_uid != user_id:
             logger.warning("ws refresh 身份不符/无效，关闭 user=%s", user_id)
             return False

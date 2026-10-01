@@ -34,7 +34,6 @@ class ConsoleEmailProvider(EmailProvider):
     """
 
     async def send_code(self, email: str, code: str) -> None:
-        # 整体遮蔽，理由同 ConsoleSmsProvider.send_code
         masked = "*" * len(code)
         logger.info("[EMAIL] To: %s | Code: %s", email, masked)
 

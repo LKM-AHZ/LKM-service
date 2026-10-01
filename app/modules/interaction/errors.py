@@ -15,8 +15,6 @@ from core.err import (
 
 class InteractionErr(ErrCode):
     CONTENT_NOT_FOUND = NS_INTERACTION.err(1)
-    # 重复点赞（蓝图 §6.1 唯一约束语义化）：content_likes 复合主键保证「同一用户对同一
-    # 内容最多一条」，并发重复点赞撞主键时由 app/db/session.py 映射到本码。
     DUPLICATE_LIKE = NS_INTERACTION.err(2)
 
 

@@ -9,13 +9,9 @@ class QuestionCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     situation: str = Field(..., min_length=1, max_length=5000)
     content: str = Field(..., min_length=1, max_length=20000)
-    # 取值域与 models.QAQuestion.category 注释、前端 QaCategory = "help" | "volunteer" 一致：
-    # 原先只限长度，任意串都能落库，而列表按 category 逐字过滤 → 脏值会把 tab 内容切碎。
     category: Literal["help", "volunteer"] = "help"
     bounty_people: int = Field(..., ge=1, le=10)
     bounty_per_person: int = Field(..., ge=0)
-    # 附件 URL/引用（后接真上传）：每条一行落库，故逐条限长 + 限条数，
-    # 否则单请求可推入任意多条任意长的 URL（不可控写放大）
     images: list[Annotated[str, Field(max_length=2048)]] = Field(
         default_factory=list, max_length=9
     )

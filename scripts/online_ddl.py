@@ -29,7 +29,6 @@ LARGE_TABLES = (
 )
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\Z")
 _COLUMN_TYPES = ("text", "integer", "bigint", "boolean", "uuid", "timestamptz")
-# Timescale hypertable 的主键必须含分区列；其余表以 UUID 主键推进。
 _COMPOSITE_KEYS = frozenset({"outbox_events", "outbox_archived", "points_ledger"})
 
 
@@ -40,7 +39,6 @@ def _ident(value: str) -> str:
 
 
 def _expression(value: str) -> str:
-    # 防止计划文件变成多语句脚本；表达式的语义仍须人工审核。
     if not value.strip() or any(
         token in value for token in (";", "--", "/*", "*/", "$$")
     ):

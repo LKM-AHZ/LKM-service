@@ -59,24 +59,17 @@ class ReadyData(BaseModel):
     redis: DependencyStatus
     pulsar: DependencyStatus
     auth: DependencyStatus
-    # 验签公钥（蓝图 §2 第 2 条）：RS256 部署下这是承接带 token 流量的前置条件，须如实上报。
     verify_key: DependencyStatus
     soft: SoftDependencies
 
 
-# AUTH 活性的可注入出站 client 工厂（monolith 就绪探针用）：默认 None → 按配置超时新建
-# httpx client 打 AUTH 进程 /liveness；测试经 monkeypatch 换成返回假 transport 的 client
-# 即可离线端到端驱动（与 auth.user_http._client_factory 同款范式）。
+# 就绪探针使用此工厂请求 AUTH 的 /liveness。
 _auth_liveness_factory: Any = None
 
-# 软依赖探测的出站 client 工厂（可注入，测试离线驱动用；语义同 _auth_liveness_factory）。
-# 软依赖只告知不阻塞，故**不**引入配置项，超时用模块常量。
 _soft_probe_factory: Any = None
 
-# 软依赖探测超时（秒）：readiness 可能被编排高频调用，探测必须是「轻量 + 短超时」，绝不能
-# 让一个不可达的 OpenSearch/MinIO 把就绪探针拖住（即便不改变判定，也会拖慢响应）。
 _SOFT_PROBE_TIMEOUT_S = 2.0
-# 小于编排层的 5s 探针超时；所有依赖并发探测，单个半挂不会拖住整次响应。
+# 依赖探测共用短超时。
 _READINESS_PROBE_TIMEOUT_S = 3.0
 
 logger = logging.getLogger(__name__)
@@ -99,8 +92,7 @@ async def _probe_auth() -> DependencyStatus:
         async with _build_auth_client() as client:
             resp = await client.get(url)
     except httpx.HTTPError as exc:
-        # 细节只进日志：/health、/readiness 都是**匿名**可读端点，而驱动层异常文本常带
-        # 内网 host:port / 库名 / 账号，等于把基础设施信息白送给任何调用者。
+        # 驱动异常详情只写日志。
         logger.warning("health probe auth failed: %s", exc)
         return DependencyStatus(status="error", detail="auth unreachable")
     if resp.status_code != 200:
@@ -154,7 +146,7 @@ async def _probe_db() -> DependencyStatus:
             await conn.execute(text("SELECT 1"))
         return DependencyStatus(status="up")
     except Exception as exc:
-        # 匿名可读的就绪面上不回显驱动异常（常含内网 host:port / 库名 / 用户名）
+        # 就绪响应不回显驱动异常。
         logger.warning("health probe db failed: %s", exc)
         return DependencyStatus(status="error", detail="database unreachable")
 

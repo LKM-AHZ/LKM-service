@@ -31,7 +31,6 @@ def current_code(secret: str) -> str:
 
 
 async def main() -> None:
-    # 目标账号必须显式给
     if len(sys.argv) < 2:
         print("用法：python scripts/setup_admin_2fa.py <username>", file=sys.stderr)
         sys.exit(2)
@@ -69,7 +68,6 @@ async def main() -> None:
                 f"（需导出请设 {_DUMP_ENV}=1）"
             )
             return
-        # 仅属主可读，避免写进日志/历史
         fd = os.open(_DUMP_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(f"SECRET={secret}\n")

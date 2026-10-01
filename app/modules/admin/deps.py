@@ -91,8 +91,6 @@ async def get_current_admin(
     except (AttributeError, TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
 
-    # jti 撤销预检：admin 登出后该 cookie **立即**失效（不等 15min 自然过期）。Redis 不可用
-    # 时 is_jti_blocked 返回 False 跳过，交由下面的 seam 权威裁决兜底；无 jti 的旧 token 亦然。
     if await is_jti_blocked(payload.get("jti")):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
 
@@ -156,8 +154,6 @@ async def get_current_admin_2fa(
     mfa_at = payload.get("mfa_at")
     if mfa_at is None:
         raise BizError(CommonErr.MFA_REQUIRED, "MFA required")
-    # mfa_at 是原始 claim：非数字/null/inf/超大值都会让 float()/fromtimestamp 抛错，
-    # 冒成 500 就丢掉了 step-up 拒绝语义，故一律 fail-closed 转 MFA_REQUIRED
     try:
         tried_at: Any = datetime.datetime.fromtimestamp(float(mfa_at), tz=datetime.UTC)
     except (TypeError, ValueError, OverflowError, OSError):

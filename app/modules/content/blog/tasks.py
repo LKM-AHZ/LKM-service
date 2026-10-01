@@ -143,7 +143,6 @@ async def reconcile_blog_repos() -> None:
                 await db.delete(q)
                 logger.info("blog 清理超龄隔离仓库: %s", repo_name)
 
-        # 目录已不在磁盘的台账行同样作废（人工删除/卷丢失），否则永久滞留成幽灵记录
         for repo_name, q in quarantined.items():
             if repo_name in seen:
                 continue

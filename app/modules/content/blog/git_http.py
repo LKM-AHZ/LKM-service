@@ -109,8 +109,6 @@ async def _authenticate_credentials(
     try:
         verified = await verify_password(db, username, password)
     except BizError as exc:
-        # 缝拿不到真值 = 无法证明身份，按未认证收场。日志保留根因（配置漏配 / auth 不可达
-        # 与「口令错」在此可区分），但不向外暴露。
         logger.warning("git Basic Auth 凭证缝不可用，按未认证收场: %s", exc)
         return None
     if verified is None:
@@ -205,9 +203,6 @@ async def _read_pipe(stream: asyncio.StreamReader | None) -> bytes:
     return await stream.read()
 
 
-# 同一 handler 同时服务 smart HTTP 的 GET(拉取)与 POST(推送)，
-# 拆成两个路由并给独立 operation_id，避免 FastAPI 生成重复 Operation ID。
-# 内部按 request.method 区分 is_push。
 @git_router.post(
     "/{repo_name}.git/{rest:path}",
     operation_id="git_http_backend_post",
@@ -230,8 +225,6 @@ async def git_http_backend(
 
     is_push = _is_receive_pack(request)
 
-    # 写路径(push)必须先确认身份 + 属主，未通过直接 401/403，绝不让 git http-backend 处理。
-    # 读路径维持原语义（Basic 通过即设 REMOTE_USER，匿名回退公开读）。
     remote_user: str | None = None
     if is_push:
         remote_user = await _require_owner_for_push(db, repo_name, request)
@@ -259,8 +252,6 @@ async def git_http_backend(
         creds = _decode_basic_auth(auth)
         if creds is not None:
             username, password = creds
-            # 读路径本就允许匿名：验密不通过、或凭证缝不可用，一律按匿名读收场（不抛）。
-            # 与写路径的 fail-closed 401 不同——这里只是「少给身份」，不会放行任何受限操作。
             identity = await _authenticate_credentials(db, username, password)
             if identity is not None:
                 # 用缝回传的权威用户名（拆库形态下业务库已无该行可取）
@@ -269,7 +260,6 @@ async def git_http_backend(
             # 仅格式错误（非 base64/缺冒号/非 UTF-8）回退匿名读；DB/内部错误不在此捕获，正常传播
             logger.warning("git Basic Auth 格式无效，回退为匿名（读公开）")
 
-    # 用 asyncio 子进程 + request.stream() 流式喂入请求体，避免 request.body() 全量缓冲
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -282,9 +272,6 @@ async def git_http_backend(
     except FileNotFoundError:
         raise BizError(CommonErr.INTERNAL_ERROR, "git executable not found") from None
 
-    # stdout/stderr 必须与写 stdin 并发抽干：子进程（receive-pack 经 sideband 发的进度、
-    # 或大批量 refs 的响应）可能在还没读完请求体前就写出超过管道缓冲的数据，此时若本端
-    # 仍在写 stdin，两边互等 → 大 push 只能卡到超时变 504。
     out_task = asyncio.create_task(_read_pipe(proc.stdout))
     err_task = asyncio.create_task(_read_pipe(proc.stderr))
     try:
@@ -298,15 +285,12 @@ async def git_http_backend(
         await proc.wait()
         raise BizError(CommonErr.TIMEOUT, "Git operation timed out") from None
     except BaseException:
-        # 其它退出路径（客户端中断的 ClientDisconnect、communicate 类错误）同样要杀掉并
-        # 回收子进程，否则每个中断请求都漏一个仍占着仓库目录的 git 进程
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         with contextlib.suppress(Exception):
             await proc.wait()
         raise
     finally:
-        # 超时/异常路径的两个读任务可能仍在等 EOF，取消并回收，避免 pending task 泄漏
         for _task in (out_task, err_task):
             if not _task.done():
                 _task.cancel()
@@ -314,7 +298,6 @@ async def git_http_backend(
 
     resp = _parse_git_response(stdout)
     if resp.status_code >= 400 and stderr.strip():
-        # http-backend 的失败细节只写在 stderr（原先直接丢弃），不留痕则线上只能看到状态码
         logger.warning(
             "git http-backend 失败 repo=%s status=%s stderr=%s",
             repo_name,

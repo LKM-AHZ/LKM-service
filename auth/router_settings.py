@@ -110,7 +110,6 @@ async def bind_email_verify(
     """验证邮箱验证码并将邮箱绑定到当前用户。"""
     await consume_email_code(db, body.email, body.code, _BIND_PURPOSE)
 
-    # 确保邮箱仍未被占用（可能在请求和验证之间被占用）
     existing = (
         (await db.execute(select(User).where(User.email == body.email)))
         .scalars()
@@ -178,7 +177,6 @@ async def bind_phone_verify(
     """验证手机验证码并将手机号绑定到当前用户。"""
     await consume_phone_code(db, body.phone, body.code, _BIND_PURPOSE)
 
-    # 确保手机号仍未被占用
     existing = (
         (await db.execute(select(User).where(User.phone == body.phone)))
         .scalars()
@@ -251,9 +249,6 @@ async def unbind(
             CommonErr.INVALID_INPUT, f"Unsupported binding type: {binding_type}"
         )
 
-    # 先锁本用户行再读登录方式：否则两个并发解绑（如同时删 email 与 phone）都会读到「还有
-    # 2 种方式」，双双通过下面的 _count_login_ways 守卫并提交，把账号解到零登录方式——
-    # 自锁死且再也无法通过登录自救。锁住后第二个请求读到的是第一个已提交后的状态。
     await db.execute(select(User.id).where(User.id == cur.id).with_for_update())
     user = await get_or_raise(
         db,
@@ -263,7 +258,6 @@ async def unbind(
         options=(selectinload(User.oauth_bindings),),
     )
 
-    # 2FA 门槛：三种解绑（email/phone/github）已开启 2FA 时都必须二次验证（TOTP 或恢复码）
     totp = await service_2fa.get_enabled_totp(db, cur.id)
     if totp is not None:
         if not body.code and not body.recovery_code:
@@ -279,8 +273,6 @@ async def unbind(
             "至少需要保留一种登录方式（邮箱/手机号/GitHub）",
         )
 
-    # 未绑定时不能静默报成功（github 分支就是「0 行即拒」的口径）：上面那个守卫只保证
-    # 「解绑后至少还有一种方式」，账号本就 ≥2 种方式时它并不拦未绑定的解绑请求。
     if binding_type == "email":
         if not user.email:
             raise BizError(CommonErr.INVALID_INPUT, "邮箱尚未绑定")

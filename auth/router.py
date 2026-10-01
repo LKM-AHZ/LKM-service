@@ -84,8 +84,6 @@ async def _send_reg_code(
         f"reg:{channel.name}:{contact}", max_count=5, window=3600
     )
     code, _ = await channel.create_verification(db, contact, "register")
-    # 延后到响应之后发送（与本文件 resend 路径同款）：原先这里 await，参数被白挂，
-    # SMTP/短信往返被算进注册请求时延，两条路径语义也不一致
     background_tasks.add_task(jobs.send_code, channel.name, contact, code)
 
 
@@ -329,10 +327,6 @@ async def refresh_access_token_route(
     request: Request,
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
-    # 按 IP 限流而非全局，避免单用户频繁刷新拖垮/阻塞全站其他用户；
-    # 刷新签发新 token 属安全敏感路径，Redis 故障时 fail-close（拒绝）。
-    # IP 经 core.client_ip 取（网关后读 X-Real-IP），不可用 request.client.host
-    # ——那是 apisix 容器的地址，会让本限流退化成全站共享单桶。
     ip = client_ip(request)
     await check_code_rate_limit(
         f"token:refresh:ip:{ip}",
@@ -350,9 +344,6 @@ async def logout_route(
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     await service_auth.revoke_all_refresh_tokens(db, cur.id)
-    # 顺手把本枚 access token 记入 jti 黑名单：revoke_all 已靠 bump token_version 让全端失效，
-    # 这里让**本枚** token 在预检处即刻被拒——也是「单设备撤销」原语在登出路径的首个消费点。
-    # 取不到 jti（灰度期旧 token）或解码异常都不影响登出语义，故全程尽力而为。
     try:
         payload = decode_access_token(token)
     except Exception:

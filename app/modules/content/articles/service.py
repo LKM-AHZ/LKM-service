@@ -147,9 +147,6 @@ async def get_article(db: DbSession, slug: str) -> ArticleDetail:
         article = await get_or_raise(
             db, Article, ArticleErr.NOT_FOUND, Article.slug == slug
         )
-        # article.tags 是 Tag 对象列表，ArticleDetail.tags 期望字符串 list。
-        # 不能直接 model_validate(article)：from_attributes 会读 article.tags 得到
-        # Tag 对象而校验失败，故从标量属性构造 dict，tags 单独 map 成字符串。
         detail = ArticleDetail(
             **{
                 k: v
@@ -236,8 +233,6 @@ async def toggle_article_like(
             await _bump_article_count(db, article.id, "likes", -1)
         liked = False
     else:
-        # 原子占位：并发两次「点赞」只有一个真插入（原先后到者撞复合主键报错，且两边
-        # 都 +1、都入队积分事件）
         if await repo.claim_like(article_id=article.id, user_id=user_id):
             await _bump_article_count(db, article.id, "likes", 1)
             # 仅新增点赞路径入队（取消点赞不重复计分）
@@ -274,7 +269,6 @@ async def create_article_comment(
     )
     await ArticleCommentRepository(db).add(comment)
     await _bump_article_count(db, article.id, "comments", 1)
-    # 同 toggle_article_like：详情/列表缓存内嵌 comments 计数，写后必须失效
     await _invalidate_article_cache(db, slug)
     return comment
 
@@ -319,13 +313,8 @@ async def delete_article_comment(
     if not as_admin and comment.user_id != user_id:
         raise BizError(CommonErr.FORBIDDEN)
     author_id = comment.user_id
-    # 批 4：改软删（行保留以便恢复）；评论列表经 Repository 基类自动过滤已软删。
-    # 连带整棵回复树（等价硬删时代的 ORM delete-orphan 级联），故 comments 计数按
-    # **实际消失的行数**递减——旧实现恒 -1，与级联删除的行数不一致（既有偏差，顺带修正）。
     removed = await ArticleCommentRepository(db).soft_delete_subtree(comment.id)
     await _bump_article_count(db, comment.article_id, "comments", -removed)
-    # 详情缓存按 slug 建键，而本函数只拿到 comment.article_id，故需回查 slug 才能失效
-    # （article 行理论上必在；硬删后取不到就跳过，缓存自然随 TTL 过期）
     article = await ArticleRepository(db).get(comment.article_id)
     if article is not None:
         await _invalidate_article_cache(db, article.slug)
@@ -417,9 +406,6 @@ async def _load_category_title(db: DbSession, category_id: uuid.UUID) -> str:
 
 async def _article_to_detail(db: DbSession, article: Article) -> ArticleDetail:
     """把 Article ORM 组装为 ArticleDetail，填充 category_title 与阅读时长。"""
-    # article.tags 是 lazy="selectin" 的异步关系：调用方常以刚 flush/新创建
-    # 的 Article 传入（tags 未预载）。若在此同步访问 article.tags 会在 async
-    # 会话中触发懒加载而抛 MissingGreenlet，故先显式 refresh 按需加载该关系。
     await ArticleRepository(db).refresh_tags(article)
     detail = ArticleDetail(
         **{
@@ -473,8 +459,6 @@ async def update_article_ex(
     expected_version = data.pop("version", None)
     if data.get("category_id") is not None:
         await _require_category(db, data["category_id"])
-    # 收敛成单个 writes 字典：统一经 CAS 落库，避免「先 setattr 再 CAS」在冲突时留下
-    # 未回滚的脏改动（冲突抛错后端点回 409，若已 setattr，同会话提交会把半成品写进去）。
     writes: dict[str, Any] = {}
     if "status" in data:
         status = str(data.pop("status"))
@@ -483,12 +467,9 @@ async def update_article_ex(
             writes["published"] = now_iso()
     if "keyword_str" in data:
         writes["keywords"] = str(data.pop("keyword_str"))
-    # tags 不能走通用 setattr：Article.tags 是 list[Tag] 关系列，赋 list[str] 会污染
-    # 关系状态并在 flush 时炸；标签只由下面的 _sync_article_tags 走仓储维护
     data.pop("tags", None)
     writes.update(data)
     repo = ArticleRepository(db)
-    # 空 patch 且未带版本时不发 UPDATE（避免仅刷新 updated_at/version 的空写）
     if expected_version is not None or writes or patch.tags is not None:
         await repo.update_cas(article, expected_version, **writes)
     if patch.tags is not None:
