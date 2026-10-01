@@ -1,4 +1,4 @@
-"""跨进程缓存锁（B4）：互斥语义、释放的 token 守卫、fail-open、与 ``cached_read`` 的协作。
+"""跨进程缓存锁：互斥语义、释放的 token 守卫、fail-open、与 ``cached_read`` 的协作。
 
 锁本身就是共享 Redis 上的 ``SET NX``，故**同一 Redis 上的两次 ``l2_lock`` 嵌套即等价于两个
 进程**，无需真起多实例。**刻意不用 Lua 脚本**做释放（见 ``cache_lock`` 模块 docstring：
@@ -12,6 +12,7 @@ import pytest
 
 import core.redis as redis_mod
 from core import cache as cache_mod
+from core import cache_lock
 from core.cache import cached_read
 from core.cache_lock import _release, l2_lock
 from core.config import settings
@@ -85,6 +86,54 @@ async def test_disabled_by_flag(monkeypatch: Any) -> None:
     monkeypatch.setattr(settings, "cache_lock_enabled", False)
     async with l2_lock("k5") as held:
         assert held is False
+
+
+async def test_disabled_lock_still_fills_cache(monkeypatch: Any) -> None:
+    await _enable_fake_redis(monkeypatch)
+    monkeypatch.setattr(settings, "cache_lock_enabled", False)
+    calls = 0
+
+    async def loader() -> dict[str, int]:
+        nonlocal calls
+        calls += 1
+        return {"v": calls}
+
+    key = cache_mod.make_key("t", "without-lock")
+    assert await cached_read(key, 60, loader) == {"v": 1}
+    assert await cached_read(key, 60, loader) == {"v": 1}
+    assert calls == 1
+
+
+async def test_redis_lock_error_aborts_retries(monkeypatch: Any) -> None:
+    await _enable_fake_redis(monkeypatch)
+    monkeypatch.setattr(settings, "cache_lock_wait_ms", 1000)
+    attempts = 0
+
+    async def broken_acquire(*_args: Any) -> None:
+        nonlocal attempts
+        attempts += 1
+        return None
+
+    monkeypatch.setattr(cache_lock, "_acquire", broken_acquire)
+    async with l2_lock("broken") as held:
+        assert held is False
+    assert attempts == 1
+
+
+async def test_redis_lock_error_during_wait_aborts_retries(monkeypatch: Any) -> None:
+    await _enable_fake_redis(monkeypatch)
+    monkeypatch.setattr(settings, "cache_lock_wait_ms", 1000)
+    attempts = 0
+
+    async def acquire_then_fail(*_args: Any) -> bool | None:
+        nonlocal attempts
+        attempts += 1
+        return False if attempts == 1 else None
+
+    monkeypatch.setattr(cache_lock, "_acquire", acquire_then_fail)
+    async with l2_lock("broken-after-wait") as held:
+        assert held is False
+    assert attempts == 2
 
 
 async def test_cached_read_only_holder_fills_l2(monkeypatch: Any) -> None:

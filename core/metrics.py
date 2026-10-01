@@ -89,10 +89,11 @@ user_snap_cache_total = Counter(
     ("layer", "result"),
 )
 # 跨进程缓存锁（B4，蓝图 §5.6 的 L2 double-check）：result=acquired（拿到锁，负责回填）
-# / timeout（等锁超时后走无锁直读，fail-open）。timeout 上升说明回填耗时或实例数偏多。
+# / timeout（等锁超时后走无锁直读）/ error（锁命令失败，立即降级）。
+# timeout 上升说明回填耗时或实例数偏多；error 上升说明 Redis 故障。
 cache_lock_total = Counter(
     "cache_lock_total",
-    "跨进程缓存锁结果（result=acquired|timeout）",
+    "跨进程缓存锁结果（result=acquired|timeout|error）",
     ("result",),
 )
 # user:snap 读请求合并（singleflight）：role=leader 为真正执行加载的请求，shared 为复用其结果者。

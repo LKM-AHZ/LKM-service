@@ -3,6 +3,7 @@
 **失败模式全部 fail-open**（宁可多查一次 DB，不可让读阻塞或抛错）：
 - 持锁者崩溃 → 锁的 TTL 自动过期，无需人工清理（无 TTL 的锁正是死锁的来源）；
 - 等锁超时（``cache_lock_wait_ms``）→ 放弃等待、走无锁直读，**不制造死锁**；记``cache_lock_total{result=timeout}`` 以便观察。
+- Redis 锁命令失败 → 立即降级，不再轮询到超时；记 ``result=error``。
 - 释放用 ``WATCH`` + token 比对 + ``MULTI/DEL``
 与 ``redis.set(nx=True)`` 的既有先例（``auth/user_dim_sync.py``、``db/migration_lock.py``）
 同款原语，差别在本模块是**短 TTL + 可放弃等待**的读路径锁，不追求严格互斥。
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -32,23 +34,23 @@ def _lock_key(key: str) -> str:
     return f"{_LOCK_PREFIX}{key}"
 
 
-async def _acquire(client: Any, lock_key: str, token: str, ttl: int) -> bool:
+async def _acquire(client: Any, lock_key: str, token: str, ttl: int) -> bool | None:
+    """True=持锁，False=被占用，None=Redis 命令失败。"""
     try:
         return bool(await client.set(lock_key, token, nx=True, ex=ttl))
     except Exception:
         logger.debug("cache lock acquire skip key=%s", lock_key)
-        return False
+        return None
 
 
-async def _wait_for_lock(client: Any, lock_key: str, token: str, ttl: int) -> bool:
+async def _wait_for_lock(client: Any, lock_key: str, token: str, ttl: int) -> bool | None:
     """在 ``cache_lock_wait_ms`` 内轮询重试（等锁期间持锁者通常已完成回填）。"""
-    deadline = settings.cache_lock_wait_ms / 1000.0
-    waited = 0.0
-    while waited < deadline:
-        await asyncio.sleep(_POLL_INTERVAL_S)
-        waited += _POLL_INTERVAL_S
-        if await _acquire(client, lock_key, token, ttl):
-            return True
+    deadline = time.monotonic() + max(0, settings.cache_lock_wait_ms) / 1000.0
+    while (remaining := deadline - time.monotonic()) > 0:
+        await asyncio.sleep(min(_POLL_INTERVAL_S, remaining))
+        acquired = await _acquire(client, lock_key, token, ttl)
+        if acquired is not False:
+            return acquired
     return False
 
 
@@ -94,10 +96,13 @@ async def l2_lock(key: str) -> AsyncGenerator[bool]:
     ttl = max(1, int(settings.cache_lock_ttl_s))
     acquired = False
     try:
-        acquired = await _acquire(client, lock_key, token, ttl) or await _wait_for_lock(
-            client, lock_key, token, ttl
-        )
-        cache_lock_total.labels("acquired" if acquired else "timeout").inc()
+        result = await _acquire(client, lock_key, token, ttl)
+        if result is False:
+            result = await _wait_for_lock(client, lock_key, token, ttl)
+        acquired = result is True
+        cache_lock_total.labels(
+            "acquired" if acquired else "error" if result is None else "timeout"
+        ).inc()
         yield acquired
     finally:
         if acquired:

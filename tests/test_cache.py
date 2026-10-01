@@ -1,11 +1,13 @@
-"""读热点缓存（模块4）：键规范、fail-open、版本失效、cached_read 回填。"""
+"""读热点缓存：键规范、fail-open、版本失效、cached_read 回填。"""
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 import core.redis as redis_mod
+from core import cache as cache_mod
 from core.cache import (
     bump_collection_version,
     cache_get,
@@ -83,6 +85,30 @@ async def test_cache_invalidate_deletes_key(monkeypatch) -> None:
     assert await cache_get("k2") is None
 
 
+async def test_cache_invalidate_routes_mixed_prefixes(monkeypatch: Any) -> None:
+    """批量失效中的键可能被灰度路由到不同 Redis 后端。"""
+    import fakeredis.aioredis
+
+    monkeypatch.setattr(settings, "redis_url_secondary", "redis://secondary:6379/0")
+    monkeypatch.setattr(settings, "redis_secondary_prefixes", "following")
+    clients = {
+        name: fakeredis.aioredis.FakeRedis(decode_responses=True)
+        for name in ("primary", "secondary")
+    }
+
+    async def get_redis(key: str) -> Any:
+        return clients["secondary" if redis_mod.is_secondary(key) else "primary"]
+
+    monkeypatch.setattr(cache_mod.redis_client, "get_redis", get_redis)
+    first = make_key("following", "user")
+    second = make_key("board:ids", "user")
+    await clients["secondary"].set(first, "old")
+    await clients["primary"].set(second, "old")
+    await cache_invalidate(first, second)
+    assert await clients["secondary"].get(first) is None
+    assert await clients["primary"].get(second) is None
+
+
 async def test_collection_version_bump_invalidates_old(monkeypatch) -> None:
     """写后 bump 版本号 → 旧列表键（含旧版本前缀）与新版本键不同。"""
     await _enable_fake_redis(monkeypatch)
@@ -94,6 +120,18 @@ async def test_collection_version_bump_invalidates_old(monkeypatch) -> None:
     assert v1 != v0
     # 旧键仍在但已不被新读取路径使用；新键缺失（直查库语义）
     assert await cache_get(make_key("columns:list", v1, 1)) is None
+
+
+async def test_collection_version_decodes_bytes(monkeypatch: Any) -> None:
+    class Client:
+        async def get(self, _key: str) -> bytes:
+            return b"42"
+
+    async def get_redis(_key: str) -> Client:
+        return Client()
+
+    monkeypatch.setattr(cache_mod.redis_client, "get_redis", get_redis)
+    assert await collection_version("columns") == "42"
 
 
 async def test_cached_read_loads_on_miss_and_hits(monkeypatch) -> None:
@@ -129,8 +167,6 @@ async def test_cached_read_single_flight_on_concurrent_miss(monkeypatch) -> None
         loader_calls += 1
         return {"done": True}
 
-    import asyncio
-
     key = make_key("single", "flight")
     results = await asyncio.gather(
         *(cached_read(key, 60, _slow_loader) for _ in range(10))
@@ -138,6 +174,60 @@ async def test_cached_read_single_flight_on_concurrent_miss(monkeypatch) -> None
     assert all(r == {"done": True} for r in results)
     assert loader_calls == 1  # 并发 miss 只加载一次
     assert peak == 1  # 任意时刻最多一个 loader 在跑
+
+
+async def test_invalidation_during_load_prevents_stale_refill(monkeypatch: Any) -> None:
+    await _enable_fake_redis(monkeypatch)
+    key = make_key("detail", "in-flight")
+    loading = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def loader() -> dict[str, str]:
+        loading.set()
+        await finish.wait()
+        return {"value": "old"}
+
+    task = asyncio.create_task(cached_read(key, 60, loader))
+    await loading.wait()
+    await cache_invalidate(key)
+    finish.set()
+    assert await task == {"value": "old"}
+    assert await cache_get(key) is None
+
+
+async def test_new_cache_value_survives_older_loader(monkeypatch: Any) -> None:
+    await _enable_fake_redis(monkeypatch)
+    key = make_key("detail", "newer")
+    loading = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def loader() -> dict[str, str]:
+        loading.set()
+        await finish.wait()
+        return {"value": "old"}
+
+    task = asyncio.create_task(cached_read(key, 60, loader))
+    await loading.wait()
+    await cache_set(key, {"value": "new"}, 60)
+    finish.set()
+    assert await task == {"value": "old"}
+    assert await cache_get(key) == {"value": "new"}
+
+
+async def test_cached_read_repairs_invalid_json(monkeypatch: Any) -> None:
+    fake = await _enable_fake_redis(monkeypatch)
+    key = make_key("detail", "invalid-json")
+    await fake.set(key, "{broken")
+    calls = 0
+
+    async def loader() -> dict[str, int]:
+        nonlocal calls
+        calls += 1
+        return {"value": calls}
+
+    assert await cached_read(key, 60, loader) == {"value": 1}
+    assert await cached_read(key, 60, loader) == {"value": 1}
+    assert calls == 1
 
 
 async def test_cached_read_caches_null_with_null_ttl(monkeypatch) -> None:
