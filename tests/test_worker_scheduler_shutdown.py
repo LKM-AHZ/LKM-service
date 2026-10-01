@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-import boot.workers.scheduler as ws
 import pytest
+
+import boot.workers.scheduler as ws
 
 
 class _FakeExecutor:

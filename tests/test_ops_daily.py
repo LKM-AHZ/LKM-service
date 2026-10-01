@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from core.flows import ops_daily_body
 from app.flows.ops_daily import orchestrate_ops_daily
 from core import clickhouse
+from core.flows import ops_daily_body
 from core.messaging import SUB_JOBS
 from core.task_registry import ensure_tasks_registered, handlers_for
 

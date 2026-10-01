@@ -2,8 +2,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from core.db.dlq import DlqMessage
 from core import messaging, worker_dlq
+from core.db.dlq import DlqMessage
 
 
 def test_make_model_maps_payload() -> None:

@@ -45,7 +45,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
+from auth.db.base import auth_metadata
 from boot.assemble import assemble
+from core import local_cache as _local_cache
+from core import singleflight as _singleflight
+from core.config import settings
+from core.db.base import Base
+from core.db.session import get_read_session, get_session
+from core.db.shared_objects import ensure_shared_objects
 
 # 收集期即装配（不能放 fixture）：下面 `from app.main import app` 在**收集阶段**就构建
 # API 路由，而 auth 前台路由经 core.route_registry 注入、鉴权依赖经 core.ports 取实现——
@@ -53,13 +60,6 @@ from boot.assemble import assemble
 assemble()
 
 from app.main import app  # noqa: E402
-from auth.db.base import auth_metadata
-from core import local_cache as _local_cache
-from core import singleflight as _singleflight
-from core.config import settings
-from core.db.base import Base
-from core.db.session import get_read_session, get_session
-from core.db.shared_objects import ensure_shared_objects
 
 # 复用类型的别名，供各测试文件 import 使用
 DB = Annotated[AsyncSession, pytest.fixture]
