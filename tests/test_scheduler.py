@@ -47,7 +47,10 @@ def test_scheduler_has_cron_jobs() -> None:
     assert ("cleanup_expired_uploads", "CronTrigger") in triggers
     assert ("reconcile_blog_repos", "CronTrigger") in triggers
     assert ("reconcile_user_dim", "CronTrigger") in triggers  # B0.2 周期增量对账(每天)
-    assert ("analytics_export", "CronTrigger") in triggers  # M5 7.2.6 ClickHouse 分析导出(每天)
+    assert (
+        "analytics_export",
+        "CronTrigger",
+    ) in triggers  # M5 7.2.6 ClickHouse 分析导出(每天)
     assert (
         "purge_stale_view_logs",
         "CronTrigger",
@@ -64,7 +67,10 @@ def test_scheduler_has_cron_jobs() -> None:
         "reconcile_content_counts_full",
         "CronTrigger",
     ) in triggers  # 蓝图 §5.6 第 5 条:日级全量兜底(每天 04:00)
-    assert ("fanout_feed_items", "CronTrigger") in triggers  # M6.11 时间线写扩散(每 2 分钟)
+    assert (
+        "fanout_feed_items",
+        "CronTrigger",
+    ) in triggers  # M6.11 时间线写扩散(每 2 分钟)
 
 
 def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
@@ -86,9 +92,9 @@ def test_scheduler_fire_fns_match_worker_handler_keys() -> None:
         "reconcile_content_counts_full",  # 蓝图 §5.6 第 5 条：日级全量兜底
         "fanout_feed_items",  # M6.11
         "run_ops_daily",  # 运营日报（蓝图 §5.5/§6.4）
-            "seed_user_id_bloom",  # §5.6 user id 白名单位图预热
-            "purge_revoked_access_tokens",  # 关 Redis 持久化后 jti 撤销表过期清理
-        }
+        "seed_user_id_bloom",  # §5.6 user id 白名单位图预热
+        "purge_revoked_access_tokens",  # 关 Redis 持久化后 jti 撤销表过期清理
+    }
     if not settings.counters_write_through:
         expect_fns.add("flush_content_counters")  # 仅回退（write-behind）模式注册
     s = scheduler.build_scheduler()
@@ -119,3 +125,50 @@ async def test_fire_tracks_in_flight_jobs(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert seen == [1]  # 作业执行期间在途数为 1
     assert scheduler_state.snapshot()["pending"] == 0  # 退出后归零
+
+
+async def test_fire_retries_with_one_event_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core import scheduler_state
+
+    sent: list[dict[str, str]] = []
+    delays: list[float] = []
+
+    async def _publish(_routing_key: str, payload: dict[str, str]) -> bool:
+        sent.append(dict(payload))
+        return len(sent) == 3
+
+    async def _sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(scheduler.messaging, "publish", _publish)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", _sleep)
+    await scheduler._fire("cron.reconcile", "reconcile_content_counts")
+
+    assert len(sent) == 3
+    assert len({item["event_id"] for item in sent}) == 1
+    assert len(sent[0]["event_id"]) == 36
+    assert delays == [1.0, 2.0]
+    assert scheduler_state.snapshot()["pending"] == 0
+
+
+async def test_fire_stops_after_bounded_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import scheduler_state
+
+    calls = 0
+
+    async def _publish(_routing_key: str, _payload: dict[str, str]) -> bool:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("broker unavailable")
+
+    async def _sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(scheduler.messaging, "publish", _publish)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", _sleep)
+    await scheduler._fire("cron.reconcile", "reconcile_content_counts")
+
+    assert calls == 3
+    assert scheduler_state.snapshot()["pending"] == 0

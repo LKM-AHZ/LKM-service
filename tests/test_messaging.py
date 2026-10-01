@@ -79,10 +79,53 @@ def test_receive_loop_retries_when_consumer_creation_fails(
     monkeypatch.setattr(messaging, "_create_consumer_sync", _create)
 
     messaging._receive_loop(
-        messaging.SUB_POINTS_STATS, lambda *_: None, None, stop  # type: ignore[arg-type]
+        messaging.SUB_POINTS_STATS,
+        lambda *_: None,
+        None,
+        stop,  # type: ignore[arg-type]
     )
 
     assert attempts["n"] == 3, "前两次失败应重试，第三次成功"
+
+
+def test_receive_loop_rebuilds_broken_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(messaging, "_CONSUMER_RETRY_S", 0.001)
+    stop = threading.Event()
+    consumers: list[object] = []
+    closed: list[int] = []
+
+    class _Consumer:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def receive(self, timeout_millis: int = 0) -> object:
+            if self.index == 0:
+                raise RuntimeError("connection lost")
+            stop.set()
+            return object()
+
+        def close(self) -> None:
+            closed.append(self.index)
+
+    def _create(_sub: object) -> _Consumer:
+        consumer = _Consumer(len(consumers))
+        consumers.append(consumer)
+        return consumer
+
+    monkeypatch.setattr(messaging, "_create_consumer_sync", _create)
+    monkeypatch.setattr(messaging, "_handle_message", lambda *_args: None)
+
+    messaging._receive_loop(
+        messaging.SUB_POINTS_STATS,
+        lambda *_: None,
+        None,
+        stop,  # type: ignore[arg-type]
+    )
+
+    assert len(consumers) == 2
+    assert closed == [0, 1]
 
 
 async def test_publish_routes_to_mapped_topic() -> None:
@@ -180,7 +223,9 @@ def test_subscription_index_unique_and_points_fanout() -> None:
     assert len(points_topics) == 1
 
 
-def _client_kwargs_with_timeout(monkeypatch: pytest.MonkeyPatch, timeout: float) -> dict:
+def _client_kwargs_with_timeout(
+    monkeypatch: pytest.MonkeyPatch, timeout: float
+) -> dict:
     """用假 pulsar 模块截获 Client 构造参数（不连真 broker）。"""
     captured: dict = {}
 
@@ -188,7 +233,9 @@ def _client_kwargs_with_timeout(monkeypatch: pytest.MonkeyPatch, timeout: float)
         def __init__(self, url: str, **kwargs: object) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setitem(sys.modules, "pulsar", types.SimpleNamespace(Client=_FakeClient))
+    monkeypatch.setitem(
+        sys.modules, "pulsar", types.SimpleNamespace(Client=_FakeClient)
+    )
     monkeypatch.setattr(messaging, "_client", None)
     monkeypatch.setattr(messaging.settings, "pulsar_operation_timeout_s", timeout)
     messaging._client_locked()
@@ -240,11 +287,16 @@ def test_receive_timeout_is_not_logged_as_exception(
 
         def close(self) -> None: ...
 
-    monkeypatch.setattr(messaging, "_create_consumer_sync", lambda _sub: _FakeConsumer())
+    monkeypatch.setattr(
+        messaging, "_create_consumer_sync", lambda _sub: _FakeConsumer()
+    )
 
     with caplog.at_level(logging.ERROR, logger="lkm.messaging"):
         messaging._receive_loop(
-            messaging.SUB_POINTS_STATS, lambda *_: None, None, stop  # type: ignore[arg-type]
+            messaging.SUB_POINTS_STATS,
+            lambda *_: None,
+            None,
+            stop,  # type: ignore[arg-type]
         )
 
     assert calls["n"] == 4

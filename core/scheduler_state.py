@@ -1,6 +1,6 @@
 """
 调度器运行态的跨进程暴露。
-Redis 不可用时两侧都 fail-open：写失败只记日志、读失败保持上次值并把 ``scheduler_up`` 置 0。
+Redis 不可用时两侧都 fail-open：写失败只记日志、读失败将运行态指标置 0。
 后者在 Redis 故障时会误报「调度器 down」，但 Redis 是硬依赖（readiness 会先红），且「不知道
 调度器状态」与「调度器异常」对告警而言同解——宁可吵，不可沉默。
 """
@@ -65,7 +65,9 @@ async def write_heartbeat(
     """把快照写进 Redis 心跳（带 TTL）；返回是否写成功。Redis 不可用 → False（fail-open）。"""
     from core.config import settings
 
-    period = settings.scheduler_heartbeat_interval_s if interval_s is None else interval_s
+    period = (
+        settings.scheduler_heartbeat_interval_s if interval_s is None else interval_s
+    )
     client = redis if redis is not None else await get_redis(HEARTBEAT_KEY)
     if client is None:
         return False
@@ -118,6 +120,8 @@ async def collect_once(redis: Any | None = None) -> None:
     if payload is None:
         scheduler_up.set(0)
         scheduler_state.set(0)
+        scheduler_jobs.set(0)
+        scheduler_pending_jobs.set(0)
         return
     scheduler_up.set(1)
     scheduler_state.set(1 if payload.get("state") else 0)

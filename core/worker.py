@@ -51,7 +51,7 @@ async def _dispatch_with_dedup(
     带幂等的任务分派（供消费回调复用）。
     - payload 带 event_id（outbox relay 发布透传）→ 开临时会话查 event_processed：
       已处理 → 返回（外层对其 ack，不二次执行）；未处理 → 跑 handler，成功后记账。
-    - 无 event_id（send/cron 等直发）→ 原语义直跑，不经 DB，零额外开销。
+    - 无 event_id（send 等直发）→ 原语义直跑，不经 DB，零额外开销。
     - ``scope`` = 订阅名：同一事件被多个订阅消费（points 扇出）时各订阅独立记账，互不误跳过。
     用事务级 advisory lock 串行同一 (scope,event_id) 的查账/handler/记账，避免并发双跑。
     handler 成功但进程在记账前崩溃时仍可能重跑，副作用须由 handler 自身幂等兜底。
@@ -114,8 +114,6 @@ async def _consume(subscription_name: str) -> None:
         )
 
     await messaging.run_subscription(subscription_name, _on_payload)
-
-
 
 
 async def run_send_worker() -> None:

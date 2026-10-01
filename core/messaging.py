@@ -25,7 +25,6 @@ import importlib
 import json
 import logging
 import threading
-import time
 from collections.abc import Callable, Coroutine, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -93,13 +92,17 @@ def _validate_namespace_isolation() -> None:
     for routing_key, topic in ROUTING_KEY_TOPICS.items():
         ns = namespace_of(topic)
         if ns not in NAMESPACES:
-            raise ValueError(f"routing_key {routing_key!r} → 未知命名空间 {ns!r}: {topic}")
+            raise ValueError(
+                f"routing_key {routing_key!r} → 未知命名空间 {ns!r}: {topic}"
+            )
     for sub in SUBSCRIPTIONS.values():
         sub_ns = namespace_of(sub.topic)
         for routing_key in sub.routing_keys:
             topic = ROUTING_KEY_TOPICS.get(routing_key)
             if topic is None:
-                raise ValueError(f"订阅 {sub.name!r} 声明了未知 routing_key {routing_key!r}")
+                raise ValueError(
+                    f"订阅 {sub.name!r} 声明了未知 routing_key {routing_key!r}"
+                )
             if namespace_of(topic) != sub_ns:
                 raise ValueError(
                     f"订阅 {sub.name!r} 跨命名空间：{routing_key!r} → {topic}"
@@ -531,7 +534,9 @@ def _handle_message(
     except Exception:
         redelivery_count = 0
     try:
-        source_message_id = base64.b64encode(msg.message_id().serialize()).decode("ascii")
+        source_message_id = base64.b64encode(msg.message_id().serialize()).decode(
+            "ascii"
+        )
     except Exception:
         source_message_id = None
     meta = MessageMeta(
@@ -568,6 +573,7 @@ def _receive_loop(
 ) -> None:
     """
     订阅专用 daemon 线程主循环：建消费者 → receive(timeout) → 处理，收到 stop 后退出。
+    非超时的 receive 异常会关闭坏连接并退避重建消费者。
     """
     import pulsar  # 局部导入：与文件其余处一致，无总线时不硬依赖客户端
 
@@ -591,14 +597,18 @@ def _receive_loop(
                 except Exception:
                     if stop.is_set():
                         break
-                    logger.exception("pulsar receive 异常 subscription=%s", sub.name)
-                    time.sleep(1.0)
-                    continue
+                    logger.exception(
+                        "pulsar receive 异常 subscription=%s; 关闭消费者后重建",
+                        sub.name,
+                    )
+                    break
                 _handle_message(consumer, msg, handler, loop, sub.name)
         finally:
             with suppress(Exception):
                 consumer.close()
             logger.info("pulsar 订阅已停止 subscription=%s", sub.name)
+        if stop.wait(_CONSUMER_RETRY_S):
+            return
 
 
 async def run_subscription(

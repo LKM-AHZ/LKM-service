@@ -1,4 +1,4 @@
-"""调度器运行态的跨进程暴露（蓝图 §5.5 第 6 条）。
+"""调度器运行态的跨进程暴露。
 
 调度器在独立 worker-scheduler 进程、不暴露 /metrics，故运行态经 **Redis 心跳**交给 API
 进程的 reporter 上报（与 pulsar lag 同一范式）。本文件验三段硬性质：
@@ -15,6 +15,7 @@ import pytest
 from prometheus_client import REGISTRY
 
 from core import scheduler_state
+from core.metrics import scheduler_jobs, scheduler_pending_jobs
 
 
 @pytest.fixture
@@ -34,7 +35,9 @@ class TestHeartbeatWrite:
         scheduler_state.note_started(7)
         scheduler_state.note_job_started()
 
-        assert await scheduler_state.write_heartbeat(fake_redis, interval_s=10.0) is True
+        assert (
+            await scheduler_state.write_heartbeat(fake_redis, interval_s=10.0) is True
+        )
 
         raw = await fake_redis.get(scheduler_state.HEARTBEAT_KEY)
         assert json.loads(raw) == {"state": 1, "jobs": 7, "pending": 1}
@@ -44,7 +47,9 @@ class TestHeartbeatWrite:
 
         scheduler_state.note_job_finished()
 
-    async def test_returns_false_without_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_false_without_redis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         async def _none(*_a, **_k) -> None:
             return None
 
@@ -82,10 +87,14 @@ class TestReporter:
         self, fake_redis: fakeredis.aioredis.FakeRedis
     ) -> None:
         """键不存在（进程亡/卡死/TTL 过期）→ up=0、state=0。"""
+        scheduler_jobs.set(5)
+        scheduler_pending_jobs.set(2)
         await scheduler_state.collect_once(fake_redis)
 
         assert _gauge("scheduler_up") == 0.0
         assert _gauge("scheduler_state") == 0.0
+        assert _gauge("scheduler_jobs") == 0.0
+        assert _gauge("scheduler_pending_jobs") == 0.0
 
     async def test_corrupt_payload_marks_down(
         self, fake_redis: fakeredis.aioredis.FakeRedis
