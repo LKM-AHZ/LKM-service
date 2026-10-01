@@ -55,7 +55,7 @@ def _render_once(extra_env: dict | None = None) -> dict:
 
     tmp = Path(tempfile.mkdtemp(prefix="apisix-bot-"))
     cert_root = tmp / "live"
-    for domain in (_COMMUNITY, "lkm-ahz.icu"):
+    for domain in (_COMMUNITY,):
         d = cert_root / domain
         d.mkdir(parents=True)
         (d / "fullchain.pem").write_text(
@@ -256,8 +256,8 @@ def should_expand_bot_body_limit_but_not_domain() -> None:
     assert 'BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-' in render_sh
     assert "APISIX_BOT_DOMAINS" not in render_sh
     assert re.search(r"^BOT=", render_sh, flags=re.MULTILINE) is None
-    # 证书 SNI 只覆盖社群/官网两域
-    assert "DOMAINS=\"$COMMUNITY $OFFICIAL\"" in render_sh
+    # 证书 SNI 只覆盖社群域（官网域已迁出独立部署）
+    assert 'DOMAINS="$COMMUNITY"' in render_sh
 
     compose = _compose_raw()
     # 注：注释里可以提到这个名字（说明"为何没有"），故断言的是「没有赋值行」

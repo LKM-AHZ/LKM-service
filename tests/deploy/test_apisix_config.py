@@ -20,18 +20,15 @@ _APISIX_DIR = _ROOT / "deploy" / "apisix"
 _COMPOSE = _ROOT / "docker-compose.yml"
 
 _COMMUNITY = "lkm-ahz.ltd"
-_OFFICIAL = "lkm-ahz.icu"
-# bot 面板已并入社群域子路径 /bot/（不再有独立子域名），故域名清单只剩两个域，各自补 www。
-_DOMAINS = [_COMMUNITY, _OFFICIAL]
-_ALL_HOSTS = [h for d in (_COMMUNITY, _OFFICIAL) for h in (d, f"www.{d}")]
+# bot 面板已并入社群域子路径 /bot/（不再有独立子域名）
+_DOMAINS = [_COMMUNITY]
+_ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
 # 模板里允许出现的占位（展开由 render.sh 负责）。
 # 同时覆盖 apisix.yaml（路由模板）与 config.yaml（APISIX 自身配置模板）两个文件。
 _PLACEHOLDERS = {
     "__SSL_SECTION__",
     "__COMMUNITY_DOMAIN__",
     "__COMMUNITY_HOSTS__",
-    "__OFFICIAL_HOSTS__",
-    "__ALL_HOSTS__",
     "__COMMUNITY_ORIGINS__",
     "__MAX_BODY_SIZE__",
     # bot 面板请求体上限：独立来源（bot 单文件 512MB vs 社群站 100MB），不可复用上面那个
@@ -206,8 +203,8 @@ def test_upstream_suffix_expands_per_runtime() -> None:
     assert "__UPSTREAM_SUFFIX__" not in raw
 
 
-def test_dual_domain_hosts_covered() -> None:
-    """渲染产物里全部域名都被路由覆盖：社群/官网（含 www）。"""
+def test_all_domain_hosts_covered() -> None:
+    """渲染产物里全部域名都被路由覆盖：社群域（含 www）。"""
     routes = _rendered_routes()
     hosted = {h for r in routes.values() for h in (r.get("hosts") or [])}
     assert set(_ALL_HOSTS) <= hosted
@@ -244,10 +241,9 @@ def test_render_expands_domains_and_body_limit() -> None:
         _COMMUNITY,
         f"www.{_COMMUNITY}",
     ]
-    assert routes["official-site"]["hosts"] == [_OFFICIAL, f"www.{_OFFICIAL}"]
     # bot 面板走社群域子路径（无独立域名条目），故 hosts 与社群站各路由同形
     assert routes["bot-panel"]["hosts"] == [_COMMUNITY, f"www.{_COMMUNITY}"]
-    # ACME challenge / http→https 的 hosts 必须是**两域并集**（含 www）
+    # ACME challenge / http→https 的 hosts = 本编排的全部域名（社群域，含 www）
     assert routes["acme-challenge"]["hosts"] == _ALL_HOSTS
     cors = routes["api-prefix"]["plugins"]["cors"]
     assert cors["allow_origins"] == f"https://{_COMMUNITY},https://www.{_COMMUNITY}"
@@ -460,14 +456,11 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
     subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
     rendered = yaml.safe_load(out.read_text())
-    assert len(rendered["ssls"]) == 2  # 社群 / 官网（bot 面板走社群域子路径，无独立 SNI）
+    assert len(rendered["ssls"]) == 1  # 仅社群域（bot 走社群域子路径；官网域已迁出独立部署）
     for entry in rendered["ssls"]:
         assert "BEGIN CERTIFICATE" in entry["cert"]
         assert "BEGIN PRIVATE KEY" in entry["key"]
-        assert any(
-            s.endswith("lkm-ahz.ltd") or s.endswith("lkm-ahz.icu")
-            for s in entry["snis"]
-        )
+        assert any(s.endswith("lkm-ahz.ltd") for s in entry["snis"])
     # 路由模板完整保留
     assert len(rendered["routes"]) == len(_load("apisix.yaml")["routes"])
 
@@ -502,13 +495,16 @@ def test_only_apisix_publishes_gateway_ports() -> None:
 
 
 def test_nginx_kept_only_as_static_file_servers() -> None:
-    """仅存的 nginx 镜像是静态文件服务器角色（ACME responder / 官网源站），且不发布 80/443。"""
+    """
+    仅存的 nginx 镜像是静态文件服务器角色（ACME responder），且不发布 80/443。
+    官网 static 服务已迁出本编排（独立服务器自包含部署），故此处只剩 acme-webroot。
+    """
     nginx_services = {
         name
         for name, svc in _services().items()
         if "nginx" in str(svc.get("image", ""))
     }
-    assert nginx_services <= {"acme-webroot", "static"}
+    assert nginx_services == {"acme-webroot"}
     for name in nginx_services:
         assert not set(_services()[name].get("ports") or [])
 
