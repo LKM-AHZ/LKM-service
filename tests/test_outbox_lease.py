@@ -10,6 +10,7 @@
 - 持有者 TTL 到期（模拟 time 前换算成对 fakeredis 的 expiry 缩短）后，另一副本可接管。
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -91,3 +92,33 @@ async def test_owner_renew_keeps_lease(monkeypatch) -> None:
     # 释放后键应被删,他人能抢占。
     await outbox_relay._release_lease(redis, token)
     assert await outbox_relay._acquire_lease(redis, 60) is not None
+
+
+@pytest.mark.parametrize("primary,secondary", [(True, False), (False, True)])
+async def test_configured_redis_outage_does_not_poll(
+    monkeypatch, primary: bool, secondary: bool
+) -> None:
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://test:6650")
+    monkeypatch.setattr(settings, "outbox_relay_interval_s", 0.01)
+
+    async def _missing(_key: str) -> None:
+        return None
+
+    calls = 0
+
+    async def _poll(**_kw: Any) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr(outbox_relay.redis_client, "get_redis", _missing)
+    monkeypatch.setattr(outbox_relay.redis_client, "is_enabled", lambda: primary)
+    monkeypatch.setattr(outbox_relay.redis_client, "is_secondary", lambda _key: secondary)
+    monkeypatch.setattr(outbox_relay.redis_client, "secondary_configured", lambda: secondary)
+    monkeypatch.setattr(outbox_relay, "relay_poll", _poll)
+    task = asyncio.create_task(outbox_relay.run_outbox_loop())
+    await asyncio.sleep(0.04)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert calls == 0

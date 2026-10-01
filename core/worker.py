@@ -14,6 +14,8 @@ import asyncio
 import logging
 from typing import Any
 
+from sqlalchemy import text
+
 from core import event_contract, messaging, metrics_relay, task_registry
 from core.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
 from core.db.session import new_worker_session as new_session
@@ -52,12 +54,8 @@ async def _dispatch_with_dedup(
       已处理 → 返回（外层对其 ack，不二次执行）；未处理 → 跑 handler，成功后记账。
     - 无 event_id（send/cron 等直发）→ 原语义直跑，不经 DB，零额外开销。
     - ``scope`` = 订阅名：同一事件被多个订阅消费（points 扇出）时各订阅独立记账，互不误跳过。
-    **去重强度是 best-effort，不是「恰好一次」**：查账（SELECT）→ 跑 handler → 记账
-    （INSERT）三步非原子，故两个并发投递可能都判定「未处理」而各跑一遍；handler 跑成功但
-    记账失败/进程被杀时账本无记录，重投也会再跑一遍。之所以不做「先原子占位再跑、失败回滚」
-    的 claim-first：那会把风险从「重复执行」换成「硬崩溃后占位行残留 → 重投被静默跳过 →
-    **事件丢失**」，与本仓 at-least-once + 消费端幂等（各 handler 自身幂等，且有 ref 等
-    次级守约）的取向相反（重投可重、丢事件不可恢复）。
+    用事务级 advisory lock 串行同一 (scope,event_id) 的查账/handler/记账，避免并发双跑。
+    handler 成功但进程在记账前崩溃时仍可能重跑，副作用须由 handler 自身幂等兜底。
     """
     eid = payload.get("event_id")
     if not isinstance(eid, str) or not eid:
@@ -65,23 +63,21 @@ async def _dispatch_with_dedup(
         return
     db = await new_session()
     try:
-        try:
-            if await already_processed(db, eid, scope=scope):
-                logger.info("幂等跳过已处理 scope=%s event_id=%s", scope, eid)
-                return  # ack，不重复执行 handler
-        except Exception:
-            # 账本查不动：保守当作未记账，继续执行，避免一旦 DB 抖动业务停摆。
-            logger.exception("event_processed 查账失败,继续执行 event_id=%s", eid)
+        # 事务级锁在 commit/rollback 自动释放；哈希碰撞最多额外串行，不会误去重。
+        # DB 故障必须负确认，不能继续执行后 ack，否则账本不可用时会重复副作用。
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"{scope}:{eid}"},
+        )
+        if await already_processed(db, eid, scope=scope):
+            logger.info("幂等跳过已处理 scope=%s event_id=%s", scope, eid)
+            await db.rollback()
+            return
         await handler(*args)
-        try:
-            await record_processed(db, eid, scope=scope)
-        except Exception:
-            # 记账失败(罕见)：已跑过一次副作用，宁可让 DLQ requeue 重试走幂等查账兜底。
-            logger.exception(
-                "event_processed 记账失败 scope=%s event_id=%s", scope, eid
-            )
-            raise
+        await record_processed(db, eid, scope=scope)
     finally:
+        if db.in_transaction():
+            await db.rollback()
         await db.close()
 
 
@@ -102,9 +98,7 @@ async def _consume(subscription_name: str) -> None:
 
     @log_exceptions
     async def _on_payload(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
-        # 事件契约校验（consume 侧）：fn 未登记 / 实参个数或类型不符 / 经不允许的 routing_key
-        # 抵达。**ack 丢弃**而非负确认——这是确定性的坏消息，重投只会把同一条再跑一遍
-        # （原先只挡住「args 非数组」与「未知 fn」，漏掉了 args 元素类型与个数）。
+        # 契约错误属于毒消息；负确认后交由死信存档，供人工修复与重放。
         # routing_key 取自发布时写的 properties，缺失时退化为只校验 fn/args。
         problems = event_contract.payload_violations(
             payload, meta.properties.get("routing_key")
@@ -116,13 +110,13 @@ async def _consume(subscription_name: str) -> None:
                 problems,
                 where=f"subscription={subscription_name}",
             )
-            return
+            raise ValueError(f"invalid event contract: {problems}")
         handler = handlers.get(payload["fn"])
         if handler is None:
             logger.warning(
-                "未知任务 %s, 丢弃 subscription=%s", payload["fn"], subscription_name
+                "未知任务 %s, 转死信 subscription=%s", payload["fn"], subscription_name
             )
-            return  # ack 丢弃
+            raise ValueError(f"unknown task {payload['fn']}")
         await _dispatch_with_dedup(
             payload, handler, payload.get("args", []), scope=subscription_name
         )

@@ -133,7 +133,10 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 | Admin Auth | `/admin/auth` | 后台认证管理 |
 | Admin Content | `/admin/content` | 后台内容管理 |
 | Admin Moderation | `/admin/moderation` | 后台审核（内容 / 板块） |
-| Admin DLQ | `/admin/dlq` | 死信队列查看 / 重投 |
+| Admin DLQ | `/admin/dlq` | 死信队列查看 / 修正后入队重放 |
+| Admin 发布失败 | `/admin/event-failures` | outbox 发布失败审计 / 修正后入队重放 |
+
+人工重放：`POST /api/v1/admin/event-failures/{id}/replay` 或 `POST /api/v1/admin/dlq/{id}/requeue`。请求体可省略；修复毒消息时可传 `{"routing_key":"event.apply_point","payload":{"fn":"apply_point_event","args":[...]}}`。重放会与状态标记一同提交到 outbox，原失败记录保留审计；relay 稍后发布，接口成功表示已可靠入队。
 | WS | `/ws` | WebSocket（Redis 订阅推送、上传登记等） |
 
 ## 身份认证
@@ -186,7 +189,7 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 数据库与迁移
 
-- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（**1 条 UUID baseline**，全库主键为 uuid7）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`），`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`（主键同样含分区列）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
+- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（UUID baseline + outbox 事件键增量迁移）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`），全局 `event_id` 由普通表 `outbox_event_keys` 唯一约束；`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`（主键同样含分区列）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
 - AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，19 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `0001_auth_baseline`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 大表（`content_items`、`content_comments`、outbox、浏览日志、积分流水）超过 64 MiB

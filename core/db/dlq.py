@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from sqlalchemy import Integer, String
+from sqlalchemy import Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,3 +41,9 @@ class DlqMessage(UUIDPrimaryKeyMixin, Base):
     requeued_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
+    # broker 消息 ID 保证 DLQ 消费者在「落库成功、ack 前崩溃」后不会再插第二条。
+    source_message_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+
+    __table_args__ = (Index("uq_dlq_source_message_id", "source_message_id", unique=True),)

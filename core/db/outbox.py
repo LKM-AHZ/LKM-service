@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Index, Integer, String, UniqueConstraint, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,20 +31,27 @@ MAX_TRIES = 5
 _BACKOFF_CAP_S = 3600
 
 
+class OutboxEventKey(Base):
+    """跨 hypertable 分区的全局事件键；与业务行在同一事务写入。"""
+
+    __tablename__ = "outbox_event_keys"
+
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
 class OutboxMessage(UUIDPrimaryKeyMixin, Base):
     """待投递事件。payload 与业务同事务落库，relay 按 routing_key 投总线后置 published。
 
-    **复合主键 ``(created_at, id)``**：本表是 TimescaleDB hypertable（按 ``created_at``
-    分区，见 ``init_db``），而 hypertable 的**每个唯一索引都必须包含分区列**——故 ``id``
-    不再是单列主键，``event_id`` 的唯一约束也由 ``(event_id)`` 放宽为 ``(event_id,
-    created_at)``。两列都唯一性不变，语义未变：``id`` 是 uuid7（全局唯一）、``event_id``
-    是每次投递的幂等键，同一 ``event_id`` 不可能有两条同毫秒 ``created_at`` 的行。
+    本表按 created_at 分区，复合主键含分区列。全局 event_id 唯一性由普通表
+    ``outbox_event_keys`` 保证，避免跨分区重复入队。
     """
 
     __tablename__: str = "outbox_events"
 
-    # 幂等键：投递去重/防重复副作用以此全局 UUID 为准。唯一性由 (event_id, created_at)
-    # 复合约束承担（hypertable 要求唯一索引含分区列），故此处不再单列 unique=True。
+    # 幂等键：普通表 outbox_event_keys 担保全局唯一，本表约束仍须包含分区列。
     event_id: Mapped[str] = mapped_column(String(36), nullable=False)
     # 逻辑主题 = 现有 topic exchange routing_key（event.apply_point/…），relay 按它 publish
     routing_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -67,7 +74,7 @@ class OutboxMessage(UUIDPrimaryKeyMixin, Base):
     published_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime, nullable=True, default=None
     )
-    # 供 M1.2 leader 摄取时置锁；M1.1 relay 单 owner 不 set，仅立列
+    # 每次单行认领写入时间与唯一 fencing token。
     locked_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime, nullable=True, default=None
     )
@@ -102,42 +109,75 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+async def _legacy_event_exists(db: AsyncSession, event_id: str) -> bool:
+    """迁移前未入键表的显式 ID，按现有索引检查热表与两张归档表。"""
+    # 延迟导入避免 event_failure -> outbox 的模块级循环依赖。
+    from core.db.event_failure import EventFailure
+    from core.db.outbox_archive import OutboxArchived
+
+    for model in (OutboxMessage, OutboxArchived, EventFailure):
+        if await db.scalar(select(model.event_id).where(model.event_id == event_id).limit(1)):
+            return True
+    return False
+
+
 async def enqueue_outbox(
     db: AsyncSession,
     routing_key: str,
     payload: dict[str, Any],
     *,
     event_id: str | None = None,
+    replay: bool = False,
 ) -> bool:
     """把一次将投递事件加入当前事务（不 commit；由业务会话统一提交/回滚）。
 
     - 未配置消息总线（settings.pulsar_url 空）→ 直接 False：维持 fail-open，dev/测试不产生积压。
-    - 提供显式 event_id 幂等：若该 id 已存在且仍 pending/published → 视为重复并跳过（不重复入队）。
-      失败(failed)项允许以新的投递在后续业务调用再入队。
+    - 显式 event_id 由普通表全局去重；人工重放用 replay=True 持键锁后重新入队。
     - payload 须为 worker 可直接分派的完整 dict（含 "fn"/"args"）。
 
     返回 True=本次已 join 进事务待提交；False=被 gate 跳过或幂等已存在。
 
-    **该幂等是 best-effort（先查后插，不是 DB 级保证）**：本表是 TimescaleDB hypertable，
-    唯一索引必须包含分区列，故唯一约束只能是 ``(event_id, created_at)``（见模型 docstring）
-    ——没有「event_id 单列唯一」可用。两个并发事务以同一 event_id 入队（各自 created_at
-    不同）都会插入成功 → 事件被投两次（由下游按 event_id 幂等兜底）；若两者的 created_at
-    恰好落在同一微秒，第二个会撞唯一索引并以 IntegrityError 打断调用方业务事务（小概率，
-    event_id 通常按业务唯一键派生）。要做成 DB 级强保证必须换承载方式（如独立去重表），
-    不在本轮范围。
+    唯一键插入和业务变更同事务提交，回滚时共同回滚。
     """
     if not settings.message_bus_enabled:
         return False
 
     eid = event_id or uuid.uuid4().hex
-    if event_id is not None:
-        dup = await db.scalar(
-            select(OutboxMessage.id).where(
-                OutboxMessage.event_id == event_id,
-                OutboxMessage.status.in_([OUTBOX_PENDING, OUTBOX_PUBLISHED]),
-            )
+    if replay and event_id is None:
+        raise ValueError("replay requires an event_id")
+    # hypertable 的唯一约束必须带 created_at，因此另用普通表做全局唯一裁决。
+    # INSERT 与 outbox 行共用业务事务；回滚时键也回滚。重放持有同一键的行锁，
+    # 串行检查活跃行，允许原失败记录重新投递且不产生并发双入队。
+    inserted = await db.scalar(
+        insert(OutboxEventKey)
+        .values(event_id=eid, created_at=now_iso())
+        .on_conflict_do_nothing(index_elements=[OutboxEventKey.event_id])
+        .returning(OutboxEventKey.event_id)
+    )
+    if inserted is None and not replay:
+        return False
+    if (
+        inserted is not None
+        and event_id is not None
+        and not replay
+        and await _legacy_event_exists(db, eid)
+    ):
+        return False
+    if replay:
+        await db.scalar(
+            select(OutboxEventKey.event_id)
+            .where(OutboxEventKey.event_id == eid)
+            .with_for_update()
         )
-        if dup is not None:
+        active = await db.scalar(
+            select(OutboxMessage.id)
+            .where(
+                OutboxMessage.event_id == eid,
+                OutboxMessage.status == OUTBOX_PENDING,
+            )
+            .limit(1)
+        )
+        if active is not None:
             return False
 
     row = OutboxMessage(

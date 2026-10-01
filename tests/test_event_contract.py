@@ -356,8 +356,8 @@ def test_permanent_failure_reason_flags_contract_violation() -> None:
     )
 
 
-async def test_worker_drops_violating_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """消费期：违约消息 ack 丢弃（不重投），并记 consume 侧违约指标。"""
+async def test_worker_dead_letters_violating_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """消费期：违约消息负确认并进入死信，保留人工修复机会。"""
     captured: dict[str, Any] = {}
     called: list[Any] = []
 
@@ -386,11 +386,12 @@ async def test_worker_drops_violating_message(monkeypatch: pytest.MonkeyPatch) -
     )
     before = _violations("notify_upload", "consume")
 
-    await handler({"fn": "notify_upload", "args": [123]}, meta)
+    with pytest.raises(ValueError, match="invalid event contract"):
+        await handler({"fn": "notify_upload", "args": [123]}, meta)
 
     assert called == [], "违约消息不得进入 handler"
     assert _violations("notify_upload", "consume") == before + 1
 
-    # 合规则正常分派（证明上面的「丢弃」不是因为 handler 压根调不到）
+    # 合规则正常分派。
     await handler({"fn": "notify_upload", "args": ["u1"]}, meta)
     assert called == [("u1",)]

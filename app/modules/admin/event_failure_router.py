@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import require_admin
+from core import messaging
 from core.common import ApiResp, ListData
+from core.config import settings
 from core.db.event_failure import EventFailure, replay_failure
 from core.db.session import get_session
 from core.err import BizError, CommonErr, respond
@@ -36,7 +38,13 @@ class _EventFailureItem(BaseModel):
     attempt_count: int
     reason: str
     folded_at: str | None = None
+    replayed_at: str | None = None
     payload: Any = None
+
+
+class _ReplayBody(BaseModel):
+    routing_key: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 @router.get("", response_model=ApiResp[ListData[_EventFailureItem]])
@@ -68,6 +76,7 @@ async def list_event_failures(
                 attempt_count=r.attempt_count,
                 reason=r.reason,
                 folded_at=r.folded_at.isoformat() if r.folded_at else None,
+                replayed_at=r.replayed_at.isoformat() if r.replayed_at else None,
                 payload=r.payload_json,
             )
             for r in rows
@@ -79,10 +88,16 @@ async def list_event_failures(
 @respond
 async def replay_event_failure(
     failure_id: uuid.UUID,
+    body: _ReplayBody | None = None,
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> dict[str, Any]:
-    ok = await replay_failure(db, failure_id)
+    ok = await replay_failure(
+        db,
+        failure_id,
+        routing_key=body.routing_key if body else None,
+        payload=body.payload if body else None,
+    )
     if not ok:
         # ``replay_failure`` 对「归档行不存在」与「消息总线未启用」都返回 False，两者对
         # 调用方意义完全不同（前者是取错 id，后者是环境不可用）——回滚后重读来区分，
@@ -90,6 +105,17 @@ async def replay_event_failure(
         await db.rollback()
         row = await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
         if row is None:
-            raise BizError(CommonErr.NOT_FOUND, "归档失败事件不存在或已被重放")
-        raise BizError(CommonErr.UNAVAILABLE, "重放失败：消息总线未启用")
+            raise BizError(CommonErr.NOT_FOUND, "归档失败事件不存在")
+        if row.replayed_at is not None:
+            raise BizError(CommonErr.CONFLICT, "该失败事件已重放")
+        if not settings.message_bus_enabled:
+            raise BizError(CommonErr.UNAVAILABLE, "重放失败：消息总线未启用")
+        rk = row.routing_key if body is None or body.routing_key is None else body.routing_key
+        payload = row.payload_json if body is None or body.payload is None else body.payload
+        reason = messaging.permanent_failure_reason(
+            rk, {**payload, "event_id": row.event_id}
+        )
+        if reason:
+            raise BizError(CommonErr.INVALID_INPUT, f"重放事件仍无效：{reason}")
+        raise BizError(CommonErr.CONFLICT, "该事件已在投递或重放状态已变化")
     return {"ok": True}

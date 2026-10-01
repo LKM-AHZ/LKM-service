@@ -8,6 +8,7 @@ import os
 import socket
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -59,7 +60,9 @@ def _claimable(now: datetime) -> tuple[Any, ...]:
     `locked_at` 比 TTL 更早的行视为「持有者已崩溃」，可被重新领取——否则持锁进程崩溃会让
     该行永久卡死。未到期（`locked_at` 新鲜）的行留给持有者，别的副本不抢。
     """
-    stale_before = now - timedelta(seconds=settings.outbox_lock_ttl_s)
+    stale_before = now - timedelta(
+        seconds=max(settings.outbox_lock_ttl_s, settings.pulsar_operation_timeout_s + 10)
+    )
     conds: list[Any] = [
         OutboxMessage.status == OUTBOX_PENDING,
         OutboxMessage.next_retry_at <= now,
@@ -81,44 +84,89 @@ def _clear_lock(msg: OutboxMessage) -> None:
 
 
 async def relay_poll(
-    batch: int = 100, *, session_factory: SessionFactory | None = None
+    batch: int = 100,
+    *,
+    session_factory: SessionFactory | None = None,
+    can_publish: Callable[[], bool] | None = None,
 ) -> int:
     """扫一批到期的 pending 事件投递；返回本轮成功(published)事件数。"""
     factory = session_factory or new_session
     db = await factory()
     succeeded = 0
     try:
-        now = datetime.now(UTC)
-        rows = list(
-            (
-                await db.execute(
-                    select(OutboxMessage)
-                    .where(*_claimable(now))
-                    .order_by(OutboxMessage.attempt_count.asc(), OutboxMessage.id.asc())
-                    .limit(batch)
-                    .with_for_update(skip_locked=True)
-                )
+        # 每次只领取一行。整批预领取会让末尾行在等待前面网络投递时过期，
+        # 被另一副本接管并双投。单行领取还给每次投递单独的 fencing token。
+        for _ in range(batch):
+            if can_publish is not None and not can_publish():
+                break
+            msg = await db.scalar(
+                select(OutboxMessage)
+                .where(*_claimable(datetime.now(UTC)))
+                .order_by(OutboxMessage.attempt_count.asc(), OutboxMessage.id.asc())
+                .limit(1)
+                .with_for_update(skip_locked=True)
             )
-            .scalars()
-            .all()
-        )
-        if rows:
-            # 领取到的行里若有 locked_at 非空者，说明持有者已崩溃、本条是被超期接管的陈旧锁
-            # （见 _claimable 的 stale_before 条件）。蓝图 §5.1 第 7 条要求这类接管可观测。
-            stale = sum(1 for m in rows if m.locked_at is not None)
-            if stale:
-                outbox_leader_total.labels("stale_reclaimed").inc(stale)
-            # 认领落库（先 commit 释放行锁）：后续其它 poller 会跳过这些行直到清标记/超时。
-            claimed_at = datetime.now(UTC)
-            for msg in rows:
-                msg.locked_at = claimed_at
-                msg.locked_by = _INSTANCE_ID
+            if msg is None:
+                break
+            if msg.locked_at is not None:
+                outbox_leader_total.labels("stale_reclaimed").inc()
+            claim_id = f"{_INSTANCE_ID}:{uuid.uuid4().hex}"[-64:]
+            msg.locked_at = datetime.now(UTC)
+            msg.locked_by = claim_id
             await db.commit()
+            if can_publish is not None and not can_publish():
+                owned = await db.scalar(
+                    select(OutboxMessage)
+                    .where(
+                        OutboxMessage.id == msg.id,
+                        OutboxMessage.created_at == msg.created_at,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if owned is not None and owned.locked_by == claim_id:
+                    _clear_lock(owned)
+                    await db.commit()
+                else:
+                    await db.rollback()
+                break
 
-        for msg in rows:
             # 把 outbox 幂等键 event_id 透传进发布消息，消费端据此按「已处理记账」去重
             payload = {**msg.payload_json, "event_id": msg.event_id}
             reason = messaging.permanent_failure_reason(msg.routing_key, payload)
+            if reason is None:
+                try:
+                    ok = await asyncio.wait_for(
+                        messaging.publish(msg.routing_key, payload),
+                        timeout=min(
+                            settings.pulsar_operation_timeout_s + 5,
+                            max(0.1, settings.outbox_lock_ttl_s / 2),
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "outbox publish exception id=%s rk=%s", msg.id, msg.routing_key
+                    )
+                    ok = False
+            else:
+                ok = False
+
+            # 发布期间若锁超时并被接管，旧持有者不得再覆盖新持有者的状态。
+            msg_id = msg.id
+            current = await db.scalar(
+                select(OutboxMessage)
+                .where(
+                    OutboxMessage.id == msg.id,
+                    OutboxMessage.created_at == msg.created_at,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if current is None or current.locked_by != claim_id:
+                await db.rollback()
+                logger.warning("outbox claim 已失效，跳过状态更新 id=%s", msg_id)
+                continue
+            msg = current
             if reason is not None:
                 # 确定性错误：重试不会变好，一次即折叠（不累加 attempt_count，不空耗退避）。
                 # 契约违约另记违约指标：这条路径**不会**走到 messaging.publish（在投递前就折叠了），
@@ -150,14 +198,6 @@ async def relay_poll(
                 await db.commit()
                 continue
 
-            try:
-                ok = await messaging.publish(msg.routing_key, payload)
-            except Exception:
-                logger.exception(
-                    "outbox publish exception id=%s rk=%s", msg.id, msg.routing_key
-                )
-                ok = False
-
             _clear_lock(msg)
             if ok:
                 msg.status = OUTBOX_PUBLISHED
@@ -186,13 +226,14 @@ async def relay_poll(
                     seconds=min(2 ** int(msg.attempt_count), _BACKOFF_CAP_S)
                 )
             await db.commit()
-        if rows and succeeded:
+        if succeeded:
             logger.info("outbox relay 本轮成功 %s 条", succeeded)
         return succeeded
     finally:
         # 积压 gauge：会话仍可分页前统计一遍仍 pending 的件数（含本轮退避、failed 摘除后的剩
         # 余 pending）。统计失败仅记日志（gauge 保上次值），不扰动本应有的 relay 语义。
         try:
+            await db.rollback()
             pending_left = await db.scalar(
                 select(func.count())
                 .select_from(OutboxMessage)
@@ -275,8 +316,7 @@ def _warn_redis_degraded_once(enabled: bool) -> None:
     if enabled and not _redis_degraded_warned:
         _redis_degraded_warned = True
         logger.warning(
-            "Redis 已配置但当前不可用：outbox relay 退化为无租约串行 poll"
-            "（多副本部署下各副本会并发轮询，仅靠 SKIP LOCKED 与消费端幂等兜底）"
+            "Redis 已配置但当前不可用：暂停 outbox relay，等待 leader 租约恢复"
         )
 
 
@@ -294,7 +334,7 @@ async def _acquire_lease(redis: Any, ttl_s: float) -> str | None:
     """SET NX EX 抢占租约；成功返回 token，已占用/异常返回 None。"""
     token = uuid.uuid4().hex
     try:
-        ok = await redis.set(_lease_key(), token, nx=True, ex=int(ttl_s))
+        ok = await redis.set(_lease_key(), token, nx=True, ex=max(1, int(ttl_s)))
     except Exception:
         logger.exception("outbox leader 租约抢占失败，按未取得处理")
         # 抢占异常与争用同记 contended：运维关心的是「本实例没能当选」这一事实
@@ -318,7 +358,7 @@ async def _renew_lease(redis: Any, token: str, ttl_s: float) -> bool:
                         await pipe.reset()
                         return False  # 已让出/被接管：绝不续别人的租约
                     pipe.multi()
-                    pipe.expire(_lease_key(), int(ttl_s))
+                    pipe.expire(_lease_key(), max(1, int(ttl_s)))
                     await pipe.execute()
                     return True
                 except WatchError:
@@ -366,38 +406,63 @@ async def run_outbox_loop() -> None:
     async def _poll_tick() -> bool:
         """一轮 poll（到点再归档）；返回 ``False`` = 租约已在轮内失效，调用方需重抢。"""
         nonlocal next_archive_at
+        lost = asyncio.Event()
+
+        async def _heartbeat() -> None:
+            assert token is not None
+            while True:
+                await asyncio.sleep(max(0.1, settings.outbox_leader_ttl_s / 3))
+                try:
+                    renewed = await _renew_lease(
+                        redis, token, settings.outbox_leader_ttl_s
+                    )
+                except Exception:
+                    logger.exception("outbox leader heartbeat 异常")
+                    renewed = False
+                if not renewed:
+                    outbox_leader_total.labels("renew_failed").inc()
+                    lost.set()
+                    return
+
+        heartbeat = asyncio.create_task(_heartbeat()) if token is not None else None
         try:
-            await relay_poll()
-        except Exception:
-            logger.exception("outbox relay_poll 异常，下轮重试")
-        # 轮内续约：单轮 relay_poll(batch=100) + archive_published(batch=500) 在总线变慢/
-        # 积压大时可能超过 outbox_leader_ttl_s，而租约只在 tick 进入前续过一次——不续期
-        # 就会「本副本仍在投递、租约已到期」，被其它副本抢成双 leader 并发 poll/归档。
-        # token 为 None（Redis 不可用的单 owner 路径）时无租约可续，直接跳过。
-        if token is not None and not await _renew_lease(
-            redis, token, settings.outbox_leader_ttl_s
-        ):
-            outbox_leader_total.labels("renew_failed").inc()
-            logger.warning("轮内租约续期失败，中止本轮后续投递并重抢")
-            return False
-        now = datetime.now(UTC)
-        if now >= next_archive_at:
             try:
-                await archive_published()
+                await relay_poll(can_publish=lambda: not lost.is_set())
             except Exception:
-                logger.exception("outbox 归档已发布行异常，下个间隔再试")
-            next_archive_at = now + timedelta(
-                seconds=settings.outbox_archive_interval_s
-            )
+                logger.exception("outbox relay_poll 异常，下轮重试")
+            if lost.is_set():
+                logger.warning("轮内租约续期失败，中止本轮后续投递并重抢")
+                return False
+            now = datetime.now(UTC)
+            if now >= next_archive_at:
+                try:
+                    await archive_published()
+                except Exception:
+                    logger.exception("outbox 归档已发布行异常，下个间隔再试")
+                next_archive_at = now + timedelta(
+                    seconds=settings.outbox_archive_interval_s
+                )
+            return not lost.is_set()
+        finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat
 
     while True:
         try:
             redis = await redis_client.get_redis(_lease_key())
             if redis is None:
-                # 单 owner 开发态（未配 Redis）：无副本竞争，直接串行 poll
                 token = None
-                _warn_redis_degraded_once(redis_client.is_enabled())
-                await _poll_tick()
+                # 任一 Redis 后端已配置却拿不到选主客户端，都不能按单实例开发态投递。
+                lease_backend_configured = (
+                    redis_client.is_enabled() or redis_client.secondary_configured()
+                )
+                if lease_backend_configured:
+                    _warn_redis_degraded_once(True)
+                else:
+                    # 未配置 Redis 的单实例开发态无需 leader 选举。
+                    await _poll_tick()
                 await asyncio.sleep(interval)
                 continue
             _reset_redis_degraded_warning()

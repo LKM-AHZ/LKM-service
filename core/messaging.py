@@ -20,6 +20,7 @@ Pulsar 官方 Python 客户端是**同步阻塞** API，故：
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import logging
@@ -338,6 +339,7 @@ class MessageMeta:
     subscription: str
     properties: dict[str, str]
     redelivery_count: int = 0
+    message_id: str | None = None
 
 
 # 消费回调类型：async 函数，返回 coroutine（供 run_coroutine_threadsafe 调度）。
@@ -488,15 +490,18 @@ def _create_consumer_sync(sub: Subscription) -> Any:
     """建订阅消费者（Shared + 死信策略）——同步，须在线程中调用。"""
     import pulsar
 
+    kwargs: dict[str, Any] = {}
+    if sub.name != SUB_DLQ.name:
+        kwargs["dead_letter_policy"] = pulsar.ConsumerDeadLetterPolicy(
+            max_redeliver_count=settings.pulsar_dlq_max_redeliver,
+            dead_letter_topic=TOPIC_DLQ,
+        )
     return _get_client_sync().subscribe(
         sub.topic,
         sub.name,
         consumer_type=pulsar.ConsumerType.Shared,
         schema=make_event_schema(sub.topic),
-        dead_letter_policy=pulsar.ConsumerDeadLetterPolicy(
-            max_redeliver_count=settings.pulsar_dlq_max_redeliver,
-            dead_letter_topic=TOPIC_DLQ,
-        ),
+        **kwargs,
     )
 
 
@@ -538,11 +543,16 @@ def _handle_message(
         redelivery_count = int(msg.redelivery_count())
     except Exception:
         redelivery_count = 0
+    try:
+        source_message_id = base64.b64encode(msg.message_id().serialize()).decode("ascii")
+    except Exception:
+        source_message_id = None
     meta = MessageMeta(
         topic=SUBSCRIPTIONS[sub_name].topic,
         subscription=sub_name,
         properties=properties,
         redelivery_count=redelivery_count,
+        message_id=source_message_id,
     )
 
     future = None

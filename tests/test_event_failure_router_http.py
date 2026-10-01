@@ -1,6 +1,6 @@
 """`/admin/event-failures` 的 HTTP 面：路由接线、admin 门禁与重放结果映射。
 
-核心语义（入队/摘除/不丢审计副本）在 ``tests/test_event_failure_replay.py`` 用单测覆盖；
+核心语义（入队/标记重放/保留审计副本）在 ``tests/test_event_failure_replay.py`` 用单测覆盖；
 本文件只验**经 HTTP** 跑通的那一段——路由前缀是否挂上、信封是否符合协定、admin 门禁是否
 生效、以及「总线不可用」映射成 503 而不是假装成功。
 
@@ -56,7 +56,10 @@ async def _mk_failure(db: DB) -> EventFailure:
     row = EventFailure(
         event_id="ef-http-1",
         routing_key="event.apply_point",
-        payload_json={"fn": "apply_point_event", "args": [3]},
+        payload_json={
+            "fn": "apply_point_event",
+            "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+        },
         attempt_count=5,
         reason="relay exhausted: max tries reached",
     )
@@ -82,17 +85,15 @@ class TestEventFailureAdminHttp:
         body = r.json()
         assert body["code"] == 0 and body["data"] == {"ok": True}
         assert body["request_id"]
-        # 已重新入队 outbox 并摘除归档行
+        # 已重新入队 outbox，原失败记录留作审计
         assert (
             await db.scalar(
                 select(OutboxMessage).where(OutboxMessage.event_id == "ef-http-1")
             )
             is not None
         )
-        assert (
-            await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
-            is None
-        )
+        archived = await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
+        assert archived is not None and archived.replayed_at is not None
 
     async def test_unknown_id_is_not_found(
         self, db: DB, client: Client

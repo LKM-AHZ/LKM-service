@@ -23,12 +23,18 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 import core.db.outbox  # noqa: F401  # 确保 OutboxMessage 入 Base.metadata
-from core import messaging, outbox_relay
+from core import messaging, outbox_relay, worker, worker_dlq
 from core.config import settings
 from core.db.base import Base
+from core.db.dlq import DlqMessage
 from core.db.event_failure import EventFailure
 from core.db.model_registry import ensure_all_models
-from core.db.outbox import OUTBOX_PENDING, OUTBOX_PUBLISHED, OutboxMessage
+from core.db.outbox import (
+    OUTBOX_PENDING,
+    OUTBOX_PUBLISHED,
+    OutboxMessage,
+    enqueue_outbox,
+)
 from core.db.outbox_archive import OutboxArchived
 
 _RK = "event.apply_point"
@@ -107,6 +113,64 @@ async def _rows(fact) -> list[OutboxMessage]:
     db = await fact()
     try:
         return list((await db.execute(select(OutboxMessage))).scalars().all())
+    finally:
+        await db.close()
+
+
+async def test_concurrent_enqueue_same_event_id_has_one_winner(fact) -> None:
+    async def _enqueue() -> bool:
+        db = await fact()
+        try:
+            added = await enqueue_outbox(db, _RK, _PAYLOAD, event_id="same-global-id")
+            await db.commit()
+            return added
+        finally:
+            await db.close()
+
+    assert sorted(await asyncio.gather(_enqueue(), _enqueue())) == [False, True]
+    assert len(await _rows(fact)) == 1
+
+
+async def test_consumer_serializes_duplicate_delivery(fact, monkeypatch) -> None:
+    monkeypatch.setattr(worker, "new_session", fact)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def _handler() -> None:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+
+    payload = {"event_id": "consumer-race"}
+    first = asyncio.create_task(worker._dispatch_with_dedup(payload, _handler, []))
+    await asyncio.wait_for(entered.wait(), 2)
+    second = asyncio.create_task(worker._dispatch_with_dedup(payload, _handler, []))
+    await asyncio.sleep(0.05)
+    assert calls == 1
+    release.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 5)
+    assert calls == 1
+
+
+async def test_dlq_redelivery_persists_one_row(fact, monkeypatch) -> None:
+    monkeypatch.setattr(worker_dlq, "new_session", fact)
+    for _ in range(2):
+        await worker_dlq._persist(
+            worker_dlq._make_model(
+                routing_key=_RK,
+                payload=_PAYLOAD,
+                attempts=1,
+                reason="dead-lettered",
+                status="pending",
+                topic=messaging.TOPIC_DLQ,
+                source_message_id="broker-message-1",
+            )
+        )
+    db = await fact()
+    try:
+        assert len((await db.execute(select(DlqMessage))).scalars().all()) == 1
     finally:
         await db.close()
 

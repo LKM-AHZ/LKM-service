@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.admin.deps import require_admin
 from core import worker_dlq
 from core.common import ApiResp, ListData
+from core.config import settings
 from core.db.dlq import DlqMessage
 from core.db.session import get_session
 from core.err import BizError, CommonErr, respond
@@ -32,6 +33,11 @@ class _DlqItem(BaseModel):
     reason: str | None = None
     created_at: str | None = None
     payload: Any = None
+
+
+class _RequeueBody(BaseModel):
+    routing_key: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 @router.get("", response_model=ApiResp[ListData[_DlqItem]])
@@ -76,10 +82,16 @@ async def list_dlq(
 @respond
 async def requeue_dlq(
     dlq_id: uuid.UUID,
+    body: _RequeueBody | None = None,
     db: AsyncSession = Depends(get_session),
     _cur: Any = require_admin,
 ) -> dict[str, Any]:
-    ok = await worker_dlq.requeue(db, dlq_id)
+    ok = await worker_dlq.requeue(
+        db,
+        dlq_id,
+        routing_key=body.routing_key if body else None,
+        payload=body.payload if body else None,
+    )
     if not ok:
         # requeue 对「状态非法」与「下游发布失败」都返回 False（worker_dlq 的既有签名），
         # 但两者对调用方意义完全不同：把 MQ 故障当 400 参数错误报会给前端与监控双重误导。
@@ -88,7 +100,16 @@ async def requeue_dlq(
         m = await db.scalar(select(DlqMessage).where(DlqMessage.id == dlq_id))
         if m is None or m.status != "pending":
             raise BizError(CommonErr.INVALID_INPUT, "死信不存在或非 pending")
-        raise BizError(CommonErr.UNAVAILABLE, "死信重投失败：下游消息总线不可用")
+        if not settings.message_bus_enabled:
+            raise BizError(CommonErr.UNAVAILABLE, "死信重投失败：下游消息总线不可用")
+        rk = m.routing_key if body is None or body.routing_key is None else body.routing_key
+        payload = (m.payload_json or {}).get("payload") if body is None or body.payload is None else body.payload
+        if not isinstance(payload, dict):
+            raise BizError(CommonErr.INVALID_INPUT, "死信 payload 无效")
+        reason = worker_dlq.messaging.permanent_failure_reason(rk, payload)
+        if reason:
+            raise BizError(CommonErr.INVALID_INPUT, f"死信重投事件无效：{reason}")
+        raise BizError(CommonErr.CONFLICT, "死信重投状态已变化")
     return {"ok": True}
 
 

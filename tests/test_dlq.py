@@ -3,7 +3,9 @@ from typing import Any
 from sqlalchemy import select
 
 from core import messaging, worker_dlq
+from core.config import settings
 from core.db.dlq import DlqMessage
+from core.db.outbox import OUTBOX_PENDING, OUTBOX_PUBLISHED, OutboxMessage
 
 
 def test_make_model_maps_payload() -> None:
@@ -40,23 +42,16 @@ async def test_persist_writes_row(db: Any) -> None:
     assert fetched.routing_key == "event.send_code"
 
 
-async def test_requeue_publishes_and_marks_requeued(db: Any, monkeypatch: Any) -> None:
-    """重投端点把消息 re-publish 回原 routing key 并标记 requeued。"""
-    published: list[tuple] = []
-
-    async def fake_pub(rk: str, payload: dict) -> bool:
-        published.append((rk, payload))
-        return True
-
-    monkeypatch.setattr(messaging, "publish", fake_pub)
-    # worker_dlq 经 `from core import messaging` 引用同一模块对象，patch 其 publish 即生效。
+async def test_requeue_enqueues_and_marks_requeued(db: Any, monkeypatch: Any) -> None:
+    """重放与状态变更同事务提交，relay 稍后投递。"""
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://test:6650")
 
     m = DlqMessage(
         routing_key=messaging.RKEY_POINTS,
         payload_json={
             "payload": {
                 "fn": "apply_point_event",
-                "args": [1, "like", "x:1"],
+                "args": ["01890000-0000-7000-8000-000000000001", "like", "x:1"],
             }
         },
     )
@@ -69,5 +64,39 @@ async def test_requeue_publishes_and_marks_requeued(db: Any, monkeypatch: Any) -
     await db.refresh(m)
     assert m.status == "requeued"
     assert m.requeued_at is not None
-    assert published[0][0] == messaging.RKEY_POINTS
-    assert published[0][1]["fn"] == "apply_point_event"
+    queued = (await db.execute(select(OutboxMessage))).scalars().one()
+    assert queued.routing_key == messaging.RKEY_POINTS
+    assert queued.payload_json["fn"] == "apply_point_event"
+    assert queued.event_id == m.id.hex
+
+
+async def test_requeue_after_original_outbox_was_published(
+    db: Any, monkeypatch: Any
+) -> None:
+    """原投递行保留期内仍是 published；死信重放须生成新的 pending 行。"""
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://test:6650")
+    payload = {
+        "fn": "apply_point_event",
+        "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+        "event_id": "dead-letter-1",
+    }
+    db.add(
+        OutboxMessage(
+            event_id="dead-letter-1",
+            routing_key=messaging.RKEY_POINTS,
+            payload_json=payload,
+            status=OUTBOX_PUBLISHED,
+        )
+    )
+    dead = DlqMessage(
+        routing_key=messaging.RKEY_POINTS,
+        payload_json={"payload": payload},
+    )
+    db.add(dead)
+    await db.commit()
+    await db.refresh(dead)
+
+    assert await worker_dlq.requeue(db, dead.id) is True
+    rows = (await db.execute(select(OutboxMessage))).scalars().all()
+    assert len(rows) == 2
+    assert {row.status for row in rows} == {OUTBOX_PENDING, OUTBOX_PUBLISHED}
