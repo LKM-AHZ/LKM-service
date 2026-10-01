@@ -55,7 +55,7 @@ async def test_lifespan_runs_setup_and_graceful_cleanup(monkeypatch) -> None:
 
     assert entered
     assert "init_db" in calls  # 后台执行 schema 初始化
-    assert "redis_probe" in calls  # 启动探测 Redis
+    # Redis 只由后台订阅 task 探测，其调度时序与本断言无关。
     assert "close_redis" in calls  # 退出释放 Redis
     assert "dispose_engine" in calls  # 退出释放引擎
 
@@ -83,3 +83,22 @@ async def test_lifespan_cancels_hanging_init_db_and_still_releases(monkeypatch) 
     assert "init_db_start" in calls
     assert "close_redis" in calls  # 挂住的初始化没有拖住收尾
     assert "dispose_engine" in calls
+
+
+async def test_lifespan_does_not_wait_for_redis_connect(monkeypatch) -> None:
+    """Redis 首连悬挂时，ASGI lifespan 仍完成启动并可进入请求阶段。"""
+    _patch_common(monkeypatch)
+    connect_started = asyncio.Event()
+
+    async def _hanging_get_redis() -> None:
+        connect_started.set()
+        await asyncio.Event().wait()
+
+    async def _fake_init_db() -> None:
+        return None
+
+    monkeypatch.setattr(main_mod.redis_client, "get_redis", _hanging_get_redis)
+    monkeypatch.setattr(main_mod, "init_db", _fake_init_db)
+    async with asyncio.timeout(2):
+        async with main_mod.lifespan(None):  # ty: ignore[invalid-argument-type]
+            await connect_started.wait()

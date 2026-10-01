@@ -5,8 +5,8 @@
 轻量探活，供容器编排自洽（compose healthcheck / 后续 B1.2 APISIX 上游均可消费）：
 
 - ``liveness``：自身存活。**零外部依赖**，仅证明进程起来能应答。
-- ``readiness``：依赖就绪。聚合 DB(SELECT 1) + Redis(ping)，供 service 依赖序判定。
-  细粒度复合/合并生产端点是 B1.3 的活，此处先给出干净、可被 healthcheck 单独命中的探测缝。
+- ``readiness``：依赖就绪。并发聚合 DB(SELECT 1) + Redis(ping)，全部就绪返回 200，
+  否则返回 503，供 Kubernetes readinessProbe 直接判定是否接流。
 
 跨文件 import 保持极简：只依赖 ``core.redis``、``auth.db.session`` 的
 ``get_auth_engine`` 与 ``auth.db.init`` 的初始化标志，均属 infra 且为 auth 进程必要的只读
@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -120,6 +121,20 @@ async def probe_redis() -> AuthDepStatus:
     return AuthDepStatus(status="up")
 
 
+async def _bounded_probe(
+    name: str, probe: Callable[[], Awaitable[AuthDepStatus]]
+) -> AuthDepStatus:
+    """Redis 等探针半挂或抛错时仍让编排收到明确的 503。"""
+    try:
+        return await asyncio.wait_for(probe(), timeout=_PROBE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("auth readiness: %s 探活超时", name)
+        return AuthDepStatus(status="error", detail="timeout")
+    except Exception:
+        logger.exception("auth readiness: %s 探活失败", name)
+        return AuthDepStatus(status="error", detail="probe failed")
+
+
 @router.get("/liveness", response_model=AuthLiveData)
 async def liveness() -> AuthLiveData:
     """存活探针：零外部依赖，进程能应答即 up。供 compose/编排判断进程心跳。"""
@@ -127,9 +142,12 @@ async def liveness() -> AuthLiveData:
 
 
 @router.get("/readiness", response_model=AuthReadyData)
-async def readiness() -> AuthReadyData:
-    """就绪探针：DB + Redis 均 up 才算 ok，否则 degraded（可被编排读作未就绪）。"""
-    db = await probe_db()
-    redis = await probe_redis()
+async def readiness(response: Response) -> AuthReadyData:
+    """就绪探针：DB + Redis 均 up 才返回 200，否则返回 503。"""
+    db, redis = await asyncio.gather(
+        _bounded_probe("db", probe_db), _bounded_probe("redis", probe_redis)
+    )
     overall = "ok" if (db.status == "up" and redis.status == "up") else "degraded"
+    if overall != "ok":
+        response.status_code = 503
     return AuthReadyData(status=overall, service="auth", db=db, redis=redis)

@@ -51,6 +51,7 @@ def _stub_hard(
         ("_probe_redis", redis),
         ("_probe_pulsar", pulsar),
         ("_probe_auth", auth),
+        ("_probe_verify_key", "up"),
     ):
         monkeypatch.setattr(health_mod, name, _mk(status))
 

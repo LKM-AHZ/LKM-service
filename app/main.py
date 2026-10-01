@@ -118,11 +118,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 并经 readiness 如实报「未就绪」，而不是起不来进 crashloop。就绪判定见 init_db 的完成标志。
     init_db_task = asyncio.create_task(_init_db_with_retry())
     instrument_sqlalchemy(get_async_engine())
-
-    # 启动即探测 Redis，便于日志暴露其状态（未配置/不可用时静默降级为 None）
-    await redis_client.get_redis()
-
-    # L1 本地缓存失效广播订阅（Redis 未配置则空转退避，不阻塞启动）
+    # 不在 lifespan 等待首次连接，否则 Redis 半挂时 HTTP 探针也无法开始应答。
     await user_cache_events.start()
 
     # 验签公钥（§2 第 2 条）：本地没有时从 AUTH `/jwks` 拉取并周期刷新。只起后台 task，

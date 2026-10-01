@@ -6,6 +6,8 @@ httpx.MockTransport 注入的假 client（``pulsar_lag._probe_client_factory``�
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -53,6 +55,9 @@ def _stub_probes(
     monkeypatch.setattr(health_mod, "_probe_redis", _mk(redis))
     monkeypatch.setattr(health_mod, "_probe_pulsar", _mk(pulsar))
     monkeypatch.setattr(health_mod, "_probe_auth", _mk(auth))
+    monkeypatch.setattr(health_mod, "_probe_verify_key", _mk("up"))
+    monkeypatch.setattr(health_mod, "_probe_search", _mk("disabled"))
+    monkeypatch.setattr(health_mod, "_probe_storage", _mk("disabled"))
 
 
 # ── liveness ───────────────────────────────────────────────────────────────
@@ -136,6 +141,25 @@ async def test_readiness_db_disabled_is_degraded(
 ) -> None:
     _stub_probes(monkeypatch, db="disabled")
     assert (await probe_client.get("/readiness")).status_code == 503
+
+
+async def test_readiness_times_out_one_probe_and_still_reports_all(
+    probe_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_probes(monkeypatch)
+    monkeypatch.setattr(health_mod, "_READINESS_PROBE_TIMEOUT_S", 0.01)
+
+    async def _hanging_db() -> DependencyStatus:
+        await asyncio.Event().wait()
+        return DependencyStatus(status="up")
+
+    monkeypatch.setattr(health_mod, "_probe_db", _hanging_db)
+    resp = await probe_client.get("/readiness")
+    assert resp.status_code == 503
+    payload = resp.json()
+    assert payload["db"]["status"] == "error"
+    assert payload["redis"]["status"] == "up"
+    assert payload["soft"]["search"]["status"] == "disabled"
 
 
 async def test_probe_db_not_ready_before_schema_init(

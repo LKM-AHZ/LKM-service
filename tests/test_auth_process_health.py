@@ -4,6 +4,7 @@
 up/disabled 回报，保持 hermetic，不触碰真实数据库 / 外部 redis）。
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -59,7 +60,7 @@ async def test_readiness_degraded_when_db_down_redis_up(
     monkeypatch.setattr(health_auth, "probe_redis", _redis_up)
 
     resp = await auth_client.get("/readiness")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     p = resp.json()
     assert p["status"] == "degraded"
     assert p["db"]["status"] == "error"
@@ -81,6 +82,23 @@ async def test_readiness_ok_when_both_up(auth_client, monkeypatch) -> None:
     assert p["status"] == "ok"
     assert p["db"]["status"] == "up"
     assert p["redis"]["status"] == "up"
+
+
+async def test_readiness_redis_timeout_returns_503(auth_client, monkeypatch) -> None:
+    monkeypatch.setattr(health_auth, "_PROBE_TIMEOUT_S", 0.01)
+
+    async def _db_up() -> AuthDepStatus:
+        return AuthDepStatus(status="up")
+
+    async def _hanging_redis() -> AuthDepStatus:
+        await asyncio.Event().wait()
+        return AuthDepStatus(status="up")
+
+    monkeypatch.setattr(health_auth, "probe_db", _db_up)
+    monkeypatch.setattr(health_auth, "probe_redis", _hanging_redis)
+    resp = await auth_client.get("/readiness")
+    assert resp.status_code == 503
+    assert resp.json()["redis"]["status"] == "error"
 
 
 async def test_probe_db_uses_auth_engine(monkeypatch) -> None:

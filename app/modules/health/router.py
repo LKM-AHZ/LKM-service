@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -75,6 +76,8 @@ _soft_probe_factory: Any = None
 # 软依赖探测超时（秒）：readiness 可能被编排高频调用，探测必须是「轻量 + 短超时」，绝不能
 # 让一个不可达的 OpenSearch/MinIO 把就绪探针拖住（即便不改变判定，也会拖慢响应）。
 _SOFT_PROBE_TIMEOUT_S = 2.0
+# 小于编排层的 5s 探针超时；所有依赖并发探测，单个半挂不会拖住整次响应。
+_READINESS_PROBE_TIMEOUT_S = 3.0
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +269,20 @@ async def _probe_storage() -> DependencyStatus:
     return DependencyStatus(status="up", detail=f"http {resp.status_code}")
 
 
+async def _bounded_probe(
+    name: str, probe: Callable[[], Awaitable[DependencyStatus]]
+) -> DependencyStatus:
+    """把单项超时或未预料异常变成依赖错误，保证 readiness 始终能应答。"""
+    try:
+        return await asyncio.wait_for(probe(), timeout=_READINESS_PROBE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("readiness probe %s timed out", name)
+        return DependencyStatus(status="error", detail=f"{name} probe timeout")
+    except Exception:
+        logger.exception("readiness probe %s failed", name)
+        return DependencyStatus(status="error", detail=f"{name} probe failed")
+
+
 @router.get("/liveness", response_model=LiveData)
 async def liveness() -> LiveData:
     """存活探针：**零外部依赖**，进程能应答即 ok。
@@ -288,14 +305,16 @@ async def readiness(response: Response) -> ReadyData:
     - 状态码语义：就绪 200 / 未就绪 503（供 compose depends_on、K8s readinessProbe、
       负载均衡摘流直接消费；M3.4 已把语义定在 AUTH 进程侧，此处对齐到单体）。
     """
-    db = await _probe_db()
-    redis = await _probe_redis()
-    pulsar = await _probe_pulsar()
-    auth = await _probe_auth()
-    verify_key = await _probe_verify_key()
-    # 软依赖：探测失败只体现在字段值，绝不改变下面 ready 的 AND 判定（一字不动）。
-    # 并发探测把最坏延迟收敛到单个超时（~2s），而非两者串行叠加。
-    search, storage = await asyncio.gather(_probe_search(), _probe_storage())
+    # 硬/软依赖一起并发，并给每项相同的总时限；软依赖仅告知，不参与下方 AND 判定。
+    db, redis, pulsar, auth, verify_key, search, storage = await asyncio.gather(
+        _bounded_probe("db", _probe_db),
+        _bounded_probe("redis", _probe_redis),
+        _bounded_probe("pulsar", _probe_pulsar),
+        _bounded_probe("auth", _probe_auth),
+        _bounded_probe("verify_key", _probe_verify_key),
+        _bounded_probe("search", _probe_search),
+        _bounded_probe("storage", _probe_storage),
+    )
     soft = SoftDependencies(search=search, storage=storage)
     ready = (
         db.status == "up"
