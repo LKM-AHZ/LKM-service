@@ -189,7 +189,9 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 数据库与迁移
 
-- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；生产/已有历史库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 迁移链（UUID baseline + outbox 事件键增量迁移）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`），全局 `event_id` 由普通表 `outbox_event_keys` 唯一约束；`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`（主键同样含分区列）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
+- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；新库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 的单条 `0001_uuid_baseline` 基线（已包含 outbox 事件键与 feed 游标索引）。**TimescaleDB**（批 2）：主库用 `timescale/timescaledb` 引擎，`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区 + 冷表压缩 + 保留策略兜底，故主键含分区列：`(created_at, id)`），全局 `event_id` 由普通表 `outbox_event_keys` 唯一约束；`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`（主键同样含分区列）；扩展不可用（普通 PG / CI 临时 PG）时只告警并降级为普通表，投递语义不变。详见《执行路线图》§8 #40。
+
+已应用旧版 `0001`/`0002`/`0003` 的数据库不能直接重跑压平后的基线；部署前须核对并补齐表结构，再将 `alembic_version` 标记为 `0001_uuid_baseline`。新库可直接运行 `alembic upgrade head`。
 - AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，19 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `0001_auth_baseline`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 大表（`content_items`、`content_comments`、outbox、浏览日志、积分流水）超过 64 MiB

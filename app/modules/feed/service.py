@@ -182,11 +182,11 @@ async def _materialized_timeline(
         if not items:
             return {}
 
-        await _fill_authors(db, items)
         rules = await load_active_rules(db)
         kept, mods = _filter_hidden(items, rules)
         if not kept:
             return {}
+        await _fill_authors(db, kept)
         await _compute_scores(kept, following_ids, mods)
         kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
         page = kept[:limit]
@@ -211,7 +211,7 @@ async def _load_materialized_page(
     before_id: uuid.UUID | None,
     limit: int,
 ) -> list[FeedItem]:
-    """从物化表取一页（(created_at, id) 游标下滤，时间倒序）。"""
+    """从物化表取一页（(created_at, source_id) 游标下滤，时间倒序）。"""
     rows = await FeedItemMaterializedRepository(db).list_page(
         user_id, before_time=before_time, before_id=before_id, limit=limit
     )
@@ -293,12 +293,11 @@ async def _realtime_timeline(
     )
     candidates: list[FeedItem] = [it for group in fetched for it in group]
 
-    # 合并回填作者名：各源只返回 author_id，此处一次性批量查询（抵消每源各查一次）
-    await _fill_authors(db, candidates)
-
     # 审校隐藏剔除 + 排序分计算（审校只跑一遍，结果传给打分层）
     rules = await load_active_rules(db)
     kept, mods = _filter_hidden(candidates, rules)
+    # 只为可见条目批量查询作者；审校判断仅依赖标题和摘要。
+    await _fill_authors(db, kept)
     await _compute_scores(kept, following_ids, mods)
 
     # 主序：时间倒序（稳定性靠 id 倒序兜底）

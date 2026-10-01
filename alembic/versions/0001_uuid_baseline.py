@@ -188,11 +188,13 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('requeued_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('source_message_id', sa.String(length=255), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_dlq_messages_routing_key'), 'dlq_messages', ['routing_key'], unique=False)
     op.create_index(op.f('ix_dlq_messages_status'), 'dlq_messages', ['status'], unique=False)
+    op.create_index('uq_dlq_source_message_id', 'dlq_messages', ['source_message_id'], unique=True)
     op.create_table('event_failures',
     sa.Column('event_id', sa.String(length=36), nullable=False),
     sa.Column('routing_key', sa.String(length=64), nullable=False),
@@ -200,6 +202,7 @@ def upgrade() -> None:
     sa.Column('attempt_count', sa.Integer(), nullable=False),
     sa.Column('reason', sa.String(length=255), nullable=False),
     sa.Column('folded_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('replayed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
@@ -263,7 +266,7 @@ def upgrade() -> None:
     sa.UniqueConstraint('user_id', 'item_type', 'source_id', name='uq_feed_item')
     )
     op.create_index('ix_feed_items_source', 'feed_items', ['source_id', 'item_type'], unique=False)
-    op.create_index('ix_feed_items_user_cursor', 'feed_items', ['user_id', 'created_at', 'id'], unique=False)
+    op.create_index('ix_feed_items_user_cursor', 'feed_items', ['user_id', 'created_at', 'source_id'], unique=False)
     op.create_table('library_files',
     sa.Column('uploader_id', sa.Uuid(), nullable=False),
     sa.Column('original_name', sa.String(length=255), nullable=False),
@@ -327,6 +330,11 @@ def upgrade() -> None:
     op.create_index('ix_notifications_aggregate', 'notifications', ['user_id', 'type', 'actor_id', 'target_id', 'read_at'], unique=False)
     op.create_index('ix_notifications_user_id', 'notifications', ['user_id', 'id'], unique=False)
     op.create_index('ix_notifications_user_read', 'notifications', ['user_id', 'read_at'], unique=False)
+    op.create_table('outbox_event_keys',
+    sa.Column('event_id', sa.String(length=36), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint('event_id')
+    )
     op.create_table('outbox_archived',
     sa.Column('event_id', sa.String(length=36), nullable=False),
     sa.Column('routing_key', sa.String(length=64), nullable=False),
@@ -1057,6 +1065,7 @@ def downgrade() -> None:
     op.drop_index('ix_outbox_archived_published_at', table_name='outbox_archived')
     op.drop_index(op.f('ix_outbox_archived_event_id'), table_name='outbox_archived')
     op.drop_table('outbox_archived')
+    op.drop_table('outbox_event_keys')
     op.drop_index('ix_notifications_user_read', table_name='notifications')
     op.drop_index('ix_notifications_user_id', table_name='notifications')
     op.drop_index('ix_notifications_aggregate', table_name='notifications')
@@ -1074,6 +1083,7 @@ def downgrade() -> None:
     op.drop_table('event_processed')
     op.drop_index(op.f('ix_event_failures_event_id'), table_name='event_failures')
     op.drop_table('event_failures')
+    op.drop_index('uq_dlq_source_message_id', table_name='dlq_messages')
     op.drop_index(op.f('ix_dlq_messages_status'), table_name='dlq_messages')
     op.drop_index(op.f('ix_dlq_messages_routing_key'), table_name='dlq_messages')
     op.drop_table('dlq_messages')

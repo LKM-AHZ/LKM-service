@@ -8,6 +8,8 @@
 - cron 注册存在（防回退）
 """
 
+import datetime
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -160,6 +162,44 @@ async def test_cursor_pagination_on_materialized(
     ids2 = {i.id for i in page2.items}
     assert not (ids1 & ids2)  # 游标推进不重不漏
     assert len(ids1 | ids2) == 3
+
+
+async def test_materialized_cursor_uses_source_id_for_same_timestamp(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    author = await _au(auth_db, "cursor_author")
+    reader = await _au(auth_db, "cursor_reader")
+    await follow_user(db, reader.id, author.id)
+
+    created_at = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    source_ids = [uuid.UUID(int=n) for n in (3, 2, 1)]
+    db.add_all(
+        FeedItemMaterialized(
+            id=uuid.UUID(int=100 + n),
+            user_id=reader.id,
+            item_type="discussion",
+            source_id=source_id,
+            author_id=author.id,
+            board_id=None,
+            sort_score=0.0,
+            title=f"帖 {n}",
+            content_preview="",
+            url=f"/content/posts/{source_id}",
+            created_at=created_at,
+        )
+        for n, source_id in zip((3, 2, 1), source_ids, strict=True)
+    )
+    await db.flush()
+
+    first = await get_timeline(
+        db, user_id=reader.id, mode="follow", cursor=None, limit=2
+    )
+    second = await get_timeline(
+        db, user_id=reader.id, mode="follow", cursor=first.next_cursor, limit=2
+    )
+    assert [item.id for item in first.items] == source_ids[:2]
+    assert [item.id for item in second.items] == source_ids[2:]
+    assert second.next_cursor is None
 
 
 async def test_superfan_skipped_but_reader_still_sees_content(

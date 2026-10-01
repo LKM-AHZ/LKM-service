@@ -25,9 +25,11 @@ class FeedItemMaterializedRepository(AsyncRepository[FeedItemMaterialized]):
         before_id: uuid.UUID | None,
         limit: int,
     ) -> list[FeedItemMaterialized]:
-        """物化表按 (created_at, id) 游标取一页（时间倒序）。
+        """物化表按 (created_at, source_id) 游标取一页（时间倒序）。
 
-        下滤条件与 ``feed.feed._before_conds`` 严格同式（本类自持一份，避免仓库层
+        ``FeedItem.id`` 和响应游标都是内容 ID，而非物化行 ID；查询必须使用
+        ``source_id``，否则同一时间戳的内容会跳页或重复。下滤条件与
+        ``feed.feed._before_conds`` 严格同式（本类自持一份，避免仓库层
         反向依赖实时合流模块）；同理，``before_id`` 缺失时退化为纯时间下滤——
         不能保留 ``id < NULL``（SQL 中恒为 NULL，会把同一时刻的行整批漏掉）。
         """
@@ -40,14 +42,14 @@ class FeedItemMaterializedRepository(AsyncRepository[FeedItemMaterialized]):
                     (FeedItemMaterialized.created_at < before_time)
                     | (
                         (FeedItemMaterialized.created_at == before_time)
-                        & (FeedItemMaterialized.id < before_id)
+                        & (FeedItemMaterialized.source_id < before_id)
                     )
                 )
         return await self.get_many(
             *conds,
             order_by=(
                 FeedItemMaterialized.created_at.desc(),
-                FeedItemMaterialized.id.desc(),
+                FeedItemMaterialized.source_id.desc(),
             ),
             limit=limit,
         )

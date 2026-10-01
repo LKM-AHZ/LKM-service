@@ -31,7 +31,7 @@ class FeedItemMaterialized(UUIDPrimaryKeyMixin, Base):
     """时间线物化读模型（M6.11）：一条 = 某用户的 feed 里的一条内容。
 
     写扩散（fanout）由 cron 按源水位扫描新内容后为本条目的**关注者**写入；读路径
-    只查本表（``(user_id, created_at, id)`` 游标），不再实时多源合流——实时合流降为
+    只查本表（``(user_id, created_at, source_id)`` 游标），不再实时多源合流——实时合流降为
     「物化未命中」的兜底。
 
     ``(user_id, item_type, source_id)`` 唯一：重复 fanout 幂等（``ON CONFLICT DO
@@ -42,8 +42,8 @@ class FeedItemMaterialized(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "feed_items"
     __table_args__: tuple[UniqueConstraint, Index, Index] = (
         UniqueConstraint("user_id", "item_type", "source_id", name="uq_feed_item"),
-        # 读路径游标：user_id + 时间倒序 + id 倒序（PG 可反向扫该索引）
-        Index("ix_feed_items_user_cursor", "user_id", "created_at", "id"),
+        # 响应游标使用内容 ID（source_id），索引和查询必须用同一排序键。
+        Index("ix_feed_items_user_cursor", "user_id", "created_at", "source_id"),
         # source_id 在前：唯一的消费方是 fanout.remove_source_item 的
         # `DELETE ... WHERE source_id = :id`（没有只按 item_type 的查询），
         # 原顺序下该删除走不了索引（PG 无 index skip scan），大表上退化为顺序扫描
