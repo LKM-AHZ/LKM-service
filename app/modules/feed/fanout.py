@@ -6,9 +6,8 @@
 
 - 水位单调推进到「已完整 fanout 的最大条目」；中途失败不推进 → 下轮重放，
   重复由 ``feed_items`` 的 ``(user_id, item_type, source_id)`` 唯一约束吸收。
-- **大 V 封顶**：作者关注者数（含关注该内容版块者）超过 ``feed_fanout_max_followers``
-  时整条跳过、只把作者记入 Redis 大 V 集合；读路径对这些作者走实时合流补齐
-  （见 ``service.get_timeline`` 的物化分支），既不写放大也不丢内容。
+- **受众封顶**：作者关注者或版块关注者超过 ``feed_fanout_max_followers`` 时，
+  只跳过超限维度的扩散；读路径实时补拉大 V 作者与所关注版块的内容。
 - **Article 不参与**：它无作者外键（follow 源里也不参与个性化），无法按作者扩散。
 
 关注者变更时的回填见 :func:`backfill_author`（新关注一位作者时补其最近 N 条）。
@@ -106,8 +105,8 @@ async def _fanout_item(db: AsyncSession, item: FeedItem) -> int:
     """把一条内容写入其受众的物化 feed；返回写入的受众数（跳过时 0）。
 
     封顶按**维度**分别判定：作者维超限才跳过作者扩散（标记大 V，由读路径实时补），
-    版块维超限只跳过版块扩散。此前按两路并集判定，导致「小作者 + 大版块」的条目连
-    作者关注者也一起不写，而大 V 实时补拉只覆盖关注作者的人。
+    版块维超限只跳过版块扩散；读路径实时补拉所关注版块的讨论帖。
+    此前按两路并集判定，导致「小作者 + 大版块」的条目连作者关注者也一起不写。
     """
     if item.author_id is None and item.board_id is None:
         return 0

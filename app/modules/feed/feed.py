@@ -65,9 +65,11 @@ def _before_conds(
     before_time: datetime | None,
     before_id: uuid.UUID | None,
 ) -> list[Any]:
-    """(created_at, id) 游标下滤条件。before_time 为 None 时返回空（首页）。"""
+    """(created_at, id) 游标下滤；无 id 时只按时间过滤。"""
     if before_time is None:
         return []
+    if before_id is None:
+        return [col_time < before_time]
     return [
         # created_at < before_time OR (created_at == before_time AND id < before_id)
         (col_time < before_time) | ((col_time == before_time) & (model_id < before_id))

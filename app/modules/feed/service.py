@@ -5,18 +5,18 @@
 ``interaction.service`` 的公开读口取「我关注了谁 / 我关注了哪些版块」用于过滤，不直接触达
 那两张表，也不缓存它们（缓存归 interaction 域所有）。
 
-合流策略（对齐 Solar 参考）：**查询时合流**，非写入 fan-out——每次请求实时从各内容源按
-(created_at, id) 游标各取一页，合并后过滤审校隐藏项，按（关注加权 + 审校排除后的）时间倒序返回。
+follow 流优先合并物化行、关注版块和大 V 的实时结果；hot 流实时合并内容源。
+两路都按 (created_at, id) 游标扫描，审校隐藏和重复项过滤后再切页。
 审校：命中 hide 的条目在合流前剔除；命中 derank 的压低 ``sort_score`` 字段值
 （v1 主序仍为时间倒序，derank 反映到排序分供后续热度排序使用，且 hide 即时生效）。
 """
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import datetime
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.modules.admin.moderation.engine import (
@@ -32,7 +32,6 @@ from app.modules.interaction.service import (
     get_followed_board_ids,
     get_following_ids,
 )
-from core.cache import TTL_LIST_S, cached_read, make_key
 from core.db.repository import DbSession
 from core.ports.snapshot import get_user_snapshot_batch
 
@@ -128,7 +127,7 @@ async def get_timeline(
     """时间线读入口：物化读模型优先，未命中回退实时多源合流（M6.11）。
 
     只有**登录用户的 follow 流**有物化意义（hot 流是个性化无关的全站榜，沿用实时）。
-    物化的两条来源：``feed_items``（fanout 写入）+ 大 V 作者的实时补拉；两者都为空时
+    物化页合并 ``feed_items``、大 V 作者及所关注版块的实时讨论帖；首页完全没有候选时
     返回 ``None`` → 兜底实时合流（覆盖「刚关注/物化未回填」的用户）。
     """
     if mode == "follow" and user_id is not None:
@@ -142,26 +141,93 @@ async def get_timeline(
     )
 
 
-def _materialized_key(
-    user_id: uuid.UUID,
+async def _collect_page(
+    fetch: Callable[
+        [datetime.datetime | None, uuid.UUID | None, int], Awaitable[list[FeedItem]]
+    ],
+    *,
     before_time: datetime.datetime | None,
     before_id: uuid.UUID | None,
     limit: int,
-) -> str:
-    """键含 limit 与游标**解码后**的值。
+    rules: list[Any],
+) -> tuple[
+    list[FeedItem],
+    dict[tuple[str, uuid.UUID], ModerationResult],
+    bool,
+    tuple[datetime.datetime, uuid.UUID] | None,
+]:
+    """按原始排序键逐批扫描，审校过滤和跨来源去重后再分页。
 
-    缓存值是已按 limit 切好的整页（含由该页推出的 ``next_cursor``），故 limit 必须进键，
-    否则同一游标下不同 limit 的请求会互相拿到长度不符的页并跳条。游标用解码值而非原始
-    字符串：原始游标是客户端可控的任意 base64，进键会为每个畸形串各开一份缓存与 singleflight
-    航班（缓存模块按「键基数自然有界」设计），解码值则天然收敛（畸形统一落到首页）。
+    每轮只消费请求量范围内的原始候选；不能把本轮所有候选的最后一条用作下一轮
+    游标，否则某个来源仅取到本轮上限时，尚未取出的条目可能被跨源合并跳过。
+    隐藏项过多时限制单请求扫描量，并用原始扫描位置续页。
     """
-    return make_key("feed", user_id, before_time or "", before_id or "", limit)
+    batch_size = limit + 1
+    max_scanned = max(200, limit * 10)
+    scanned = 0
+    visible: list[FeedItem] = []
+    mods: dict[tuple[str, uuid.UUID], ModerationResult] = {}
+    seen: set[tuple[str, uuid.UUID]] = set()
+    has_candidates = False
+    scan_time, scan_id = before_time, before_id
+    last_scanned: FeedItem | None = None
+    while len(visible) <= limit and scanned < max_scanned:
+        size = min(batch_size, max_scanned - scanned)
+        candidates = await fetch(scan_time, scan_id, size)
+        if not candidates:
+            break
+        has_candidates = True
+        candidates.sort(key=lambda it: (it.created_at, it.id), reverse=True)
+        batch = candidates[:size]
+        scanned += len(batch)
+        kept, batch_mods = _filter_hidden(batch, rules)
+        for it in kept:
+            key = (it.item_type, it.id)
+            if key not in seen:
+                seen.add(key)
+                visible.append(it)
+                mods[key] = batch_mods[key]
+                if len(visible) > limit:
+                    break
+        last_scanned = batch[-1]
+        scan_time, scan_id = last_scanned.created_at, last_scanned.id
+        if len(candidates) < size:
+            break
+        batch_size = min(batch_size * 2, 100)
+    continuation = None
+    if scanned >= max_scanned and len(visible) <= limit and last_scanned is not None:
+        continuation = (last_scanned.created_at, last_scanned.id)
+    return visible, mods, has_candidates, continuation
+
+
+async def _finish_page(
+    db: DbSession,
+    visible: list[FeedItem],
+    following_ids: set[uuid.UUID] | None,
+    mods: dict[tuple[str, uuid.UUID], ModerationResult],
+    limit: int,
+    continuation: tuple[datetime.datetime, uuid.UUID] | None,
+) -> FeedResponse:
+    page = visible[:limit]
+    if not page:
+        return FeedResponse(
+            items=[],
+            next_cursor=_encode_cursor(*continuation) if continuation else None,
+        )
+    await _fill_authors(db, page)
+    await _compute_scores(page, following_ids, mods)
+    next_cursor = None
+    if len(visible) > limit:
+        next_cursor = _encode_cursor(page[-1].created_at, page[-1].id)
+    elif continuation is not None:
+        next_cursor = _encode_cursor(*continuation)
+    return FeedResponse(items=page, next_cursor=next_cursor)
 
 
 async def _materialized_timeline(
     db: DbSession, *, user_id: uuid.UUID, cursor: str | None, limit: int
 ) -> FeedResponse | None:
-    """物化读：feed_items + 大 V 实时补拉。返回 ``None`` 表示应回退实时合流。"""
+    """物化行与实时补拉合并；首页无候选时返回 ``None`` 以回退。"""
     before_time, before_id = _decode_cursor(cursor)
     following_ids = set(await get_following_ids(db, user_id))
     board_ids = set(await get_followed_board_ids(db, user_id))
@@ -169,39 +235,32 @@ async def _materialized_timeline(
         return FeedResponse(items=[], next_cursor=None)
 
     bigv = (await fanout.bigv_authors(db)) & following_ids
+    rules = await load_active_rules(db)
 
-    async def _load() -> dict[str, Any]:
-        # 多取一条以判定「是否还有下一页」（两路各自 +1，合并后仍能判出）
-        items = await _load_materialized_page(
-            db, user_id, before_time, before_id, limit + 1
-        )
-        if bigv:
-            items += await _realtime_for_authors(
-                db, bigv, board_ids, before_time, before_id, limit + 1
+    async def _fetch(
+        scan_time: datetime.datetime | None, scan_id: uuid.UUID | None, size: int
+    ) -> list[FeedItem]:
+        items = await _load_materialized_page(db, user_id, scan_time, scan_id, size)
+        if bigv or board_ids:
+            items.extend(
+                await _realtime_supplement(
+                    db, bigv, board_ids, scan_time, scan_id, size
+                )
             )
-        if not items:
-            return {}
+        return items
 
-        rules = await load_active_rules(db)
-        kept, mods = _filter_hidden(items, rules)
-        if not kept:
-            return {}
-        await _fill_authors(db, kept)
-        await _compute_scores(kept, following_ids, mods)
-        kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
-        page = kept[:limit]
-        next_cursor: str | None = None
-        if len(kept) > limit and page:
-            last = page[-1]
-            next_cursor = _encode_cursor(last.created_at, last.id)
-        return FeedResponse(items=page, next_cursor=next_cursor).model_dump(mode="json")
-
-    cached = await cached_read(
-        _materialized_key(user_id, before_time, before_id, limit), TTL_LIST_S, _load
+    visible, mods, has_candidates, continuation = await _collect_page(
+        _fetch,
+        before_time=before_time,
+        before_id=before_id,
+        limit=limit,
+        rules=rules,
     )
-    if not cached:
+    # 仅首页完全没有候选时才用实时兜底：后续页或「候选全被审校隐藏」
+    # 都是物化流中的合法空页，切换读模型会造成分页重复或跳条。
+    if not has_candidates and before_time is None:
         return None
-    return FeedResponse.model_validate(cached)
+    return await _finish_page(db, visible, following_ids, mods, limit, continuation)
 
 
 async def _load_materialized_page(
@@ -232,7 +291,7 @@ async def _load_materialized_page(
     ]
 
 
-async def _realtime_for_authors(
+async def _realtime_supplement(
     db: DbSession,
     author_ids: set[uuid.UUID],
     board_ids: set[uuid.UUID],
@@ -240,15 +299,25 @@ async def _realtime_for_authors(
     before_id: uuid.UUID | None,
     limit: int,
 ) -> list[FeedItem]:
-    """大 V 补拉：只对这些作者走实时源（与 follow 模式同一过滤语义）。"""
-
-    async def _fetch_one(name: str) -> list[FeedItem]:
+    """补拉大 V 作者及关注版块的讨论帖，供物化页合并去重。"""
+    items: list[FeedItem] = []
+    for name in feed_src.FOLLOW_SOURCES:
+        if name != "discussion" and not author_ids:
+            continue
+        if name == "discussion" and not author_ids and not board_ids:
+            continue
         fetch = feed_src.SOURCES[name]
-        b_ids = board_ids if name == "discussion" else None
-        return await fetch(db, author_ids, b_ids, before_time, before_id, limit)
-
-    groups = await asyncio.gather(*(_fetch_one(n) for n in feed_src.FOLLOW_SOURCES))
-    return [it for group in groups for it in group]
+        items.extend(
+            await fetch(
+                db,
+                author_ids,
+                board_ids if name == "discussion" else None,
+                before_time,
+                before_id,
+                limit,
+            )
+        )
+    return items
 
 
 async def _realtime_timeline(
@@ -277,36 +346,24 @@ async def _realtime_timeline(
     # 选源：follow 用 FOLLOW_SOURCES（article 无作者外键不进个性化），hot 全含
     source_names = feed_src.FOLLOW_SOURCES if mode == "follow" else feed_src.HOT_SOURCES
 
-    # 各内容源互不依赖，gather 并行拉取，而非串行 await（时间线多源往返叠加）。
-    async def _fetch_one(name: str) -> list[FeedItem]:
-        fetch = feed_src.SOURCES[name]
-        if mode == "follow":
-            # discussion 额外按关注版块过滤；其余按关注作者过滤
-            b_ids = board_ids if name == "discussion" else None
-            a_ids = following_ids
-        else:
-            a_ids, b_ids = None, None
-        return await fetch(db, a_ids, b_ids, before_time, before_id, limit + 1)
+    async def _fetch(
+        scan_time: datetime.datetime | None, scan_id: uuid.UUID | None, size: int
+    ) -> list[FeedItem]:
+        items: list[FeedItem] = []
+        # 同一个 AsyncSession 不可并发执行 SQL；按源依次查询，仍只在结果页回填作者。
+        for name in source_names:
+            fetch = feed_src.SOURCES[name]
+            a_ids = following_ids if mode == "follow" else None
+            b_ids = board_ids if mode == "follow" and name == "discussion" else None
+            items.extend(await fetch(db, a_ids, b_ids, scan_time, scan_id, size))
+        return items
 
-    fetched: list[list[FeedItem]] = await asyncio.gather(
-        *(_fetch_one(n) for n in source_names)
-    )
-    candidates: list[FeedItem] = [it for group in fetched for it in group]
-
-    # 审校隐藏剔除 + 排序分计算（审校只跑一遍，结果传给打分层）
     rules = await load_active_rules(db)
-    kept, mods = _filter_hidden(candidates, rules)
-    # 只为可见条目批量查询作者；审校判断仅依赖标题和摘要。
-    await _fill_authors(db, kept)
-    await _compute_scores(kept, following_ids, mods)
-
-    # 主序：时间倒序（稳定性靠 id 倒序兜底）
-    kept.sort(key=lambda it: (it.created_at, it.id), reverse=True)
-    page = kept[:limit]
-
-    next_cursor: str | None = None
-    if page and not (len(kept) <= limit):
-        last = page[-1]
-        next_cursor = _encode_cursor(last.created_at, last.id)
-
-    return FeedResponse(items=page, next_cursor=next_cursor)
+    visible, mods, _, continuation = await _collect_page(
+        _fetch,
+        before_time=before_time,
+        before_id=before_id,
+        limit=limit,
+        rules=rules,
+    )
+    return await _finish_page(db, visible, following_ids, mods, limit, continuation)
