@@ -162,6 +162,41 @@ async def test_readiness_times_out_one_probe_and_still_reports_all(
     assert payload["soft"]["search"]["status"] == "disabled"
 
 
+async def test_health_bounds_failing_probe_and_reports_other_results(
+    probe_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_probes(monkeypatch)
+    monkeypatch.setattr(health_mod, "_READINESS_PROBE_TIMEOUT_S", 0.01)
+
+    async def _hanging_db() -> DependencyStatus:
+        await asyncio.Event().wait()
+        return DependencyStatus(status="up")
+
+    monkeypatch.setattr(health_mod, "_probe_db", _hanging_db)
+    resp = await probe_client.get("/health")
+    assert resp.status_code == 200
+    payload = resp.json()["data"]
+    assert payload["status"] == "degraded"
+    assert payload["db"]["status"] == "error"
+    assert payload["redis"]["status"] == "up"
+    assert payload["auth"]["status"] == "up"
+
+
+async def test_probe_redis_distinguishes_missing_config_from_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_mod.redis_client, "is_enabled", lambda: False)
+    monkeypatch.setattr(health_mod.redis_client, "secondary_configured", lambda: False)
+
+    async def _no_clients() -> list[object]:
+        return []
+
+    monkeypatch.setattr(health_mod.redis_client, "all_clients", _no_clients)
+    assert (await health_mod._probe_redis()).status == "disabled"
+    monkeypatch.setattr(health_mod.redis_client, "is_enabled", lambda: True)
+    assert (await health_mod._probe_redis()).status == "error"
+
+
 async def test_probe_db_not_ready_before_schema_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

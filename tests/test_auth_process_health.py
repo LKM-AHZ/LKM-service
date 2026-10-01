@@ -101,6 +101,21 @@ async def test_readiness_redis_timeout_returns_503(auth_client, monkeypatch) -> 
     assert resp.json()["redis"]["status"] == "error"
 
 
+async def test_probe_redis_distinguishes_missing_config_from_outage(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(health_auth.redis_client, "is_enabled", lambda: False)
+    monkeypatch.setattr(health_auth.redis_client, "secondary_configured", lambda: False)
+
+    async def _no_clients() -> list[object]:
+        return []
+
+    monkeypatch.setattr(health_auth.redis_client, "all_clients", _no_clients)
+    assert (await health_auth.probe_redis()).status == "disabled"
+    monkeypatch.setattr(health_auth.redis_client, "is_enabled", lambda: True)
+    assert (await health_auth.probe_redis()).status == "error"
+
+
 async def test_probe_db_uses_auth_engine(monkeypatch) -> None:
     """probe_db 探的是 auth 独立库引擎（get_auth_engine），绝不是业务引擎。"""
     from auth.db import session as auth_session

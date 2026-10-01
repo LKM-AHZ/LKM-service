@@ -99,13 +99,13 @@ async def probe_redis() -> AuthDepStatus:
     """
     try:
         # 与 probe_db 对称：get_redis 自身的降级路径（关连接池）也可能抛，不该让探针 500
+        if not redis_client.is_enabled() and not redis_client.secondary_configured():
+            return AuthDepStatus(status="disabled", detail="redis_url 未配置")
         expected = 1 + (1 if redis_client.secondary_configured() else 0)
         clients = await redis_client.all_clients()
     except Exception as exc:
         logger.warning("auth readiness: redis 客户端获取失败", exc_info=True)
         return AuthDepStatus(status="error", detail=type(exc).__name__)
-    if not clients:
-        return AuthDepStatus(status="disabled", detail="redis_url 未配置或不可用")
     if len(clients) < expected:
         return AuthDepStatus(
             status="error", detail=f"redis 后端不可用（{len(clients)}/{expected}）"

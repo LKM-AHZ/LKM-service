@@ -16,6 +16,7 @@ from core.db.session import get_async_engine
 from core.err import respond
 from core.ports.verify_keys import refresh_verify_key, verify_key_status
 from core.pulsar_lag import probe_health as probe_pulsar_health
+from core.secrets import reveal
 
 router = APIRouter(tags=["health"])
 
@@ -138,10 +139,10 @@ async def _probe_db() -> DependencyStatus:
     """
     if not is_db_initialized():
         return DependencyStatus(status="error", detail="schema not initialized")
-    engine = get_async_engine()
-    if engine is None:
-        return DependencyStatus(status="error", detail="engine not initialized")
     try:
+        engine = get_async_engine()
+        if engine is None:
+            return DependencyStatus(status="error", detail="engine not initialized")
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return DependencyStatus(status="up")
@@ -157,10 +158,10 @@ async def _probe_redis() -> DependencyStatus:
     双后端并行时任一后端不可用都算降级——它承载的那部分域会退到 fail-open。
     ``all_clients()`` 只返回「可用」的后端，故必须与「已配置数量」比对才能发现掉线。
     """
+    if not redis_client.is_enabled() and not redis_client.secondary_configured():
+        return DependencyStatus(status="disabled", detail="redis_url 未配置")
     expected = 1 + (1 if redis_client.secondary_configured() else 0)
     clients = await redis_client.all_clients()
-    if not clients:
-        return DependencyStatus(status="disabled", detail="redis_url 未配置或不可用")
     if len(clients) < expected:
         return DependencyStatus(
             status="error", detail=f"redis 后端不可用（{len(clients)}/{expected}）"
@@ -216,24 +217,57 @@ def _build_soft_client() -> httpx.AsyncClient:
 async def _probe_search() -> DependencyStatus:
     """软依赖：检索后端（可降级，只告知不阻塞）。
 
-    - 内置 ``pg`` 检索（默认）/ 其它未接出的引擎 → ``disabled``：无外部依赖。
-    - ``opensearch`` 且配了 URL：轻量 ``GET /_cluster/health``（短超时）→ ``up``/``error``。
+    - 内置 ``pg`` 检索（默认）→ ``disabled``：无外部依赖。
+    - ``meilisearch`` / ``opensearch``：请求各自的健康端点并检查状态。
     结果**不参与** readiness 判定，异常只记日志、不冒泡。
     """
     engine = settings.search_engine
-    base = (settings.search_opensearch_url or "").strip().rstrip("/")
-    if engine != "opensearch":
+    if engine == "pg":
         return DependencyStatus(status="disabled", detail=f"search_engine={engine}")
+    base = (
+        (
+            settings.search_meili_url
+            if engine == "meilisearch"
+            else settings.search_opensearch_url
+        )
+        .strip()
+        .rstrip("/")
+    )
     if not base:
-        return DependencyStatus(status="disabled", detail="opensearch url 未配置")
+        return DependencyStatus(status="error", detail=f"{engine} url 未配置")
+    headers: dict[str, str] = {}
+    auth: tuple[str, str] | None = None
+    if engine == "meilisearch":
+        key = reveal(settings.search_meili_api_key)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        url = f"{base}/health"
+        expected_status = "available"
+    else:
+        if settings.search_opensearch_user:
+            auth = (
+                settings.search_opensearch_user,
+                reveal(settings.search_opensearch_password),
+            )
+        url = f"{base}/_cluster/health"
+        expected_status = None
     try:
         async with _build_soft_client() as client:
-            resp = await client.get(f"{base}/_cluster/health")
+            resp = await client.get(url, auth=auth, headers=headers)
     except httpx.HTTPError as exc:
         logger.warning("health probe search failed: %s", exc)
         return DependencyStatus(status="error", detail="search unreachable")
-    if resp.status_code >= 500:
-        return DependencyStatus(status="error", detail=f"search http {resp.status_code}")
+    if resp.status_code != 200:
+        return DependencyStatus(
+            status="error", detail=f"search http {resp.status_code}"
+        )
+    try:
+        payload = resp.json()
+    except ValueError:
+        return DependencyStatus(status="error", detail="search invalid response")
+    good_statuses = (expected_status,) if expected_status else ("green", "yellow")
+    if not isinstance(payload, dict) or payload.get("status") not in good_statuses:
+        return DependencyStatus(status="error", detail="search cluster unavailable")
     return DependencyStatus(status="up")
 
 
@@ -258,6 +292,10 @@ async def _probe_storage() -> DependencyStatus:
     except httpx.HTTPError as exc:
         logger.warning("health probe storage failed: %s", exc)
         return DependencyStatus(status="error", detail="storage unreachable")
+    if resp.status_code >= 500:
+        return DependencyStatus(
+            status="error", detail=f"storage http {resp.status_code}"
+        )
     return DependencyStatus(status="up", detail=f"http {resp.status_code}")
 
 
@@ -341,9 +379,11 @@ async def health_check() -> dict[str, object]:
     是 `/readiness` 的接流硬依赖。Pulsar 不可达时两者判定会不同（此处 ok / readiness 503），
     属预期分工：要判断能否接流请看 `/readiness`，不要用本端点做接流判据。
     """
-    db_status = await _probe_db()
-    redis_status = await _probe_redis()
-    auth_status = await _probe_auth()
+    db_status, redis_status, auth_status = await asyncio.gather(
+        _bounded_probe("db", _probe_db),
+        _bounded_probe("redis", _probe_redis),
+        _bounded_probe("auth", _probe_auth),
+    )
     overall = (
         "ok"
         if db_status.status == "up"

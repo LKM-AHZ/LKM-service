@@ -57,7 +57,10 @@ def _stub_hard(
 
 
 def _stub_soft(
-    monkeypatch: pytest.MonkeyPatch, *, search: str = "disabled", storage: str = "disabled"
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    search: str = "disabled",
+    storage: str = "disabled",
 ) -> None:
     def _mk(status: str):
         async def _probe() -> DependencyStatus:
@@ -112,6 +115,47 @@ class TestSoftProbes:
         status = await health_mod._probe_search()
         assert status.status == "disabled"
 
+    @pytest.mark.parametrize("engine", ["meilisearch", "opensearch"])
+    async def test_configured_search_without_url_reports_error(
+        self, monkeypatch: pytest.MonkeyPatch, engine: str
+    ) -> None:
+        monkeypatch.setattr(settings, "search_engine", engine)
+        monkeypatch.setattr(settings, "search_meili_url", "")
+        monkeypatch.setattr(settings, "search_opensearch_url", "")
+        assert (await health_mod._probe_search()).status == "error"
+
+    async def test_meilisearch_checks_health_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(settings, "search_engine", "meilisearch")
+        monkeypatch.setattr(settings, "search_meili_url", "http://meili:7700")
+        monkeypatch.setattr(settings, "search_meili_api_key", SecretStr("meili-key"))
+
+        def _healthy(req: httpx.Request) -> httpx.Response:
+            assert req.url.path == "/health"
+            assert req.headers["authorization"] == "Bearer meili-key"
+            return httpx.Response(200, json={"status": "available"})
+
+        monkeypatch.setattr(
+            health_mod,
+            "_soft_probe_factory",
+            lambda: httpx.AsyncClient(transport=httpx.MockTransport(_healthy)),
+        )
+        assert (await health_mod._probe_search()).status == "up"
+
+        monkeypatch.setattr(
+            health_mod,
+            "_soft_probe_factory",
+            lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(
+                    lambda _req: httpx.Response(500, json={"status": "mustRestart"})
+                )
+            ),
+        )
+        assert (await health_mod._probe_search()).status == "error"
+
     async def test_storage_disabled_on_local(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -119,14 +163,12 @@ class TestSoftProbes:
         status = await health_mod._probe_storage()
         assert status.status == "disabled"
 
-    async def test_search_up_and_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_search_up_and_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(settings, "search_engine", "opensearch")
         monkeypatch.setattr(settings, "search_opensearch_url", "http://os:9200")
 
         def _handler(_req: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, text="{}")
+            return httpx.Response(200, json={"status": "green"})
 
         monkeypatch.setattr(
             health_mod,
@@ -145,6 +187,48 @@ class TestSoftProbes:
         )
         assert (await health_mod._probe_search()).status == "error"
 
+    async def test_search_checks_http_and_cluster_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "search_engine", "opensearch")
+        monkeypatch.setattr(settings, "search_opensearch_url", "http://os:9200")
+        for response in (
+            httpx.Response(401),
+            httpx.Response(200, json={"status": "red"}),
+            httpx.Response(200, text="not json"),
+        ):
+            monkeypatch.setattr(
+                health_mod,
+                "_soft_probe_factory",
+                lambda response=response: httpx.AsyncClient(
+                    transport=httpx.MockTransport(lambda _req: response)
+                ),
+            )
+            assert (await health_mod._probe_search()).status == "error"
+
+    async def test_search_sends_configured_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(settings, "search_engine", "opensearch")
+        monkeypatch.setattr(settings, "search_opensearch_url", "http://os:9200")
+        monkeypatch.setattr(settings, "search_opensearch_user", "search-user")
+        monkeypatch.setattr(
+            settings, "search_opensearch_password", SecretStr("search-password")
+        )
+
+        def _handler(req: httpx.Request) -> httpx.Response:
+            assert req.headers["authorization"].startswith("Basic ")
+            return httpx.Response(200, json={"status": "yellow"})
+
+        monkeypatch.setattr(
+            health_mod,
+            "_soft_probe_factory",
+            lambda: httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+        assert (await health_mod._probe_search()).status == "up"
+
     async def test_storage_reachable_on_403(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -161,3 +245,15 @@ class TestSoftProbes:
             lambda: httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
         )
         assert (await health_mod._probe_storage()).status == "up"
+
+    async def test_storage_server_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "storage_backend", "s3")
+        monkeypatch.setattr(settings, "s3_endpoint_url", "http://minio:9000")
+        monkeypatch.setattr(
+            health_mod,
+            "_soft_probe_factory",
+            lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda _req: httpx.Response(503))
+            ),
+        )
+        assert (await health_mod._probe_storage()).status == "error"
