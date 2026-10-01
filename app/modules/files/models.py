@@ -44,13 +44,16 @@ FILES_TABLE_PLAN = {
 
 class LibraryFile(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "library_files"
+    __table_args__ = (Index("ix_library_files_sha3_hash", "sha3_hash"),)
 
-    uploader_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    uploader_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     # 内容寻址哈希（SHA3-256，16 进制 64 字符）
     sha3_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # 引用计数：同一物理文件被多少条目引用，归零时清理磁盘文件。DB 持久化，替代内存 cache。
+    # 引用计数：同一内容仍处于待审/已通过的条目数，归零时清理物理对象。
     ref_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     # 物理文件落盘路径（内容寻址：``files_store_dir/<hash[:2]>/<hash>``）。同一内容条目共享同一
     # ``storage_path``（不唯一），去重共享物理文件的关键；``stored_name`` 保持唯一作展示/定位。
@@ -80,7 +83,7 @@ class UploadSession(Base):
     后这两件事都不再依赖 Redis 存活。
 
     会话在 ``confirm_upload`` / ``notify_upload`` 认领时**删行**（等价原 ``GETDEL`` 的原子
-    消费，以 DELETE 影响行数判定归属）；未被认领的行由 ``cleanup_expired_uploads`` 按
+    消费，以 DELETE RETURNING 获取归属）；未被认领的行由 ``cleanup_expired_uploads`` 按
     ``created_at`` 判龄回收。
     """
 

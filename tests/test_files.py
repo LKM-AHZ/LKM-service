@@ -321,7 +321,11 @@ class TestFilesRoutes:
             perms.append("files.download")
         await _grant(db, "normal:member", *perms)
         return await _au(
-            auth_db, username=username, nickname=nickname, account_level="normal", role="member"
+            auth_db,
+            username=username,
+            nickname=nickname,
+            account_level="normal",
+            role="member",
         )
 
     async def _upload(
@@ -437,9 +441,7 @@ class TestFilesRoutes:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
-        uploader = await self._mk_user(
-            db, auth_db, download=True, upload=True
-        )
+        uploader = await self._mk_user(db, auth_db, download=True, upload=True)
         created = (await self._upload(client, uploader)).json()["data"]
         file_id = created["id"]
 
@@ -493,7 +495,9 @@ class TestFilesRoutes:
         store = tmp_path / "store"
         store.mkdir()
         (store / "blocked.txt").write_text("x")
-        monkeypatch.setattr(settings, "files_store_dir", str(store / "blocked.txt" / "sub"))
+        monkeypatch.setattr(
+            settings, "files_store_dir", str(store / "blocked.txt" / "sub")
+        )
 
         uploader = await _au(auth_db)
         with pytest.raises(BizError) as exc:
@@ -665,6 +669,32 @@ class TestFilesDedupAndReview:
         assert reviewed.status == "rejected"
         physical = await self._list_physical(tmp_path)
         assert physical == []
+        row = await db.get(LibraryFile, f.id)
+        assert row is not None and row.ref_count == 0
+
+    async def should_preserve_deleted_duplicate_when_rejecting_content(
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
+        uploader = await _au(auth_db)
+        deleted = await self._upload_raw(db, uploader, b"same rejected content")
+        pending = await self._upload_raw(db, uploader, b"same rejected content")
+        await delete_file(db, deleted.id, actor_id=uploader.id)
+
+        await review_file(db, pending.id, FileStatus.REJECTED, is_admin=True)
+
+        rows = (await db.execute(select(LibraryFile))).scalars().all()
+        assert {row.id: row.status for row in rows} == {
+            deleted.id: FileStatus.DELETED,
+            pending.id: FileStatus.REJECTED,
+        }
+        assert all(row.ref_count == 0 for row in rows)
+        assert await self._list_physical(tmp_path) == []
 
     async def should_reject_review_when_not_pending(
         self,
@@ -754,9 +784,7 @@ class TestFilesPhase2AEndpoints:
     async def _authed(self, db: AsyncSession, auth_db: AsyncSession) -> AuthUser:
         # 预览/下载端点需 files.download 权限点（test_columns 迁移同款做法）。
         await _grant(db, "normal:member", "files.download")
-        return await _au(
-            auth_db, username="phase2a", nickname="phase2a", role="member"
-        )
+        return await _au(auth_db, username="phase2a", nickname="phase2a", role="member")
 
     async def test_preview_returns_403_for_non_approved(
         self,
@@ -1090,7 +1118,7 @@ class TestFilesPhase2BUploadInit:
             monkeypatch.setattr(svc, "_get_storage", lambda: stor)
             uploader = await _au(auth_db)
             from app.modules.files.schemas import FileCreate
-            from auth.deps import CurrentUser
+            from core.contracts import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
             init = await upload_init(
@@ -1125,11 +1153,9 @@ class TestFilesPhase2BUploadInit:
         monkeypatch.setattr(settings, "storage_backend", "s3")
         with mock_aws():
             stor, _ = _moto_s3_storage()
-            monkeypatch.setattr(
-                "app.modules.files.service._get_storage", lambda: stor
-            )
+            monkeypatch.setattr("app.modules.files.service._get_storage", lambda: stor)
             uploader = await _au(auth_db)
-            from auth.deps import CurrentUser
+            from core.contracts import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
 
@@ -1137,6 +1163,74 @@ class TestFilesPhase2BUploadInit:
                 await confirm_upload(db, "no-such-upload", cur)
 
         assert exc.value.errcode == FileErr.UPLOAD_EXPIRED
+
+    async def test_confirm_cannot_claim_another_users_session(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ) -> None:
+        from app.modules.files.models import UploadSession
+        from core.contracts import CurrentUser
+
+        owner = await _au(auth_db, username="owner")
+        other = await _au(auth_db, username="other")
+        db.add(
+            UploadSession(
+                upload_id="owned-upload",
+                uploader_id=owner.id,
+                storage_key="up/owned-upload",
+                meta="{}",
+            )
+        )
+        await db.flush()
+
+        with pytest.raises(BizError) as exc:
+            await confirm_upload(
+                db,
+                "owned-upload",
+                CurrentUser(id=other.id, account_level="normal", role="member"),
+            )
+
+        assert exc.value.errcode == FileErr.UPLOAD_EXPIRED
+        assert await _get_session(db, "owned-upload") is not None
+
+    async def test_confirm_copy_failure_keeps_object_for_retry(
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from moto import mock_aws
+
+        import app.modules.files.service as svc
+        from core.contracts import CurrentUser
+
+        monkeypatch.setattr(settings, "storage_backend", "s3")
+        with mock_aws():
+            stor, client = _moto_s3_storage()
+            monkeypatch.setattr(svc, "_get_storage", lambda: stor)
+            uploader = await _au(auth_db)
+            cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
+            init = await upload_init(db, FileCreate.model_validate(self._body()), cur)
+            assert init.upload_id is not None
+            await db.commit()
+            key = f"up/{init.upload_id}"
+            client.put_object(Bucket="lkm", Key=f"files/{key}", Body=b"retry me")
+
+            original_copy = stor.copy
+
+            async def fail_copy(_src: str, _dest: str) -> None:
+                raise RuntimeError("copy failed")
+
+            monkeypatch.setattr(stor, "copy", fail_copy)
+            with pytest.raises(RuntimeError, match="copy failed"):
+                await confirm_upload(db, init.upload_id, cur)
+            await db.rollback()
+            assert await stor.exists(key)
+            assert await _get_session(db, init.upload_id) is not None
+
+            monkeypatch.setattr(stor, "copy", original_copy)
+            result = await confirm_upload(db, init.upload_id, cur)
+            assert result.status == FileStatus.PENDING
 
     async def test_confirm_s3_registers_pending_and_dedups(
         self,
@@ -1162,7 +1256,7 @@ class TestFilesPhase2BUploadInit:
             monkeypatch.setattr(svc, "_get_storage", lambda: stor)
             uploader = await _au(auth_db)
             from app.modules.files.schemas import FileCreate
-            from auth.deps import CurrentUser
+            from core.contracts import CurrentUser
 
             cur = CurrentUser(id=uploader.id, account_level="normal", role="member")
             init = await upload_init(

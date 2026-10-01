@@ -3,11 +3,11 @@ import hashlib
 import json
 import tempfile
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NoReturn, Protocol
+from typing import IO, Any, Literal, NoReturn, Protocol
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
@@ -32,7 +32,6 @@ from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
 from core.ports.snapshot import get_user_snapshot_batch
-from core.redis import get_redis
 from core.secrets import reveal
 from core.storage.base import StorageBackend
 from core.storage.errors import StorageErr
@@ -43,14 +42,6 @@ class _Readable(Protocol):
     """可同步分块读取的 file-like 对象最小协议。"""
 
     def read(self, size: int = -1, /) -> bytes: ...
-
-
-class _Spool(_Readable, Protocol):
-    """``_buffer_and_hash`` 返回的 spool 流：除 read 外还需能 seek 与 close（释放临时文件）。"""
-
-    def seek(self, offset: int, whence: int = 0, /) -> int: ...
-
-    def close(self) -> None: ...
 
 
 def get_files_plan() -> dict[str, Any]:
@@ -112,18 +103,23 @@ async def get_file(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
 
-    if bump_view:
-        f.view_count += 1
-        await LibraryFileRepository(db).flush()
+    view_count = (
+        await LibraryFileRepository(db).increment_view(file_id) if bump_view else None
+    )
 
     names = await _uploader_map(db, [f.uploader_id])
-    return _file_to_schema(f, names.get(f.uploader_id, ""))
+    info = _file_to_schema(f, names.get(f.uploader_id, ""))
+    return (
+        info.model_copy(update={"view_count": view_count})
+        if view_count is not None
+        else info
+    )
 
 
 _CHUNK = 1024 * 1024  # 分块读写，避免整文件载入内存
 
 
-def _buffer_and_hash(stream: _Readable, limit: int) -> tuple[int, str, _Spool]:
+def _buffer_and_hash(stream: _Readable, limit: int) -> tuple[int, str, IO[bytes]]:
     """单遍读 ``stream``：一边算 SHA3-256、一边把内容 spool 到临时文件，返回可重读流。
 
     相比原 ``io.BytesIO``（整文件驻留内存，上限=整个上传大小，大文件有 OOM 风险）
@@ -186,60 +182,6 @@ _INLINE_SAFE_TYPES: frozenset[str] = frozenset(
         "video/webm",
     }
 )
-
-
-_HASH_LOCK_TTL_SECONDS = 30
-_hash_locks_inproc: dict[str, asyncio.Lock] = {}
-# 进程内锁没有"值"的概念，用固定 token 占位，使持有者判定在两种后端下一致
-_INPROC_LOCK_TOKEN = "inproc"
-
-# 仅当值仍是自己的 token 才删除：租约 30s 到期后锁可能已被他人重获，
-# 无条件 DEL 会删掉**别人的**锁，让第三个持有者挤进临界区
-_RELEASE_LOCK_LUA = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
-end
-return 0
-"""
-
-
-async def _acquire_hash_lock(content_hash: str) -> str | None:
-    """尝试获取 content_hash 级互斥锁；拿到返回持有者 token（释放时须回传），否则 None。"""
-    redis = await get_redis(f"files:hash:{content_hash}")
-    if redis is None:
-        lock = _hash_locks_inproc.setdefault(content_hash, asyncio.Lock())
-        return _INPROC_LOCK_TOKEN if await lock.acquire() else None
-    token = uuid.uuid4().hex
-    got = await redis.set(
-        f"files:hash:{content_hash}", token, ex=_HASH_LOCK_TTL_SECONDS, nx=True
-    )
-    return token if got else None
-
-
-async def _release_hash_lock(content_hash: str, token: str) -> None:
-    redis = await get_redis(f"files:hash:{content_hash}")
-    if redis is None:
-        lock = _hash_locks_inproc.get(content_hash)
-        if lock is not None:
-            lock.release()
-        return
-    await redis.eval(_RELEASE_LOCK_LUA, 1, f"files:hash:{content_hash}", token)
-
-
-@asynccontextmanager
-async def _hash_lock(content_hash: str) -> AsyncGenerator[None]:
-    """await 获取锁，确保拿到后在退出时释放。锁等不到/Redis 异常按放行(不阻断上传/删除)。"""
-    token: str | None = None
-    try:
-        token = await _acquire_hash_lock(content_hash)
-    except Exception:
-        token = None
-    try:
-        yield
-    finally:
-        if token is not None:
-            with suppress(Exception):
-                await _release_hash_lock(content_hash, token)
 
 
 def _storage_path_for(content_hash: str) -> str:
@@ -312,24 +254,26 @@ async def create_file(
     判断同内容是否已存在（跨 Local/S3 通用）；存在则复用不重写，缺失才 ``storage.save``。
     StorageErr → FileErr 转换保证前端契约不变。ref_count 仍在 DB 聚合，供删除/清理断言。
     """
-    limit = max_bytes or settings.max_upload_bytes
+    limit = settings.max_upload_bytes if max_bytes is None else max_bytes
     # 读流 + SHA3 + 写 spool 全是同步阻塞 I/O（最大可达 max_upload_bytes），
     # 直接在事件循环里跑会把整个 worker 的其他请求一起卡住 → 丢线程池；
     # buf 只是普通文件对象，跨线程交回后调用方照常 close/读取
     total, content_hash, buf = await asyncio.to_thread(_buffer_and_hash, stream, limit)
     bucket_key = _build_bucket_key(content_hash)
 
+    repo = LibraryFileRepository(db)
+    # 事务锁覆盖物理写入和元数据登记；直到请求提交后，其他同哈希操作才可继续。
+    await repo.lock_hash(content_hash)
     saved: dict[str, object] | None = None
     try:
-        async with _hash_lock(content_hash):
-            try:
-                storage = _get_storage()
-                if not await storage.exists(bucket_key):
-                    saved = dict(
-                        await storage.save(buf, max_bytes=limit, bucket_key=bucket_key)
-                    )
-            except BizError as exc:
-                _raise_storage_as_file(exc)
+        try:
+            storage = _get_storage()
+            if not await storage.exists(bucket_key):
+                saved = dict(
+                    await storage.save(buf, max_bytes=limit, bucket_key=bucket_key)
+                )
+        except BizError as exc:
+            _raise_storage_as_file(exc)
     finally:
         # buf 是 _buffer_and_hash 的 spool 临时文件，用完即关（关闭自动删除，释放磁盘）。
         buf.close()
@@ -339,42 +283,30 @@ async def create_file(
     else:
         storage_path = _storage_path_for(content_hash)
 
-    repo = LibraryFileRepository(db)
-    try:
-        f = LibraryFile(
-            uploader_id=uploader_id,
-            original_name=info.original_name,
-            stored_name=_make_stored_name(info.original_name),
-            sha3_hash=content_hash,
-            ref_count=1,
-            storage_path=storage_path,
-            mime_type=info.mime_type,
-            size=total,
-            category_id=info.category_id,
-            description=info.description,
-            tags=json.dumps(info.tags, ensure_ascii=False),
-        )
-        await repo.add(f)
-        await repo.sync_ref_count(content_hash)
-        await repo.flush()
-    except Exception:
-        # 入库失败：仅当物理文件在本次是唯一引用（无其他条目）时才回收磁盘。
-        if await repo.count_by_hash(content_hash) <= 1:
-            with suppress(BizError, OSError):  # 尽力清理，不覆盖原始入库异常
-                await _get_storage().delete(bucket_key)
-        raise
+    f = LibraryFile(
+        uploader_id=uploader_id,
+        original_name=info.original_name,
+        stored_name=_make_stored_name(info.original_name),
+        sha3_hash=content_hash,
+        ref_count=1,
+        storage_path=storage_path,
+        mime_type=info.mime_type,
+        size=total,
+        category_id=info.category_id,
+        description=info.description,
+        tags=json.dumps(info.tags, ensure_ascii=False),
+    )
+    # 数据库失败时保留内容寻址对象供重试复用。此处可能已处于 failed transaction，
+    # 再查询引用数并删除 blob 会覆盖原异常，也可能误删其他条目仍引用的对象。
+    await repo.add(f)
+    await repo.sync_ref_count(content_hash)
 
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
 
 
 async def bump_download(db: DbSession, file_id: uuid.UUID) -> int:
-    f = await get_or_raise(
-        db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
-    )
-    f.download_count += 1
-    await LibraryFileRepository(db).flush()
-    return f.download_count
+    return await LibraryFileRepository(db).increment_download(file_id)
 
 
 async def review_file(
@@ -391,6 +323,11 @@ async def review_file(
         raise BizError(FileErr.INVALID_STATUS, detail="Invalid review status")
 
     repo = LibraryFileRepository(db)
+    f = await get_or_raise(
+        db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
+    )
+    if f.sha3_hash:
+        await repo.lock_hash(f.sha3_hash)
     f = await repo.get_locked(file_id)
     if f is None:
         raise BizError(FileErr.NOT_FOUND, detail="File not found")
@@ -403,9 +340,11 @@ async def review_file(
     if target_status == FileStatus.REJECTED and f.sha3_hash:
         # 同一物理文件被多个条目引用：一并标记 REJECTED，并删除物理文件。
         for other in await repo.list_by_hash(f.sha3_hash):
-            other.status = FileStatus.REJECTED
-            other.review_comment = other.review_comment or review_comment
+            if other.status != FileStatus.DELETED:
+                other.status = FileStatus.REJECTED
+                other.review_comment = other.review_comment or review_comment
         await repo.flush()
+        await repo.sync_ref_count(f.sha3_hash)
         # 删除物理文件（尽力而为：key 已不存在视为成功，保持原来的 missing_ok 语义）。
         bucket_key = _bucket_key_of(f)
         if bucket_key is not None:
@@ -436,25 +375,33 @@ async def delete_file(
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
+    if f.sha3_hash:
+        await repo.lock_hash(f.sha3_hash)
+    f = await repo.get_locked(file_id)
+    if f is None:
+        raise BizError(FileErr.NOT_FOUND)
     if not is_admin and f.uploader_id != actor_id:
         raise BizError(FileErr.STORE_ERROR, detail="Not the owner of this file")
+
+    if f.status == FileStatus.DELETED:
+        names = await _uploader_map(db, [f.uploader_id])
+        return _file_to_schema(f, names.get(f.uploader_id, ""))
 
     old_hash = f.sha3_hash
     f.status = FileStatus.DELETED
     await repo.flush()
 
     if old_hash:
-        async with _hash_lock(old_hash):
-            remaining = await repo.count_live_by_hash(old_hash)
-            await repo.sync_ref_count(old_hash)
-            # 加锁后仍无引用才物理删除（key 已不存在视为成功）。
-            if remaining <= 0:
-                bucket_key = _build_bucket_key(old_hash)
-                try:
-                    await _get_storage().delete(bucket_key)
-                except BizError as exc:
-                    if exc.errcode != StorageErr.NOT_FOUND:
-                        _raise_storage_as_file(exc)
+        remaining = await repo.count_live_by_hash(old_hash)
+        await repo.sync_ref_count(old_hash)
+        # 事务锁持有至 commit；此时无存活引用才删除物理对象。
+        if remaining <= 0:
+            bucket_key = _build_bucket_key(old_hash)
+            try:
+                await _get_storage().delete(bucket_key)
+            except BizError as exc:
+                if exc.errcode != StorageErr.NOT_FOUND:
+                    _raise_storage_as_file(exc)
 
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
@@ -479,8 +426,7 @@ async def download_url(
     key = _bucket_key_of(f)
     if key is None:
         raise BizError(FileErr.NOT_FOUND, detail="File has no stored content")
-    f.download_count += 1
-    await LibraryFileRepository(db).flush()
+    await LibraryFileRepository(db).increment_download(file_id)
     storage = _get_storage()
     if settings.storage_backend == "s3":
         url = storage.presign_download(key, expires=60)
@@ -544,8 +490,7 @@ async def serve_content(
     if not await _get_storage().exists(key):
         raise BizError(FileErr.NOT_FOUND, detail="Stored object not found")
     if disposition == "inline":  # 预览计次 view
-        f.view_count += 1
-        await LibraryFileRepository(db).flush()
+        await LibraryFileRepository(db).increment_view(file_id)
     return _serve(db, f, disposition)
 
 
@@ -611,8 +556,9 @@ async def _hash_from_storage(
                     detail=f"Upload exceeds {limit} byte limit",
                 )
             hasher.update(chunk)
-    except BizError:
-        await _safe_delete(storage, key)
+    except BizError as exc:
+        if exc.errcode == FileErr.TOO_LARGE:
+            await _safe_delete(storage, key)
         raise
     return total, hasher.hexdigest()
 
@@ -626,9 +572,9 @@ async def _register_from_upload(
     """把已直传的随机对象登记为 PENDING 的 LibraryFile（Phase 2-C 可复用核心）。
 
     无请求上下文的纯函数式登记：显式接收 ``uploader_id``（事件回调里没有 user 上下文），
-    后续队列 worker 可直接调用。流程：读随机 key→SHA3→copy/dedup 到内容寻址 key→删随机
-    key→建行（PENDING, uploader_id, ref_count, storage_path 按 backend 对齐 create_file）→
-    同步 ref_count。哈希/去重/拷贝逻辑与 ``confirm_upload`` 保持一致，未重写。
+    后续队列 worker 可直接调用。流程：读随机 key→SHA3→copy/dedup 到内容寻址 key→
+    建行（PENDING, uploader_id, ref_count, storage_path 按 backend 对齐 create_file）→
+    同步 ref_count→删随机 key。登记失败时保留随机对象供重试。
     """
     key = meta["key"]
     if not await storage.exists(key):
@@ -637,16 +583,11 @@ async def _register_from_upload(
         storage, key, settings.max_upload_bytes
     )
     hash_key = _build_bucket_key(content_hash)
-    # 与 delete_file 的末引用物理删除互斥，防并发删除在 copy→登记间隙清空复用对象。
-    async with _hash_lock(content_hash):
-        if not await storage.exists(hash_key):
-            try:
-                await storage.copy(key, hash_key)
-            except Exception:
-                # copy 失败：随机 up/<uid> 对象尚未删除，尽力回收，覆盖原始异常
-                await _safe_delete(storage, key)
-                raise
-        await _safe_delete(storage, key)
+    repo = LibraryFileRepository(db)
+    # 事务锁覆盖拷贝、登记及提交，防并发末引用删除清空复用对象。
+    await repo.lock_hash(content_hash)
+    if not await storage.exists(hash_key):
+        await storage.copy(key, hash_key)
     storage_path = _storage_path_for(content_hash)
     # 登记 PENDING（tags 标记里是 JSON 数组，转回 JSON 字符串存储，与 create_file 一致）
     f = LibraryFile(
@@ -665,18 +606,12 @@ async def _register_from_upload(
         else json.dumps(meta["tags"], ensure_ascii=False),
         status=FileStatus.PENDING,
     )
-    repo = LibraryFileRepository(db)
-    try:
-        await repo.add(f)
-        await repo.sync_ref_count(content_hash)
-        await repo.flush()
-    except Exception:
-        if await repo.count_by_hash(content_hash) <= 1:
-            with suppress(BizError, OSError):  # 尽力清理，不覆盖原始入库异常
-                await _get_storage().delete(hash_key)
-        raise
+    await repo.add(f)
+    await repo.sync_ref_count(content_hash)
     names = await _uploader_map(db, [uploader_id])
-    return _file_to_schema(f, names.get(uploader_id, ""))
+    result = _file_to_schema(f, names.get(uploader_id, ""))
+    await _safe_delete(storage, key)
+    return result
 
 
 async def confirm_upload(db: DbSession, upload_id: str, cur: CurrentUser) -> FileInfo:
@@ -687,7 +622,7 @@ async def confirm_upload(db: DbSession, upload_id: str, cur: CurrentUser) -> Fil
 
     薄封装：认领→解析 meta→调用 ``_register_from_upload``（登记核心已抽出复用）。
     """
-    session = await UploadSessionRepository(db).claim(upload_id)
+    session = await UploadSessionRepository(db).claim(upload_id, uploader_id=cur.id)
     if session is None:
         raise BizError(FileErr.UPLOAD_EXPIRED, detail="Upload session expired/used")
     try:
@@ -695,9 +630,7 @@ async def confirm_upload(db: DbSession, upload_id: str, cur: CurrentUser) -> Fil
     except json.JSONDecodeError:
         raise BizError(FileErr.UPLOAD_EXPIRED) from None
     storage = _get_storage()
-    return await _register_from_upload(
-        db, meta, uuid.UUID(meta["uploader_id"]), storage
-    )
+    return await _register_from_upload(db, meta, session.uploader_id, storage)
 
 
 async def _safe_delete(storage: StorageBackend, key: str) -> None:

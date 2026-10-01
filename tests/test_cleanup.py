@@ -105,3 +105,23 @@ async def test_cleanup_keeps_session_when_storage_delete_fails(
 
     assert deleted == []  # 删除失败，未计入
     assert await _remaining(db) == {"aaa"}  # 行保留待下轮
+
+
+async def test_cleanup_continues_past_failed_batch(
+    db: AsyncSession, monkeypatch: Any
+) -> None:
+    deleted: list[str] = []
+    monkeypatch.setattr(cleanup, "_CLEANUP_BATCH", 1)
+    monkeypatch.setattr(
+        cleanup, "_get_storage", lambda: _FakeStorage(deleted, fail_on={"up/aaa"})
+    )
+    monkeypatch.setattr(cleanup, "new_session", _new_session_for(db))
+    for upload_id in ("aaa", "bbb", "ccc"):
+        await _add_session(
+            db, upload_id, f"up/{upload_id}", age_seconds=_UPLOAD_TTL + 10
+        )
+
+    await cleanup.cleanup_expired_uploads()
+
+    assert deleted == ["up/bbb", "up/ccc"]
+    assert await _remaining(db) == {"aaa"}
