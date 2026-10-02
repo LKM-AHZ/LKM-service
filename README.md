@@ -143,6 +143,13 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 
 所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由鉴权依赖解析；身份/展示读经 AUTH 读缝（`app/modules/auth/snapshot.py` / `user_http.py`），业务库不直连 `users` 表。
 
+### RBAC0 角色与权限
+
+- AUTH 库的 `profiles.role` 与 `users.account_level` 派生兼容旧账号的基础角色；`user_roles` 保存附加角色。一个用户可有多个角色，角色名格式为 `等级:角色`。
+- 每次会话鉴权由 AUTH 权威数据激活当前等级下的全部已分配角色。业务库 `role_permissions` 保存角色与权限的多对多映射，授权取激活角色的权限并集；显式禁用的授权不生效，也不会被启动 seed 恢复。
+- 后台角色管理：`GET /api/v1/admin/auth/users/{user_id}/roles` 查看用户角色；`GET /api/v1/admin/auth/roles/{role_name}/users` 分页查看角色成员；`PUT` / `DELETE /api/v1/admin/auth/users/{user_id}/roles/{role_name}` 分配 / 撤销附加角色。操作要求有效管理员 cookie、1 小时内的 2FA 信任和 `admin:super_admin` 角色；变更会撤销目标用户的旧会话。
+- 生产增量迁移需同时应用业务库的 `0003_role_permissions_enabled` 与 AUTH 库的 `0002_user_roles`。
+
 > **部署要求**：S5 拆库后 `users/profiles` 只在 auth 独立库，业务库已无 `users` 表。生产必须同时配置
 > `LKM_AUTH_HTTP_URL`（compose 默认 `http://auth:8001`）与 `LKM_AUTH_HTTP_TOKEN`（backend 与 auth 两侧同值）；
 > 缺任一项 seam 关闭，`snapshot` 会回落业务库直查已迁出的 `users` 表而 `UndefinedTable`，身份展示读、

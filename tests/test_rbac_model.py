@@ -22,4 +22,5 @@ async def test_role_permission_columns(db: DB) -> None:
     got = (await db.execute(select(RolePermission))).scalars().one()
     assert got.role_name == "normal:member"
     assert got.permission == "content.create"
+    assert got.enabled is True
     assert got.id is not None

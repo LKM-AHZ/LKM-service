@@ -69,9 +69,10 @@ async def internal_authz(
     _auth: None = Depends(_require_internal_token),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, object]:
-    """auth 权威裁决：会话是否存活 + 返回当前 account_level/role。返回内部信封：
+    """auth 权威裁决：会话是否存活 + 返回当前等级和激活角色。返回内部信封：
 
-    ``{"ok": bool, "cause": str|null, "account_level": str|null, "role": str|null}``。
+    ``{"ok": bool, "cause": str|null, "account_level": str|null,
+    "role": str|null, "active_roles": list[str]}``。
     消费方（monolith deps seam）据 ok/cause 抛对应 BizError 并重建 CurrentUser。
     """
     return await authorize_user(
@@ -144,7 +145,8 @@ async def internal_verify_password(
         ok = await verifypwd(body.password, str(user.hashed_password))
     except Exception:
         logger.exception(
-            "verifypwd raised exception for user_id=%s (possible corrupted hash)", user.id
+            "verifypwd raised exception for user_id=%s (possible corrupted hash)",
+            user.id,
         )
         ok = False
     if not ok:

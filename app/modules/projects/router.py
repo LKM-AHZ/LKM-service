@@ -18,8 +18,8 @@ from app.modules.projects.service import (
     submit_application,
 )
 from app.modules.rbac.deps import RequirePermission
-from app.modules.rbac.permissions import Permission, composible_role
-from app.modules.rbac.service import role_has_permission
+from app.modules.rbac.permissions import Permission
+from app.modules.rbac.service import user_has_permission
 from core.common import ApiResp, ModuleStatus
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
@@ -85,7 +85,6 @@ async def review_app(
     _cur: Annotated[CurrentUser, require_admin_2fa],
     db: AsyncSession = Depends(get_session),
 ) -> ProjectApplicationOut:
-    role = composible_role(_cur.account_level, _cur.role)
-    if not await role_has_permission(db, role, Permission.projects_application_review):
+    if not await user_has_permission(db, _cur, Permission.projects_application_review):
         raise BizError(CommonErr.FORBIDDEN)
     return await review_application(db, app_id, _cur.id, body)

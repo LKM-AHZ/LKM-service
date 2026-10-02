@@ -227,7 +227,6 @@ def _to_fields_or_unavailable(data: Any) -> dict[str, Any]:
     return {f: data[f] for f in _SNAP_FIELDS}
 
 
-
 _AUTHZ_FIELDS: tuple[str, ...] = ("ok", "account_level", "role")
 
 
@@ -276,13 +275,19 @@ async def authorize_via_seam(
     ok = payload.get("ok")
     if not isinstance(ok, bool):
         raise UserHttpUnavailable("auth_http authz malformed ok flag")
+    active_roles = payload.get("active_roles")
+    if active_roles is not None and (
+        not isinstance(active_roles, list)
+        or any(not isinstance(role, str) for role in active_roles)
+    ):
+        raise UserHttpUnavailable("auth_http authz malformed active_roles")
     return {
         "ok": ok,
         "cause": payload.get("cause"),
         "account_level": payload.get("account_level"),
         "role": payload.get("role"),
+        "active_roles": active_roles,
     }
-
 
 
 _GRANT_FIELDS: tuple[str, ...] = ("changed",)
@@ -331,11 +336,12 @@ async def grant_via_seam(
         ) from None
 
 
-
 _VERIFY_FIELDS: tuple[str, ...] = ("ok", "user_id", "username")
 
 
-async def verify_password_via_seam(*, username: str, password: str) -> dict[str, object]:
+async def verify_password_via_seam(
+    *, username: str, password: str
+) -> dict[str, object]:
     """经 AUTH internal 端点校验 Basic 凭证，返回 ``{"ok", "user_id", "username"}``。
 
     ``ok=False``（用户不存在／无密码／口令不匹配）是**权威否答**而非故障，照常返回；
@@ -374,7 +380,6 @@ async def verify_password_via_seam(*, username: str, password: str) -> dict[str,
         "user_id": payload.get("user_id"),
         "username": payload.get("username"),
     }
-
 
 
 _BOT_TICKET_FIELDS: tuple[str, ...] = ("ticket", "expires_in")

@@ -28,8 +28,8 @@ from app.modules.content.boards.service import (
 )
 from app.modules.content.models import Board
 from app.modules.rbac.deps import RequirePermission
-from app.modules.rbac.permissions import Permission, composible_role
-from app.modules.rbac.service import check_owner, role_has_permission
+from app.modules.rbac.permissions import Permission
+from app.modules.rbac.service import check_owner, user_has_permission
 from core.common import ApiResp, ModuleStatus
 from core.contracts import CurrentUser
 from core.db.repository import VersionConflictError
@@ -95,8 +95,7 @@ async def review_app(
     _cur: Admin2FADep,
     db: AsyncSession = Depends(get_session),
 ) -> BoardApplicationOut:
-    role = composible_role(_cur.account_level, _cur.role)
-    if not await role_has_permission(db, role, Permission.boards_review_application):
+    if not await user_has_permission(db, _cur, Permission.boards_review_application):
         raise BizError(CommonErr.FORBIDDEN)
     return await review_application(db, app_id, _cur.id, body)
 

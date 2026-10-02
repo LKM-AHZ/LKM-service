@@ -17,6 +17,7 @@ from auth.errors import AuthErr
 from auth.models import User
 from auth.providers.base import EmailProvider, SmsProvider
 from auth.providers.console import ConsoleEmailProvider, ConsoleSmsProvider
+from auth.repository import UserRoleRepository
 from auth.security import decode_access_token
 from auth.service_authz import (
     CAUSE_LOCKED,
@@ -30,6 +31,7 @@ from core.config import is_test_env
 from core.db.base import now_iso
 from core.err import BizError, CommonErr
 from core.ports.authz import MFA_TRUST_SECONDS
+from core.rbac_roles import activated_roles
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ class CurrentUser(BaseModel):
     id: uuid.UUID
     account_level: str
     role: str
+    active_roles: tuple[str, ...] | None = None
     email: str | None = None
     phone: str | None = None
 
@@ -134,6 +137,11 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         id=user.id,
         account_level=str(user.account_level),
         role=role,
+        active_roles=activated_roles(
+            str(user.account_level),
+            role,
+            await UserRoleRepository(db).list_roles(user.id),
+        ),
         email=user.email,
         phone=user.phone,
     )
@@ -155,9 +163,7 @@ def _fail_current_user(cause: object | None) -> BizError:
             AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
         )
     if cause == CAUSE_PASSWORD_CHANGED:
-        return BizError(
-            AuthErr.TOKEN_EXPIRED, "Password changed – please login again"
-        )
+        return BizError(AuthErr.TOKEN_EXPIRED, "Password changed – please login again")
     if cause == CAUSE_NOT_FOUND:
         return BizError(AuthErr.USER_NOT_FOUND)
     if cause == CAUSE_NOT_ADMIN:
@@ -205,10 +211,16 @@ async def _resolve_via_seam(
 
     if not verdict.get("ok"):
         raise _fail_current_user(verdict.get("cause"))
+    active_roles = verdict.get("active_roles")
     return CurrentUser(
         id=user_id,
         account_level=str(verdict.get("account_level") or ""),
         role=str(verdict.get("role") or "member"),
+        active_roles=(
+            tuple(role for role in active_roles if isinstance(role, str))
+            if isinstance(active_roles, (list, tuple))
+            else None
+        ),
         email=None,
         phone=None,
     )
@@ -235,8 +247,6 @@ async def get_optional_user(
     except (BizError, PyJWTError) as exc:
         logger.debug("optional auth ignored: %s", exc)
         return None
-
-
 
 
 async def get_current_user_2fa(

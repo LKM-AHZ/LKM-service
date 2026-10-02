@@ -69,6 +69,7 @@ class CurrentUser(BaseModel):
     id: uuid.UUID
     account_level: str
     role: str
+    active_roles: tuple[str, ...] | None = None
     email: str | None = None
     phone: str | None = None
 

@@ -20,8 +20,9 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Update, case, func, or_, select
+from sqlalchemy import Update, case, delete, func, or_, select
 from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import selectinload
 
@@ -42,6 +43,7 @@ from auth.models import (
     TempTokenUsage,
     User,
     UserOAuth,
+    UserRole,
 )
 from auth.token_revocation import set_token_version
 from core.db.base import expires_at, now_iso
@@ -226,6 +228,39 @@ class ProfileRepository(AsyncRepository[Profile]):
 
     async def set_role(self, user_id: uuid.UUID, role: str) -> int:
         return await self.update_where({"role": role}, Profile.user_id == user_id)
+
+
+class UserRoleRepository:
+    """auth 权威的附加用户角色分配（UA）。"""
+
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
+
+    async def list_roles(self, user_id: uuid.UUID) -> list[str]:
+        return list(
+            (
+                await self.db.scalars(
+                    select(UserRole.role_name).where(UserRole.user_id == user_id)
+                )
+            ).all()
+        )
+
+    async def add(self, user_id: uuid.UUID, role_name: str) -> bool:
+        stmt = pg_insert(UserRole).values(user_id=user_id, role_name=role_name)
+        result = await self.db.execute(
+            stmt.on_conflict_do_nothing(
+                index_elements=[UserRole.user_id, UserRole.role_name]
+            )
+        )
+        return bool(getattr(result, "rowcount", 0))
+
+    async def remove(self, user_id: uuid.UUID, role_name: str) -> bool:
+        result = await self.db.execute(
+            delete(UserRole).where(
+                UserRole.user_id == user_id, UserRole.role_name == role_name
+            )
+        )
+        return bool(getattr(result, "rowcount", 0))
 
 
 class RefreshTokenRepository(AsyncRepository[RefreshToken]):
@@ -594,6 +629,7 @@ __all__ = [
     "TempTokenUsageRepository",
     "UserOAuthRepository",
     "UserRepository",
+    "UserRoleRepository",
     "VerificationRepository",
     "is_integrity_error",
     "is_operational_error",

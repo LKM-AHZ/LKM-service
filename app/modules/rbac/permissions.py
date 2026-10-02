@@ -2,11 +2,15 @@
 
 权限点命名两段式 ``域.动作``；对象级权限点加 owner 前缀。复合角色为
 ``{account_level}:{profile.role}``（见 spec §3.1）。角色→权限默认映射
-``DEFAULT_GRANTS`` 供 seed 落库；运行期以 ``role_permissions`` 表为准。
+``DEFAULT_GRANTS`` 是启动时补齐的基础授权；数据库中的额外授权会保留。
+运行期只认可 ``role_permissions.enabled`` 的授权。禁用行表示显式撤销，
+启动时的补齐不会覆盖它。用户可被分配多个角色，会话激活角色的权限取并集。
 """
 
 from enum import StrEnum
 from typing import NamedTuple
+
+from core.rbac_roles import composite_role
 
 
 class Permission(StrEnum):
@@ -76,7 +80,7 @@ class Grant(NamedTuple):
 
 def composible_role(account_level: str, role: str) -> str:
     """复合角色字符串：``{account_level}:{role}``。"""
-    return f"{account_level}:{role}"
+    return composite_role(account_level, role)
 
 
 # 各复合角色默认授予的权限点。KEY = 复合角色名。

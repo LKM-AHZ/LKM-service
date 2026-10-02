@@ -17,8 +17,8 @@ from typing import Any
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.rbac.permissions import Permission, composible_role
-from app.modules.rbac.service import role_has_permission
+from app.modules.rbac.permissions import Permission
+from app.modules.rbac.service import user_has_permission
 from core.contracts import CurrentUser
 from core.db.session import get_session
 from core.err import BizError, CommonErr
@@ -26,14 +26,13 @@ from core.ports.authz import get_current_user
 
 
 def RequirePermission(permission: Permission) -> Any:
-    """全局权限点依赖工厂：当前用户有效角色须被授予指定权限点。"""
+    """全局权限点依赖工厂：任一激活角色须被授予指定权限点。"""
 
     async def checker(
         cur: CurrentUser = Depends(get_current_user),
         db: AsyncSession = Depends(get_session),
     ) -> CurrentUser:
-        role = composible_role(cur.account_level, cur.role)
-        if not await role_has_permission(db, role, permission):
+        if not await user_has_permission(db, cur, permission):
             raise BizError(CommonErr.FORBIDDEN, f"Missing permission: {permission}")
         return cur
 

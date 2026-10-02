@@ -25,8 +25,8 @@ from app.modules.content.columns.service import (
 )
 from app.modules.content.models import Column, ColumnApplication
 from app.modules.rbac.deps import RequirePermission
-from app.modules.rbac.permissions import Permission, composible_role
-from app.modules.rbac.service import check_owner, role_has_permission
+from app.modules.rbac.permissions import Permission
+from app.modules.rbac.service import check_owner, user_has_permission
 from core.common import (
     ApiResp,
     ModuleStatus,
@@ -79,11 +79,7 @@ async def get_applications(
     db: AsyncSession = Depends(get_read_session),
     pag: PaginateParams = Depends(PaginateDep()),
 ) -> PageData[ColumnApplicationInfo]:
-    if not await role_has_permission(
-        db,
-        composible_role(cur.account_level, cur.role),
-        Permission.columns_application_review,
-    ):
+    if not await user_has_permission(db, cur, Permission.columns_application_review):
         raise BizError(CommonErr.FORBIDDEN)
     return await list_applications(db, page=pag.page, limit=pag.limit)
 
@@ -120,11 +116,7 @@ async def review_column_application(
     cur: CurrentUser = require_admin_2fa,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    if not await role_has_permission(
-        db,
-        composible_role(cur.account_level, cur.role),
-        Permission.columns_application_review,
-    ):
+    if not await user_has_permission(db, cur, Permission.columns_application_review):
         raise BizError(CommonErr.FORBIDDEN)
     # 职责分离：审核人不得是申请人本人。当前只有 super_admin 持审核点，属预防性护栏——
     # 将来若拆出「既可申请又可审核」的角色，没有这道检查就能自审自过。

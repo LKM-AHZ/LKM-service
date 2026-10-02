@@ -24,9 +24,11 @@ from auth.repository import (
     ProfileRepository,
     RevokedAccessTokenRepository,
     UserRepository,
+    UserRoleRepository,
 )
 from core.db.base import now_iso
 from core.db.repository import DbSession
+from core.rbac_roles import activated_roles
 
 _LEVEL_RANK = {"local": 0, "normal": 1, "admin": 2}
 # 考试 unlock_role 的取值域只有 columnist/author（见 exam/seed），管理侧与培育侧角色
@@ -70,8 +72,8 @@ async def authorize_user(
     这是 monolith ``get_current_user``/``get_current_admin`` 在 seam 开启时委托的权限真值
     判定：查 User+Profile 做——存在性 / 是否锁定 / token_version 是否被提升 / updated_at 是否晚于
     签发的 iat（改密撤销）——并返回 auth 侧的【权威 account_level + role】与是否 admin 达标。
-    返回 ``{ok, cause, account_level, role}``：
-      ok=True  → 用户存活且（require_admin 时）已是 admin；account_level/role 用库内权威值。
+    返回 ``{ok, cause, account_level, role, active_roles}``：
+      ok=True  → 用户存活且（require_admin 时）已是 admin；角色集合从 auth 库实时计算。
       ok=False → cause 给出拒绝原因（not_found/locked/session_revoked/password_changed/not_admin）。
     只读判定（不落库改动、不发事件）；调用方（内部端点）负责 commit/close。
     """
@@ -135,6 +137,9 @@ async def authorize_user(
         "cause": None,
         "account_level": account_level,
         "role": role,
+        "active_roles": activated_roles(
+            account_level, role, await UserRoleRepository(db).list_roles(user_id)
+        ),
     }
 
 
@@ -249,8 +254,6 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
         await events.notify_audit_permission_change(user_id, "grant_incubation")
         return 1
     return 0
-
-
 
 
 async def grant_incubation_from_business(db: DbSession, user_id: uuid.UUID) -> int:

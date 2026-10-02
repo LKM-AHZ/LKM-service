@@ -32,8 +32,8 @@ from app.modules.files.service import (
 )
 from app.modules.files.wire import to_wire
 from app.modules.rbac.deps import RequirePermission
-from app.modules.rbac.permissions import Permission, composible_role
-from app.modules.rbac.service import check_owner, role_has_permission
+from app.modules.rbac.permissions import Permission
+from app.modules.rbac.service import check_owner, user_has_permission
 from core.common import (
     ApiResp,
     ModuleStatus,
@@ -170,8 +170,7 @@ async def review_uploaded_file(
     被授给非管理角色时"仅凭权限点即越权审核/删文件"。通过后 service 层仍走
     is_admin=True 跳过 account_level==admin 门槛（权限点已代管）。
     """
-    role = composible_role(_cur.account_level, _cur.role)
-    if not await role_has_permission(db, role, Permission.files_review):
+    if not await user_has_permission(db, _cur, Permission.files_review):
         raise BizError(CommonErr.FORBIDDEN)
     return await review_file(
         db,

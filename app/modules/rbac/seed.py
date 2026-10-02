@@ -28,7 +28,7 @@ def _rows() -> list[dict[str, str]]:
 
 
 async def seed_rbac(db: AsyncSession) -> int:
-    """对账写入各复合角色默认权限；返回实际新增行数。
+    """补齐各复合角色默认权限；保留额外授权和显式禁用的默认授权。
 
     并发/重复执行安全：用 ``INSERT ... ON CONFLICT DO NOTHING`` 交由数据库按
     ``(role_name, permission)`` 唯一约束去重，避免 SELECT-再-INSERT 的竞态窗口
@@ -37,21 +37,11 @@ async def seed_rbac(db: AsyncSession) -> int:
     新增行数取语句自身的 rowcount：原先用插入前后整表 COUNT 差值，会把并发 worker
     同时插入/删除的行算进来，日志里的「实际新增」可以偏大、偏小甚至为负。
     """
-    from sqlalchemy import delete as sa_delete
     from sqlalchemy.dialects.postgresql import insert as impl_insert
 
     rows = _rows()
     if not rows:
         return 0
-
-    for role_name, grants in DEFAULT_GRANTS.items():
-        allowed = [g.permission.value for g in grants]
-        await db.execute(
-            sa_delete(RolePermission).where(
-                RolePermission.role_name == role_name,
-                RolePermission.permission.notin_(allowed),
-            )
-        )
 
     # PostgreSQL ON CONFLICT：显式冲突目标（role+permission 唯一约束）防重复插入 → 幂等。
     stmt = impl_insert(RolePermission).values(rows)

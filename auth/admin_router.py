@@ -23,7 +23,7 @@ import uuid
 from typing import Any
 
 import jwt
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -46,6 +46,7 @@ from auth.schemas import Password
 from auth.security import dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
 from auth.service_auth import generate_refresh_token, hash_refresh_token
+from auth.service_roles import list_user_roles, list_users_for_role, set_user_role
 from auth.service_verify import check_code_rate_limit
 from auth.token_revocation import block_payload_jti, is_jti_blocked
 from core.client_ip import client_ip
@@ -57,6 +58,59 @@ from core.err import BizError, CommonErr, resp_json
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
 
 
+async def _require_role_manager(request: Request, db: AsyncSession) -> User:
+    actor = await _require_admin_from_cookie(request, db)
+    if not _current_mfa_trust(request)[0]:
+        raise BizError(CommonErr.MFA_REQUIRED)
+    if "admin:super_admin" not in await list_user_roles(db, actor.id):
+        raise BizError(CommonErr.FORBIDDEN)
+    return actor
+
+
+@router.get("/users/{user_id}/roles")
+async def read_user_roles(
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, list[str]]:
+    await _require_role_manager(request, db)
+    return {"roles": list(await list_user_roles(db, user_id))}
+
+
+@router.get("/roles/{role_name}/users")
+async def read_role_users(
+    role_name: str,
+    request: Request,
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, list[uuid.UUID]]:
+    await _require_role_manager(request, db)
+    return {
+        "user_ids": await list_users_for_role(db, role_name, limit=limit, offset=offset)
+    }
+
+
+@router.put("/users/{user_id}/roles/{role_name}")
+async def assign_user_role(
+    user_id: uuid.UUID,
+    role_name: str,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, bool]:
+    await _require_role_manager(request, db)
+    return {"changed": await set_user_role(db, user_id, role_name, assigned=True)}
+
+
+@router.delete("/users/{user_id}/roles/{role_name}")
+async def revoke_user_role(
+    user_id: uuid.UUID,
+    role_name: str,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, bool]:
+    await _require_role_manager(request, db)
+    return {"changed": await set_user_role(db, user_id, role_name, assigned=False)}
 
 
 class _AdminLoginReq(BaseModel):
@@ -141,6 +195,7 @@ def _admin_user_dict(user: User) -> dict[str, Any]:
 
 
 # -- 2FA step-up 需先确认当前会话是合法 admin（复用 admin_session 基元，本地裁决于 auth 库）--
+
 
 async def _revoke_jti_persistently(db: AsyncSession, payload: dict[str, Any]) -> None:
     """把 jti 落 DB 撤销表（Redis 预检之外的**权威**面）。

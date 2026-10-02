@@ -2,7 +2,7 @@
 
 from app.modules.admin.models import RolePermission
 from app.modules.rbac.permissions import Permission
-from app.modules.rbac.service import role_has_permission
+from app.modules.rbac.service import role_has_permission, set_role_permission
 from tests.conftest import DB
 
 
@@ -21,3 +21,15 @@ async def test_role_has_granted(db: DB) -> None:
 
 async def test_role_missing_row(db: DB) -> None:
     assert not await role_has_permission(db, "normal:member", Permission.files_review)
+
+
+async def test_permission_can_be_revoked_and_restored(db: DB) -> None:
+    role = "normal:member"
+    permission = Permission.content_create
+    await seed_permission(db, role, permission.value)
+
+    assert await set_role_permission(db, role, permission, enabled=False)
+    assert not await role_has_permission(db, role, permission)
+    assert not await set_role_permission(db, role, permission, enabled=False)
+    assert await set_role_permission(db, role, permission, enabled=True)
+    assert await role_has_permission(db, role, permission)

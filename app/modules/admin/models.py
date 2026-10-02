@@ -50,13 +50,16 @@ class Report(UUIDPrimaryKeyMixin, Base):
 
 
 class RolePermission(UUIDPrimaryKeyMixin, Base):
-    """RBAC：复合角色→权限点 映射。角色即 ``{account_level}:{profile.role}``。"""
+    """RBAC：复合角色→权限点映射；禁用行保留显式撤销状态。"""
 
     __tablename__ = "role_permissions"
     __table_args__ = (UniqueConstraint("role_name", "permission"),)
 
     role_name: Mapped[str] = mapped_column(String(40), nullable=False)
     permission: Mapped[str] = mapped_column(String(80), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )

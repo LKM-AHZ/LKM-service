@@ -428,3 +428,18 @@ class Profile(AuthBase):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="profile")
+
+
+class UserRole(AuthBase):
+    """附加用户角色（UA）；基础角色由 users.account_level + profiles.role 派生。"""
+
+    __tablename__ = "user_roles"
+    __table_args__ = (Index("ix_user_roles_role_name_user_id", "role_name", "user_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )

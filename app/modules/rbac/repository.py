@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.modules.admin.models import RolePermission
 from core.db.repository import AsyncRepository, DbSession
@@ -20,11 +21,39 @@ class RolePermissionRepository(AsyncRepository[RolePermission]):
     model = RolePermission
 
     async def has_permission(self, role_name: str, permission: str) -> bool:
-        """该角色是否被授予指定权限点。"""
+        """该角色是否有当前启用的授权。"""
         return await self.exists(
             RolePermission.role_name == role_name,
             RolePermission.permission == permission,
+            RolePermission.enabled.is_(True),
         )
+
+    async def has_any_permission(
+        self, role_names: tuple[str, ...], permission: str
+    ) -> bool:
+        """一次查询判定激活角色的权限并集。"""
+        if not role_names:
+            return False
+        return await self.exists(
+            RolePermission.role_name.in_(role_names),
+            RolePermission.permission == permission,
+            RolePermission.enabled.is_(True),
+        )
+
+    async def set_permission(
+        self, role_name: str, permission: str, *, enabled: bool
+    ) -> bool:
+        """原子设置授权状态；返回数据库状态是否实际变化。"""
+        stmt = pg_insert(RolePermission).values(
+            role_name=role_name, permission=permission, enabled=enabled
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[RolePermission.role_name, RolePermission.permission],
+            set_={"enabled": enabled},
+            where=RolePermission.enabled.is_distinct_from(enabled),
+        )
+        result = await self.db.execute(stmt)
+        return bool(getattr(result, "rowcount", 0))
 
 
 class ResourceRepository:
