@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from httpx import ASGITransport, AsyncClient
 
 from core import middleware
@@ -90,8 +91,56 @@ async def test_security_headers_applied_on_rejected_host(sec_env, monkeypatch) -
     async with _client(app, base_url="http://evil.example") as c:
         resp = await c.get("/ping")
     assert resp.status_code == 400
+    assert resp.headers["X-Request-ID"]
     for name, value in _SECURITY_HEADERS.items():
         assert resp.headers[name] == value
+
+
+async def test_unhandled_error_keeps_request_id_and_security_headers(sec_env) -> None:
+    app = FastAPI()
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("unexpected")
+
+    install_security_middleware(app)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as c:
+        resp = await c.get("/boom", headers={"X-Request-ID": "trace-123"})
+
+    assert resp.status_code == 500
+    assert resp.headers["X-Request-ID"] == "trace-123"
+    assert resp.json()["request_id"] == "trace-123"
+    for name, value in _SECURITY_HEADERS.items():
+        assert resp.headers[name] == value
+
+
+async def test_route_cannot_override_request_id(sec_env) -> None:
+    app = FastAPI()
+
+    @app.get("/spoof")
+    async def spoof() -> PlainTextResponse:
+        return PlainTextResponse("ok", headers={"X-Request-ID": "spoofed"})
+
+    install_security_middleware(app)
+    async with _client(app) as c:
+        resp = await c.get("/spoof", headers={"X-Request-ID": "trace-123"})
+    assert resp.headers.get_list("X-Request-ID") == ["trace-123"]
+
+
+async def test_ambiguous_or_unsafe_request_id_is_replaced(sec_env) -> None:
+    app = _make_app()
+    async with _client(app) as c:
+        duplicate = await c.get(
+            "/ping",
+            headers=[("X-Request-ID", "first"), ("X-Request-ID", "second")],
+        )
+        unsafe = await c.get("/ping", headers={"X-Request-ID": "has spaces"})
+    for resp in (duplicate, unsafe):
+        assert len(resp.headers["X-Request-ID"]) == 32
+        assert resp.headers["X-Request-ID"].isalnum()
 
 
 # ── TrustedHost ────────────────────────────────────────────────────────────
@@ -258,9 +307,7 @@ def test_monolith_and_auth_apps_install_security_middleware() -> None:
     for application in (app.main.app, auth.main.app):
         installed = {cls for cls, _args, _kw in application.user_middleware}
         assert required <= installed
-        assert (middleware.CORSMiddleware in installed) is (
-            not settings.is_production
-        )
+        assert (middleware.CORSMiddleware in installed) is (not settings.is_production)
 
 
 async def test_monolith_exposes_probe_endpoints(sec_env) -> None:

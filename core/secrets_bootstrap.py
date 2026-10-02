@@ -171,11 +171,24 @@ def bootstrap(
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """拉取密钥后以当前环境替换进程，避免子进程注入丢失。"""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    return bootstrap()
+    command = sys.argv[1:] if argv is None else argv
+    if not command:
+        logger.error("secrets bootstrap: no command supplied")
+        return 1
+    result = bootstrap()
+    if result:
+        return result
+    try:
+        os.execvpe(command[0], command, os.environ)
+    except OSError as exc:
+        logger.error("secrets bootstrap: command failed: %s", exc)
+        return 127
+    return 0
 
 
 if __name__ == "__main__":

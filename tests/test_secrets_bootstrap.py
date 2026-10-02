@@ -7,10 +7,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from core import secrets_bootstrap
 from core.secrets_bootstrap import bootstrap
 
 _BASE_ENV: dict[str, str] = {
@@ -152,3 +157,53 @@ def test_unreadable_path_fails_when_required(tmp_path: Any) -> None:
         raise AssertionError("配置错不该触网")
 
     assert bootstrap(env, client_factory=_boom) == 1
+
+
+def test_main_execs_command_with_injected_environment(monkeypatch: Any) -> None:
+    seen: dict[str, Any] = {}
+    for key, value in _BASE_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("LKM_TOTP_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(secrets_bootstrap, "_default_client_factory", _factory(_ok_handler))
+
+    def _exec(file: str, argv: list[str], env: dict[str, str]) -> None:
+        seen.update(file=file, argv=argv, secret=env["LKM_TOTP_ENCRYPTION_KEY"])
+
+    monkeypatch.setattr(secrets_bootstrap.os, "execvpe", _exec)
+
+    assert secrets_bootstrap.main(["python", "-m", "auth.main"]) == 0
+    assert seen == {
+        "file": "python",
+        "argv": ["python", "-m", "auth.main"],
+        "secret": "real-totp",
+    }
+
+
+def test_main_does_not_start_command_after_required_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(secrets_bootstrap, "bootstrap", lambda: 1)
+    monkeypatch.setattr(
+        secrets_bootstrap.os,
+        "execvpe",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not exec")),
+    )
+    assert secrets_bootstrap.main(["python", "-m", "auth.main"]) == 1
+
+
+def test_entrypoint_starts_command_through_bootstrap() -> None:
+    service_root = Path(__file__).resolve().parents[1]
+    entrypoint = service_root / "deploy" / "docker-entrypoint.sh"
+    env = dict(
+        os.environ,
+        LKM_INFISICAL_ENABLED="false",
+        PATH=f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+    )
+    result = subprocess.run(
+        ["sh", str(entrypoint), sys.executable, "-c", "print('service-started')"],
+        cwd=service_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "service-started"

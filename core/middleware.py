@@ -31,7 +31,7 @@ _MAX_AGE_S = 3600
 
 _HSTS_VALUE = "max-age=31536000; includeSubDomains"
 
-# 入站 X-Request-ID 的采纳上限：超长会撑爆日志/响应头（h11 对头部字节数有限制）。
+# 入站 X-Request-ID 仅采纳单个安全字符集内的短值，避免歧义和日志/响应头膨胀。
 _MAX_REQUEST_ID_LEN = 128
 
 
@@ -48,24 +48,36 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        candidate = Headers(scope=scope).get("X-Request-ID") or ""
+        candidates = Headers(scope=scope).getlist("X-Request-ID")
+        candidate = candidates[0] if len(candidates) == 1 else ""
         request_id = (
             candidate
             if candidate
             and candidate.isascii()
-            and candidate.isprintable()
             and len(candidate) <= _MAX_REQUEST_ID_LEN
+            and all(c.isalnum() or c in "-_.:" for c in candidate)
             else uuid.uuid4().hex
         )
         token = set_request_id(request_id)
+        response_started = False
 
         async def _send_with_id(message: Message) -> None:
+            nonlocal response_started
             if message["type"] == "http.response.start":
-                MutableHeaders(scope=message).setdefault("X-Request-ID", request_id)
+                response_started = True
+                # 以中间件生成/采纳的 ID 为准，避免路由头与信封、日志出现不同值。
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
             await send(message)
 
         try:
             await self.app(scope, receive, _send_with_id)
+        except Exception:
+            if response_started:
+                raise
+            # FastAPI 的 ServerErrorMiddleware 位于用户中间件之外；若交由它
+            # 生成 500，请求 ID 的 ContextVar 已复位，响应头和信封都会丢失。
+            logger.exception("Unhandled HTTP request")
+            await resp_json(CommonErr.INTERNAL_ERROR)(scope, receive, _send_with_id)
         finally:
             reset_request_id(token)
 
@@ -201,9 +213,10 @@ def install_security_middleware(application: FastAPI) -> None:
             expose_headers=_EXPOSE_HEADERS,
             max_age=_MAX_AGE_S,
         )
-    # 安全头先加 → 外层：TrustedHost/CORS 的拒答也带安全头
-    application.add_middleware(SecurityHeadersMiddleware, hsts=settings.is_production)
+    # RequestId 外包 TrustedHost/CORS，让拒答也带同一个请求 ID。
     application.add_middleware(RequestIdMiddleware)
+    # 安全头最外层：RequestId 兜底的 500 和 TrustedHost/CORS 的拒答均覆盖。
+    application.add_middleware(SecurityHeadersMiddleware, hsts=settings.is_production)
 
 
 __all__: list[str] = [
