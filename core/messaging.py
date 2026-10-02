@@ -97,6 +97,8 @@ def _validate_namespace_isolation() -> None:
             )
     for sub in SUBSCRIPTIONS.values():
         sub_ns = namespace_of(sub.topic)
+        if sub_ns not in NAMESPACES:
+            raise ValueError(f"订阅 {sub.name!r} 使用未知命名空间 {sub_ns!r}")
         for routing_key in sub.routing_keys:
             topic = ROUTING_KEY_TOPICS.get(routing_key)
             if topic is None:
@@ -107,6 +109,11 @@ def _validate_namespace_isolation() -> None:
                 raise ValueError(
                     f"订阅 {sub.name!r} 跨命名空间：{routing_key!r} → {topic}"
                     f"（订阅 topic 在 {sub_ns!r}）"
+                )
+            if topic != sub.topic:
+                raise ValueError(
+                    f"订阅 {sub.name!r} topic 不匹配：{routing_key!r} → {topic}"
+                    f"（订阅 topic 为 {sub.topic}）"
                 )
 
 
@@ -232,6 +239,7 @@ TOPIC_SCHEMAS: dict[str, dict[str, Any]] = {
     TOPIC_AUDIT_PERMISSION_CHANGE: EVENT_SCHEMA,
     TOPIC_NOTIFY: EVENT_SCHEMA,
     TOPIC_POINTS: EVENT_SCHEMA,
+    TOPIC_CONTENT: EVENT_SCHEMA,
     TOPIC_CRON: EVENT_SCHEMA,
     TOPIC_DLQ: EVENT_SCHEMA,
 }
@@ -339,6 +347,10 @@ class MessageMeta:
 
 # 消费回调类型：async 函数，返回 coroutine（供 run_coroutine_threadsafe 调度）。
 MessageHandler = Callable[[dict[str, Any], MessageMeta], Coroutine[Any, Any, None]]
+
+# DLQ 无二次死信策略；无法解成对象的原始消息用 base64 包装后交给 DLQ handler
+# 持久化，避免在源订阅直接 ack 丢弃，或在 DLQ 上无限负确认。
+RAW_MESSAGE_KEY = "_raw_message_base64"
 
 
 class Transport(Protocol):
@@ -512,18 +524,29 @@ def _handle_message(
 ) -> None:
     """
     处理一条消息：解析 → 桥回主循环执行 async handler → ack / negative_ack。
-    非法 JSON 直接 ack 丢弃（避免死信风暴）；handler 异常/超时 → 负确认，累计重投超限后
-    由 Pulsar 投死信 topic。注意超时后协程可能仍在执行，副作用靠 handler 自身幂等兜底。
+    非法 envelope 在源订阅负确认并最终进入死信；DLQ 将原始字节包装为 base64 交给
+    持久化 handler。handler 异常/超时也负确认。注意超时后协程可能仍在执行，副作用靠
+    handler 自身幂等兜底。
     """
     try:
-        payload = json.loads(msg.data())
+        raw = msg.data()
+    except Exception:
+        logger.exception("读取消息失败 subscription=%s", sub_name)
+        with suppress(Exception):
+            consumer.negative_acknowledge(msg)
+        return
+    try:
+        payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("payload 非 JSON 对象")
-    except Exception:
-        logger.warning("非法消息丢弃 subscription=%s body=%r", sub_name, msg.data())
-        with suppress(Exception):
-            consumer.acknowledge(msg)
-        return
+    except (TypeError, ValueError):
+        if sub_name != SUB_DLQ.name:
+            logger.warning("非法消息转死信 subscription=%s bytes=%s", sub_name, len(raw))
+            with suppress(Exception):
+                consumer.negative_acknowledge(msg)
+            return
+        logger.warning("死信消息无法解码，保存原始字节 bytes=%s", len(raw))
+        payload = {RAW_MESSAGE_KEY: base64.b64encode(raw).decode("ascii")}
 
     try:
         properties = dict(msg.properties() or {})

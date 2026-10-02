@@ -123,7 +123,11 @@ async def _on_dlq(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
         routing_key=meta.properties.get("routing_key", ""),
         payload=payload,
         attempts=meta.redelivery_count,
-        reason="dead-lettered",
+        reason=(
+            "invalid envelope"
+            if messaging.RAW_MESSAGE_KEY in payload
+            else "dead-lettered"
+        ),
         status="pending",
         topic=meta.topic,
         source_message_id=meta.message_id,

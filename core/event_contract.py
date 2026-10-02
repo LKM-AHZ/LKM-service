@@ -9,7 +9,8 @@
 2. **发布期**（``messaging.publish``，全仓唯一咽喉）：违约 → ERROR 日志 + 违约指标 + 返回
    False；``messaging.permanent_failure_reason`` 同步把违约判为**永久失败**，使 relay 把它
    折叠进 ``event_failures``（可人工重放）而不是重试 5 次再丢。
-3. **消费期**（``worker._on_payload``）：违约消息 ack 丢弃并计违约指标（确定性坏消息重投无益）。
+3. **消费期**（``worker._on_payload``）：违约消息计指标并负确认，重投超限后进入死信，
+   供人工修正重投。
 **参数类型按「线上 JSON 形态」声明**，不按 Python 标注：``uuid.UUID`` 过 JSON 后是 str，
 ``datetime`` 同理；handler 上的类型标注表达的是意图（且本仓并不一致），不能当契约。
 """

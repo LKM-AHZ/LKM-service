@@ -1,16 +1,18 @@
 """M4 消息总线抽象测试：映射表、transport 发布、fail-open、JSON schema（无需真实 broker）。"""
 
+import asyncio
 import json
 import logging
 import sys
 import threading
 import types
 from collections.abc import Iterator
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from prometheus_client import REGISTRY
 
-from core import messaging
+from core import messaging, worker_dlq
 from tests.fakes import InMemoryTransport
 
 
@@ -51,6 +53,7 @@ def test_event_schema_is_avro_record_form() -> None:
     assert messaging.EVENT_SCHEMA["fields"], "record 形式必须声明 fields"
     for topic, schema in messaging.TOPIC_SCHEMAS.items():
         assert schema["type"] == "record", topic
+    assert set(messaging.ROUTING_KEY_TOPICS.values()) <= set(messaging.TOPIC_SCHEMAS)
 
 
 def test_receive_loop_retries_when_consumer_creation_fails(
@@ -194,12 +197,20 @@ async def test_publish_uses_pulsar_producer(
         sent.append(("topic", topic))
         return _FakeProducer()
 
+    async def _inline_to_thread(fn, *args, **kwargs):
+        sent.append(("thread", fn.__name__))
+        return fn(*args, **kwargs)
+
     monkeypatch.setattr(messaging, "_get_producer", _fake_get_producer)
+    # Keep this transport unit test independent of executor shutdown while
+    # still asserting that publish crosses the to_thread boundary.
+    monkeypatch.setattr(messaging.asyncio, "to_thread", _inline_to_thread)
     payload = {"fn": "send_code", "args": ["email", "a@b.c", "1234"]}
     ok = await messaging.publish(messaging.RKEY_SEND_CODE, payload)
     assert ok is True
     assert sent[0] == ("topic", messaging.TOPIC_EMAIL)
-    _, content, properties = sent[1]
+    assert sent[1] == ("thread", "send")
+    _, content, properties = sent[2]
     assert properties["routing_key"] == messaging.RKEY_SEND_CODE
     assert properties["fn"] == "send_code"
     assert content == payload
@@ -335,6 +346,66 @@ def test_namespace_isolation_validation_rejects_cross_namespace() -> None:
             messaging._validate_namespace_isolation()
     finally:
         del messaging.SUBSCRIPTIONS[bogus.name]
+
+
+def test_subscription_validation_rejects_wrong_topic_in_same_namespace() -> None:
+    bogus = messaging.Subscription(
+        "bogus", messaging.TOPIC_USER_EVENTS, (messaging.RKEY_AUDIT_LOGIN_FAIL,)
+    )
+    messaging.SUBSCRIPTIONS[bogus.name] = bogus
+    try:
+        with pytest.raises(ValueError, match="topic 不匹配"):
+            messaging._validate_namespace_isolation()
+    finally:
+        del messaging.SUBSCRIPTIONS[bogus.name]
+
+
+def test_invalid_envelope_is_negative_acked_for_dead_letter() -> None:
+    consumer = Mock()
+    msg = Mock()
+    msg.data.return_value = b"not-json"
+
+    messaging._handle_message(
+        consumer, msg, AsyncMock(), None, messaging.SUB_NOTIFY.name
+    )
+
+    consumer.negative_acknowledge.assert_called_once_with(msg)
+    consumer.acknowledge.assert_not_called()
+
+
+def test_dlq_persists_invalid_envelope_as_base64(monkeypatch) -> None:
+    consumer = Mock()
+    msg = Mock()
+    msg.data.return_value = b"not-json"
+    msg.properties.return_value = {"routing_key": messaging.RKEY_NOTIFY}
+    msg.redelivery_count.return_value = 3
+    msg.message_id.side_effect = ValueError("missing message id")
+    persist = AsyncMock()
+    monkeypatch.setattr(worker_dlq, "_persist", persist)
+
+    def run_handler(coro, _loop):
+        asyncio.run(coro)
+        future = Mock()
+        future.result.return_value = None
+        return future
+
+    monkeypatch.setattr(messaging.asyncio, "run_coroutine_threadsafe", run_handler)
+
+    messaging._handle_message(
+        consumer,
+        msg,
+        worker_dlq._on_dlq,
+        None,
+        messaging.SUB_DLQ.name,
+    )
+
+    consumer.acknowledge.assert_called_once_with(msg)
+    consumer.negative_acknowledge.assert_not_called()
+    saved = persist.await_args.args[0]
+    assert saved.reason == "invalid envelope"
+    assert saved.payload_json == {
+        "payload": {messaging.RAW_MESSAGE_KEY: "bm90LWpzb24="}
+    }
 
 
 def test_namespace_of_rejects_malformed_topic() -> None:
