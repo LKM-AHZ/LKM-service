@@ -92,10 +92,11 @@ async def store_refresh_token(
     mfa_verified: bool = False,
     mfa_at: datetime.datetime | None = None,
     active_roles: tuple[str, ...] | None = None,
+    session_expires_at: datetime.datetime | None = None,
 ) -> datetime.datetime:
     """持久化哈希后的刷新令牌并返回其过期时间（timezone-aware datetime）。"""
     days = settings.refresh_token_expire_days
-    expires_str = expires_at(days=days)
+    expires_str = session_expires_at or expires_at(days=days)
     await RefreshTokenRepository(db).create(
         user_id=user_id,
         token_hash=hash_refresh_token(raw),
@@ -115,6 +116,7 @@ async def issue_session_tokens(
     mfa_verified: bool = False,
     mfa_at: datetime.datetime | None = None,
     active_roles: tuple[str, ...] | None = None,
+    session_expires_at: datetime.datetime | None = None,
 ) -> tuple[str, str]:
     """发放访问令牌 + 刷新令牌，返回 (access_token, raw_refresh)。
 
@@ -148,6 +150,9 @@ async def issue_session_tokens(
         mfa_verified=mfa_verified,
         mfa_at=int(verified_at.timestamp()) if mfa_verified else None,
         active_roles=active_roles,
+        session_expires_at=int(session_expires_at.timestamp())
+        if session_expires_at is not None
+        else None,
     )
     raw_refresh = generate_refresh_token()
     await store_refresh_token(
@@ -157,6 +162,7 @@ async def issue_session_tokens(
         mfa_verified=mfa_verified,
         mfa_at=verified_at if mfa_verified else None,
         active_roles=active_roles,
+        session_expires_at=session_expires_at,
     )
     return access_token, raw_refresh
 
@@ -678,6 +684,8 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
     user = await UserRepository(db).get_with_profile_or_raise(
         stored.user_id, AuthErr.USER_NOT_FOUND
     )
+    if user.is_locked and user.locked_until and user.locked_until > now:
+        raise BizError(AuthErr.ACCOUNT_LOCKED)
 
     try:
         selected_roles = session_roles_claim(stored.active_roles)
@@ -686,9 +694,10 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
     access_token, raw_new = await issue_session_tokens(
         db,
         user,
-        mfa_verified=stored.mfa_verified,
+        mfa_verified=bool(stored.mfa_verified and stored.mfa_at),
         mfa_at=stored.mfa_at,
         active_roles=selected_roles,
+        session_expires_at=stored.expires_at,
     )
     return {"access_token": access_token, "refresh_token": raw_new}
 

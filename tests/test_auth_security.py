@@ -4,9 +4,12 @@ import uuid
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import ValidationError
 
 from auth import jwt_keys
+from auth.schemas import UserLoginPassword, UserRegLocal
 from auth.security import (
+    PASSWORD_MAX_LENGTH,
     create_access_token,
     create_temp_token,
     decode_access_token,
@@ -25,6 +28,26 @@ from auth.security import (
 # ---------------------------------------------------------------------------
 # JWT – access token
 # ---------------------------------------------------------------------------
+
+
+class TestPasswordBounds:
+    async def should_reject_oversized_password_before_hashing(self):
+        oversized = "x" * (PASSWORD_MAX_LENGTH + 1)
+        with pytest.raises(ValidationError):
+            UserRegLocal(username="alice", password=oversized)
+        with pytest.raises(ValidationError):
+            UserLoginPassword(account="alice", password=oversized)
+        with pytest.raises(ValueError):
+            await hashpwd(oversized)
+        assert not await verifypwd(oversized, "invalid-hash")
+
+    async def should_still_verify_legacy_short_password(self, monkeypatch):
+        async def run_inline(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr("auth.security.asyncio.to_thread", run_inline)
+        stored = await hashpwd("legacy")
+        assert await verifypwd("legacy", stored)
 
 
 class TestAccessToken:

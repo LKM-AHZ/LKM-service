@@ -23,6 +23,7 @@ from core.config import settings
 from core.secrets import reveal
 
 _ph = PasswordHasher()
+PASSWORD_MAX_LENGTH = 1024
 # 虚拟哈希，防枚举
 _DUMMY_HASH = _ph.hash("dummy-timing-equalizer")
 
@@ -33,11 +34,15 @@ async def hashpwd(raw: str) -> str:
     argon2 是 CPU/内存密集操作，经 asyncio.to_thread 下放到线程池，
     避免在事件循环内同步执行阻塞所有并发请求。
     """
+    if len(raw) > PASSWORD_MAX_LENGTH:
+        raise ValueError("Password is too long")
     return await asyncio.to_thread(_ph.hash, raw)
 
 
 async def verifypwd(raw: str, stored: str) -> bool:
     """验证密码。哈希格式无效或密码不匹配时返回 False，不抛异常。"""
+    if len(raw) > PASSWORD_MAX_LENGTH:
+        return False
 
     def _verify() -> bool:
         try:
@@ -70,9 +75,13 @@ def create_access_token(
     mfa_verified: bool = False,
     mfa_at: int | None = None,
     active_roles: tuple[str, ...] | None = None,
+    session_expires_at: int | None = None,
 ) -> str:
     now = int(time.time())
     verified_at = mfa_at if mfa_at is not None else now
+    access_expires_at = now + settings.access_token_expire_minutes * 60
+    if session_expires_at is not None:
+        access_expires_at = min(access_expires_at, session_expires_at)
     payload: dict[str, Any] = {
         "user_id": str(user_id),
         "account_level": account_level,
@@ -92,7 +101,7 @@ def create_access_token(
         # APISIX jwt-auth 靠该 claim 查消费者（见 jwt_keys.GATEWAY_KEY）：
         "key": jwt_keys.GATEWAY_KEY,
         "iat": now,
-        "exp": now + settings.access_token_expire_minutes * 60,
+        "exp": access_expires_at,
     }
     if active_roles is not None:
         payload["active_roles"] = list(active_roles)

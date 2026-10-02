@@ -6,6 +6,8 @@ from typing import Annotated, Any, ClassVar
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from auth.security import PASSWORD_MAX_LENGTH
+
 
 class ProfileRole(StrEnum):
     MEMBER = "member"
@@ -18,7 +20,9 @@ def _validate_password(v: str) -> str:
     return v
 
 
-Password = Annotated[str, AfterValidator(_validate_password)]
+Password = Annotated[
+    str, Field(max_length=PASSWORD_MAX_LENGTH), AfterValidator(_validate_password)
+]
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -74,7 +78,7 @@ class UserRegByEmail(BaseModel):
 
 class UserLoginPassword(BaseModel):
     account: str = Field(..., min_length=1)
-    password: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1, max_length=PASSWORD_MAX_LENGTH)
 
 
 class AuthTokenData(BaseModel):

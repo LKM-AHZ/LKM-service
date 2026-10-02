@@ -42,8 +42,7 @@ from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
 from auth.repository import RevokedAccessTokenRepository, UserRoleRepository
-from auth.schemas import Password
-from auth.security import dummy_verify, verifypwd
+from auth.security import PASSWORD_MAX_LENGTH, dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
 from auth.service_auth import generate_refresh_token, hash_refresh_token
 from auth.service_roles import list_user_roles, list_users_for_role, set_user_role
@@ -204,7 +203,8 @@ async def revoke_user_role(
 
 class _AdminLoginReq(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
-    password: Password
+    # 旧账号可能使用短密码；登录只限制计算成本，新密码策略由注册/重置控制。
+    password: str = Field(..., min_length=1, max_length=PASSWORD_MAX_LENGTH)
 
 
 class _AdminVerify2FARequest(BaseModel):
@@ -244,26 +244,34 @@ def _current_mfa_trust(request: Request) -> tuple[bool, int | None]:
 # -- cookie helper（复用 admin_session 常量，行为对齐单体现行）-----------------
 
 
-def _set_access_cookie(resp: Response, token: str) -> None:
+def _set_access_cookie(
+    resp: Response, token: str, *, max_age: int | None = None
+) -> None:
     resp.set_cookie(
         key=COOKIE_NAME,
         value=token,
         httponly=True,
         secure=settings.is_production,
         samesite="lax",
-        max_age=settings.admin_access_cookie_minutes * 60,
+        max_age=max_age
+        if max_age is not None
+        else settings.admin_access_cookie_minutes * 60,
         path=COOKIE_PATH,
     )
 
 
-def _set_refresh_cookie(resp: Response, token: str) -> None:
+def _set_refresh_cookie(
+    resp: Response, token: str, *, max_age: int | None = None
+) -> None:
     resp.set_cookie(
         key=REFRESH_NAME,
         value=token,
         httponly=True,
         secure=settings.is_production,
         samesite="lax",
-        max_age=settings.refresh_token_expire_days * 86400,
+        max_age=max_age
+        if max_age is not None
+        else settings.refresh_token_expire_days * 86400,
         path=COOKIE_PATH,
     )
 
@@ -476,11 +484,13 @@ async def admin_refresh(
     )
     if user.account_level != "admin":
         return resp_json(CommonErr.FORBIDDEN, detail="会话无效")
+    if user.is_locked and user.locked_until and user.locked_until > now:
+        return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
     # 2FA 信任以 auth 库 refresh 行为真值：access cookie 只活 15min，只读它的话
     # cookie 一过期就得到 (False, None)，新 refresh 行被写成 mfa_verified=False/mfa_at=NULL，
     # 1 小时信任窗口被硬截成 15 分钟（与上面那条注释的意图相反）。同时把信任原点写回新行。
-    mfa_ok = bool(stored.mfa_verified)
+    mfa_ok = bool(stored.mfa_verified and stored.mfa_at)
     mfa_at = int(stored.mfa_at.timestamp()) if stored.mfa_at else None
     try:
         selection = session_roles_claim(stored.active_roles)
@@ -499,7 +509,11 @@ async def admin_refresh(
         except ValueError as exc:
             raise BizError(CommonErr.FORBIDDEN, "Session roles invalid") from exc
     access_token = create_admin_access_token(
-        user, mfa_verified=mfa_ok, mfa_at=mfa_at, active_roles=selection
+        user,
+        mfa_verified=mfa_ok,
+        mfa_at=mfa_at,
+        active_roles=selection,
+        session_expires_at=stored.expires_at,
     )
     payload = _admin_user_dict(user)
 
@@ -512,16 +526,29 @@ async def admin_refresh(
             mfa_verified=mfa_ok,
             mfa_at=stored.mfa_at,
             active_roles=list(selection) if selection is not None else None,
-            expires_at=now_iso()
-            + datetime.timedelta(days=settings.refresh_token_expire_days),
+            expires_at=stored.expires_at,
             revoked_at=None,
         )
     )
     await db.commit()
 
     resp = resp_json(CommonErr.OK, data=payload)
-    _set_access_cookie(resp, access_token)
-    _set_refresh_cookie(resp, new_refresh)
+    _set_access_cookie(
+        resp,
+        access_token,
+        max_age=max(
+            0,
+            min(
+                settings.admin_access_cookie_minutes * 60,
+                int((stored.expires_at - now).total_seconds()),
+            ),
+        ),
+    )
+    _set_refresh_cookie(
+        resp,
+        new_refresh,
+        max_age=max(0, int((stored.expires_at - now).total_seconds())),
+    )
     return resp
 
 
@@ -591,11 +618,16 @@ async def admin_verify_2fa(
             select(RefreshToken).where(
                 RefreshToken.token_hash == hash_refresh_token(raw_refresh),
                 RefreshToken.kind == "admin",
+                RefreshToken.user_id == user.id,
+                RefreshToken.expires_at > now_iso(),
             )
         )
         stored_refresh = result.scalars().first()
         if stored_refresh is not None and stored_refresh.revoked_at is None:
             stored_refresh.mfa_verified = True
+            stored_refresh.mfa_at = datetime.datetime.fromtimestamp(
+                mfa_at, tz=datetime.UTC
+            )
             stored_refresh.active_roles = list(active_roles)
     await db.commit()
 

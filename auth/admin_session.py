@@ -44,6 +44,7 @@ def create_admin_access_token(
     mfa_verified: bool = False,
     mfa_at: int | None = None,
     active_roles: tuple[str, ...] | None = None,
+    session_expires_at: datetime.datetime | None = None,
 ) -> str:
     """签发后台 access token（15min）。payload 带 type=admin + 专属 audience。
 
@@ -56,6 +57,11 @@ def create_admin_access_token(
     """
     now = datetime.datetime.now(datetime.UTC)
     verified_at = mfa_at if mfa_at is not None else int(now.timestamp())
+    access_expires_at = int(
+        (now + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES)).timestamp()
+    )
+    if session_expires_at is not None:
+        access_expires_at = min(access_expires_at, int(session_expires_at.timestamp()))
     payload: dict[str, object] = {
         "sub": str(user.id),
         "account_level": str(user.account_level),
@@ -70,9 +76,7 @@ def create_admin_access_token(
         "mfa": mfa_verified,
         "mfa_at": verified_at if mfa_verified else None,
         "iat": int(now.timestamp()),
-        "exp": int(
-            (now + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES)).timestamp()
-        ),
+        "exp": access_expires_at,
     }
     if active_roles is not None:
         payload["active_roles"] = list(active_roles)

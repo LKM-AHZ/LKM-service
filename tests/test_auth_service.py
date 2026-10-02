@@ -17,6 +17,7 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
     """auth 域单测跑在 auth 独立库 schema（S5 拆后 users 不在 biz）。"""
     return auth_db
 
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -355,9 +356,7 @@ class TestRefresh:
         tokens = (
             (
                 await db.execute(
-                    select(RefreshToken).where(
-                        RefreshToken.user_id == reg["user_id"]
-                    )
+                    select(RefreshToken).where(RefreshToken.user_id == reg["user_id"])
                 )
             )
             .scalars()
@@ -379,6 +378,39 @@ class TestRefresh:
         old_hash = hashlib.sha256(raw.encode()).hexdigest()
         old = await _get(db, RefreshToken, RefreshToken.token_hash == old_hash)
         assert old.revoked_at is not None
+
+    async def should_preserve_absolute_refresh_expiry(self, db: AsyncSession):
+        result = await _reg_local(db, username="absolute")
+        raw = result["refresh_token"]
+        original = await _get(
+            db,
+            RefreshToken,
+            RefreshToken.token_hash == hashlib.sha256(raw.encode()).hexdigest(),
+        )
+        expiry = original.expires_at
+
+        for _ in range(2):
+            rotated = await _service().refresh_access_token(db, raw)
+            raw = rotated["refresh_token"]
+            record = await _get(
+                db,
+                RefreshToken,
+                RefreshToken.token_hash == hashlib.sha256(raw.encode()).hexdigest(),
+            )
+            assert record.expires_at == expiry
+
+    async def should_reject_refresh_while_account_locked(self, db: AsyncSession):
+        result = await _reg_local(db, username="locked_refresh")
+        user = await _get(db, User, User.id == result["user_id"])
+        user.is_locked = True
+        user.locked_until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+            minutes=10
+        )
+        await db.flush()
+
+        with pytest.raises(BizError) as exc:
+            await _service().refresh_access_token(db, result["refresh_token"])
+        assert exc.value.errcode == AuthErr.ACCOUNT_LOCKED
 
     async def should_inherit_stepup_mfa_trust_on_refresh(self, db: AsyncSession):
         """前台 step-up 2FA 信任（mfa_at 原点）应随刷新轮换继承，1h 窗口不被 15min access 轮换重置。"""
@@ -459,9 +491,7 @@ class TestRevokeAll:
         tok1 = (
             (
                 await db.execute(
-                    select(RefreshToken).where(
-                        RefreshToken.user_id == alice["user_id"]
-                    )
+                    select(RefreshToken).where(RefreshToken.user_id == alice["user_id"])
                 )
             )
             .scalars()

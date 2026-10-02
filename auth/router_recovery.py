@@ -32,6 +32,7 @@ from auth.schemas import (
     AdminRecoverVerifyContactResponse,
     AdminRecoverVerifyTOTPResponse,
     MessageResponse,
+    Password,
     RawEmail,
     RecoverCheckResponse,
     RecoverRequires2FAResponse,
@@ -64,7 +65,7 @@ class RecoverPhoneRequest(BaseModel):
 class RecoverPhoneVerifyRequest(BaseModel):
     phone: str = Field(..., min_length=5, max_length=20)
     code: str = Field(..., min_length=6, max_length=6)
-    new_password: str | None = Field(None, min_length=6)
+    new_password: Password | None = None
 
 
 class RecoverEmailRequest(BaseModel):
@@ -75,7 +76,7 @@ class RecoverEmailVerifyRequest(BaseModel):
     email: RawEmail
     code: str = Field(..., min_length=6, max_length=6)
     # 语义同 RecoverPhoneVerifyRequest.new_password（非 MFA 在此直接重置，MFA 走 complete 步）
-    new_password: str | None = Field(None, min_length=6)
+    new_password: Password | None = None
 
 
 class RecoverMagicLinkRequest(BaseModel):
@@ -84,7 +85,7 @@ class RecoverMagicLinkRequest(BaseModel):
 
 class RecoverMagicLinkVerifyRequest(BaseModel):
     token: str = Field(..., min_length=1)
-    new_password: str | None = Field(None, min_length=6)
+    new_password: Password | None = None
 
 
 @router.post("/check", response_model=ApiResp[RecoverCheckResponse])
@@ -193,7 +194,7 @@ class RecoverUserVerifyTOTPRequest(BaseModel):
 
 class RecoverUserCompleteRequest(BaseModel):
     txn_id: str = Field(..., min_length=1)
-    new_password: str = Field(..., min_length=6)
+    new_password: Password
 
 
 async def _limit_recovery_step(action: str, request: Request) -> None:
@@ -254,7 +255,7 @@ class RecoverAdminVerifyTOTPRequest(BaseModel):
 
 class RecoverAdminCompleteRequest(BaseModel):
     txn_id: str = Field(..., min_length=1)
-    new_password: str = Field(..., min_length=6)
+    new_password: Password
 
 
 @router.post("/admin/begin", response_model=ApiResp[AdminRecoverBeginResponse])

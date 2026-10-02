@@ -14,6 +14,7 @@
 """
 
 import base64
+import datetime
 import hashlib
 import hmac
 import struct
@@ -24,6 +25,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth.admin_session import decode_admin_access
 from auth.models import TOTP, Profile, RefreshToken, User
 from auth.security import encrypt_secret, generate_totp_secret, hashpwd
 
@@ -126,11 +128,7 @@ class TestAuthProcessAdminLogin:
         await _create_admin(auth_db, "kind1")
         login = await _login(auth_app_client, "kind1")
         assert login.status_code == 200
-        stored = (
-            (await auth_db.execute(select(RefreshToken)))
-            .scalars()
-            .all()
-        )
+        stored = (await auth_db.execute(select(RefreshToken))).scalars().all()
         admin_rows = [r for r in stored if r.kind == "admin"]
         assert admin_rows, "应在 auth 库写入 kind=admin 的 refresh 行"
 
@@ -147,6 +145,47 @@ class TestAuthProcessAdminRefreshAndLogout:
         assert resp.json()["code"] == 0
         # 旋转后收到新的 refresh cookie
         assert auth_app_client.cookies.get("admin_refresh")
+
+    async def should_preserve_absolute_expiry_on_refresh(
+        self, auth_db: AsyncSession, auth_app_client: AsyncClient
+    ):
+        await _create_admin(auth_db, "absolute_admin")
+        assert (await _login(auth_app_client, "absolute_admin")).status_code == 200
+        raw = auth_app_client.cookies.get("admin_refresh")
+        assert raw
+        original = await auth_db.scalar(
+            select(RefreshToken).where(
+                RefreshToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()
+            )
+        )
+        assert original is not None
+        expiry = original.expires_at
+
+        for _ in range(2):
+            response = await auth_app_client.post("/api/v1/admin/auth/refresh")
+            assert response.status_code == 200
+            raw = auth_app_client.cookies.get("admin_refresh")
+            assert raw
+            rotated = await auth_db.scalar(
+                select(RefreshToken).where(
+                    RefreshToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()
+                )
+            )
+            assert rotated is not None
+            assert rotated.expires_at == expiry
+
+    async def should_reject_locked_account_refresh(
+        self, auth_db: AsyncSession, auth_app_client: AsyncClient
+    ):
+        user = await _create_admin(auth_db, "locked_admin")
+        assert (await _login(auth_app_client, "locked_admin")).status_code == 200
+        user.is_locked = True
+        user.locked_until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+            minutes=10
+        )
+        await auth_db.commit()
+        response = await auth_app_client.post("/api/v1/admin/auth/refresh")
+        assert response.status_code == 403
 
     async def should_logout_and_clear(
         self, auth_db: AsyncSession, auth_app_client: AsyncClient
@@ -183,6 +222,35 @@ class TestAuthProcessAdminRefreshAndLogout:
 
 
 class TestAuthProcessAdmin2FA:
+    async def should_keep_original_mfa_time_after_refresh(
+        self, auth_db: AsyncSession, auth_app_client: AsyncClient
+    ):
+        await _create_admin(auth_db, "mfa_origin")
+        assert (await _login(auth_app_client, "mfa_origin")).status_code == 200
+        secret = await _enable_totp(auth_db, "mfa_origin")
+        stepup = await auth_app_client.post(
+            "/api/v1/admin/auth/2fa", json={"code": _totp_code_now(secret)}
+        )
+        assert stepup.status_code == 200
+        access = auth_app_client.cookies.get("admin_session")
+        assert access
+        original_mfa_at = decode_admin_access(access)["mfa_at"]
+        raw = auth_app_client.cookies.get("admin_refresh")
+        assert raw
+        stored = await auth_db.scalar(
+            select(RefreshToken).where(
+                RefreshToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()
+            )
+        )
+        assert stored is not None
+        assert int(stored.mfa_at.timestamp()) == original_mfa_at
+
+        refreshed = await auth_app_client.post("/api/v1/admin/auth/refresh")
+        assert refreshed.status_code == 200
+        access = auth_app_client.cookies.get("admin_session")
+        assert access
+        assert decode_admin_access(access)["mfa_at"] == original_mfa_at
+
     async def should_stepup_upgrade_access(
         self, auth_db: AsyncSession, auth_app_client: AsyncClient
     ):
