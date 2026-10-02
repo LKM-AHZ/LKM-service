@@ -28,7 +28,13 @@ from auth.repository import (
 )
 from core.db.base import now_iso
 from core.db.repository import DbSession
-from core.rbac_roles import activated_roles
+from core.err import BizError, CommonErr
+from core.rbac_roles import (
+    SSD_CONSTRAINTS,
+    activated_roles,
+    authorized_roles,
+    satisfies_constraints,
+)
 
 _LEVEL_RANK = {"local": 0, "normal": 1, "admin": 2}
 # 考试 unlock_role 的取值域只有 columnist/author（见 exam/seed），管理侧与培育侧角色
@@ -66,6 +72,7 @@ async def authorize_user(
     iat_ts: float | int | None,
     require_admin: bool,
     jti: str | None = None,
+    selected_roles: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """在 auth 库内裁决一个由 `{user_id, token_version, iat(sec)}` 描述的会话是否仍存活。
 
@@ -132,14 +139,27 @@ async def authorize_user(
             "role": None,
         }
 
+    assigned = await UserRoleRepository(db).list_roles(user_id)
+    try:
+        if not satisfies_constraints(
+            authorized_roles(account_level, role, assigned), SSD_CONSTRAINTS
+        ):
+            raise ValueError("Assigned roles violate SSD")
+        active = activated_roles(account_level, role, assigned, selected_roles)
+    except ValueError:
+        return {
+            "ok": False,
+            "cause": CAUSE_SESSION_REVOKED,
+            "account_level": None,
+            "role": None,
+        }
+
     return {
         "ok": True,
         "cause": None,
         "account_level": account_level,
         "role": role,
-        "active_roles": activated_roles(
-            account_level, role, await UserRoleRepository(db).list_roles(user_id)
-        ),
+        "active_roles": active,
     }
 
 
@@ -213,6 +233,27 @@ async def _apply_upgrades(
         changed = True
 
     if changed:
+        new_level = (
+            str(unlock_level)
+            if unlock_level is not None
+            and _rank_of(_LEVEL_RANK, unlock_level)
+            > _rank_of(_LEVEL_RANK, account_level)
+            else account_level
+        )
+        new_role = (
+            str(unlock_role)
+            if unlock_role is not None
+            and cur_role_rank >= 0
+            and _rank_of(_ROLE_RANK, unlock_role) > cur_role_rank
+            else cur_role
+        )
+        if not satisfies_constraints(
+            authorized_roles(
+                new_level, new_role, await UserRoleRepository(db).list_roles(user_id)
+            ),
+            SSD_CONSTRAINTS,
+        ):
+            raise BizError(CommonErr.INVALID_INPUT, "Upgrade violates SSD")
         await UserRepository(db).bump_token_version(user_id)
         await UserRepository(db).flush()
         # 升权即身份升迁 → user.updated 失效快照 + 使旧令牌作废（镜像 auth.service.upgrade_to_normal）
@@ -247,6 +288,15 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
         changed = True
 
     if changed:
+        if not satisfies_constraints(
+            authorized_roles(
+                "admin",
+                "incubated_member" if cur_role == "member" else cur_role,
+                await UserRoleRepository(db).list_roles(user_id),
+            ),
+            SSD_CONSTRAINTS,
+        ):
+            raise BizError(CommonErr.INVALID_INPUT, "Upgrade violates SSD")
         await UserRepository(db).bump_token_version(user_id)
         await UserRepository(db).flush()
         await events.notify_user_updated(user_id)

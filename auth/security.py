@@ -69,6 +69,7 @@ def create_access_token(
     token_version: int = 0,
     mfa_verified: bool = False,
     mfa_at: int | None = None,
+    active_roles: tuple[str, ...] | None = None,
 ) -> str:
     now = int(time.time())
     verified_at = mfa_at if mfa_at is not None else now
@@ -93,6 +94,8 @@ def create_access_token(
         "iat": now,
         "exp": now + settings.access_token_expire_minutes * 60,
     }
+    if active_roles is not None:
+        payload["active_roles"] = list(active_roles)
     return jwt_keys.encode(payload)
 
 

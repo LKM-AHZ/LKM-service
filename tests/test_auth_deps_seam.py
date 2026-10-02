@@ -109,6 +109,7 @@ async def test_seam_on_settles_auth_not_local_db(db: DB, monkeypatch) -> None:
                 "cause": None,
                 "account_level": "admin",
                 "role": "author",
+                "active_roles": ["admin:author"],
             },
         )
 
@@ -184,7 +185,13 @@ async def test_admin_seam_ok(db: DB, monkeypatch) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={"ok": True, "cause": None, "account_level": "admin", "role": "superadmin"},
+            json={
+                "ok": True,
+                "cause": None,
+                "account_level": "admin",
+                "role": "superadmin",
+                "active_roles": ["admin:superadmin"],
+            },
         )
 
     _inject_client(handler)
@@ -204,7 +211,13 @@ async def test_admin_seam_fail_closed(db: DB, monkeypatch) -> None:
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, json={"ok": False, "cause": "not_admin", "account_level": None, "role": None}
+            200,
+            json={
+                "ok": False,
+                "cause": "not_admin",
+                "account_level": None,
+                "role": None,
+            },
         )
 
     _inject_client(handler)

@@ -12,7 +12,7 @@ from app.modules.rbac.repository import ResourceRepository, RolePermissionReposi
 from core.contracts import CurrentUser
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
-from core.rbac_roles import composite_role
+from core.rbac_roles import composite_role, role_closure
 
 
 async def role_has_permission(
@@ -37,7 +37,7 @@ async def user_has_permission(
     if roles is None:
         roles = (composite_role(cur.account_level, cur.role),)
     prefix = f"{cur.account_level}:"
-    valid_roles = tuple(role for role in roles if role.startswith(prefix))
+    valid_roles = tuple(role for role in role_closure(roles) if role.startswith(prefix))
     if len(valid_roles) == 1:
         return await role_has_permission(db, valid_roles[0], permission)
     return await RolePermissionRepository(db).has_any_permission(

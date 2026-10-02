@@ -31,7 +31,13 @@ from core.config import is_test_env
 from core.db.base import now_iso
 from core.err import BizError, CommonErr
 from core.ports.authz import MFA_TRUST_SECONDS
-from core.rbac_roles import activated_roles
+from core.rbac_roles import (
+    SSD_CONSTRAINTS,
+    activated_roles,
+    authorized_roles,
+    satisfies_constraints,
+    session_roles_claim,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +81,10 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         payload = decode_access_token(token)
     except (PyJWTError, ValueError) as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
+    try:
+        selected_roles = session_roles_claim(payload.get("active_roles"))
+    except ValueError as exc:
+        raise BizError(AuthErr.TOKEN_INVALID) from exc
 
     if await is_jti_blocked(payload.get("jti")):
         raise BizError(
@@ -95,12 +105,16 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         )
 
     if seam_enabled():
+        kwargs = (
+            {"selected_roles": selected_roles} if selected_roles is not None else {}
+        )
         return await _resolve_via_seam(
             user_id,
             int(payload.get("token_version", 0)),
             payload.get("iat"),
             require_admin=False,
             jti=payload.get("jti"),
+            **kwargs,
         )
 
     result = await db.execute(
@@ -133,15 +147,25 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
 
     profile = user.profile
     role: str = profile.role if profile else "member"
+    assigned = await UserRoleRepository(db).list_roles(user.id)
+    try:
+        if not satisfies_constraints(
+            authorized_roles(str(user.account_level), role, assigned), SSD_CONSTRAINTS
+        ):
+            raise ValueError("Assigned roles violate SSD")
+        active = activated_roles(
+            str(user.account_level),
+            role,
+            assigned,
+            selected_roles,
+        )
+    except ValueError as exc:
+        raise BizError(AuthErr.TOKEN_INVALID) from exc
     return CurrentUser(
         id=user.id,
         account_level=str(user.account_level),
         role=role,
-        active_roles=activated_roles(
-            str(user.account_level),
-            role,
-            await UserRoleRepository(db).list_roles(user.id),
-        ),
+        active_roles=active,
         email=user.email,
         phone=user.phone,
     )
@@ -178,6 +202,7 @@ async def _resolve_via_seam(
     *,
     require_admin: bool,
     jti: str | None = None,
+    selected_roles: tuple[str, ...] | None = None,
 ) -> CurrentUser:
     """经 auth internal authz 裁决一次会话并重建 CurrentUser。
 
@@ -197,12 +222,16 @@ async def _resolve_via_seam(
             iat_secs = None
 
     try:
+        kwargs = (
+            {"selected_roles": selected_roles} if selected_roles is not None else {}
+        )
         verdict = await auth_user_http.authorize_via_seam(
             user_id=user_id,
             expect_token_version=expect_token_version,
             iat_ts=iat_secs,
             require_admin=require_admin,
             jti=jti,
+            **kwargs,
         )
     except auth_user_http.UserHttpUnavailable as exc:
         raise BizError(
@@ -212,15 +241,20 @@ async def _resolve_via_seam(
     if not verdict.get("ok"):
         raise _fail_current_user(verdict.get("cause"))
     active_roles = verdict.get("active_roles")
+    if not isinstance(active_roles, (list, tuple)) or any(
+        not isinstance(role, str) for role in active_roles
+    ):
+        raise BizError(AuthErr.TOKEN_INVALID, "Account roles cannot be proven")
+    if selected_roles is not None and (
+        len(active_roles) != len(set(active_roles))
+        or set(active_roles) != set(selected_roles)
+    ):
+        raise BizError(AuthErr.TOKEN_INVALID, "Session roles cannot be proven")
     return CurrentUser(
         id=user_id,
         account_level=str(verdict.get("account_level") or ""),
         role=str(verdict.get("role") or "member"),
-        active_roles=(
-            tuple(role for role in active_roles if isinstance(role, str))
-            if isinstance(active_roles, (list, tuple))
-            else None
-        ),
+        active_roles=tuple(active_roles),
         email=None,
         phone=None,
     )

@@ -40,7 +40,10 @@ MFA_TRUST_SECONDS = 3600
 
 
 def create_admin_access_token(
-    user: Any, mfa_verified: bool = False, mfa_at: int | None = None
+    user: Any,
+    mfa_verified: bool = False,
+    mfa_at: int | None = None,
+    active_roles: tuple[str, ...] | None = None,
 ) -> str:
     """签发后台 access token（15min）。payload 带 type=admin + 专属 audience。
 
@@ -71,6 +74,8 @@ def create_admin_access_token(
             (now + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES)).timestamp()
         ),
     }
+    if active_roles is not None:
+        payload["active_roles"] = list(active_roles)
     return jwt_keys.encode(payload)
 
 

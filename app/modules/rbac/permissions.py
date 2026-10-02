@@ -171,6 +171,8 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.admin_dashboard),
         Grant(Permission.admin_reports_view),
     ),
+    "admin:content_reviewer": (Grant(Permission.articles_review),),
+    "admin:content_publisher": (Grant(Permission.articles_publish),),
     "admin:super_admin": (
         Grant(Permission.comment_create),
         Grant(Permission.avatar_update),

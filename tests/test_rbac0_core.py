@@ -43,7 +43,8 @@ async def test_permissions_are_union_of_active_roles(monkeypatch) -> None:
     )
     assert await user_has_permission(None, cur, Permission.projects_create)
     lookup.assert_awaited_once_with(
-        ("normal:member", "normal:author"), Permission.projects_create.value
+        ("normal:author", "normal:columnist", "normal:member"),
+        Permission.projects_create.value,
     )
 
 
@@ -79,6 +80,24 @@ async def test_auth_verdict_carries_active_roles(monkeypatch) -> None:
     assert cur.active_roles == ("normal:member", "normal:author")
 
 
+async def test_auth_verdict_must_honor_selected_roles(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "auth.user_http.authorize_via_seam",
+        AsyncMock(
+            return_value={
+                "ok": True,
+                "account_level": "normal",
+                "role": "member",
+                "active_roles": ["normal:member"],
+            }
+        ),
+    )
+    with pytest.raises(BizError):
+        await _resolve_via_seam(
+            uuid.uuid4(), 0, 1, require_admin=False, selected_roles=()
+        )
+
+
 async def test_auth_seam_rejects_malformed_role_set(monkeypatch) -> None:
     monkeypatch.setattr(
         user_http,
@@ -104,6 +123,25 @@ async def test_auth_seam_rejects_malformed_role_set(monkeypatch) -> None:
         )
 
 
+async def test_auth_seam_rejects_missing_success_role_set(monkeypatch) -> None:
+    monkeypatch.setattr(
+        user_http,
+        "_request",
+        AsyncMock(
+            return_value=httpx.Response(
+                200,
+                json={"ok": True, "account_level": "normal", "role": "member"},
+            )
+        ),
+    )
+    with pytest.raises(user_http.UserHttpUnavailable):
+        await user_http.authorize_via_seam(
+            user_id=uuid.uuid4(),
+            expect_token_version=0,
+            iat_ts=None,
+        )
+
+
 async def test_assign_extra_role_revokes_old_sessions(monkeypatch) -> None:
     user_id = uuid.uuid4()
     db = SimpleNamespace(
@@ -115,6 +153,7 @@ async def test_assign_extra_role_revokes_old_sessions(monkeypatch) -> None:
     updated = AsyncMock()
     audited = AsyncMock()
     monkeypatch.setattr(UserRoleRepository, "add", add)
+    monkeypatch.setattr(UserRoleRepository, "list_roles", AsyncMock(return_value=[]))
     monkeypatch.setattr("auth.service_roles.events.notify_user_updated", updated)
     monkeypatch.setattr(
         "auth.service_roles.events.notify_audit_permission_change", audited
@@ -190,7 +229,7 @@ async def test_role_management_requires_super_admin(monkeypatch) -> None:
     )
     monkeypatch.setattr("auth.admin_router._current_mfa_trust", lambda _: (True, 1))
     monkeypatch.setattr(
-        "auth.admin_router.list_user_roles",
+        "auth.admin_router._active_cookie_roles",
         AsyncMock(return_value=("admin:org_member",)),
     )
     with pytest.raises(BizError) as exc:

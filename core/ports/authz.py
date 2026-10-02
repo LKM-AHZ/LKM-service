@@ -60,14 +60,17 @@ async def resolve_via_seam(
     *,
     require_admin: bool,
     jti: str | None = None,
+    selected_roles: tuple[str, ...] | None = None,
 ) -> CurrentUser:
     """经 auth 内部 authz 裁决一次会话并重建 CurrentUser（后台 seam 权威裁决）。"""
+    kwargs = {"selected_roles": selected_roles} if selected_roles is not None else {}
     return await get("authz").resolve_via_seam(
         user_id,
         expect_token_version,
         iat_ts,
         require_admin=require_admin,
         jti=jti,
+        **kwargs,
     )
 
 

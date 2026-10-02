@@ -48,6 +48,7 @@ class _AuthzIn(BaseModel):
     # 单枚 token 的 jti（admin 单设备登出用）。可选：缺省不做 jti 撤销判定——前台/旧调用方
     # 仍有 token_version 兜底；后台路径（app/modules/admin/deps）必传。
     jti: str | None = None
+    selected_roles: tuple[str, ...] | None = None
 
 
 class _GrantIn(BaseModel):
@@ -82,6 +83,7 @@ async def internal_authz(
         iat_ts=body.iat_ts,
         require_admin=body.require_admin,
         jti=body.jti,
+        selected_roles=body.selected_roles,
     )
 
 

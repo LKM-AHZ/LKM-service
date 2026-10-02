@@ -621,6 +621,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         iat_ts: float | int | None = None,
         require_admin: bool = False,
         jti: str | None = None,
+        selected_roles: tuple[str, ...] | None = None,
     ) -> dict[str, object]:
         # 直接委托 auth 侧真原语：替身若自行简化，就会把 token_version 撤销、改密 iat、
         # admin 门槛这三道裁决吞掉（require_admin 的 admin 门禁只在 verdict 这一处裁决），
@@ -635,6 +636,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             iat_ts=iat_ts,
             require_admin=require_admin,
             jti=jti,
+            selected_roles=selected_roles,
         )
 
     async def _fetch(user_id: uuid.UUID) -> Any:

@@ -51,6 +51,7 @@ from core.db.base import expires_at, now_iso
 from core.db.repo import consume_once, get_or_raise, isolated_update
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
+from core.rbac_roles import session_roles_claim
 from core.throttle import check_password_login_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ async def store_refresh_token(
     raw: str,
     mfa_verified: bool = False,
     mfa_at: datetime.datetime | None = None,
+    active_roles: tuple[str, ...] | None = None,
 ) -> datetime.datetime:
     """持久化哈希后的刷新令牌并返回其过期时间（timezone-aware datetime）。"""
     days = settings.refresh_token_expire_days
@@ -99,6 +101,7 @@ async def store_refresh_token(
         token_hash=hash_refresh_token(raw),
         mfa_verified=mfa_verified,
         mfa_at=mfa_at,
+        active_roles=list(active_roles) if active_roles is not None else None,
         expires_at=expires_str,
     )
     return expires_str
@@ -111,6 +114,7 @@ async def issue_session_tokens(
     trust_device: bool = False,
     mfa_verified: bool = False,
     mfa_at: datetime.datetime | None = None,
+    active_roles: tuple[str, ...] | None = None,
 ) -> tuple[str, str]:
     """发放访问令牌 + 刷新令牌，返回 (access_token, raw_refresh)。
 
@@ -121,6 +125,19 @@ async def issue_session_tokens(
         await db.refresh(user, attribute_names=["profile"])
     profile = user.profile
     role = profile.role if profile else "member"
+    if active_roles is not None:
+        from auth.repository import UserRoleRepository
+        from core.rbac_roles import activated_roles
+
+        try:
+            active_roles = activated_roles(
+                str(user.account_level),
+                role,
+                await UserRoleRepository(db).list_roles(user.id),
+                active_roles,
+            )
+        except ValueError as exc:
+            raise BizError(AuthErr.TOKEN_INVALID, "Session roles invalid") from exc
     verified_at = mfa_at if mfa_at is not None else datetime.datetime.now(datetime.UTC)
     access_token = create_access_token(
         user_id=user.id,
@@ -130,6 +147,7 @@ async def issue_session_tokens(
         token_version=user.token_version,
         mfa_verified=mfa_verified,
         mfa_at=int(verified_at.timestamp()) if mfa_verified else None,
+        active_roles=active_roles,
     )
     raw_refresh = generate_refresh_token()
     await store_refresh_token(
@@ -138,6 +156,7 @@ async def issue_session_tokens(
         raw_refresh,
         mfa_verified=mfa_verified,
         mfa_at=verified_at if mfa_verified else None,
+        active_roles=active_roles,
     )
     return access_token, raw_refresh
 
@@ -660,8 +679,16 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
         stored.user_id, AuthErr.USER_NOT_FOUND
     )
 
+    try:
+        selected_roles = session_roles_claim(stored.active_roles)
+    except ValueError as exc:
+        raise BizError(AuthErr.TOKEN_INVALID, "Session roles invalid") from exc
     access_token, raw_new = await issue_session_tokens(
-        db, user, mfa_verified=stored.mfa_verified, mfa_at=stored.mfa_at
+        db,
+        user,
+        mfa_verified=stored.mfa_verified,
+        mfa_at=stored.mfa_at,
+        active_roles=selected_roles,
     )
     return {"access_token": access_token, "refresh_token": raw_new}
 

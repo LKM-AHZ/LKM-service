@@ -143,12 +143,15 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 
 所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由鉴权依赖解析；身份/展示读经 AUTH 读缝（`app/modules/auth/snapshot.py` / `user_http.py`），业务库不直连 `users` 表。
 
-### RBAC0 角色与权限
+### RBAC0 / RBAC1 / RBAC2 角色与权限
 
 - AUTH 库的 `profiles.role` 与 `users.account_level` 派生兼容旧账号的基础角色；`user_roles` 保存附加角色。一个用户可有多个角色，角色名格式为 `等级:角色`。
-- 每次会话鉴权由 AUTH 权威数据激活当前等级下的全部已分配角色。业务库 `role_permissions` 保存角色与权限的多对多映射，授权取激活角色的权限并集；显式禁用的授权不生效，也不会被启动 seed 恢复。
+- RBAC1 的角色层级在 `core/rbac_roles.py` 定义：`normal:author → normal:columnist → normal:member` 与 `admin:super_admin → admin:org_member → admin:incubated_member`。高级角色继承低级角色的权限；继承只在同一账号等级内，启动时拒绝未知角色、跨等级边和循环。`role_permissions` 仍是权限映射的实时事实源；禁用直接授权不会被 seed 恢复，但其他激活角色或低级角色的同一权限仍可能授权。
+- RBAC2 支持按角色集合和最大数量配置静态职责分离（SSD）与动态职责分离（DSD）。SSD 在角色分配、身份升级及鉴权时检查用户的已授权角色闭包；DSD 在每次鉴权时检查本会话的激活角色闭包。配置分别为 `LKM_RBAC_SSD_CONSTRAINTS`、`LKM_RBAC_DSD_CONSTRAINTS`，JSON 格式如 `[{"roles":["admin:content_reviewer","admin:content_publisher"],"max_roles":1}]`。两项默认 `[]`，因为现有业务没有指定实际互斥职责；配置非法时服务拒绝启动。新增 `admin:content_reviewer` 与 `admin:content_publisher` 细分角色分别授予文章审核、发布权限，可用于实际策略。
+- 无冲突时，旧令牌默认激活当前等级下的全部已分配角色。有 DSD 冲突时，默认选择一个符合约束的确定性子集。前台 `POST /api/v1/auth/roles/activate` 传 `{"roles":[...],"refresh_token":"..."}`，返回限定角色的 `access_token`；后台 `POST /api/v1/admin/auth/roles/activate` 传 `{"roles":[...]}` 并更新管理员 cookie。所选角色必须是已分配或继承的授权角色且符合 DSD；选择写入对应刷新会话，刷新轮换和 2FA 升阶保留。空数组可创建不激活任何 RBAC 角色的会话。
+- 每枚 access token 代表一个独立的激活会话；切换会签发新令牌，先前令牌仍可用至过期或撤销。DSD 限制的是单个会话中的并发角色；需要同一用户跨会话也不能持有两项职责时应配置 SSD。
 - 后台角色管理：`GET /api/v1/admin/auth/users/{user_id}/roles` 查看用户角色；`GET /api/v1/admin/auth/roles/{role_name}/users` 分页查看角色成员；`PUT` / `DELETE /api/v1/admin/auth/users/{user_id}/roles/{role_name}` 分配 / 撤销附加角色。操作要求有效管理员 cookie、1 小时内的 2FA 信任和 `admin:super_admin` 角色；变更会撤销目标用户的旧会话。
-- 生产增量迁移需同时应用业务库的 `0003_role_permissions_enabled` 与 AUTH 库的 `0002_user_roles`。
+- 生产增量迁移需同时应用业务库的 `0003_role_permissions_enabled` 与 AUTH 库的 `0002_user_roles`、`0003_session_roles`。
 
 > **部署要求**：S5 拆库后 `users/profiles` 只在 auth 独立库，业务库已无 `users` 表。生产必须同时配置
 > `LKM_AUTH_HTTP_URL`（compose 默认 `http://auth:8001`）与 `LKM_AUTH_HTTP_TOKEN`（backend 与 auth 两侧同值）；

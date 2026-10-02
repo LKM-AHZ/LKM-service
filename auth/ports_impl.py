@@ -51,15 +51,18 @@ class _AuthzImpl:
         *,
         require_admin: bool,
         jti: str | None = None,
+        selected_roles: tuple[str, ...] | None = None,
     ) -> Any:
         from auth import seams as _seams
 
+        kwargs = {"selected_roles": selected_roles} if selected_roles is not None else {}
         return await _seams.resolve_via_seam(
             user_id,
             expect_token_version,
             iat_ts,
             require_admin=require_admin,
             jti=jti,
+            **kwargs,
         )
 
     def create_admin_access_token(

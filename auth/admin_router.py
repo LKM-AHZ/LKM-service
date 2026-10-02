@@ -41,7 +41,7 @@ from auth.admin_session import (
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
-from auth.repository import RevokedAccessTokenRepository
+from auth.repository import RevokedAccessTokenRepository, UserRoleRepository
 from auth.schemas import Password
 from auth.security import dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
@@ -54,6 +54,14 @@ from core.config import settings
 from core.db.base import now_iso
 from core.db.repo import consume_once, get_or_raise
 from core.err import BizError, CommonErr, resp_json
+from core.rbac_roles import (
+    SSD_CONSTRAINTS,
+    activated_roles,
+    authorized_roles,
+    role_closure,
+    satisfies_constraints,
+    session_roles_claim,
+)
 
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
 
@@ -62,9 +70,89 @@ async def _require_role_manager(request: Request, db: AsyncSession) -> User:
     actor = await _require_admin_from_cookie(request, db)
     if not _current_mfa_trust(request)[0]:
         raise BizError(CommonErr.MFA_REQUIRED)
-    if "admin:super_admin" not in await list_user_roles(db, actor.id):
+    if "admin:super_admin" not in await _active_cookie_roles(request, db, actor):
         raise BizError(CommonErr.FORBIDDEN)
     return actor
+
+
+async def _active_cookie_roles(
+    request: Request, db: AsyncSession, user: User
+) -> tuple[str, ...]:
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise BizError(CommonErr.FORBIDDEN)
+    try:
+        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
+    except jwt.InvalidTokenError as exc:
+        raise BizError(CommonErr.FORBIDDEN, "Session invalid") from exc
+    await db.refresh(user, attribute_names=["profile"])
+    role = user.profile.role if user.profile else "member"
+    try:
+        selection = session_roles_claim(payload.get("active_roles"))
+        assigned = await UserRoleRepository(db).list_roles(user.id)
+        if not satisfies_constraints(
+            authorized_roles(str(user.account_level), role, assigned), SSD_CONSTRAINTS
+        ):
+            raise ValueError("Assigned roles violate SSD")
+        return activated_roles(
+            str(user.account_level),
+            role,
+            assigned,
+            selection,
+        )
+    except ValueError as exc:
+        raise BizError(CommonErr.FORBIDDEN, "Session roles invalid") from exc
+
+
+class _AdminActivateRolesRequest(BaseModel):
+    roles: list[str]
+
+
+@router.post("/roles/activate")
+async def activate_admin_roles(
+    body: _AdminActivateRolesRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> JSONResponse:
+    user = await _require_admin_from_cookie(request, db)
+    raw_refresh = request.cookies.get(REFRESH_NAME)
+    if not raw_refresh:
+        raise BizError(CommonErr.FORBIDDEN, "Refresh session missing")
+    stored = await db.scalar(
+        select(RefreshToken)
+        .where(
+            RefreshToken.token_hash == hash_refresh_token(raw_refresh),
+            RefreshToken.user_id == user.id,
+            RefreshToken.kind == "admin",
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now_iso(),
+        )
+        .with_for_update()
+    )
+    if stored is None:
+        raise BizError(CommonErr.FORBIDDEN, "Refresh session invalid")
+    await db.refresh(user, attribute_names=["profile"])
+    role = user.profile.role if user.profile else "member"
+    try:
+        roles = activated_roles(
+            str(user.account_level),
+            role,
+            await UserRoleRepository(db).list_roles(user.id),
+            body.roles,
+        )
+    except ValueError as exc:
+        raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
+    stored.active_roles = list(roles)
+    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
+    access = create_admin_access_token(
+        user,
+        mfa_verified=bool(old.get("mfa")),
+        mfa_at=old.get("mfa_at") if isinstance(old.get("mfa_at"), int) else None,
+        active_roles=roles,
+    )
+    resp = resp_json(CommonErr.OK, data={"active_roles": roles})
+    _set_access_cookie(resp, access)
+    return resp
 
 
 @router.get("/users/{user_id}/roles")
@@ -74,7 +162,8 @@ async def read_user_roles(
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, list[str]]:
     await _require_role_manager(request, db)
-    return {"roles": list(await list_user_roles(db, user_id))}
+    direct = await list_user_roles(db, user_id)
+    return {"roles": list(direct), "authorized_roles": list(role_closure(direct))}
 
 
 @router.get("/roles/{role_name}/users")
@@ -393,7 +482,25 @@ async def admin_refresh(
     # 1 小时信任窗口被硬截成 15 分钟（与上面那条注释的意图相反）。同时把信任原点写回新行。
     mfa_ok = bool(stored.mfa_verified)
     mfa_at = int(stored.mfa_at.timestamp()) if stored.mfa_at else None
-    access_token = create_admin_access_token(user, mfa_verified=mfa_ok, mfa_at=mfa_at)
+    try:
+        selection = session_roles_claim(stored.active_roles)
+    except ValueError as exc:
+        raise BizError(CommonErr.FORBIDDEN, "Session roles invalid") from exc
+    if selection is not None:
+        await db.refresh(user, attribute_names=["profile"])
+        role = user.profile.role if user.profile else "member"
+        try:
+            selection = activated_roles(
+                "admin",
+                role,
+                await UserRoleRepository(db).list_roles(user.id),
+                selection,
+            )
+        except ValueError as exc:
+            raise BizError(CommonErr.FORBIDDEN, "Session roles invalid") from exc
+    access_token = create_admin_access_token(
+        user, mfa_verified=mfa_ok, mfa_at=mfa_at, active_roles=selection
+    )
     payload = _admin_user_dict(user)
 
     new_refresh = generate_refresh_token()
@@ -404,6 +511,7 @@ async def admin_refresh(
             kind="admin",
             mfa_verified=mfa_ok,
             mfa_at=stored.mfa_at,
+            active_roles=list(selection) if selection is not None else None,
             expires_at=now_iso()
             + datetime.timedelta(days=settings.refresh_token_expire_days),
             revoked_at=None,
@@ -470,7 +578,10 @@ async def admin_verify_2fa(
     await verify_user_totp(db, user.id, body.code)
 
     mfa_at = int(datetime.datetime.now(datetime.UTC).timestamp())
-    access_token = create_admin_access_token(user, mfa_verified=True, mfa_at=mfa_at)
+    active_roles = await _active_cookie_roles(request, db, user)
+    access_token = create_admin_access_token(
+        user, mfa_verified=True, mfa_at=mfa_at, active_roles=active_roles
+    )
     payload = _admin_user_dict(user)
 
     # 同步更新当前会话 refresh 记录的 mfa 状态（保持一致性，供审计/未来扩展）
@@ -485,6 +596,7 @@ async def admin_verify_2fa(
         stored_refresh = result.scalars().first()
         if stored_refresh is not None and stored_refresh.revoked_at is None:
             stored_refresh.mfa_verified = True
+            stored_refresh.active_roles = list(active_roles)
     await db.commit()
 
     resp = resp_json(

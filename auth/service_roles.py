@@ -9,7 +9,15 @@ from auth.models import Profile, User, UserRole
 from auth.repository import UserRoleRepository
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
-from core.rbac_roles import KNOWN_ROLES, activated_roles, composite_role
+from core.rbac_roles import (
+    KNOWN_ROLES,
+    SSD_CONSTRAINTS,
+    assigned_roles,
+    authorized_roles,
+    composite_role,
+    role_closure,
+    satisfies_constraints,
+)
 
 
 async def list_user_roles(db: DbSession, user_id: uuid.UUID) -> tuple[str, ...]:
@@ -22,7 +30,7 @@ async def list_user_roles(db: DbSession, user_id: uuid.UUID) -> tuple[str, ...]:
     ).first()
     if row is None:
         raise BizError(CommonErr.NOT_FOUND)
-    return activated_roles(
+    return assigned_roles(
         row[0], row[1] or "member", await UserRoleRepository(db).list_roles(user_id)
     )
 
@@ -33,19 +41,25 @@ async def list_users_for_role(
     """角色成员审查：合并基础角色与显式 UA 分配。"""
     if role_name not in KNOWN_ROLES:
         raise BizError(CommonErr.INVALID_INPUT, "Unknown role")
-    level, profile_role = role_name.split(":", 1)
-    primary_match = Profile.role == profile_role
-    if profile_role == "member":
+    level = role_name.split(":", 1)[0]
+    # A senior assignment also authorizes every junior role in the hierarchy.
+    seniors = tuple(role for role in KNOWN_ROLES if role_name in role_closure((role,)))
+    senior_names = tuple(role.split(":", 1)[1] for role in seniors)
+    primary_match = Profile.role.in_(senior_names)
+    if "member" in senior_names:
         primary_match = or_(primary_match, Profile.user_id.is_(None))
-    primary = (
-        select(User.id)
-        .outerjoin(Profile, Profile.user_id == User.id)
-        .where(User.account_level == level, primary_match)
-    )
     assigned = (
         select(UserRole.user_id)
         .join(User, User.id == UserRole.user_id)
-        .where(UserRole.role_name == role_name, User.account_level == level)
+        .where(UserRole.role_name.in_(seniors), User.account_level == level)
+    )
+    primary = (
+        select(User.id)
+        .outerjoin(Profile, Profile.user_id == User.id)
+        .where(
+            User.account_level == level,
+            primary_match,
+        )
     )
     members = union(primary, assigned).subquery()
     stmt = select(members.c.id).order_by(members.c.id).limit(limit).offset(offset)
@@ -77,6 +91,11 @@ async def set_user_role(
         raise BizError(CommonErr.INVALID_INPUT, "Primary role cannot be revoked")
 
     repo = UserRoleRepository(db)
+    if assigned:
+        current = await repo.list_roles(user_id)
+        proposed = authorized_roles(account_level, primary, [*current, role_name])
+        if not satisfies_constraints(proposed, SSD_CONSTRAINTS):
+            raise BizError(CommonErr.INVALID_INPUT, "Role assignment violates SSD")
     changed = (
         await repo.add(user_id, role_name)
         if assigned

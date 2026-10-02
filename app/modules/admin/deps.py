@@ -38,6 +38,7 @@ from core.ports.authz import (
     resolve_via_seam,
     seam_enabled,
 )
+from core.rbac_roles import session_roles_claim
 
 # —— 后台 cookie 签发/校验纯基元与常量：单一事实源 auth.admin_session，此处原样 re-export，
 #    供既有调用方（auth_router / users / content / moderation / reports …及需造后台 cookie 的
@@ -103,10 +104,17 @@ async def get_current_admin(
     try:
         expect_tv = int(payload.get("token_version", 0))
     except (TypeError, ValueError):
-        raise BizError(CommonErr.FORBIDDEN, "Admin session token version invalid") from None
+        raise BizError(
+            CommonErr.FORBIDDEN, "Admin session token version invalid"
+        ) from None
 
+    try:
+        selected_roles = session_roles_claim(payload.get("active_roles"))
+    except ValueError as exc:
+        raise BizError(CommonErr.FORBIDDEN, "Admin session roles invalid") from exc
+    kwargs = {"selected_roles": selected_roles} if selected_roles is not None else {}
     return await _resolve_admin_via_seam(
-        user_id, expect_tv, payload.get("iat"), jti=payload.get("jti")
+        user_id, expect_tv, payload.get("iat"), jti=payload.get("jti"), **kwargs
     )
 
 
@@ -116,6 +124,7 @@ async def _resolve_admin_via_seam(
     iat_ts: object,
     *,
     jti: str | None = None,
+    selected_roles: tuple[str, ...] | None = None,
 ) -> CurrentUser:
     """后台 seam 判定：复用 auth 的 seam 解析（require_admin=True），并把失败统一为 FORBIDDEN。
 
@@ -123,8 +132,11 @@ async def _resolve_admin_via_seam(
     """
 
     try:
+        kwargs = (
+            {"selected_roles": selected_roles} if selected_roles is not None else {}
+        )
         return await resolve_via_seam(
-            user_id, expect_token_version, iat_ts, require_admin=True, jti=jti
+            user_id, expect_token_version, iat_ts, require_admin=True, jti=jti, **kwargs
         )
     except BizError:
         raise BizError(
@@ -165,5 +177,3 @@ async def get_current_admin_2fa(
 
 
 require_admin_2fa = Depends(get_current_admin_2fa)
-
-

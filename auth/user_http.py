@@ -237,6 +237,7 @@ async def authorize_via_seam(
     iat_ts: float | int | None,
     require_admin: bool = False,
     jti: str | None = None,
+    selected_roles: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """经 AUTH internal authz 端点裁决一次会话：返回 ``{"ok","cause","account_level","role"}``。
 
@@ -257,6 +258,8 @@ async def authorize_via_seam(
         "require_admin": require_admin,
         "jti": jti,
     }
+    if selected_roles is not None:
+        body["selected_roles"] = list(selected_roles)
     resp = await _request(
         "POST", url, label="auth_http authz request", headers=headers, json=body
     )
@@ -276,7 +279,7 @@ async def authorize_via_seam(
     if not isinstance(ok, bool):
         raise UserHttpUnavailable("auth_http authz malformed ok flag")
     active_roles = payload.get("active_roles")
-    if active_roles is not None and (
+    if ok and (
         not isinstance(active_roles, list)
         or any(not isinstance(role, str) for role in active_roles)
     ):

@@ -35,6 +35,7 @@ class RefreshToken(UUIDPrimaryKeyMixin, AuthBase):
     mfa_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # step-up 2FA 信任原点（epoch）：随刷新轮换继承，保留 1 小时信任窗口不被 15min access 轮换重置
     mfa_at: Mapped[datetime.datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    active_roles: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

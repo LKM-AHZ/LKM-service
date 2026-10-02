@@ -12,6 +12,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import service_auth
@@ -34,7 +35,9 @@ from auth.limits import (
     REFRESH_MAX_PER_WINDOW,
     REFRESH_WINDOW_SECONDS,
 )
+from auth.models import RefreshToken
 from auth.providers.base import EmailProvider
+from auth.repository import UserRoleRepository
 from auth.schemas import (
     AuthTokenData,
     MessageResponse,
@@ -51,7 +54,7 @@ from auth.schemas import (
     UserRegLocal,
     UserRegNormal,
 )
-from auth.security import decode_access_token
+from auth.security import create_access_token, decode_access_token
 from auth.service import (
     get_profile,
     get_profile_by_username,
@@ -69,9 +72,64 @@ from core import jobs
 from core.client_ip import client_ip
 from core.common import ApiResp
 from core.config import settings
+from core.db.base import now_iso
 from core.err import BizError, CommonErr, respond
+from core.rbac_roles import activated_roles
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class _ActivateRolesRequest(BaseModel):
+    roles: list[str]
+    refresh_token: str
+
+
+@router.post("/roles/activate", response_model=ApiResp[dict[str, str]])
+@respond
+async def activate_roles(
+    body: _ActivateRolesRequest,
+    token: str = Depends(_parse_bearer),
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, str]:
+    """Select session roles and bind the selection to its refresh token."""
+    stored = await db.scalar(
+        select(RefreshToken)
+        .where(
+            RefreshToken.token_hash
+            == service_auth.hash_refresh_token(body.refresh_token),
+            RefreshToken.user_id == cur.id,
+            RefreshToken.kind == "web",
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now_iso(),
+        )
+        .with_for_update()
+    )
+    if stored is None:
+        raise BizError(CommonErr.FORBIDDEN, "Refresh session invalid")
+    try:
+        roles = activated_roles(
+            cur.account_level,
+            cur.role,
+            await UserRoleRepository(db).list_roles(cur.id),
+            body.roles,
+        )
+    except ValueError as exc:
+        raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
+    stored.active_roles = list(roles)
+    old = decode_access_token(token)
+    return {
+        "access_token": create_access_token(
+            user_id=cur.id,
+            account_level=cur.account_level,
+            role=cur.role,
+            trust_device=bool(old.get("trust_device")),
+            token_version=int(old.get("token_version", 0)),
+            mfa_verified=bool(old.get("mfa")),
+            mfa_at=old.get("mfa_at") if isinstance(old.get("mfa_at"), int) else None,
+            active_roles=roles,
+        )
+    }
 
 
 async def _send_reg_code(
