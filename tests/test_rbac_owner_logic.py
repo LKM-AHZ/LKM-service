@@ -52,7 +52,7 @@ async def test_owner_skips_role_permission_lookup(monkeypatch) -> None:
     monkeypatch.setattr(ResourceRepository, "get_owner_row", lookup)
     monkeypatch.setattr("app.modules.rbac.service.role_has_permission", permission)
 
-    await check_owner(
+    assert not await check_owner(
         None,
         _actor(owner_id),
         uuid.uuid4(),
@@ -101,7 +101,7 @@ async def test_non_owner_requires_role_permission(monkeypatch, granted: bool) ->
         Permission.content_owner_delete,
     )
     if granted:
-        await call
+        assert await call
     else:
         with pytest.raises(BizError) as exc:
             await call

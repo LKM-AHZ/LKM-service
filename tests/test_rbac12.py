@@ -9,6 +9,8 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 import core.rbac_roles as rbac_roles
+from app.modules.content.boards.router import owner_update_board
+from app.modules.content.boards.schemas import BoardUpdate
 from app.modules.rbac.permissions import Permission
 from app.modules.rbac.repository import RolePermissionRepository
 from app.modules.rbac.service import user_has_permission
@@ -90,6 +92,27 @@ async def test_ssd_rejects_conflicting_assignment(monkeypatch) -> None:
     add.assert_not_awaited()
 
 
+async def test_ssd_rejects_assignment_conflicting_with_inherited_role(
+    monkeypatch,
+) -> None:
+    constraint = SeparationConstraint(
+        frozenset({"normal:author", "normal:columnist"}), 1
+    )
+    monkeypatch.setattr("auth.service_roles.SSD_CONSTRAINTS", (constraint,))
+    monkeypatch.setattr(UserRoleRepository, "list_roles", AsyncMock(return_value=[]))
+    add = AsyncMock()
+    monkeypatch.setattr(UserRoleRepository, "add", add)
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(first=lambda: ("normal", "member"))
+        )
+    )
+    with pytest.raises(BizError) as exc:
+        await set_user_role(db, uuid.uuid4(), "normal:author", assigned=True)
+    assert exc.value.errcode == CommonErr.INVALID_INPUT
+    add.assert_not_awaited()
+
+
 def test_dsd_allows_assignment_but_restricts_each_session(monkeypatch) -> None:
     constraint = SeparationConstraint(
         frozenset({"admin:content_reviewer", "admin:content_publisher"}), 1
@@ -118,6 +141,44 @@ def test_ssd_counts_inherited_junior() -> None:
         frozenset({"normal:author", "normal:columnist"}), 1
     )
     assert not satisfies_constraints(("normal:author",), (constraint,))
+
+
+def test_dsd_falls_back_to_inherited_junior(monkeypatch) -> None:
+    constraint = SeparationConstraint(
+        frozenset({"normal:author", "normal:columnist"}), 1
+    )
+    monkeypatch.setattr("core.rbac_roles.DSD_CONSTRAINTS", (constraint,))
+    # The senior assignment remains valid under SSD, but its own hierarchy
+    # closure conflicts with DSD. The session can still activate its junior.
+    assert activated_roles("normal", "author", []) == ("normal:columnist",)
+    with pytest.raises(ValueError, match="DSD"):
+        activated_roles("normal", "author", [], ["normal:author"])
+    assert activated_roles("normal", "author", [], ["normal:columnist"]) == (
+        "normal:columnist",
+    )
+
+
+@pytest.mark.parametrize(
+    ("primary_role", "delegated"),
+    [("org_member", True), ("super_admin", False)],
+)
+async def test_board_delegation_uses_active_permission(
+    monkeypatch, primary_role: str, delegated: bool
+) -> None:
+    owner_check = AsyncMock(return_value=delegated)
+    update = AsyncMock(return_value=SimpleNamespace())
+    monkeypatch.setattr("app.modules.content.boards.router.check_owner", owner_check)
+    monkeypatch.setattr("app.modules.content.boards.router.update_board_ex", update)
+    cur = CurrentUser(
+        id=uuid.uuid4(),
+        account_level="admin",
+        role=primary_role,
+        active_roles=("admin:content_reviewer",) if delegated else (),
+    )
+    await owner_update_board.__wrapped__(
+        uuid.uuid4(), BoardUpdate(title="updated"), cur, None
+    )
+    assert update.await_args.kwargs["is_admin"] is delegated
 
 
 async def test_role_review_includes_senior_assignments() -> None:

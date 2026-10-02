@@ -110,13 +110,13 @@ async def owner_update_board(
     db: AsyncSession = Depends(get_session),
 ) -> BoardOut | tuple[ErrCode, dict[str, Any]]:
     # 对象级权限：板块属主放行，或拥有 board_owner_manage（super_admin 代管）放行。
-    await check_owner(
+    delegated = await check_owner(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
     # 乐观锁冲突（蓝图 §6.1）：同 patch_article，转 (errcode, 当前值) 元组带出 409 + data。
     try:
         return await update_board_ex(
-            db, board_id, cur.id, patch, is_admin=(cur.role == "super_admin")
+            db, board_id, cur.id, patch, is_admin=delegated
         )
     except VersionConflictError as exc:
         return (exc.errcode, exc.current)
@@ -130,11 +130,11 @@ async def ban(
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:
-    await check_owner(
+    delegated = await check_owner(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
     board = await get_board_ex(db, board_id)
-    await ban_user(db, board, cur.id, body, is_admin=(cur.role == "super_admin"))
+    await ban_user(db, board, cur.id, body, is_admin=delegated)
     return {"ok": True}
 
 
@@ -148,11 +148,11 @@ async def unban(
     cur: CurrentUserDep,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:
-    await check_owner(
+    delegated = await check_owner(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
     board = await get_board_ex(db, board_id)
     await unban_user(
-        db, board, cur.id, target_user_id, is_admin=(cur.role == "super_admin")
+        db, board, cur.id, target_user_id, is_admin=delegated
     )
     return {"ok": True}

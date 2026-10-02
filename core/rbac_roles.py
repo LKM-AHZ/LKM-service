@@ -169,10 +169,16 @@ def activated_roles(
         raise ValueError("Assigned roles violate SSD")
     if selected_roles is None:
         # Preserve existing all-active behavior when possible. On a DSD conflict,
-        # pick a deterministic valid subset until the caller explicitly switches.
+        # try direct assignments first, then inherited juniors. A senior whose
+        # closure violates DSD may still authorize a safe junior session.
         chosen: list[str] = []
-        for role in (composite_role(account_level, primary_role), *direct):
-            if role not in chosen and satisfies_constraints(
+        candidates = (
+            composite_role(account_level, primary_role),
+            *direct,
+            *available,
+        )
+        for role in candidates:
+            if role not in role_closure(chosen) and satisfies_constraints(
                 [*chosen, role], DSD_CONSTRAINTS
             ):
                 chosen.append(role)

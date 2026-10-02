@@ -65,19 +65,20 @@ async def check_owner(
     model: type[Any],
     id_field: str,
     permission: Permission,
-) -> None:
+) -> bool:
     """对象级权限断言：资源属主直接放行，否则检查代管权限点。
 
     先确认资源存在且未软删；普通属主无需再查角色权限映射。
 
-    *permission* 是对象级权限点（如 ``content_owner_delete``）；非属主的管理员
-    通过拥有该权限点获得代管资格（如 super_admin）。
+    *permission* 是对象级权限点（如 ``content_owner_delete``）。返回值表示
+    是否通过会话角色权限取得代管资格，供服务层的二次属主校验使用。
     """
     owner_row = await ResourceRepository(db).get_owner_row(model, obj_id, id_field)
     if owner_row is None:
         raise BizError(CommonErr.FORBIDDEN)
     if owner_row[0] == cur.id:
-        return
+        return False
 
     if not await user_has_permission(db, cur, permission):
         raise BizError(CommonErr.FORBIDDEN)
+    return True

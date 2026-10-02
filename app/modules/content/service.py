@@ -868,7 +868,7 @@ def _assert_owner(
     board: Board, current_user_id: uuid.UUID, is_admin: bool = False
 ) -> None:
     # 防御性断言：非属主且非 admin(代管) → 拒。路由层 check_owner 已先做对象级
-    # 判定(board_owner_manage)，此处 is_admin 由路由传 cur.role=="super_admin" 放行代管。
+    # 判定(board_owner_manage)，此处 is_admin 由路由的会话权限裁决结果传入。
     if board.owner_id != current_user_id and not is_admin:
         raise BizError(BoardErr.NOT_BOARD_OWNER)
 
