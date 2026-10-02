@@ -275,6 +275,71 @@ def test_client_operation_timeout_clamped_to_at_least_one(
     assert kwargs["operation_timeout_seconds"] == 1
 
 
+def test_shutdown_discards_producer_created_in_flight(monkeypatch) -> None:
+    started = threading.Event()
+    finish = threading.Event()
+    producer = Mock()
+    client = Mock()
+
+    def create_producer(*_args, **_kwargs):
+        started.set()
+        assert finish.wait(3)
+        return producer
+
+    client.create_producer.side_effect = create_producer
+    monkeypatch.setattr(messaging, "_client", client)
+    monkeypatch.setattr(messaging, "_producers", {})
+    monkeypatch.setattr(messaging, "_closed", False)
+    monkeypatch.setattr(messaging, "make_event_schema", lambda _: object())
+
+    async def _inline_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(messaging.asyncio, "to_thread", _inline_to_thread)
+    errors: list[Exception] = []
+
+    def create_in_thread() -> None:
+        try:
+            messaging._create_producer_cached(messaging.TOPIC_NOTIFY)
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=create_in_thread)
+    thread.start()
+    try:
+        assert started.wait(3)
+        asyncio.run(messaging.shutdown())
+    finally:
+        finish.set()
+        thread.join(3)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], RuntimeError)
+    assert messaging._producers == {}
+    producer.close.assert_called_once_with()
+    client.close.assert_called_once_with()
+    with pytest.raises(RuntimeError, match="shut down"):
+        messaging._get_client_sync()
+
+
+def test_shutdown_discards_consumer_created_in_flight(monkeypatch) -> None:
+    consumer = Mock()
+    client = Mock()
+
+    def subscribe(*_args, **_kwargs):
+        messaging._closed = True
+        return consumer
+
+    client.subscribe.side_effect = subscribe
+    monkeypatch.setattr(messaging, "_client", client)
+    monkeypatch.setattr(messaging, "_closed", False)
+    monkeypatch.setattr(messaging, "make_event_schema", lambda _: object())
+
+    with pytest.raises(RuntimeError, match="closed while creating consumer"):
+        messaging._create_consumer_sync(messaging.SUB_DLQ)
+    consumer.close.assert_called_once_with()
+
+
 def test_receive_timeout_is_not_logged_as_exception(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

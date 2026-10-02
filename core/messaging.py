@@ -381,6 +381,8 @@ def set_transport(transport: Transport | None) -> None:
 def _client_locked() -> Any:
     """取/建单例 Pulsar Client；调用方须持 ``_client_lock``。"""
     global _client
+    if _closed:
+        raise RuntimeError("message bus is shut down")
     if _client is None:
         import pulsar
 
@@ -409,10 +411,18 @@ def _create_producer_cached(topic: str) -> Any:
     client = _get_client_sync()  # 短临界区：只取/建 client
     producer = client.create_producer(topic, schema=make_event_schema(topic))
     with _client_lock:
-        cached = _producers.setdefault(topic, producer)
+        # Producer construction runs outside the lock. Shutdown may have
+        # cleared and closed this client while construction was in progress.
+        cached = (
+            None
+            if _closed or _client is not client
+            else _producers.setdefault(topic, producer)
+        )
     if cached is not producer:
         with suppress(Exception):
             producer.close()
+    if cached is None:
+        raise RuntimeError("message bus closed while creating producer")
     return cached
 
 
@@ -477,6 +487,8 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             return False
         try:
             producer = await _get_producer(topic)
+            if _closed:
+                return False
             await asyncio.to_thread(producer.send, dict(payload), properties=props)
             return True
         except Exception:
@@ -498,13 +510,21 @@ def _create_consumer_sync(sub: Subscription) -> Any:
             max_redeliver_count=settings.pulsar_dlq_max_redeliver,
             dead_letter_topic=TOPIC_DLQ,
         )
-    return _get_client_sync().subscribe(
+    client = _get_client_sync()
+    consumer = client.subscribe(
         sub.topic,
         sub.name,
         consumer_type=pulsar.ConsumerType.Shared,
         schema=make_event_schema(sub.topic),
         **kwargs,
     )
+    with _client_lock:
+        stale = _closed or _client is not client
+    if stale:
+        with suppress(Exception):
+            consumer.close()
+        raise RuntimeError("message bus closed while creating consumer")
+    return consumer
 
 
 async def _run_handler(
