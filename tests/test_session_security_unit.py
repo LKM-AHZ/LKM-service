@@ -161,6 +161,7 @@ async def test_admin_refresh_keeps_expiry_without_reinstating_missing_mfa_time(
     assert inserted[0].expires_at == stored.expires_at
     assert inserted[0].mfa_verified is False
     assert signed["mfa_verified"] is False
+    assert signed["refresh_token_hash"] == inserted[0].token_hash
 
 
 @pytest.mark.asyncio
@@ -169,7 +170,11 @@ async def test_admin_stepup_persists_verification_time(monkeypatch):
         id=uuid.uuid4(), username="admin", account_level="admin", created_at=None
     )
     stored = SimpleNamespace(
-        mfa_verified=False, mfa_at=None, active_roles=None, revoked_at=None
+        mfa_verified=False,
+        mfa_at=None,
+        active_roles=None,
+        revoked_at=None,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=2),
     )
 
     class Result:
@@ -199,10 +204,24 @@ async def test_admin_stepup_persists_verification_time(monkeypatch):
     monkeypatch.setattr(admin_router, "verify_user_totp", verify)
     monkeypatch.setattr(admin_router, "_active_cookie_roles", roles)
     monkeypatch.setattr(
-        admin_router, "create_admin_access_token", lambda *a, **k: "jwt"
+        admin_router.jwt_keys,
+        "decode",
+        lambda *a, **k: {"rt_hash": admin_router.hash_refresh_token("old-refresh")},
     )
+    signed = {}
+
+    def sign(*args, **kwargs):
+        signed.update(kwargs)
+        return "jwt"
+
+    monkeypatch.setattr(admin_router, "create_admin_access_token", sign)
     request = Request(
-        {"type": "http", "headers": [(b"cookie", b"admin_refresh=old-refresh")]}
+        {
+            "type": "http",
+            "headers": [
+                (b"cookie", b"admin_refresh=old-refresh; admin_session=access")
+            ],
+        }
     )
 
     response = await admin_router.admin_verify_2fa(
@@ -212,6 +231,10 @@ async def test_admin_stepup_persists_verification_time(monkeypatch):
     assert stored.mfa_verified is True
     assert stored.active_roles == ["admin:super_admin"]
     assert stored.mfa_at is not None
+    assert signed["session_expires_at"] == stored.expires_at
+    assert signed["refresh_token_hash"] == admin_router.hash_refresh_token(
+        "old-refresh"
+    )
     assert (
         abs((datetime.datetime.now(datetime.UTC) - stored.mfa_at).total_seconds()) < 5
     )

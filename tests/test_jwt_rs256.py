@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 import uuid
 
 import jwt
@@ -91,6 +92,7 @@ def test_verify_with_public_key_only(monkeypatch: pytest.MonkeyPatch) -> None:
             "user_id": str(uuid.uuid4()),
             "type": "access",
             "aud": "lkm:web",
+            "iat": int(time.time()),
             "exp": 4102444800,
         },
         _PRIVATE_KEY,

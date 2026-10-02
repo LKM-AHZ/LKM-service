@@ -44,7 +44,11 @@ from auth.models import RefreshToken, User
 from auth.repository import RevokedAccessTokenRepository, UserRoleRepository
 from auth.security import PASSWORD_MAX_LENGTH, dummy_verify, verifypwd
 from auth.service_2fa import verify_user_totp
-from auth.service_auth import generate_refresh_token, hash_refresh_token
+from auth.service_auth import (
+    generate_refresh_token,
+    hash_refresh_token,
+    valid_refresh_token,
+)
 from auth.service_roles import list_user_roles, list_users_for_role, set_user_role
 from auth.service_verify import check_code_rate_limit
 from auth.token_revocation import block_payload_jti, is_jti_blocked
@@ -115,12 +119,16 @@ async def activate_admin_roles(
 ) -> JSONResponse:
     user = await _require_admin_from_cookie(request, db)
     raw_refresh = request.cookies.get(REFRESH_NAME)
-    if not raw_refresh:
+    if not raw_refresh or not valid_refresh_token(raw_refresh):
         raise BizError(CommonErr.FORBIDDEN, "Refresh session missing")
+    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
+    refresh_hash = hash_refresh_token(raw_refresh)
+    if old.get("rt_hash") != refresh_hash:
+        raise BizError(CommonErr.FORBIDDEN, "Access and refresh sessions differ")
     stored = await db.scalar(
         select(RefreshToken)
         .where(
-            RefreshToken.token_hash == hash_refresh_token(raw_refresh),
+            RefreshToken.token_hash == refresh_hash,
             RefreshToken.user_id == user.id,
             RefreshToken.kind == "admin",
             RefreshToken.revoked_at.is_(None),
@@ -142,15 +150,16 @@ async def activate_admin_roles(
     except ValueError as exc:
         raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
     stored.active_roles = list(roles)
-    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
     access = create_admin_access_token(
         user,
         mfa_verified=bool(old.get("mfa")),
         mfa_at=old.get("mfa_at") if isinstance(old.get("mfa_at"), int) else None,
         active_roles=roles,
+        session_expires_at=stored.expires_at,
+        refresh_token_hash=refresh_hash,
     )
     resp = resp_json(CommonErr.OK, data={"active_roles": roles})
-    _set_access_cookie(resp, access)
+    _set_access_cookie(resp, access, max_age=_remaining_access_age(stored.expires_at))
     return resp
 
 
@@ -257,6 +266,16 @@ def _set_access_cookie(
         if max_age is not None
         else settings.admin_access_cookie_minutes * 60,
         path=COOKIE_PATH,
+    )
+
+
+def _remaining_access_age(expires_at: datetime.datetime) -> int:
+    return max(
+        0,
+        min(
+            settings.admin_access_cookie_minutes * 60,
+            int((expires_at - now_iso()).total_seconds()),
+        ),
     )
 
 
@@ -417,12 +436,12 @@ async def admin_login(
     if user.is_locked and user.locked_until and user.locked_until > now_iso():
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
+    raw_refresh = generate_refresh_token()
     access_token = create_admin_access_token(
-        user
+        user, refresh_token_hash=hash_refresh_token(raw_refresh)
     )  # 读 id/account_level/token_version（已加载）
     payload = _admin_user_dict(user)  # 读 created_at 等（已加载）
 
-    raw_refresh = generate_refresh_token()
     db.add(
         RefreshToken(
             user_id=user.id,
@@ -457,6 +476,8 @@ async def admin_refresh(
     raw_refresh = request.cookies.get(REFRESH_NAME)
     if not raw_refresh:
         return resp_json(CommonErr.FORBIDDEN, detail="缺少刷新令牌")
+    if not valid_refresh_token(raw_refresh):
+        return resp_json(CommonErr.FORBIDDEN, detail="刷新令牌无效")
 
     tok_hash = hash_refresh_token(raw_refresh)
     now = now_iso()
@@ -508,16 +529,17 @@ async def admin_refresh(
             )
         except ValueError as exc:
             raise BizError(CommonErr.FORBIDDEN, "Session roles invalid") from exc
+    new_refresh = generate_refresh_token()
     access_token = create_admin_access_token(
         user,
         mfa_verified=mfa_ok,
         mfa_at=mfa_at,
         active_roles=selection,
         session_expires_at=stored.expires_at,
+        refresh_token_hash=hash_refresh_token(new_refresh),
     )
     payload = _admin_user_dict(user)
 
-    new_refresh = generate_refresh_token()
     db.add(
         RefreshToken(
             user_id=user.id,
@@ -534,15 +556,7 @@ async def admin_refresh(
 
     resp = resp_json(CommonErr.OK, data=payload)
     _set_access_cookie(
-        resp,
-        access_token,
-        max_age=max(
-            0,
-            min(
-                settings.admin_access_cookie_minutes * 60,
-                int((stored.expires_at - now).total_seconds()),
-            ),
-        ),
+        resp, access_token, max_age=_remaining_access_age(stored.expires_at)
     )
     _set_refresh_cookie(
         resp,
@@ -559,7 +573,7 @@ async def admin_logout(
 ) -> JSONResponse:
     """登出：auth 库撤销对应 admin refresh 并清空 cookie。"""
     raw_refresh = request.cookies.get(REFRESH_NAME)
-    if raw_refresh:
+    if raw_refresh and valid_refresh_token(raw_refresh):
         tok_hash = hash_refresh_token(raw_refresh)
         result = await db.execute(
             select(RefreshToken).where(
@@ -602,37 +616,51 @@ async def admin_verify_2fa(
     """
     # 识别当前 admin（auth 库裁决）：无效/非 admin → FORBIDDEN
     user = await _require_admin_from_cookie(request, db)
-    await verify_user_totp(db, user.id, body.code)
+    raw_refresh = request.cookies.get(REFRESH_NAME)
+    if not raw_refresh or not valid_refresh_token(raw_refresh):
+        raise BizError(CommonErr.FORBIDDEN, "Refresh session missing")
+    refresh_hash = hash_refresh_token(raw_refresh)
+    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
+    if old.get("rt_hash") != refresh_hash:
+        raise BizError(CommonErr.FORBIDDEN, "Access and refresh sessions differ")
+    result = await db.execute(
+        select(RefreshToken)
+        .where(
+            RefreshToken.token_hash == refresh_hash,
+            RefreshToken.kind == "admin",
+            RefreshToken.user_id == user.id,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now_iso(),
+        )
+        .with_for_update()
+    )
+    stored_refresh = result.scalars().first()
+    if stored_refresh is None:
+        raise BizError(CommonErr.FORBIDDEN, "Refresh session invalid")
 
+    await verify_user_totp(db, user.id, body.code)
     mfa_at = int(datetime.datetime.now(datetime.UTC).timestamp())
     active_roles = await _active_cookie_roles(request, db, user)
     access_token = create_admin_access_token(
-        user, mfa_verified=True, mfa_at=mfa_at, active_roles=active_roles
+        user,
+        mfa_verified=True,
+        mfa_at=mfa_at,
+        active_roles=active_roles,
+        session_expires_at=stored_refresh.expires_at,
+        refresh_token_hash=refresh_hash,
     )
     payload = _admin_user_dict(user)
 
-    # 同步更新当前会话 refresh 记录的 mfa 状态（保持一致性，供审计/未来扩展）
-    raw_refresh = request.cookies.get(REFRESH_NAME)
-    if raw_refresh:
-        result = await db.execute(
-            select(RefreshToken).where(
-                RefreshToken.token_hash == hash_refresh_token(raw_refresh),
-                RefreshToken.kind == "admin",
-                RefreshToken.user_id == user.id,
-                RefreshToken.expires_at > now_iso(),
-            )
-        )
-        stored_refresh = result.scalars().first()
-        if stored_refresh is not None and stored_refresh.revoked_at is None:
-            stored_refresh.mfa_verified = True
-            stored_refresh.mfa_at = datetime.datetime.fromtimestamp(
-                mfa_at, tz=datetime.UTC
-            )
-            stored_refresh.active_roles = list(active_roles)
+    # 同步更新当前会话 refresh 记录的 mfa 状态。
+    stored_refresh.mfa_verified = True
+    stored_refresh.mfa_at = datetime.datetime.fromtimestamp(mfa_at, tz=datetime.UTC)
+    stored_refresh.active_roles = list(active_roles)
     await db.commit()
 
     resp = resp_json(
         CommonErr.OK, data={**payload, "mfa_verified": True, "mfa_at": mfa_at}
     )
-    _set_access_cookie(resp, access_token)
+    _set_access_cookie(
+        resp, access_token, max_age=_remaining_access_age(stored_refresh.expires_at)
+    )
     return resp

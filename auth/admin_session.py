@@ -45,6 +45,7 @@ def create_admin_access_token(
     mfa_at: int | None = None,
     active_roles: tuple[str, ...] | None = None,
     session_expires_at: datetime.datetime | None = None,
+    refresh_token_hash: str | None = None,
 ) -> str:
     """签发后台 access token（15min）。payload 带 type=admin + 专属 audience。
 
@@ -80,6 +81,8 @@ def create_admin_access_token(
     }
     if active_roles is not None:
         payload["active_roles"] = list(active_roles)
+    if refresh_token_hash is not None:
+        payload["rt_hash"] = refresh_token_hash
     return jwt_keys.encode(payload)
 
 

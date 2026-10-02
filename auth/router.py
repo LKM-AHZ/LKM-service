@@ -11,7 +11,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,7 +81,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class _ActivateRolesRequest(BaseModel):
     roles: list[str]
-    refresh_token: str
+    refresh_token: str = Field(..., min_length=1, max_length=128)
 
 
 @router.post("/roles/activate", response_model=ApiResp[dict[str, str]])
@@ -93,11 +93,14 @@ async def activate_roles(
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, str]:
     """Select session roles and bind the selection to its refresh token."""
+    old = decode_access_token(token)
+    refresh_hash = service_auth.hash_refresh_token(body.refresh_token)
+    if old.get("rt_hash") != refresh_hash:
+        raise BizError(CommonErr.FORBIDDEN, "Access and refresh sessions differ")
     stored = await db.scalar(
         select(RefreshToken)
         .where(
-            RefreshToken.token_hash
-            == service_auth.hash_refresh_token(body.refresh_token),
+            RefreshToken.token_hash == refresh_hash,
             RefreshToken.user_id == cur.id,
             RefreshToken.kind == "web",
             RefreshToken.revoked_at.is_(None),
@@ -117,7 +120,6 @@ async def activate_roles(
     except ValueError as exc:
         raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
     stored.active_roles = list(roles)
-    old = decode_access_token(token)
     return {
         "access_token": create_access_token(
             user_id=cur.id,
@@ -128,6 +130,8 @@ async def activate_roles(
             mfa_verified=bool(old.get("mfa")),
             mfa_at=old.get("mfa_at") if isinstance(old.get("mfa_at"), int) else None,
             active_roles=roles,
+            session_expires_at=int(stored.expires_at.timestamp()),
+            refresh_token_hash=refresh_hash,
         )
     }
 

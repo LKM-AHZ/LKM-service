@@ -143,7 +143,7 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 
 所有写操作使用 `Authorization: Bearer <access_token>`（JWT），由鉴权依赖解析；身份/展示读经 AUTH 读缝（`app/modules/auth/snapshot.py` / `user_http.py`），业务库不直连 `users` 表。
 
-密码使用 Argon2id 哈希；新密码和登录输入最长 1024 个字符，旧短密码仍可登录。前后台刷新令牌每次使用后轮换，但沿用首次签发时的到期时间（默认 7 天，`LKM_REFRESH_TOKEN_EXPIRE_DAYS`），刷新不会无限延长会话；账号锁定时拒绝刷新。管理员 2FA 信任窗口从实际验证时刻起算，刷新不会重置信任起点。
+密码使用 Argon2id 哈希；新密码和登录输入最长 1024 个字符，旧短密码仍可登录。JWT 验签强制校验 `aud`、`exp`、`iat`，并限制令牌长度为 8192 字符。前后台刷新令牌每次使用后轮换，但沿用首次签发时的到期时间（默认 7 天，`LKM_REFRESH_TOKEN_EXPIRE_DAYS`），刷新不会无限延长会话；账号锁定时拒绝刷新。access token 通过 `rt_hash` 与对应刷新会话绑定，角色切换和后台 2FA 升阶要求两者匹配。部署更新后，存量 access token 若缺少 `rt_hash`，需先刷新再进行这些操作。管理员 2FA 信任窗口从实际验证时刻起算，刷新不会重置信任起点。
 
 ### RBAC0 / RBAC1 / RBAC2 / RBAC3 角色与权限
 

@@ -85,6 +85,11 @@ def hash_refresh_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def valid_refresh_token(raw: str) -> bool:
+    """Bound untrusted refresh input before hashing or querying it."""
+    return 0 < len(raw) <= 128
+
+
 async def store_refresh_token(
     db: DbSession,
     user_id: uuid.UUID,
@@ -141,6 +146,7 @@ async def issue_session_tokens(
         except ValueError as exc:
             raise BizError(AuthErr.TOKEN_INVALID, "Session roles invalid") from exc
     verified_at = mfa_at if mfa_at is not None else datetime.datetime.now(datetime.UTC)
+    raw_refresh = generate_refresh_token()
     access_token = create_access_token(
         user_id=user.id,
         account_level=user.account_level,
@@ -153,8 +159,8 @@ async def issue_session_tokens(
         session_expires_at=int(session_expires_at.timestamp())
         if session_expires_at is not None
         else None,
+        refresh_token_hash=hash_refresh_token(raw_refresh),
     )
-    raw_refresh = generate_refresh_token()
     await store_refresh_token(
         db,
         user.id,
@@ -654,6 +660,8 @@ async def upgrade_to_normal(db: DbSession, user: User) -> None:
 
 
 async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any]:
+    if not valid_refresh_token(raw_refresh):
+        raise BizError(AuthErr.TOKEN_INVALID)
     tok_hash = hash_refresh_token(raw_refresh)
     now = now_iso()
 

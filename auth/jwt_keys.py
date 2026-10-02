@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import jwt
+import jwt.algorithms
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -128,6 +129,8 @@ def decode(token: str, *, audience: str) -> dict[str, Any]:
     异常沿用 PyJWT 原生类型（``PyJWTError`` 家族），调用方既有的 ``except jwt.*``
     分支无需改动。
     """
+    if len(token) > 8192:
+        raise jwt.DecodeError("JWT too large")
     alg = jwt.get_unverified_header(token).get("alg")
     if alg != RS256:
         raise jwt.InvalidAlgorithmError(f"unsupported JWT alg: {alg!r}")
@@ -136,7 +139,13 @@ def decode(token: str, *, audience: str) -> dict[str, Any]:
         raise jwt.InvalidAlgorithmError(
             "RS256 token presented but no public key configured"
         )
-    return jwt.decode(token, key, algorithms=[RS256], audience=audience)
+    return jwt.decode(
+        token,
+        key,
+        algorithms=[RS256],
+        audience=audience,
+        options={"require": ["aud", "exp", "iat"]},
+    )
 
 
 # ─────────────────────── JWKS ───────────────────────
@@ -162,7 +171,6 @@ def jwks_document() -> dict[str, Any]:
     jwk.pop("key_ops", None)
     jwk.update({"use": "sig", "alg": RS256, "kid": _thumbprint(jwk)})
     return {"keys": [jwk]}
-
 
 
 #: 运行期从 JWKS 拉到的公钥 PEM（本地有钥时不会被使用/写入）。
