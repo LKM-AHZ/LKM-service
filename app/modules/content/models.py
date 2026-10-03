@@ -358,6 +358,8 @@ class QAQuestion(UUIDPrimaryKeyMixin, Base):
     __table_args__: tuple[Index, ...] = (
         Index("ix_qa_question_category_id", "category", "id"),
         Index("ix_qa_question_status_id", "status", "id"),
+        Index("ix_qa_questions_due", "status", "bounty_expires_at"),
+        Index("ix_qa_questions_bounty_sort", "category", "bounty_total", "id"),
     )
 
     author_id: Mapped[uuid.UUID] = mapped_column(
@@ -370,6 +372,10 @@ class QAQuestion(UUIDPrimaryKeyMixin, Base):
     bounty_per_person: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     bounty_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     bounty_distributed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bounty_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    urgent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="open"
     )  # open|accepted|closed

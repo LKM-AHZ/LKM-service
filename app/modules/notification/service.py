@@ -43,6 +43,7 @@ class NotificationType(StrEnum):
     CONTENT_LIKED = "content_liked"
     CONTENT_COMMENTED = "content_commented"
     COMMENT_REPLIED = "comment_replied"
+    QA_ANSWER_ACCEPTED = "qa_answer_accepted"
 
 
 NOTIFICATION_TYPES: tuple[str, ...] = tuple(t.value for t in NotificationType)

@@ -6,9 +6,11 @@ uuid 主键(FK 已断)；建用户须落 auth_db(经 auth_user_uid 返稳定 id)
 本测 auth_db 真值，免得 seam-关闭时回落"就地 select(User)"读到已拆走的业务 users(UndefinedTable)。
 """
 
+import datetime
 import uuid
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,7 @@ from app.modules.content.qa.service import (
     close_question,
     create_answer,
     create_question,
+    expire_due_questions,
     get_question,
     list_questions,
 )
@@ -70,6 +73,18 @@ async def _asker_with_bounty(
 
 
 class TestAsk:
+    def test_bounty_cap_and_urgent_rule(self):
+        with pytest.raises(ValidationError):
+            QuestionCreate(
+                title="t", situation="s", content="c",
+                bounty_people=10, bounty_per_person=101,
+            )
+        with pytest.raises(ValidationError):
+            QuestionCreate(
+                title="t", situation="s", content="c",
+                bounty_per_person=10, bounty_days=14, urgent=True,
+            )
+
     async def test_asker_spends_escrow(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
@@ -87,7 +102,18 @@ class TestAsk:
             ),
         )
         assert q.bounty_total == 60
+        assert q.bounty_expires_at is not None
         assert await get_balance(db, asker) == 940  # 1000-60
+
+    async def test_unbountied_question_needs_no_balance(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
+        asker = await _user(auth_db, "free")
+        q = await create_question(
+            db, asker, QuestionCreate(title="t", situation="s", content="c")
+        )
+        assert q.bounty_total == 0
+        assert q.bounty_expires_at is None
 
     async def test_create_insufficient(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
@@ -123,6 +149,29 @@ class TestAnswer:
 
 
 class TestAccept:
+    async def test_self_accept_rejected(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
+        qid, asker = await _asker_with_bounty(db, auth_db)
+        own = await create_answer(db, qid, asker, AnswerCreate(content="self"))
+        with pytest.raises(BizError) as exc:
+            await accept_answer(db, qid, own.id, asker)
+        assert exc.value.errcode == QaErr.SELF_ACCEPT_FORBIDDEN
+
+    async def test_expired_bounty_cannot_be_accepted(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
+        qid, asker = await _asker_with_bounty(db, auth_db)
+        answerer = await _user(auth_db, "late_answerer")
+        answer = await create_answer(db, qid, answerer, AnswerCreate(content="late"))
+        row = await db.get(QAQuestion, qid)
+        assert row is not None
+        row.bounty_expires_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+        await db.flush()
+        with pytest.raises(BizError) as exc:
+            await accept_answer(db, qid, answer.id, asker)
+        assert exc.value.errcode == QaErr.BOUNTY_EXPIRED
+
     async def test_accept_pays_answerer(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
@@ -171,6 +220,19 @@ class TestAccept:
 
 
 class TestClose:
+    async def test_expiry_refunds_once(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
+        qid, asker = await _asker_with_bounty(db, auth_db)
+        row = await db.get(QAQuestion, qid)
+        assert row is not None
+        row.bounty_expires_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+        await db.flush()
+        assert await expire_due_questions(db) == 1
+        assert await expire_due_questions(db) == 0
+        assert await get_balance(db, asker) == 1000
+        assert row.status == "closed"
+
     async def test_close_refunds_remainder(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
@@ -194,6 +256,26 @@ class TestClose:
 
 
 class TestList:
+    async def test_bounty_sort_orders_highest_first(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
+        asker = await _user(auth_db, "sort_asker")
+        await reward(db, asker, 1000, "seed", "seed", "qa-sort")
+        low = await create_question(
+            db, asker,
+            QuestionCreate(
+                title="low", situation="s", content="c", bounty_per_person=10
+            ),
+        )
+        high = await create_question(
+            db, asker,
+            QuestionCreate(
+                title="high", situation="s", content="c", bounty_per_person=100
+            ),
+        )
+        page = await list_questions(db, page=1, limit=10, sort="bounty")
+        assert [q.id for q in page.items[:2]] == [high.id, low.id]
+
     async def test_list_paginated(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):

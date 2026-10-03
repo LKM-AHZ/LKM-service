@@ -1,8 +1,11 @@
 import uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import StreamingResponse
 
+from app.modules.content.qa.images import serve_question_image, upload_question_image
 from app.modules.content.qa.schemas import (
     AcceptIn,
     AnswerCreate,
@@ -39,9 +42,8 @@ def _status() -> ModuleStatus:
         status="implemented",
         responsibility="求助/问答：悬赏问答，发问锁定 escrow、采纳派发、撤单退回。",
         next_steps=[
-            "附件图真实上传（前端 IndexedDB 替换）",
             "回答点赞/认可、搜索/标签、通知",
-            "前端 QA 接线",
+            "跨账号同设备刷分识别",
         ],
     )
 
@@ -57,11 +59,14 @@ async def qa_status() -> ModuleStatus:
 @router.get("/questions", response_model=ApiResp[PageData[QuestionOut]])
 @respond
 async def qa_list(
-    category: str | None = Query(default=None),
+    category: Literal["help", "volunteer"] | None = Query(default=None),
+    sort: Literal["newest", "bounty"] = Query(default="newest"),
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
 ) -> PageData[QuestionOut]:
-    return await list_questions(db, page=pag.page, limit=pag.limit, category=category)
+    return await list_questions(
+        db, page=pag.page, limit=pag.limit, category=category, sort=sort
+    )
 
 
 @router.get("/questions/{question_id}", response_model=ApiResp[QuestionDetail])
@@ -91,6 +96,29 @@ async def qa_answer(
     db: AsyncSession = Depends(get_session),
 ) -> AnswerOut:
     return await create_answer(db, question_id, cur.id, info)
+
+
+@router.post("/questions/{question_id}/images", response_model=ApiResp[dict[str, str]])
+@respond
+async def qa_upload_image(
+    question_id: uuid.UUID,
+    file: UploadFile = File(...),
+    image_id: uuid.UUID = Form(...),
+    cur: CurrentUser = RequireLevel("normal"),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    return {
+        "url": await upload_question_image(db, question_id, cur.id, image_id, file)
+    }
+
+
+@router.get("/questions/{question_id}/images/{image_id}")
+async def qa_image(
+    question_id: uuid.UUID,
+    image_id: uuid.UUID,
+    db: AsyncSession = Depends(get_read_session),
+) -> StreamingResponse:
+    return await serve_question_image(db, question_id, image_id)
 
 
 @router.post("/questions/{question_id}/accept", response_model=ApiResp[AnswerOut])

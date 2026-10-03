@@ -9,8 +9,8 @@
   若是回复（``parent_id`` 非空）另通知父评论作者 ``comment_replied``
 
 不产通知的事件：``post``/``competition``/``file_approved``/``article:like`` 等是
-「自己触发自己」或目标实体不在统一内容表；``answer_accepted`` 的事件主体就是回答作者
-本人（缺提问者信息），无法定向。
+「自己触发自己」或目标实体不在统一内容表；``answer_accepted`` 用于计数，
+``qa_accept_notice`` 以提问者为主体定向通知回答者。
 
 落库与推送的关系：**以库为准**——先入库并提交，再 best-effort 推送（Redis/WS 失败不影响
 通知存在）；偏好关闭只静音实时推送，库里的站内信照落（用户刷新仍可见）。
@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.models import ContentComment, ContentItem
+from app.modules.content.models import ContentComment, ContentItem, QAAnswer, QAQuestion
 from app.modules.notification.service import (
     NotificationType,
     create_notification,
@@ -136,6 +136,28 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
                     )
                 )
         return targets
+
+    if event == "qa_accept_notice" and prefix == "answer":
+        answer = await db.scalar(select(QAAnswer).where(QAAnswer.id == ref))
+        if answer is None:
+            return []
+        question = await db.scalar(
+            select(QAQuestion).where(QAQuestion.id == answer.question_id)
+        )
+        if question is None:
+            return []
+        return [
+            _Target(
+                owner_id=answer.author_id,
+                kind=NotificationType.QA_ANSWER_ACCEPTED,
+                target_id=question.id,
+                payload={
+                    "title": question.title,
+                    "url": f"/qa/{question.id}",
+                    "points": question.bounty_per_person,
+                },
+            )
+        ]
 
     return []
 

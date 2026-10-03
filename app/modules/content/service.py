@@ -1010,6 +1010,9 @@ async def create_question(
 ) -> QuestionOut:
     """发问：spend 锁定总悬赏 + 写 Question（同事务）。"""
     total = info.bounty_people * info.bounty_per_person
+    expires_at = (
+        now_iso() + _dt.timedelta(days=info.bounty_days) if total > 0 else None
+    )
     # 先建 Question 拿 id（作为 spend 的 ref_id）
     q = QAQuestion(
         author_id=author_id,
@@ -1021,6 +1024,8 @@ async def create_question(
         bounty_per_person=info.bounty_per_person,
         bounty_total=total,
         bounty_distributed=0,
+        bounty_expires_at=expires_at,
+        urgent=info.urgent,
         status="open",
     )
     repo = QAQuestionRepository(db)
@@ -1028,8 +1033,6 @@ async def create_question(
     if total > 0:
         # spend 锁定（余额不足抛 INSUFFICIENT_BALANCE，同事务回滚）
         await spend(db, author_id, total, "qa_escrow", "qa_question", str(q.id))
-    if info.images:
-        await repo.add_images(q.id, info.images)
     await _sync_question_content_item(db, author_id, q)
     await db.flush()
     await bump_collection_version("qa")
@@ -1093,12 +1096,16 @@ async def list_questions(
     page: int = 1,
     limit: int = 20,
     category: str | None = None,
+    sort: str = "newest",
 ) -> PageData[QuestionOut]:
     repo = QAQuestionRepository(db)
 
     async def load() -> list[dict[str, Any]]:
         rows = await repo.list_with_answer_counts(
-            category=category, offset=paginate_offset(page, limit), limit=limit
+            category=category,
+            sort=sort,
+            offset=paginate_offset(page, limit),
+            limit=limit,
         )
         questions = [q for q, _ in rows]
         names = await _qa_author_names(db, [q.author_id for q in questions])
@@ -1116,7 +1123,7 @@ async def list_questions(
 
     ver = await collection_version("qa")
     payload = await cached_read(
-        make_key("qa:list", ver, page, limit, category or ""), 60, load
+        make_key("qa:list", ver, page, limit, category or "", sort), 60, load
     )
     # 分页元信息（total 单独查，不缓存）
     total_where = [QAQuestion.category == category] if category else []
@@ -1151,11 +1158,13 @@ async def get_question(db: DbSession, question_id: uuid.UUID) -> QuestionDetail:
 async def create_answer(
     db: DbSession, question_id: uuid.UUID, author_id: uuid.UUID, info: AnswerCreate
 ) -> AnswerOut:
-    q = await QAQuestionRepository(db).get_or_raise(
-        question_id, QaErr.QUESTION_NOT_FOUND
-    )
+    q = await QAQuestionRepository(db).get_locked(question_id)
+    if q is None:
+        raise BizError(QaErr.QUESTION_NOT_FOUND)
     if q.status != "open":
         raise BizError(QaErr.QUESTION_NOT_OPEN)
+    if q.bounty_expires_at is not None and q.bounty_expires_at <= now_iso():
+        raise BizError(QaErr.BOUNTY_EXPIRED)
     a = await QAAnswerRepository(db).create(
         question_id=question_id, author_id=author_id, content=info.content
     )
@@ -1169,11 +1178,15 @@ async def accept_answer(
     """发问者采纳回答：防超发派发人均积分给回答者（同事务）。"""
     q_repo = QAQuestionRepository(db)
     a_repo = QAAnswerRepository(db)
-    q = await q_repo.get_or_raise(question_id, QaErr.QUESTION_NOT_FOUND)
+    q = await q_repo.get_locked(question_id)
+    if q is None:
+        raise BizError(QaErr.QUESTION_NOT_FOUND)
     if q.author_id != asker_id:
         raise BizError(QaErr.NOT_ASKER)
     if q.status != "open":
         raise BizError(QaErr.QUESTION_NOT_OPEN)
+    if q.bounty_expires_at is not None and q.bounty_expires_at <= now_iso():
+        raise BizError(QaErr.BOUNTY_EXPIRED)
     a = await a_repo.get_one_or_raise(
         QaErr.ANSWER_NOT_FOUND,
         QAAnswer.id == answer_id,
@@ -1181,6 +1194,8 @@ async def accept_answer(
     )
     if a.is_accepted:
         return AnswerOut.model_validate(a)
+    if a.author_id == q.author_id:
+        raise BizError(QaErr.SELF_ACCEPT_FORBIDDEN)
     # 防超发：已采纳数 >= 悬赏人数 → 拒
     accepted_count = await a_repo.count_accepted(question_id)
     if accepted_count >= q.bounty_people:
@@ -1200,6 +1215,7 @@ async def accept_answer(
     await a_repo.flush()
     # 采纳回答事件入队（仅计数，QA 已按悬赏派发，不加分）
     await enqueue_points_event(db, a.author_id, "answer_accepted", f"answer:{a.id}")
+    await enqueue_points_event(db, q.author_id, "qa_accept_notice", f"answer:{a.id}")
     await bump_collection_version("qa")
     return AnswerOut.model_validate(a)
 
@@ -1212,7 +1228,9 @@ async def close_question(
 ) -> QuestionOut:
     """发问者关闭问题：可同时采纳一个回答；剩余 escrow 退回发问者。"""
     repo = QAQuestionRepository(db)
-    q = await repo.get_or_raise(question_id, QaErr.QUESTION_NOT_FOUND)
+    q = await repo.get_locked(question_id)
+    if q is None:
+        raise BizError(QaErr.QUESTION_NOT_FOUND)
     if q.author_id != asker_id:
         raise BizError(QaErr.NOT_ASKER)
     if q.status != "open":
@@ -1221,15 +1239,30 @@ async def close_question(
         await accept_answer(db, question_id, accepted_answer_id, asker_id)
         # 重新载入 q（accept 改了 distributed）
         q = await repo.get_or_raise(question_id, QaErr.QUESTION_NOT_FOUND)
-    # 剩余 escrow 退回发问者
-    refund = q.bounty_total - q.bounty_distributed
-    if refund > 0:
-        await reward(db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id))
-    q.status = "accepted" if q.accepted_answer_id is not None else "closed"
+    await _settle_question(db, q)
     await repo.flush()
     await bump_collection_version("qa")
     names = await _qa_author_names(db, [q.author_id])
     return _question_to_schema(q, names.get(q.author_id, ""))
+
+
+async def _settle_question(db: DbSession, q: QAQuestion) -> None:
+    """退还尚未派发的托管积分；由问题行锁保护重复结算。"""
+    refund = q.bounty_total - q.bounty_distributed
+    if refund > 0:
+        await reward(db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id))
+    q.status = "accepted" if q.accepted_answer_id is not None else "closed"
+
+
+async def expire_due_questions(db: DbSession, limit: int = 100) -> int:
+    """扫描到期问题并在同一事务内退款；多 worker 用 SKIP LOCKED 分片。"""
+    questions = await QAQuestionRepository(db).expired_for_update(now_iso(), limit)
+    for q in questions:
+        await _settle_question(db, q)
+    if questions:
+        await db.flush()
+        await bump_collection_version("qa")
+    return len(questions)
 
 
 def _question_to_schema(q: QAQuestion, author_name: str = "") -> QuestionOut:

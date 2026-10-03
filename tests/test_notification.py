@@ -16,6 +16,8 @@ from app.modules.content.models import (
     ContentItem,
     ContentStatus,
     ContentType,
+    QAAnswer,
+    QAQuestion,
 )
 from app.modules.notification import tasks as notif_tasks
 from app.modules.notification.errors import NotificationErr
@@ -328,6 +330,7 @@ class TestService:
             NotificationType.CONTENT_LIKED,
             NotificationType.CONTENT_COMMENTED,
             NotificationType.COMMENT_REPLIED,
+            NotificationType.QA_ANSWER_ACCEPTED,
         }
         assert await is_type_enabled(db, uid, NotificationType.CONTENT_LIKED)
 
@@ -379,6 +382,45 @@ class TestService:
 
 
 class TestConsumeEvents:
+    async def test_qa_accept_notifies_answer_author(
+        self, db: AsyncSession, auth_db: AsyncSession, patched_handler: list
+    ) -> None:
+        asker = await _mk_user(auth_db, "qa_asker_notify")
+        answerer = await _mk_user(auth_db, "qa_answerer_notify")
+        question = QAQuestion(
+            author_id=asker,
+            title="悬赏题",
+            situation="情况",
+            content="问题",
+            bounty_people=1,
+            bounty_per_person=50,
+            bounty_total=50,
+            bounty_distributed=50,
+            status="open",
+            category="help",
+        )
+        db.add(question)
+        await db.flush()
+        answer = QAAnswer(
+            question_id=question.id,
+            author_id=answerer,
+            content="解答",
+            is_accepted=True,
+        )
+        db.add(answer)
+        await db.flush()
+
+        await notif_tasks.notify_from_point_event(
+            asker, "qa_accept_notice", f"answer:{answer.id}"
+        )
+
+        rows = await _rows(db, answerer)
+        assert len(rows) == 1
+        assert rows[0].type == NotificationType.QA_ANSWER_ACCEPTED
+        assert rows[0].payload["points"] == 50
+        assert rows[0].payload["url"] == f"/qa/{question.id}"
+        assert len(patched_handler) == 1
+
     async def test_like_notifies_content_author(
         self, db: AsyncSession, auth_db: AsyncSession, patched_handler: list
     ) -> None:
