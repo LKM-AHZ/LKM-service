@@ -28,13 +28,14 @@ MODULES: tuple[str, ...] = (
     "projects",
     "search",
     "starhope",
+    "treehole",
     # rbac 无 REST/GraphQL 导出，但承载跨模块权限框架，无需在此列表聚合路由；
     # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
 )
 
 # 不做顶层 errors.py 的模块：admin 的错误码在子包 admin.moderation 下；health 无错误码；
 # feed 的错误码（FollowErr）随关注关系迁入 interaction 后已无自有错误码。
-_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "feed", "health"})
+_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "feed", "health", "treehole"})
 
 _ERROR_MODULES: list[str] = [
     *(m for m in MODULES if m not in _NO_TOP_ERRORS),

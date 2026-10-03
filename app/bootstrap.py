@@ -20,6 +20,7 @@ APP_MODEL_MODULES: tuple[str, ...] = (
     "app.modules.points.models",
     "app.modules.projects.models",
     "app.modules.starhope.models",
+    "app.modules.treehole.models",
 )
 
 #: 需在装配期导入的 Pulsar 任务模块（导入即副作用注册 handler / cron）。
