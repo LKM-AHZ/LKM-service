@@ -28,4 +28,10 @@ async def apply_content_event(item_id: str, action: str) -> None:
     await sync.apply_content_event(item_id, action)
 
 
+@log_exceptions
+async def apply_file_event(file_id: str) -> None:
+    await sync.apply_file_event(file_id)
+
+
 register_task(SUB_CONTENT_INDEX.name, "apply_content_event", apply_content_event)
+register_task(SUB_CONTENT_INDEX.name, "apply_file_event", apply_file_event)

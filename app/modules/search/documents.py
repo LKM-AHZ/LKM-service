@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.content.models import ContentItem
+from app.modules.files.models import LibraryFile
 from app.modules.search.engines.base import IndexDoc
 from core.common import parse_tags
 
@@ -44,3 +45,21 @@ def build_doc(item: ContentItem, author_name: str = "") -> IndexDoc:
     if item.created_at is not None:
         doc["created_at"] = item.created_at.isoformat()
     return doc
+
+
+def build_file_doc(item: LibraryFile, uploader_name: str = "") -> IndexDoc:
+    """已审核公开文件的正文/元数据索引文档；调用方负责可见性过滤。"""
+    return {
+        "id": str(item.id),
+        "content_type": "library_file",
+        "board_id": "",
+        "title": item.original_name,
+        "excerpt": item.description,
+        "content": item.extracted_text,
+        "summary": item.document_code or "",
+        "tags": _tag_list(item.tags),
+        "keywords": [item.category_id, item.document_code or ""],
+        "author_id": str(item.uploader_id),
+        "author_name": uploader_name,
+        "created_at": item.created_at.isoformat(),
+    }

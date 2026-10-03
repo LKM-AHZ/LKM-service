@@ -5,7 +5,7 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Index, Integer, String, Text, Uuid
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.db.base import Base, UTCDateTime, UUIDPrimaryKeyMixin, now_iso
@@ -16,6 +16,12 @@ class FileStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     DELETED = "deleted"
+
+
+class FileClassification(StrEnum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
 
 
 # 文件库模块实际用到/计划的库表及其列（供 /files/status 健康自检展示）。
@@ -38,13 +44,28 @@ FILES_TABLE_PLAN = {
         "download_count",
         "view_count",
         "created_at",
+        "document_code",
+        "classification",
+        "project_id",
+        "version",
+        "root_file_id",
+        "extracted_text",
+        "archive_state",
+        "backed_up_at",
     ],
 }
 
 
 class LibraryFile(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "library_files"
-    __table_args__ = (Index("ix_library_files_sha3_hash", "sha3_hash"),)
+    __table_args__ = (
+        Index("ix_library_files_sha3_hash", "sha3_hash"),
+        UniqueConstraint(
+            "document_code", "version", name="uq_library_document_version"
+        ),
+        Index("ix_library_files_project", "project_id"),
+        Index("ix_library_files_root_version", "root_file_id", "version"),
+    )
 
     uploader_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, nullable=False
@@ -63,6 +84,24 @@ class LibraryFile(UUIDPrimaryKeyMixin, Base):
     )
     size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     category_id: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    document_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    classification: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=FileClassification.PUBLIC
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    root_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("library_files.id"), nullable=True
+    )
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    archive_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active"
+    )
+    backed_up_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")

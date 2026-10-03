@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from app.modules.search.documents import build_doc
+from app.modules.search.documents import build_doc, build_file_doc
 from app.modules.search.engines.factory import get_engine
 from app.modules.search.repository import SearchRepository
 from core.config import settings
@@ -75,6 +75,26 @@ async def rebuild_index(
             ]
             indexed += await engine.upsert(docs)
             last_id = rows[-1].id
+        last_file_id = uuid.UUID(int=0)
+        while True:
+            files = await repo.public_files_batch(after_id=last_file_id, limit=size)
+            if not files:
+                break
+            snaps = await get_user_snapshot_batch(
+                session, user_ids=list({row.uploader_id for row in files})
+            )
+            indexed += await engine.upsert(
+                [
+                    build_file_doc(
+                        row,
+                        snaps[row.uploader_id].display_name
+                        if row.uploader_id in snaps
+                        else "",
+                    )
+                    for row in files
+                ]
+            )
+            last_file_id = files[-1].id
     finally:
         if owned:
             await session.close()

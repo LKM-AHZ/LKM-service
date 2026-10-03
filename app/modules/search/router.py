@@ -28,7 +28,7 @@ async def search_status() -> ModuleStatus:
     return ModuleStatus(
         module="search",
         status="implemented",
-        responsibility="站内检索：已发布内容的只读聚合（PG FTS + pg_trgm；可切 Meilisearch/OpenSearch）。",
+        responsibility="站内检索：已发布内容与审核公开文件（PG FTS + pg_trgm；内容可切外部引擎）。",
         next_steps=[
             "OpenSearch 侧中文分词需集群插件（ik/smartcn），未装则用 standard 分析器",
             "检索结果缓存与 P1 索引调优按收益复评",

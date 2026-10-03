@@ -22,6 +22,7 @@ from app.modules.content.boards.service import create_board_ex
 from app.modules.content.models import ContentItem, ContentStatus
 from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item
+from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.search.errors import SearchErr
 from app.modules.search.service import search_items
 from core.err import BizError
@@ -214,3 +215,54 @@ async def test_search_indexes_present(db: AsyncSession) -> None:
     assert "ix_content_title_trgm" in defs
     assert "ix_content_content_trgm" in defs
     assert "gin_trgm_ops" in defs["ix_content_title_trgm"]
+
+
+async def test_public_library_file_full_text_and_version_filter(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = (await _au(auth_db, "file_searcher")).id
+    common = dict(
+        uploader_id=uid,
+        original_name="实验报告.pdf",
+        mime_type="application/pdf",
+        size=100,
+        category_id="physics",
+        description="实验",
+        tags="[]",
+        document_code="WL-SYBG-2024-901",
+        extracted_text="量子纠缠测量",
+    )
+    first = LibraryFile(
+        **common,
+        stored_name="search-v1",
+        version=1,
+        status=FileStatus.APPROVED,
+        classification="public",
+    )
+    second = LibraryFile(
+        **common,
+        stored_name="search-v2",
+        version=2,
+        status=FileStatus.APPROVED,
+        classification="public",
+    )
+    secret = LibraryFile(
+        **{**common, "document_code": "WL-SYBG-2024-902"},
+        stored_name="search-secret",
+        version=1,
+        status=FileStatus.APPROVED,
+        classification="confidential",
+    )
+    pending = LibraryFile(
+        **{**common, "document_code": "WL-SYBG-2024-903"},
+        stored_name="search-pending",
+        version=1,
+        status=FileStatus.PENDING,
+        classification="public",
+    )
+    db.add_all([first, second, secret, pending])
+    await db.flush()
+    page = await search_items(db, "量子纠缠")
+    assert [hit.id for hit in page.items] == [second.id]
+    assert page.items[0].document_code == "WL-SYBG-2024-901"
+    assert (await search_items(db, "量子纠缠", content_type="library_file")).total == 1

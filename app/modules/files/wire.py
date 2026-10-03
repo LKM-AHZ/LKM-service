@@ -33,6 +33,13 @@ class FileInfoWire(msgspec.Struct):
     download_count: int
     view_count: int
     created_at: datetime.datetime
+    document_code: str | None
+    classification: str
+    project_id: uuid.UUID | None
+    version: int
+    root_file_id: uuid.UUID | None
+    archive_state: str
+    backed_up_at: datetime.datetime | None
 
 
 class FilePageWire(msgspec.Struct):
@@ -61,6 +68,13 @@ def to_wire(page: PageData[FileInfo]) -> FilePageWire:
                 download_count=item.download_count,
                 view_count=item.view_count,
                 created_at=item.created_at,
+                document_code=item.document_code,
+                classification=item.classification,
+                project_id=item.project_id,
+                version=item.version,
+                root_file_id=item.root_file_id,
+                archive_state=item.archive_state,
+                backed_up_at=item.backed_up_at,
             )
             for item in page.items
         ],

@@ -25,7 +25,7 @@ class SearchHitWire(msgspec.Struct):
 
     id: uuid.UUID
     content_type: str
-    board_id: uuid.UUID
+    board_id: uuid.UUID | None
     title: str
     excerpt: str
     slug: str | None
@@ -36,6 +36,9 @@ class SearchHitWire(msgspec.Struct):
     view_count: int
     published_at: datetime.datetime | None
     created_at: datetime.datetime
+    document_code: str | None
+    version: int | None
+    project_id: uuid.UUID | None
 
 
 class SearchPageWire(msgspec.Struct):
@@ -65,6 +68,9 @@ def to_wire(page: PageData[SearchHit]) -> SearchPageWire:
                 view_count=hit.view_count,
                 published_at=hit.published_at,
                 created_at=hit.created_at,
+                document_code=hit.document_code,
+                version=hit.version,
+                project_id=hit.project_id,
             )
             for hit in page.items
         ],

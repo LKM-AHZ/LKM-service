@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from typing import Any, cast
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, literal, or_, select, union_all
+from sqlalchemy.orm import aliased
 
 from app.modules.content.models import ContentItem, ContentStatus
+from app.modules.files.models import FileStatus, LibraryFile
 from core.db.repository import AsyncRepository
 
 _LIKE_ESCAPE = "\\"
@@ -36,6 +39,118 @@ class SearchRepository(AsyncRepository[ContentItem]):
     """``content_items`` 的只读检索（仅已发布内容，匿名口径与内容列表一致）。"""
 
     model = ContentItem
+
+    async def search_with_files(
+        self,
+        *,
+        term: str,
+        offset: int,
+        limit: int,
+        content_type: str | None = None,
+    ) -> tuple[int, list[tuple[uuid.UUID, str]]]:
+        """公开文件与已发布内容在数据库内合并排序、分页。"""
+        query, content_conditions = self._match(term, None)
+        content = select(
+            ContentItem.id.label("id"),
+            literal("content").label("source"),
+            func.ts_rank(ContentItem.search_vector, query).label("rank"),
+            ContentItem.created_at.label("created_at"),
+        ).where(*cast(Any, content_conditions))
+
+        pattern = _like_pattern(term)
+        file_vector = func.to_tsvector(
+            "simple",
+            func.concat_ws(
+                " ",
+                LibraryFile.original_name,
+                LibraryFile.document_code,
+                LibraryFile.description,
+                LibraryFile.tags,
+                LibraryFile.extracted_text,
+            ),
+        )
+        file_match = or_(
+            file_vector.bool_op("@@")(query),
+            LibraryFile.original_name.ilike(pattern, escape=_LIKE_ESCAPE),
+            LibraryFile.document_code.ilike(pattern, escape=_LIKE_ESCAPE),
+            LibraryFile.description.ilike(pattern, escape=_LIKE_ESCAPE),
+            LibraryFile.tags.ilike(pattern, escape=_LIKE_ESCAPE),
+            LibraryFile.extracted_text.ilike(pattern, escape=_LIKE_ESCAPE),
+        )
+        newer = aliased(LibraryFile)
+        has_newer_approved = (
+            select(newer.id)
+            .where(
+                newer.document_code == LibraryFile.document_code,
+                newer.version > LibraryFile.version,
+                newer.status == FileStatus.APPROVED,
+            )
+            .exists()
+        )
+        files = select(
+            LibraryFile.id.label("id"),
+            literal("library_file").label("source"),
+            func.ts_rank(file_vector, query).label("rank"),
+            LibraryFile.created_at.label("created_at"),
+        ).where(
+            LibraryFile.status == FileStatus.APPROVED,
+            LibraryFile.classification == "public",
+            ~has_newer_approved,
+            file_match,
+        )
+        if content_type == "library_file":
+            combined = files.subquery()
+        else:
+            combined = union_all(content, files).subquery()
+        total = await self.db.scalar(select(func.count()).select_from(combined))
+        rows = (
+            await self.db.execute(
+                select(combined.c.id, combined.c.source)
+                .order_by(
+                    combined.c.rank.desc().nulls_last(),
+                    combined.c.created_at.desc(),
+                    combined.c.id.desc(),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+        return int(total or 0), [(row.id, row.source) for row in rows]
+
+    async def public_files_by_ids(self, ids: Sequence[uuid.UUID]) -> list[LibraryFile]:
+        if not ids:
+            return []
+        result = await self.db.execute(
+            select(LibraryFile).where(
+                LibraryFile.id.in_(ids),
+                LibraryFile.status == FileStatus.APPROVED,
+                LibraryFile.classification == "public",
+            )
+        )
+        return list(result.scalars().all())
+
+    async def public_files_batch(
+        self, *, after_id: uuid.UUID, limit: int
+    ) -> list[LibraryFile]:
+        newer = aliased(LibraryFile)
+        result = await self.db.execute(
+            select(LibraryFile)
+            .where(
+                LibraryFile.id > after_id,
+                LibraryFile.status == FileStatus.APPROVED,
+                LibraryFile.classification == "public",
+                ~select(newer.id)
+                .where(
+                    newer.document_code == LibraryFile.document_code,
+                    newer.version > LibraryFile.version,
+                    newer.status == FileStatus.APPROVED,
+                )
+                .exists(),
+            )
+            .order_by(LibraryFile.id)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     @staticmethod
     def _match(term: str, content_type: str | None) -> tuple[object, list[object]]:

@@ -10,6 +10,11 @@ class FileErr(ErrCode):
     NOT_APPROVED = NS_FILES.err(6)
     UPLOAD_NOT_FOUND = NS_FILES.err(7)
     UPLOAD_EXPIRED = NS_FILES.err(8)
+    NOT_OWNER = NS_FILES.err(9)
+    INVALID_PROJECT = NS_FILES.err(10)
+    UNSAFE_CONTENT = NS_FILES.err(11)
+    SCAN_UNAVAILABLE = NS_FILES.err(12)
+    PREVIEW_UNAVAILABLE = NS_FILES.err(13)
 
 
 register(
@@ -25,5 +30,13 @@ register(
             "Upload target not found (direct upload failed)",
         ),
         FileErr.UPLOAD_EXPIRED: (410, "Upload session expired, please re-initiate"),
+        FileErr.NOT_OWNER: (403, "Only the document owner can add a version"),
+        FileErr.INVALID_PROJECT: (
+            400,
+            "Project does not exist or user is not a member",
+        ),
+        FileErr.UNSAFE_CONTENT: (422, "File failed security screening"),
+        FileErr.SCAN_UNAVAILABLE: (503, "File scanner is unavailable"),
+        FileErr.PREVIEW_UNAVAILABLE: (415, "Document preview is unavailable"),
     }
 )

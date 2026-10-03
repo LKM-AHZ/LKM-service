@@ -13,10 +13,13 @@ import datetime
 import hashlib
 import uuid
 
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import Integer, and_, delete, func, or_, select, tuple_, update
+from sqlalchemy.orm import aliased
 
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FileStatus, LibraryFile, UploadSession
+from app.modules.projects.models import ProjectMember
+from core.contracts import CurrentUser
 from core.db.repository import AsyncRepository
 from core.err import BizError
 
@@ -67,6 +70,46 @@ class UploadSessionRepository(AsyncRepository[UploadSession]):
 class LibraryFileRepository(AsyncRepository[LibraryFile]):
     model = LibraryFile
 
+    async def lock_document(self, key: str) -> None:
+        lock_id = int.from_bytes(
+            hashlib.blake2b(f"file-doc:{key}".encode(), digest_size=8).digest(),
+            byteorder="big",
+            signed=True,
+        )
+        await self.db.execute(select(func.pg_advisory_xact_lock(lock_id)))
+
+    async def next_document_code(self, year: int) -> str:
+        """在年度事务锁内取号，保证并发上传不会分配同一编号。"""
+        prefix = f"WL-SYBG-{year}-"
+        await self.lock_document(prefix)
+        latest = await self.db.scalar(
+            select(
+                func.max(
+                    func.cast(
+                        func.substring(LibraryFile.document_code, len(prefix) + 1),
+                        Integer,
+                    )
+                )
+            ).where(LibraryFile.document_code.like(f"{prefix}%"))
+        )
+        number = (latest or 0) + 1
+        return f"{prefix}{number:03d}"
+
+    async def next_version(self, code: str) -> int:
+        await self.lock_document(code)
+        latest = await self.db.scalar(
+            select(func.max(LibraryFile.version)).where(
+                LibraryFile.document_code == code
+            )
+        )
+        return (latest or 0) + 1
+
+    async def versions(self, code: str) -> list[LibraryFile]:
+        return await self.get_many(
+            LibraryFile.document_code == code,
+            order_by=LibraryFile.version.desc(),
+        )
+
     async def lock_hash(self, sha3_hash: str) -> None:
         """持有同内容哈希的 PG 事务锁，直到最外层事务 commit/rollback。
 
@@ -99,19 +142,77 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
         return count
 
     @staticmethod
-    def _page_conditions(category_id: str | None, status: str | None) -> list[object]:
+    def _page_conditions(
+        category_id: str | None,
+        status: str | None,
+        viewer: CurrentUser | None = None,
+        enforce_visibility: bool = False,
+    ) -> list[object]:
         conditions: list[object] = []
+        newer = aliased(LibraryFile)
+        has_newer_approved = (
+            select(newer.id)
+            .where(
+                newer.document_code == LibraryFile.document_code,
+                newer.version > LibraryFile.version,
+                newer.status == FileStatus.APPROVED,
+            )
+            .exists()
+        )
+        conditions.append(
+            or_(LibraryFile.status != FileStatus.APPROVED, ~has_newer_approved)
+        )
         if category_id:
             conditions.append(LibraryFile.category_id == category_id)
         if status:
             conditions.append(LibraryFile.status == status)
+        if enforce_visibility and (viewer is None or viewer.account_level != "admin"):
+            public = and_(
+                LibraryFile.status == FileStatus.APPROVED,
+                LibraryFile.classification == "public",
+            )
+            if viewer is None:
+                conditions.append(public)
+            else:
+                internal = and_(
+                    LibraryFile.status == FileStatus.APPROVED,
+                    LibraryFile.classification == "internal",
+                )
+                member = (
+                    select(ProjectMember.id)
+                    .where(
+                        ProjectMember.project_id == LibraryFile.project_id,
+                        ProjectMember.user_id == viewer.id,
+                    )
+                    .exists()
+                )
+                project_file = and_(
+                    LibraryFile.status == FileStatus.APPROVED,
+                    LibraryFile.classification == "confidential",
+                    member,
+                )
+                conditions.append(
+                    or_(
+                        public,
+                        internal,
+                        project_file,
+                        LibraryFile.uploader_id == viewer.id,
+                    )
+                )
         return conditions
 
     async def count_page(
-        self, *, category_id: str | None = None, status: str | None = None
+        self,
+        *,
+        category_id: str | None = None,
+        status: str | None = None,
+        viewer: CurrentUser | None = None,
+        enforce_visibility: bool = False,
     ) -> int:
         """列表总数（与 :meth:`list_page` 同谓词）。"""
-        return await self.count(*self._page_conditions(category_id, status))
+        return await self.count(
+            *self._page_conditions(category_id, status, viewer, enforce_visibility)
+        )
 
     async def list_page(
         self,
@@ -121,6 +222,8 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
         sort: str = "newest",
         offset: int = 0,
         limit: int = 20,
+        viewer: CurrentUser | None = None,
+        enforce_visibility: bool = False,
     ) -> list[LibraryFile]:
         """文件列表分页；``sort == "downloads"`` 按下载量倒序，否则按 id 倒序。"""
         # downloads 排序补 id 兜底：download_count 相同的行在 PG 里无稳定次序，
@@ -131,7 +234,7 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
             else LibraryFile.id.desc()
         )
         return await self.get_many(
-            *self._page_conditions(category_id, status),
+            *self._page_conditions(category_id, status, viewer, enforce_visibility),
             order_by=order,
             offset=offset,
             limit=limit,

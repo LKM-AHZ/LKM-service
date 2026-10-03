@@ -70,6 +70,25 @@ def _to_hit(item: Any, names: dict[uuid.UUID, str]) -> SearchHit:
     )
 
 
+def _file_hit(item: Any, names: dict[uuid.UUID, str]) -> SearchHit:
+    return SearchHit(
+        id=item.id,
+        content_type="library_file",
+        board_id=None,
+        title=item.original_name,
+        excerpt=item.description,
+        author_id=item.uploader_id,
+        author_name=names.get(item.uploader_id, ""),
+        like_count=0,
+        comment_count=0,
+        view_count=item.view_count,
+        created_at=item.created_at,
+        document_code=item.document_code,
+        version=item.version,
+        project_id=item.project_id,
+    )
+
+
 async def _pg_hits(
     db: DbSession,
     term: str,
@@ -79,6 +98,34 @@ async def _pg_hits(
     content_type: str | None,
 ) -> PageData[SearchHit]:
     repo = SearchRepository(db)
+    if content_type is None or content_type == "library_file":
+        total, ordered_ids = await repo.search_with_files(
+            term=term,
+            offset=paginate_offset(page, limit),
+            limit=limit,
+            content_type=content_type,
+        )
+        content_ids = [i for i, source in ordered_ids if source == "content"]
+        file_ids = [i for i, source in ordered_ids if source == "library_file"]
+        content_rows = await repo.list_published_by_ids(content_ids)
+        file_rows = await repo.public_files_by_ids(file_ids)
+        content_map = {row.id: row for row in content_rows}
+        file_map = {row.id: row for row in file_rows}
+        names = await _author_map(
+            db,
+            [row.author_id for row in content_rows if row.author_id]
+            + [row.uploader_id for row in file_rows],
+        )
+        hits = [
+            _to_hit(content_map[i], names)
+            if source == "content"
+            else _file_hit(file_map[i], names)
+            for i, source in ordered_ids
+            if (i in content_map if source == "content" else i in file_map)
+        ]
+        return PageData(
+            items=hits, total=total, page=page, pages=paginate_pages(total, limit)
+        )
     total = await repo.count_matching(term=term, content_type=content_type)
     items = await repo.list_matching(
         term=term,
@@ -143,6 +190,11 @@ async def search_items(
         raise BizError(SearchErr.EMPTY_QUERY)
 
     engine = get_engine()
+    # 文件按数据库审核/密级实时过滤；外部索引即使滞后也不能绕过该口径。
+    if content_type is None or content_type == "library_file":
+        return await _pg_hits(
+            db, term, page=page, limit=limit, content_type=content_type
+        )
     if engine is not None:
         try:
             return await _engine_hits(

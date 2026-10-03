@@ -59,6 +59,7 @@ RKEY_BLOOM_SEED = "cron.bloom_seed"
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
 RKEY_CONTENT_DELETED = "event.content.deleted"
+RKEY_FILE_CHANGED = "event.file.changed"
 RKEY_AUDIT_LOGIN_FAIL = "audit.login_fail"
 RKEY_AUDIT_PERMISSION_CHANGE = "audit.permission_change"
 
@@ -141,6 +142,7 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_CONTENT_PUBLISHED: TOPIC_CONTENT,
     RKEY_CONTENT_UPDATED: TOPIC_CONTENT,
     RKEY_CONTENT_DELETED: TOPIC_CONTENT,
+    RKEY_FILE_CHANGED: TOPIC_CONTENT,
     RKEY_CLEANUP: TOPIC_CRON,
     RKEY_RECONCILE: TOPIC_CRON,
     RKEY_ANALYTICS: TOPIC_CRON,
@@ -183,7 +185,12 @@ SUB_JOBS = Subscription(
 SUB_CONTENT_INDEX = Subscription(
     "content-index",
     TOPIC_CONTENT,
-    (RKEY_CONTENT_PUBLISHED, RKEY_CONTENT_UPDATED, RKEY_CONTENT_DELETED),
+    (
+        RKEY_CONTENT_PUBLISHED,
+        RKEY_CONTENT_UPDATED,
+        RKEY_CONTENT_DELETED,
+        RKEY_FILE_CHANGED,
+    ),
 )
 SUB_DLQ = Subscription("dlq-persist", TOPIC_DLQ)
 SUB_AUDIT = Subscription("audit", TOPIC_AUDIT_LOGIN_FAIL, (RKEY_AUDIT_LOGIN_FAIL,))
@@ -561,7 +568,9 @@ def _handle_message(
             raise ValueError("payload 非 JSON 对象")
     except (TypeError, ValueError):
         if sub_name != SUB_DLQ.name:
-            logger.warning("非法消息转死信 subscription=%s bytes=%s", sub_name, len(raw))
+            logger.warning(
+                "非法消息转死信 subscription=%s bytes=%s", sub_name, len(raw)
+            )
             with suppress(Exception):
                 consumer.negative_acknowledge(msg)
             return

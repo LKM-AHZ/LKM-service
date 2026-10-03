@@ -36,6 +36,7 @@ from app.modules.files.service import (
     delete_file,
     get_file,
     list_files,
+    list_versions,
     review_file,
     upload_init,
 )
@@ -46,6 +47,42 @@ from tests.conftest import AuthUser, auth_user_uid
 
 # 合法的 uuid7 形态（第 3 段以 7 开头、第 4 段以 8 开头），用于"不存在"的 id 用例。
 _MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
+
+
+async def test_document_code_versions_and_latest_list(
+    db: AsyncSession,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    monkeypatch.setattr(settings, "files_store_dir", str(tmp_path / "store"))
+    monkeypatch.setattr(settings, "files_backup_dir", str(tmp_path / "backup"))
+    monkeypatch.setattr(settings, "files_clamav_address", "")
+    owner = await _au(auth_db, username="version_owner")
+    first = await create_file(
+        db,
+        owner.id,
+        FileCreate(original_name="report.txt", description="first"),
+        io.BytesIO(b"first version"),
+    )
+    second = await create_file(
+        db,
+        owner.id,
+        FileCreate(original_name="report.txt", version_of=first.id),
+        io.BytesIO(b"second version"),
+    )
+    assert first.document_code and first.document_code.startswith("WL-SYBG-")
+    assert second.document_code == first.document_code
+    assert (first.version, second.version) == (1, 2)
+    await review_file(db, first.id, FileStatus.APPROVED, is_admin=True)
+    await review_file(db, second.id, FileStatus.APPROVED, is_admin=True)
+    page = await list_files(db, viewer=None, enforce_visibility=True)
+    assert [item.id for item in page.items] == [second.id]
+    assert [item.version for item in await list_versions(db, second.id, None)] == [2, 1]
+    digest = hashlib.sha3_256(b"second version").hexdigest()
+    assert (tmp_path / "backup" / digest[:2] / digest).read_bytes() == b"second version"
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +732,29 @@ class TestFilesDedupAndReview:
         }
         assert all(row.ref_count == 0 for row in rows)
         assert await self._list_physical(tmp_path) == []
+
+    async def should_keep_approved_duplicate_when_rejecting_another_file(
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
+        uploader = await _au(auth_db)
+        approved = await self._upload_raw(db, uploader, b"shared approved bytes")
+        pending = await self._upload_raw(db, uploader, b"shared approved bytes")
+        await review_file(db, approved.id, FileStatus.APPROVED, is_admin=True)
+
+        await review_file(db, pending.id, FileStatus.REJECTED, is_admin=True)
+
+        approved_row = await db.get(LibraryFile, approved.id)
+        pending_row = await db.get(LibraryFile, pending.id)
+        assert approved_row is not None and approved_row.status == FileStatus.APPROVED
+        assert pending_row is not None and pending_row.status == FileStatus.REJECTED
+        assert approved_row.ref_count == pending_row.ref_count == 1
+        assert len(await self._list_physical(tmp_path)) == 1
 
     async def should_reject_review_when_not_pending(
         self,

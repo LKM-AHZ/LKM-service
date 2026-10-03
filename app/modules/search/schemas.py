@@ -11,7 +11,7 @@ class SearchHit(BaseModel):
 
     id: uuid.UUID
     content_type: str
-    board_id: uuid.UUID
+    board_id: uuid.UUID | None
     title: str
     excerpt: str = ""
     slug: str | None = None
@@ -22,3 +22,6 @@ class SearchHit(BaseModel):
     view_count: int
     published_at: datetime.datetime | None = None
     created_at: datetime.datetime
+    document_code: str | None = None
+    version: int | None = None
+    project_id: uuid.UUID | None = None

@@ -12,10 +12,12 @@ from __future__ import annotations
 import logging
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.models import ContentStatus
-from app.modules.search.documents import build_doc
+from app.modules.files.models import FileStatus, LibraryFile
+from app.modules.search.documents import build_doc, build_file_doc
 from app.modules.search.engines.base import SearchEngine
 from app.modules.search.engines.factory import get_engine
 from app.modules.search.repository import SearchRepository
@@ -46,6 +48,47 @@ async def sync_item(db: AsyncSession, engine: SearchEngine, item_id: uuid.UUID) 
         return "delete"
     await engine.upsert([build_doc(item, await _author_name(db, item.author_id))])
     return "upsert"
+
+
+async def sync_file(db: AsyncSession, engine: SearchEngine, file_id: uuid.UUID) -> str:
+    row = await db.get(LibraryFile, file_id)
+    if (
+        row is None
+        or row.status != FileStatus.APPROVED
+        or row.classification != "public"
+    ):
+        await engine.delete([str(file_id)])
+        return "delete"
+    newer = await db.scalar(
+        select(LibraryFile.id)
+        .where(
+            LibraryFile.document_code == row.document_code,
+            LibraryFile.version > row.version,
+            LibraryFile.status == FileStatus.APPROVED,
+        )
+        .limit(1)
+    )
+    if newer is not None:
+        await engine.delete([str(file_id)])
+        return "delete"
+    await engine.upsert([build_file_doc(row, await _author_name(db, row.uploader_id))])
+    return "upsert"
+
+
+async def apply_file_event(file_id: str) -> None:
+    engine = get_engine()
+    if engine is None or not settings.search_sync_enabled:
+        return
+    try:
+        uid = uuid.UUID(file_id)
+    except ValueError:
+        logger.warning("file 事件 id 非 uuid: %r", file_id)
+        return
+    db = await new_session()
+    try:
+        await sync_file(db, engine, uid)
+    finally:
+        await db.close()
 
 
 async def apply_content_event(item_id: str, action: str) -> None:

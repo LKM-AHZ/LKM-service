@@ -13,6 +13,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
+       poppler-utils libreoffice-writer libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv

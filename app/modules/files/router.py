@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from app.modules.admin.deps import require_admin_2fa
-from app.modules.files.models import FileStatus, LibraryFile
+from app.modules.files.models import FileClassification, FileStatus, LibraryFile
 from app.modules.files.schemas import (
     DownloadUrlInfo,
     FileCreate,
@@ -23,9 +23,11 @@ from app.modules.files.service import (
     get_file,
     get_files_plan,
     list_files,
+    list_versions,
     review_file,
     serve_content,
     upload_init,
+    upload_projects,
 )
 from app.modules.files.service import (
     create_file as create_file_service,
@@ -46,7 +48,7 @@ from core.config import settings
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
-from core.ports.authz import get_current_user
+from core.ports.authz import get_current_user, get_optional_user
 from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -69,6 +71,7 @@ async def get_files(
     category_id: str | None = Query(default=None, max_length=50),
     status: str | None = Query(default=None, max_length=20),
     sort: str = Query(default="newest"),
+    cur: CurrentUser | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_read_session),
 ) -> PageData[FileInfo] | Response:
     page = await list_files(
@@ -78,6 +81,8 @@ async def get_files(
         category_id=category_id,
         status=status,
         sort=sort,
+        viewer=cur,
+        enforce_visibility=True,
     )
     if settings.read_msgspec_enabled:
         return msgspec_ok(to_wire(page))
@@ -94,6 +99,8 @@ async def upload_file(
     category_id: str = Form(default="", max_length=50),
     description: str = Form(default="", max_length=500),
     tags: str = Form(default="[]"),
+    classification: FileClassification = Form(default=FileClassification.PUBLIC),
+    project_id: uuid.UUID | None = Form(default=None),
     cur: CurrentUser = RequirePermission(Permission.files_upload),
     db: AsyncSession = Depends(get_session),
 ) -> FileInfo:
@@ -108,6 +115,8 @@ async def upload_file(
             category_id=category_id,
             description=description,
             tags=tags_list,
+            classification=classification,
+            project_id=project_id,
         )
     except ValidationError as exc:
         raise BizError(CommonErr.INVALID_INPUT, str(exc)) from exc
@@ -125,6 +134,15 @@ async def upload_init_endpoint(
     return await upload_init(db, payload, cur)
 
 
+@router.get("/upload-projects", response_model=ApiResp[list[dict[str, str]]])
+@respond
+async def get_upload_projects(
+    cur: CurrentUser = RequirePermission(Permission.files_upload),
+    db: AsyncSession = Depends(get_read_session),
+) -> list[dict[str, str]]:
+    return await upload_projects(db, cur.id)
+
+
 @router.post("/{upload_id}/confirm", response_model=ApiResp[FileInfo])
 @respond
 async def confirm_upload_endpoint(
@@ -139,9 +157,43 @@ async def confirm_upload_endpoint(
 @router.get("/{file_id}", response_model=ApiResp[FileInfo])
 @respond
 async def get_file_detail(
-    file_id: uuid.UUID, db: AsyncSession = Depends(get_session)
+    file_id: uuid.UUID,
+    cur: CurrentUser | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_session),
 ) -> FileInfo:
-    return await get_file(db, file_id, bump_view=True)
+    return await get_file(
+        db, file_id, bump_view=True, viewer=cur, enforce_visibility=True
+    )
+
+
+@router.get("/{file_id}/versions", response_model=ApiResp[list[FileInfo]])
+@respond
+async def get_file_versions(
+    file_id: uuid.UUID,
+    cur: CurrentUser | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> list[FileInfo]:
+    return await list_versions(db, file_id, cur)
+
+
+@router.post("/{file_id}/versions", response_model=ApiResp[FileInfo])
+@respond
+async def upload_file_version(
+    file_id: uuid.UUID,
+    file: UploadFile = File(...),
+    description: str = Form(default="", max_length=500),
+    tags: str = Form(default="[]"),
+    cur: CurrentUser = RequirePermission(Permission.files_upload),
+    db: AsyncSession = Depends(get_session),
+) -> FileInfo:
+    info = FileCreate(
+        original_name=file.filename or "untitled",
+        mime_type=file.content_type or "application/octet-stream",
+        description=description,
+        tags=parse_tags(tags),
+        version_of=file_id,
+    )
+    return await create_file_service(db, cur.id, info, file.file)
 
 
 @router.post("/{file_id}/download", response_model=ApiResp[dict[str, Any]])
@@ -151,6 +203,9 @@ async def download_file(
     cur: CurrentUser = RequirePermission(Permission.files_download),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    info = await get_file(db, file_id, viewer=cur, enforce_visibility=True)
+    if info.status != FileStatus.APPROVED:
+        raise BizError(CommonErr.FORBIDDEN)
     return {"download_count": await bump_download(db, file_id)}
 
 
@@ -163,9 +218,9 @@ async def review_uploaded_file(
     review_comment: str | None = Form(default=None),
     db: AsyncSession = Depends(get_session),
 ) -> FileInfo:
-    """管理员审核文件：通过 / 驳回（驳回时删除物理文件并联动同 hash 条目）。
+    """管理员审核文件：通过 / 驳回；无其他有效引用时清理物理文件。
 
-    高危破坏性操作（驳回删物理文件 + 发放积分）：先经 require_admin_2fa（后台会话 +
+    高危操作（驳回可能清理物理文件，通过审核发放积分）：先经 require_admin_2fa（后台会话 +
     1h 2FA 信任），再叠加 files_review 权限点；二者并取才放行，避免将来 files_review
     被授给非管理角色时"仅凭权限点即越权审核/删文件"。通过后 service 层仍走
     is_admin=True 跳过 account_level==admin 门槛（权限点已代管）。
@@ -209,11 +264,11 @@ async def delete_uploaded_file(
 @router.get("/{file_id}/preview")
 async def preview_file(
     file_id: uuid.UUID,
-    cur: CurrentUser = RequirePermission(Permission.files_download),
+    cur: CurrentUser | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """预览：仅 APPROVED 可访问，inline 流式返回，计 view_count。"""
-    resp = await serve_content(db, file_id, "inline")
+    resp = await serve_content(db, file_id, "inline", cur)
     # 依赖 teardown 要等响应体发完才跑，若不在此提前提交，慢客户端下载期间会一直占着
     # 池连接（生成器只读 storage，不再需要 DB）；提交同时落定上面的 view_count 计次。
     await db.commit()
@@ -238,7 +293,7 @@ async def download_file_content(
     db: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     """附件流式下载：仅 APPROVED 可访问。"""
-    resp = await serve_content(db, file_id, "attachment")
+    resp = await serve_content(db, file_id, "attachment", cur)
     # 同上：流式期间不再需要 DB，提前结束事务把连接还给连接池（本路径无写入，提交即空事务）
     await db.commit()
     return resp

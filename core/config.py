@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     blog_repo_dir: str = "blog_repos"
     files_store_dir: str = "files_store"
     max_upload_bytes: int = 100 * 1024 * 1024  # 单文件上传上限 100MB
+    files_clamav_address: str = ""  # host:port；配置后扫描不可用则拒绝上传
+    files_sensitive_terms: str = ""  # 逗号分隔；匹配文件名、描述与可提取正文
+    files_preview_max_bytes: int = 50 * 1024 * 1024
+    files_backup_dir: str = ""  # 独立挂载卷上的本地备份目录
+    files_archive_after_days: int = 365
+    files_archive_dir: str = ""  # 独立挂载卷上的低频归档目录
     redis_url: SecretStr = SecretStr(
         ""  # 空串 = 未启用 Redis
     )
@@ -392,7 +398,7 @@ class Settings(BaseSettings):
     def assert_web_security_configured(self) -> None:
         """
         HTTP 服务进程装配期校验：生产必须显式给 Host 白名单。
-        刻意**不**放进 ``_no_insecure_secrets_outside_dev`` 
+        刻意**不**放进 ``_no_insecure_secrets_outside_dev``
         校验器：该器按进程执行，而 worker 进程 env 集不同（不承载 HTTP），强校验会误杀。
         """
         if not self.is_production:

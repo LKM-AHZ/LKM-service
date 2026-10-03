@@ -10,6 +10,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.modules.files.models import FileClassification
 from core.common import parse_tags
 
 
@@ -19,6 +20,9 @@ class FileCreate(BaseModel):
     category_id: str = Field(default="", max_length=50)
     description: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list)
+    classification: FileClassification = FileClassification.PUBLIC
+    project_id: uuid.UUID | None = None
+    version_of: uuid.UUID | None = None
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -44,6 +48,13 @@ class FileInfo(BaseModel):
     download_count: int
     view_count: int
     created_at: datetime.datetime
+    document_code: str | None = None
+    classification: FileClassification = FileClassification.PUBLIC
+    project_id: uuid.UUID | None = None
+    version: int = 1
+    root_file_id: uuid.UUID | None = None
+    archive_state: str = "active"
+    backed_up_at: datetime.datetime | None = None
 
     @field_validator("tags", mode="before")
     @classmethod

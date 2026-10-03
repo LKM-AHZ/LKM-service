@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
+import io
 import json
+import logging
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
@@ -11,12 +13,20 @@ from typing import IO, Any, Literal, NoReturn, Protocol
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
+from sqlalchemy import or_, select
 
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FILES_TABLE_PLAN, FileStatus, LibraryFile
+from app.modules.files.processing import is_office, process_upload
 from app.modules.files.repository import (
     LibraryFileRepository,
     UploadSessionRepository,
+)
+from app.modules.files.retention import (
+    archive_exists,
+    backup_file,
+    delete_archive,
+    read_archive,
 )
 from app.modules.files.schemas import (
     DownloadUrlInfo,
@@ -25,17 +35,31 @@ from app.modules.files.schemas import (
     UploadInitResp,
 )
 from app.modules.points.rules import enqueue_points_event
-from core.common import PageData, paginate_offset, paginate_pages
+from app.modules.projects.models import Project, ProjectMember
+from core.common import PageData, paginate_offset, paginate_pages, parse_tags
 from core.config import settings
 from core.contracts import CurrentUser
+from core.db.outbox import enqueue_outbox
 from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
+from core.messaging import RKEY_FILE_CHANGED
 from core.ports.snapshot import get_user_snapshot_batch
 from core.secrets import reveal
 from core.storage.base import StorageBackend
 from core.storage.errors import StorageErr
 from core.storage.factory import get_storage
+
+logger = logging.getLogger(__name__)
+
+
+async def _enqueue_file_change(db: DbSession, file_id: uuid.UUID) -> None:
+    if settings.search_sync_enabled:
+        await enqueue_outbox(
+            db,
+            RKEY_FILE_CHANGED,
+            {"fn": "apply_file_event", "args": [str(file_id)]},
+        )
 
 
 class _Readable(Protocol):
@@ -46,12 +70,12 @@ class _Readable(Protocol):
 
 def get_files_plan() -> dict[str, Any]:
     return {
-        "status": "implemented_minimal",
+        "status": "implemented",
         "tables": FILES_TABLE_PLAN,
         "next_steps": [
-            "Add review approval workflow",
-            "Add duplicate / plagiarism detection",
-            "Add file serving with presigned URL",
+            "Configure ClamAV and sensitive-term policy before production uploads",
+            "Configure an off-host backup for disaster recovery",
+            "Configure S3 lifecycle transitions for cold object storage",
         ],
     }
 
@@ -71,6 +95,22 @@ async def _uploader_map(
     return {uid: s.display_name for uid, s in snaps.items()}
 
 
+async def upload_projects(db: DbSession, user_id: uuid.UUID) -> list[dict[str, str]]:
+    member = (
+        select(ProjectMember.id)
+        .where(ProjectMember.project_id == Project.id, ProjectMember.user_id == user_id)
+        .exists()
+    )
+    rows = (
+        await db.execute(
+            select(Project.id, Project.title)
+            .where(or_(Project.applicant_id == user_id, member))
+            .order_by(Project.created_at.desc())
+        )
+    ).all()
+    return [{"id": str(row.id), "title": row.title} for row in rows]
+
+
 async def list_files(
     db: DbSession,
     page: int = 1,
@@ -78,15 +118,24 @@ async def list_files(
     category_id: str | None = None,
     status: str | None = None,
     sort: str = "newest",
+    viewer: CurrentUser | None = None,
+    enforce_visibility: bool = False,
 ) -> PageData[FileInfo]:
     repo = LibraryFileRepository(db)
-    total = await repo.count_page(category_id=category_id, status=status)
+    total = await repo.count_page(
+        category_id=category_id,
+        status=status,
+        viewer=viewer,
+        enforce_visibility=enforce_visibility,
+    )
     files = await repo.list_page(
         category_id=category_id,
         status=status,
         sort=sort,
         offset=paginate_offset(page, limit),
         limit=limit,
+        viewer=viewer,
+        enforce_visibility=enforce_visibility,
     )
 
     names = await _uploader_map(db, [f.uploader_id for f in files])
@@ -97,11 +146,17 @@ async def list_files(
 
 
 async def get_file(
-    db: DbSession, file_id: uuid.UUID, bump_view: bool = False
+    db: DbSession,
+    file_id: uuid.UUID,
+    bump_view: bool = False,
+    viewer: CurrentUser | None = None,
+    enforce_visibility: bool = False,
 ) -> FileInfo:
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
+    if enforce_visibility:
+        await _require_visible(db, f, viewer)
 
     view_count = (
         await LibraryFileRepository(db).increment_view(file_id) if bump_view else None
@@ -238,6 +293,47 @@ def _make_stored_name(original_name: str) -> str:
     return f"{uuid.uuid4().hex}{suffix}"
 
 
+async def _identity_for_upload(
+    db: DbSession,
+    repo: LibraryFileRepository,
+    uploader_id: uuid.UUID,
+    info: FileCreate,
+) -> tuple[str, int, uuid.UUID | None, str, uuid.UUID | None]:
+    """验证项目归属及版本链，并在事务锁下分配编号/版次。"""
+    if info.version_of is not None:
+        parent = await get_or_raise(
+            db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == info.version_of
+        )
+        if parent.uploader_id != uploader_id:
+            raise BizError(FileErr.NOT_OWNER)
+        if parent.status in (FileStatus.DELETED, FileStatus.REJECTED):
+            raise BizError(FileErr.INVALID_STATUS)
+        if not parent.document_code:
+            raise BizError(FileErr.INVALID_STATUS, detail="Document has no code")
+        info.category_id = parent.category_id
+        info.description = info.description or parent.description
+        info.tags = info.tags or parse_tags(parent.tags)
+        return (
+            parent.document_code,
+            await repo.next_version(parent.document_code),
+            parent.root_file_id or parent.id,
+            parent.classification,
+            parent.project_id,
+        )
+    if info.project_id is not None:
+        project = await db.scalar(select(Project).where(Project.id == info.project_id))
+        member = await db.scalar(
+            select(ProjectMember.id).where(
+                ProjectMember.project_id == info.project_id,
+                ProjectMember.user_id == uploader_id,
+            )
+        )
+        if project is None or (project.applicant_id != uploader_id and member is None):
+            raise BizError(FileErr.INVALID_PROJECT)
+    code = await repo.next_document_code(datetime.now(UTC).year)
+    return code, 1, None, info.classification, info.project_id
+
+
 async def create_file(
     db: DbSession,
     uploader_id: uuid.UUID,
@@ -262,8 +358,22 @@ async def create_file(
     bucket_key = _build_bucket_key(content_hash)
 
     repo = LibraryFileRepository(db)
-    # 事务锁覆盖物理写入和元数据登记；直到请求提交后，其他同哈希操作才可继续。
-    await repo.lock_hash(content_hash)
+    try:
+        extracted_text, preview_pdf = await asyncio.to_thread(
+            process_upload,
+            buf,
+            original_name=info.original_name,
+            description=info.description,
+            size=total,
+        )
+        code, version, root_id, classification, project_id = await _identity_for_upload(
+            db, repo, uploader_id, info
+        )
+        # 事务锁覆盖物理写入和元数据登记。
+        await repo.lock_hash(content_hash)
+    except BaseException:
+        buf.close()
+        raise
     saved: dict[str, object] | None = None
     try:
         try:
@@ -277,6 +387,16 @@ async def create_file(
     finally:
         # buf 是 _buffer_and_hash 的 spool 临时文件，用完即关（关闭自动删除，释放磁盘）。
         buf.close()
+
+    if preview_pdf is not None:
+        try:
+            await _get_storage().save(
+                io.BytesIO(preview_pdf),
+                max_bytes=settings.files_preview_max_bytes,
+                bucket_key=f"{bucket_key}.preview.pdf",
+            )
+        except BizError:
+            logger.warning("文件 PDF 预览保存失败 hash=%s", content_hash, exc_info=True)
 
     if saved is not None:
         storage_path = str(saved["storage_path"])
@@ -293,12 +413,21 @@ async def create_file(
         mime_type=info.mime_type,
         size=total,
         category_id=info.category_id,
+        document_code=code,
+        version=version,
+        root_file_id=root_id,
+        classification=classification,
+        project_id=project_id,
+        extracted_text=extracted_text,
         description=info.description,
         tags=json.dumps(info.tags, ensure_ascii=False),
     )
     # 数据库失败时保留内容寻址对象供重试复用。此处可能已处于 failed transaction，
     # 再查询引用数并删除 blob 会覆盖原异常，也可能误删其他条目仍引用的对象。
     await repo.add(f)
+    await repo.flush()
+    if root_id is None:
+        f.root_file_id = f.id
     await repo.sync_ref_count(content_hash)
 
     names = await _uploader_map(db, [f.uploader_id])
@@ -309,6 +438,52 @@ async def bump_download(db: DbSession, file_id: uuid.UUID) -> int:
     return await LibraryFileRepository(db).increment_download(file_id)
 
 
+async def _require_visible(
+    db: DbSession, f: LibraryFile, viewer: CurrentUser | None
+) -> None:
+    if viewer is not None and (
+        viewer.account_level == "admin" or f.uploader_id == viewer.id
+    ):
+        return
+    if f.status != FileStatus.APPROVED:
+        raise BizError(FileErr.NOT_FOUND)
+    if f.classification == "public":
+        return
+    if viewer is None:
+        raise BizError(FileErr.NOT_FOUND)
+    if f.classification == "internal":
+        return
+    if f.project_id and await db.scalar(
+        select(ProjectMember.id).where(
+            ProjectMember.project_id == f.project_id,
+            ProjectMember.user_id == viewer.id,
+        )
+    ):
+        return
+    raise BizError(FileErr.NOT_FOUND)
+
+
+async def list_versions(
+    db: DbSession, file_id: uuid.UUID, viewer: CurrentUser | None
+) -> list[FileInfo]:
+    f = await get_or_raise(
+        db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
+    )
+    await _require_visible(db, f, viewer)
+    if not f.document_code:
+        return [_file_to_schema(f, "")]
+    rows = await LibraryFileRepository(db).versions(f.document_code)
+    visible: list[LibraryFile] = []
+    for row in rows:
+        try:
+            await _require_visible(db, row, viewer)
+        except BizError:
+            continue
+        visible.append(row)
+    names = await _uploader_map(db, [r.uploader_id for r in visible])
+    return [_file_to_schema(r, names.get(r.uploader_id, "")) for r in visible]
+
+
 async def review_file(
     db: DbSession,
     file_id: uuid.UUID,
@@ -316,7 +491,7 @@ async def review_file(
     review_comment: str | None = None,
     is_admin: bool = False,
 ) -> FileInfo:
-    """管理员审核文件：通过 / 驳回（驳回时删除物理文件并联动同 hash 条目置 REJECTED）。"""
+    """管理员审核文件：通过或驳回；共享同一内容的其他文件独立审核。"""
     if not is_admin:
         raise BizError(FileErr.STORE_ERROR, detail="Only admin can review files")
     if target_status not in (FileStatus.APPROVED, FileStatus.REJECTED):
@@ -338,27 +513,27 @@ async def review_file(
     f.review_comment = review_comment
 
     if target_status == FileStatus.REJECTED and f.sha3_hash:
-        # 同一物理文件被多个条目引用：一并标记 REJECTED，并删除物理文件。
-        for other in await repo.list_by_hash(f.sha3_hash):
-            if other.status != FileStatus.DELETED:
-                other.status = FileStatus.REJECTED
-                other.review_comment = other.review_comment or review_comment
         await repo.flush()
         await repo.sync_ref_count(f.sha3_hash)
-        # 删除物理文件（尽力而为：key 已不存在视为成功，保持原来的 missing_ok 语义）。
-        bucket_key = _bucket_key_of(f)
-        if bucket_key is not None:
-            try:
-                await _get_storage().delete(bucket_key)
-            except BizError as exc:
-                if exc.errcode != StorageErr.NOT_FOUND:
-                    _raise_storage_as_file(exc)
+        if await repo.count_live_by_hash(f.sha3_hash) == 0:
+            await _delete_content_variants(f.sha3_hash)
     else:
         await repo.flush()
 
     # 仅审核通过时给归属者加分（f.status 已设为 target_status）
     if f.status == FileStatus.APPROVED:
+        if f.sha3_hash:
+            await backup_file(
+                _get_storage(), _build_bucket_key(f.sha3_hash), f.sha3_hash
+            )
+            if settings.files_backup_dir:
+                f.backed_up_at = datetime.now(UTC)
         await enqueue_points_event(db, f.uploader_id, "file_approved", f"file:{f.id}")
+        await _enqueue_file_change(db, f.id)
+        if f.document_code:
+            for older in await repo.versions(f.document_code):
+                if older.id != f.id and older.status == FileStatus.APPROVED:
+                    await _enqueue_file_change(db, older.id)
 
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
@@ -390,21 +565,32 @@ async def delete_file(
     old_hash = f.sha3_hash
     f.status = FileStatus.DELETED
     await repo.flush()
+    await _enqueue_file_change(db, f.id)
+    if f.document_code:
+        for older in await repo.versions(f.document_code):
+            if older.id != f.id and older.status == FileStatus.APPROVED:
+                await _enqueue_file_change(db, older.id)
 
     if old_hash:
         remaining = await repo.count_live_by_hash(old_hash)
         await repo.sync_ref_count(old_hash)
         # 事务锁持有至 commit；此时无存活引用才删除物理对象。
         if remaining <= 0:
-            bucket_key = _build_bucket_key(old_hash)
-            try:
-                await _get_storage().delete(bucket_key)
-            except BizError as exc:
-                if exc.errcode != StorageErr.NOT_FOUND:
-                    _raise_storage_as_file(exc)
+            await _delete_content_variants(old_hash)
 
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
+
+
+async def _delete_content_variants(content_hash: str) -> None:
+    key = _build_bucket_key(content_hash)
+    for suffix in (".thumb.webp", ".medium.webp", ".preview.pdf", ""):
+        try:
+            await _get_storage().delete(f"{key}{suffix}")
+        except BizError as exc:
+            if exc.errcode != StorageErr.NOT_FOUND:
+                _raise_storage_as_file(exc)
+    await delete_archive(content_hash)
 
 
 def _require_approved(f: LibraryFile, *, action: str) -> None:
@@ -422,46 +608,63 @@ async def download_url(
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
+    await _require_visible(db, f, cur)
     _require_approved(f, action="download")
     key = _bucket_key_of(f)
     if key is None:
         raise BizError(FileErr.NOT_FOUND, detail="File has no stored content")
     await LibraryFileRepository(db).increment_download(file_id)
     storage = _get_storage()
-    if settings.storage_backend == "s3":
+    if settings.storage_backend == "s3" and (
+        not f.sha3_hash or not await archive_exists(f.sha3_hash)
+    ):
         url = storage.presign_download(key, expires=60)
         return DownloadUrlInfo(kind="presigned", url=url, expires_in=60)
     return DownloadUrlInfo(kind="backend", url=f"/api/v1/files/{file_id}/content")
 
 
 def _serve(
-    db: DbSession, f: LibraryFile, disposition: Literal["inline", "attachment"]
+    db: DbSession,
+    f: LibraryFile,
+    disposition: Literal["inline", "attachment"],
+    *,
+    key: str | None = None,
+    preview_pdf: bool = False,
+    use_archive: bool = False,
 ) -> StreamingResponse:
     """构造流式响应：逐块读取 storage 字节，不整载内存；存储错误映射为 FileErr。"""
 
     async def it() -> AsyncIterator[bytes]:
         try:
-            async for chunk in _get_storage().open(_bucket_key_of(f) or ""):
+            source = (
+                read_archive(f.sha3_hash)
+                if use_archive and f.sha3_hash
+                else _get_storage().open(key or _bucket_key_of(f) or "")
+            )
+            async for chunk in source:
                 yield chunk
         except BizError as exc:
             # 响应头已发出（Starlette 先发 start 再迭代 body），此处只能尽力收尾，
             # 无法再变成 404/500——真正的「对象缺失」由 serve_content 的预检拦截
             _raise_storage_as_file(exc)
 
-    media_type = f.mime_type
-    if disposition == "inline" and f.mime_type not in _INLINE_SAFE_TYPES:
+    media_type = "application/pdf" if preview_pdf else f.mime_type
+    if disposition == "inline" and media_type not in _INLINE_SAFE_TYPES:
         # mime_type 来自上传方（UploadFile.content_type / 直传 payload），内联渲染
         # text/html、image/svg+xml 这类可执行脚本的类型会在 API 源上形成存储型 XSS
         # （同源 cookie 可直接打接口）→ 不在白名单就降级为附件下载
         disposition = "attachment"
         media_type = "application/octet-stream"
 
+    display_name = (
+        f"{Path(f.original_name).stem}.pdf" if preview_pdf else f.original_name
+    )
     ascii_fallback = (
-        f.original_name.encode("ascii", "ignore").decode("ascii") or "download"
+        display_name.encode("ascii", "ignore").decode("ascii") or "download"
     )
     cd = (
         f"{disposition}; filename={ascii_fallback}; "
-        f"filename*=UTF-8''{quote(f.original_name)}"
+        f"filename*=UTF-8''{quote(display_name)}"
     )
     headers = {
         "Content-Disposition": cd,
@@ -476,22 +679,44 @@ async def serve_content(
     db: DbSession,
     file_id: uuid.UUID,
     disposition: Literal["inline", "attachment"],
+    viewer: CurrentUser | None = None,
 ) -> StreamingResponse:
     """预览(/preview)/下载(/content)共用入口：仅 APPROVED 可访问；预览计次 view_count。"""
     f = await get_or_raise(
         db, LibraryFile, FileErr.NOT_FOUND, LibraryFile.id == file_id
     )
+    await _require_visible(db, f, viewer)
     _require_approved(f, action="preview" if disposition == "inline" else "download")
     key = _bucket_key_of(f)
     if key is None:
         raise BizError(FileErr.NOT_FOUND, detail="File has no storage key")
+    converted = False
+    if disposition == "inline" and is_office(f.original_name):
+        key = f"{key}.preview.pdf"
+        converted = True
     # 预检对象存在性：响应头一旦发出，生成器里的存储错误无法再变成 404/500
     # （客户端会收到 200 + 截断体）。这里先探一次，把缺失/failed blob 拦在响应之前。
-    if not await _get_storage().exists(key):
+    hot_exists = await _get_storage().exists(key)
+    use_archive = bool(
+        not hot_exists
+        and not converted
+        and f.sha3_hash
+        and await archive_exists(f.sha3_hash)
+    )
+    if not hot_exists and not use_archive:
+        if converted:
+            raise BizError(FileErr.PREVIEW_UNAVAILABLE)
         raise BizError(FileErr.NOT_FOUND, detail="Stored object not found")
     if disposition == "inline":  # 预览计次 view
         await LibraryFileRepository(db).increment_view(file_id)
-    return _serve(db, f, disposition)
+    return _serve(
+        db,
+        f,
+        disposition,
+        key=key,
+        preview_pdf=converted,
+        use_archive=use_archive,
+    )
 
 
 # ---- Phase 2-B: 预签名直传（upload-init / confirm，Redis 标记 + 回读哈希去重） ----
@@ -528,6 +753,9 @@ async def upload_init(
             "category_id": info.category_id,
             "description": info.description,
             "tags": info.tags,
+            "classification": info.classification,
+            "project_id": str(info.project_id) if info.project_id else None,
+            "version_of": str(info.version_of) if info.version_of else None,
             "created_at": datetime.now(UTC).isoformat(),
         },
         ensure_ascii=False,
@@ -563,6 +791,22 @@ async def _hash_from_storage(
     return total, hasher.hexdigest()
 
 
+async def _process_storage_upload(
+    storage: StorageBackend, key: str, meta: dict[str, Any], size: int
+) -> tuple[str, bytes | None]:
+    with tempfile.TemporaryFile() as stream:
+        async for chunk in storage.open(key):
+            await asyncio.to_thread(stream.write, chunk)
+        stream.seek(0)
+        return await asyncio.to_thread(
+            process_upload,
+            stream,
+            original_name=meta["original_name"],
+            description=meta["description"],
+            size=size,
+        )
+
+
 async def _register_from_upload(
     db: DbSession,
     meta: dict[str, Any],
@@ -582,12 +826,39 @@ async def _register_from_upload(
     total, content_hash = await _hash_from_storage(
         storage, key, settings.max_upload_bytes
     )
+    extracted_text, preview_pdf = await _process_storage_upload(
+        storage, key, meta, total
+    )
     hash_key = _build_bucket_key(content_hash)
     repo = LibraryFileRepository(db)
+    info = FileCreate(
+        original_name=meta["original_name"],
+        mime_type=meta["mime_type"],
+        category_id=meta["category_id"],
+        description=meta["description"],
+        tags=meta["tags"],
+        classification=meta.get("classification", "public"),
+        project_id=meta.get("project_id"),
+        version_of=meta.get("version_of"),
+    )
+    code, version, root_id, classification, project_id = await _identity_for_upload(
+        db, repo, uploader_id, info
+    )
     # 事务锁覆盖拷贝、登记及提交，防并发末引用删除清空复用对象。
     await repo.lock_hash(content_hash)
     if not await storage.exists(hash_key):
         await storage.copy(key, hash_key)
+    if preview_pdf is not None:
+        try:
+            await storage.save(
+                io.BytesIO(preview_pdf),
+                max_bytes=settings.files_preview_max_bytes,
+                bucket_key=f"{hash_key}.preview.pdf",
+            )
+        except BizError:
+            logger.warning(
+                "直传文件 PDF 预览保存失败 hash=%s", content_hash, exc_info=True
+            )
     storage_path = _storage_path_for(content_hash)
     # 登记 PENDING（tags 标记里是 JSON 数组，转回 JSON 字符串存储，与 create_file 一致）
     f = LibraryFile(
@@ -599,14 +870,21 @@ async def _register_from_upload(
         storage_path=storage_path,
         mime_type=meta["mime_type"],
         size=total,
-        category_id=meta["category_id"],
-        description=meta["description"],
-        tags=meta["tags"]
-        if isinstance(meta["tags"], str)
-        else json.dumps(meta["tags"], ensure_ascii=False),
+        category_id=info.category_id,
+        document_code=code,
+        version=version,
+        root_file_id=root_id,
+        classification=classification,
+        project_id=project_id,
+        extracted_text=extracted_text,
+        description=info.description,
+        tags=json.dumps(info.tags, ensure_ascii=False),
         status=FileStatus.PENDING,
     )
     await repo.add(f)
+    await repo.flush()
+    if root_id is None:
+        f.root_file_id = f.id
     await repo.sync_ref_count(content_hash)
     names = await _uploader_map(db, [uploader_id])
     result = _file_to_schema(f, names.get(uploader_id, ""))
