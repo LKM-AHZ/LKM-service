@@ -48,6 +48,7 @@ class DatasetSpec:
     time_column: str
     columns: tuple[str, ...]
     order_by: str
+    category_column: str
 
 
 # 白名单：任何外部输入都不得进入标识符位置（表/列/排序均取自此表）。
@@ -66,18 +67,21 @@ DATASETS: dict[str, DatasetSpec] = {
             "service",
         ),
         "ts DESC",
+        "service",
     ),
     "event_failures": DatasetSpec(
         "lkm.event_failures",
         "folded_at",
         ("id", "event_id", "routing_key", "attempt_count", "reason", "folded_at"),
         "id DESC",
+        "routing_key",
     ),
     "audit_logs": DatasetSpec(
         "lkm.audit_logs",
         "created_at",
         ("id", "user_id", "action", "detail", "ip_address", "created_at"),
         "id DESC",
+        "action",
     ),
 }
 
@@ -154,3 +158,48 @@ async def admin_query_analytics(
         page=page,
         pages=paginate_pages(total, page_limit),
     )
+
+
+@router.get(
+    "/analytics/{dataset}/summary", response_model=ApiResp[list[dict[str, Any]]]
+)
+@respond
+async def admin_analytics_summary(
+    dataset: str,
+    since: datetime.datetime,
+    until: datetime.datetime,
+    interval: Annotated[str, Query(pattern="^(hour|day)$")] = "hour",
+    _cur: CurrentUser = require_admin,
+    db: AsyncSession = Depends(get_read_session),
+    client: ClickHouseClient = Depends(get_analytics_client),
+) -> list[dict[str, Any]]:
+    """按时间和固定类别汇总日志、失败事件或审计事件。"""
+    await require_permission(db, _cur, Permission.admin_analytics_view)
+    spec = DATASETS.get(dataset)
+    if spec is None:
+        raise BizError(CommonErr.INVALID_INPUT, f"unknown dataset: {dataset}")
+    since_utc, until_utc = to_ch_datetime(since), to_ch_datetime(until)
+    if since_utc >= until_utc:
+        raise BizError(CommonErr.INVALID_INPUT, "since must be < until")
+    if until_utc - since_utc > datetime.timedelta(days=31):
+        raise BizError(CommonErr.INVALID_INPUT, "time window exceeds 31 days")
+
+    bucket = "toStartOfHour" if interval == "hour" else "toStartOfDay"
+    result = await client.query(
+        f"SELECT {bucket}({spec.time_column}) AS bucket, "
+        f"{spec.category_column} AS category, count() AS events "
+        f"FROM {spec.table} "
+        f"WHERE {spec.time_column} >= {{since:DateTime64(3)}} "
+        f"AND {spec.time_column} < {{until:DateTime64(3)}} "
+        "GROUP BY bucket, category ORDER BY bucket DESC, events DESC "
+        "LIMIT {lim:UInt32}",
+        {
+            "since": since_utc,
+            "until": until_utc,
+            "lim": settings.clickhouse_query_limit_max,
+        },
+    )
+    return [
+        dict(zip(("bucket", "category", "events"), row, strict=True))
+        for row in result_rows(result)
+    ]

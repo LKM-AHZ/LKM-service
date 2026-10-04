@@ -8,6 +8,7 @@ sink 表名、三处服务的 CH 配置下发。每条断言都对应一个可�
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -160,3 +161,20 @@ def should_capture_docker_logs_into_app_logs() -> None:
     assert "skip_unknown_fields = true" in toml
     # 非 JSON 行不能丢：remap 失败分支保留原文并置 unknown
     assert '"unknown"' in toml
+
+
+def should_persist_vector_buffer() -> None:
+    for path in (_CH_DIR / "vector.toml", _ROOT / "deploy/k8s/base/infra/vector.toml"):
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert config["data_dir"] == "/var/lib/vector"
+        assert config["sinks"]["clickhouse"]["buffer"] == {
+            "type": "disk",
+            "max_size": 536870912,
+            "when_full": "block",
+        }
+    assert "vector_data:/var/lib/vector" in _services()["vector"]["volumes"]
+    k8s = yaml.safe_load((_ROOT / "deploy/k8s/base/infra/vector.yaml").read_text())
+    volumes = k8s["spec"]["template"]["spec"]["volumes"]
+    assert any(
+        v.get("hostPath", {}).get("path") == "/var/lib/lkm/vector" for v in volumes
+    )

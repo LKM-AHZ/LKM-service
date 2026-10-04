@@ -8,13 +8,17 @@ CH 客户端经 ``get_analytics_client`` 依赖 override 注入 fake，不依赖
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import app
+from app.modules.admin import analytics_router
 from app.modules.admin.analytics_router import get_analytics_client
 from app.modules.rbac.permissions import Permission
 from core.config import settings
@@ -149,6 +153,46 @@ async def should_parameterize_time_window(
     last_sql, last_params = fake_ch.queries[-1]
     assert "since" in last_params
     assert "{since:DateTime64(3)}" in last_sql
+
+
+async def should_summarize_events_with_bounded_parameterized_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def allow(*_args: Any) -> None:
+        pass
+
+    monkeypatch.setattr(analytics_router, "require_permission", allow)
+    fake_ch = FakeClickHouseClient(
+        rows=[(datetime(2026, 10, 1, tzinfo=UTC), "backend", 3)]
+    )
+    summary = cast(Any, analytics_router.admin_analytics_summary)
+    result = await summary(
+        dataset="app_logs",
+        since=datetime(2026, 10, 1, tzinfo=UTC),
+        until=datetime(2026, 10, 2, tzinfo=UTC),
+        interval="day",
+        _cur=None,
+        db=None,
+        client=fake_ch,
+    )
+
+    assert json.loads(bytes(result.body))["data"][0]["events"] == 3
+    sql, params = fake_ch.queries[-1]
+    assert "toStartOfDay(ts)" in sql
+    assert "service AS category" in sql
+    assert params["since"] == datetime(2026, 10, 1)
+    assert "{until:DateTime64(3)}" in sql
+
+    with pytest.raises(analytics_router.BizError):
+        await summary(
+            dataset="audit_logs",
+            since=datetime(2026, 10, 2, tzinfo=UTC),
+            until=datetime(2026, 10, 1, tzinfo=UTC),
+            interval="hour",
+            _cur=None,
+            db=None,
+            client=fake_ch,
+        )
 
 
 async def should_return_503_when_clickhouse_disabled(
