@@ -13,7 +13,7 @@ _MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
 
 async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> Any:
-    resp = await client.post("/graphql", json={"query": query, "variables": variables})
+    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
     assert resp.status_code == 200
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")
@@ -23,19 +23,15 @@ async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> An
 _INTROSPECTION = "query { __schema { queryType { name } } }"
 
 
-async def should_expose_versioned_and_alias_endpoints(client: AsyncClient) -> None:
-    """§2 多端点版本化：``/graphql/v1`` 与无版本别名 ``/graphql`` 同时可用且 schema 相同。
-
-    别名保留是为了让存量前端（照旧打 ``/graphql``）零改动；带版本端点才是契约锚点，
-    响应头 ``X-API-Version`` 让调用方确认命中的是哪个版本。
-    """
+async def should_expose_only_versioned_endpoint(client: AsyncClient) -> None:
+    """版本端点返回版本头，无版本路径不再提供 GraphQL。"""
     versioned = await client.post("/graphql/v1", json={"query": _INTROSPECTION})
     alias = await client.post("/graphql", json={"query": _INTROSPECTION})
 
-    assert versioned.status_code == alias.status_code == 200
-    assert versioned.json()["data"] == alias.json()["data"]
+    assert versioned.status_code == 200
+    assert versioned.json()["data"]["__schema"]["queryType"]["name"]
     assert versioned.headers["X-API-Version"] == "v1"
-    # 别名路径不替调用方猜「现在等价于哪个版本」（见 core.middleware 的说明）
+    assert alias.status_code == 404
     assert "X-API-Version" not in alias.headers
 
 

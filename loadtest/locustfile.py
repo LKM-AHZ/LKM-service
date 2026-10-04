@@ -38,7 +38,7 @@ _LOGIN_PASSWORD = reveal(settings.bench_password)
 # 连不上 lkm_auth 而 500（已知架构事实）。用绝对 URL 覆盖 HttpUser 的 host。
 _AUTH_LOGIN_URL = settings.bench_auth_login_url
 
-_GRAPHQL = "/graphql"
+_GRAPHQL = "/graphql/v1"
 
 # ---- GraphQL 读查询（字段名取自真实 schema；见 2026-10-01 真机 introspect）----
 _ARTICLES = (

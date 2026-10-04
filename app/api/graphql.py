@@ -1,13 +1,4 @@
-"""GraphQL 聚合（§7）+ 防护（M6.4）：把各模块经 registry 暴露的 Query 类 merge 成统一 schema。
-
-原聚合逻辑在 main.py（merge_types 7 个 Query 类），P5 收敛到此，main 只装配。
-新增模块的 GraphQL 查询：模块 __init__.py 暴露 ``GRAPHQL``，registry 自动聚合。
-
-**多端点版本化（§2）**：不采用「单端点 + `@deprecated` 缓冲」（移动端版本碎片化下守不住，
-必然堆成废弃字段的大泥球），改为**版本即端点**——``GRAPHQL_VERSIONS`` 登记每个版本由哪些
-模块贡献 Query 类，``build_schema(version)`` 各自构建**完全独立的 schema**，main 逐个挂到
-``{graphql_path}/{version}``。破坏性变更 = 加一条版本记录 + 一条 APISIX 路由，旧端点保留运行；
-网关按 ``X-API-Version`` 把流量分流到对应端点（``deploy/apisix/apisix.yaml``）。
+"""GraphQL 聚合：把各模块经 registry 暴露的 Query 类 merge 成统一 schema。
 
 防护三层（阈值见 ``core.config``，默认值由前端现有查询集实测校准后写死）：
 
@@ -19,23 +10,6 @@
 3. **时间预算** ``GraphQLGuard``（``LKM_GRAPHQL_TIMEOUT_S``）：预算耗尽后拒答后续 resolver，
    使查询以受控错误收束而非把 worker 拖满。
 
-**已知局限**（蓝图「查询级超时」的落地口径）：时间预算在**每个 resolver 边界**检查，无法中断
-单个已在 ``await`` 中的 resolver（Python 无抢占式取消同步/已进入的协程）。故它保证的是
-「扇出型慢查询尽快收束」；**墙钟硬超时**由 HTTP 层的 ``core.middleware.GraphQLTimeoutMiddleware``
-（``asyncio.wait_for`` + 504）兜底。
-
-被拒计数与耗时观测：耗时为 ``GraphQLGuard`` 的 per-request 观测；**被拒分类统一在 HTTP 层**
-（``GuardedGraphQLRouter.process_result``）按错误消息归类，避免两处统计同一拒绝。**深度分布**
-（§2 第 5 条与耗时/被拒并列的第三项）由 ``QueryDepthLimiter`` 的校验回调直接产出，见
-``_observe_depths``。
-
-**关于 DataLoader（§2 第 4 条「列表字段必须走 DataLoader/批查询」）**：本仓走的是该条并列的
-**批查询**这一支——author / column 的富集在 service 层一次性批量完成（``content.service``
-的 ``_author_map`` / ``_column_title_map``，blog / projects / feed 同款），列表读的 DB 语句数
-与返回条数无关。**刻意不再叠一层 strawberry DataLoader**：service 的预批量已发生，在其上再加
-loader 只会对同一批 id 多跑一次批量查询（净负收益），而不会减少任何 DB 往返。该不变式由
-``tests/test_graphql_no_n_plus_1.py`` 守住（按语句计数断言与条数无关）——将来有人把某个嵌套
-字段改成逐节点懒查，那个测试会立刻变红。
 """
 
 from __future__ import annotations
@@ -98,7 +72,7 @@ def _observe_depths(depths: dict[str, int]) -> None:
     for value in depths.values():
         graphql_query_depth.observe(value)
 
-# ---- 成本模型常数（§2 第 2 条：field cost 而非词法代理）----
+# ---- 成本模型常数 ----
 # 每个被选中字段的基础分。
 _COST_PER_FIELD = 1
 # **无显式分页实参**的列表字段：无法从 AST 得知实际条数，按一个温和常量计分，且**不向下累乘**
@@ -114,9 +88,9 @@ _COST_HARD_CAP = 1_000_000
 
 # ---- 多端点版本化（§2）----
 # 版本 → 贡献 Query 类的模块清单。架构级破坏（删字段/改类型/收缩返回/改枚举语义）时**新增**
-# 一条记录（如 "v2"），旧端点原样保留服务存量客户端；网关按 X-API-Version 分流。
+# 一条记录（如 "v2"），旧端点原样保留服务存量客户端。
 GRAPHQL_VERSIONS: dict[str, tuple[str, ...]] = {"v1": registry.MODULES}
-# 无版本路径 ``/graphql`` 指向的版本（等价 REST 的「不带版本 = 最新」，见 app.main 的挂载）。
+# 直接调用 build_schema() 时使用的默认版本；HTTP 入口仍须显式带版本。
 GRAPHQL_DEFAULT_VERSION = "v1"
 
 
@@ -297,7 +271,7 @@ class GraphQLGuard(SchemaExtension):
       —— 由 GraphQL 引擎收成 `errors`（HTTP 仍是 200，非 500、非栈），前端可见受控错误。
       顶级字段（``info.path.prev is None``）另经 ``_root_lock`` **串行**进入。
 
-    **为什么要串行顶级字段**（2026-09-26 真机验收暴露的既有缺陷）：graphql-core 用
+    **为什么要串行顶级字段**：graphql-core 用
     ``asyncio.gather`` 并发执行**同级**字段，而所有 resolver 共享同一个
     ``info.context.db``（``get_read_session`` 给的 AsyncSession）——两个都打 DB 的根字段
     并发时 SQLAlchemy 抛 ``This session is provisioning a new connection; concurrent
@@ -384,7 +358,7 @@ def record_rejections(result: Any) -> None:
 class GuardedGraphQLRouter(GraphQLRouter):
     """``GraphQLRouter`` + 防护拒绝计数：在响应生成前统计被拒原因。
 
-    计数只覆盖 HTTP 入口（``/graphql``）——测试里直接 ``schema.execute`` 不经此处，
+    计数只覆盖 HTTP 入口（如 ``/graphql/v1``）——测试里直接 ``schema.execute`` 不经此处，
     故防护拒绝的计数断言应经 client 打接口（与线上同路径）。
     """
 
@@ -409,7 +383,7 @@ def _all_graphql_types(version: str) -> list[type[Any]]:
 def build_schema(version: str = GRAPHQL_DEFAULT_VERSION) -> strawberry.Schema:
     """按 ``version`` 合并其登记模块导出的 GraphQL 类型，构建带防护扩展的 schema。
 
-    **各版本 schema 完全独立**（§2 多端点版本化）：破坏性变更开新版本端点、旧端点按原
+    **各版本 schema 完全独立**：破坏性变更开新版本端点、旧端点按原
     schema 继续服务存量客户端，不靠 ``@deprecated`` 在单端点里堆废弃字段。
 
     注意 registry 的契约只是「任意 strawberry 类型的列表」，本函数把它们统一并进

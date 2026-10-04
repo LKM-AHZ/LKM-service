@@ -968,6 +968,8 @@ async def check_post_allowed(
 ) -> None:
     """校验用户在板块的发帖资格：板块存在 / 可见 / 未禁言 / 认证 / 日限发。异常抛相应 BoardErr。"""
     board = await get_board_ex(db, board_id)
+    if board.status != "active":
+        raise BizError(BoardErr.BOARD_INACTIVE)
     if not board.is_public:
         # 私有板块：需 normal 以上（认证成员）。account_level 判给 auth 快照缝（含 banned 态）。
         _snap = await get_user_snapshot(db, user_id=user_id)

@@ -2,7 +2,7 @@
 
 口径（见 ``app/api/graphql.py`` docstring）：
 - 防护阈值是**每请求**从 settings 读（扩展以类注册），故测试可 monkeypatch 阈值后经同一
-  app 的 ``/graphql`` 验证——不重建 app、与线上同路径。
+  app 的 ``/graphql/v1`` 验证——不重建 app、与线上同路径。
 - 被拒计数只在 HTTP 层（``GuardedGraphQLRouter.process_result`` / 硬超时中间件）统计，
   故断言必须走 client。
 - 只认防护自身文案：业务/校验错误不得计入 ``graphql_query_rejected_total``。
@@ -116,7 +116,7 @@ def _cost_of(query: str, variables: dict | None = None) -> int:
 
 
 async def _post(client: Client, query: str, variables: dict | None = None) -> dict:
-    resp = await client.post("/graphql", json={"query": query, "variables": variables})
+    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
     assert resp.status_code == 200, resp.text  # 防护拒绝是受控错误，不是 5xx
     return resp.json()
 

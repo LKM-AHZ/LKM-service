@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # 内容域子路由：版块 / 专栏 / 问答 统一挂到 /content 前缀下（逐域子前缀）。
 from app.modules.content.boards.router import router as _boards_router
 from app.modules.content.columns.router import router as _columns_router
-from app.modules.content.models import ContentItem
+from app.modules.content.models import Column, ContentItem, ContentType
 from app.modules.content.qa.router import router as _qa_router
 from app.modules.content.schemas import (
     ContentCommentCreate,
@@ -24,13 +24,13 @@ from app.modules.content.service import (
 )
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
-from app.modules.rbac.service import check_owner
+from app.modules.rbac.service import check_owner, user_has_permission
 from core.common import (
     ApiResp,
 )
 from core.contracts import CurrentUser
 from core.db.session import get_session
-from core.err import respond
+from core.err import BizError, CommonErr, respond
 from core.ports.authz import get_current_user
 
 router = APIRouter(prefix="/content", tags=["content"])
@@ -46,6 +46,29 @@ async def create_content_item(
     cur: CurrentUser = RequirePermission(Permission.content_create),
     db: AsyncSession = Depends(get_session),
 ) -> ContentItemInfo:
+    if info.content_type in (ContentType.BLOG_POST, ContentType.QA):
+        # 博客发布和提问各有自己的写入口，直接写统一内容表会绕过其审核与关联流程。
+        raise BizError(CommonErr.FORBIDDEN)
+    if info.content_type == ContentType.ARTICLE and not await user_has_permission(
+        db, cur, Permission.articles_publish
+    ):
+        raise BizError(CommonErr.FORBIDDEN)
+    if info.content_type == ContentType.COLUMN_POST:
+        if not await user_has_permission(db, cur, Permission.columns_publish):
+            raise BizError(CommonErr.FORBIDDEN)
+        if info.column_id:
+            await check_owner(
+                db,
+                cur,
+                info.column_id,
+                Column,
+                "owner_id",
+                Permission.column_owner_publish,
+            )
+    if (info.is_pinned or info.is_featured) and not await user_has_permission(
+        db, cur, Permission.admin_content_review
+    ):
+        raise BizError(CommonErr.FORBIDDEN)
     return await create_item(db, cur.id, info)
 
 

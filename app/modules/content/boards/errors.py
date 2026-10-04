@@ -12,6 +12,7 @@ class BoardErr(ErrCode):
     DAILY_POST_LIMIT_REACHED = NS_BOARDS.err(8)
     CERTIFICATION_REQUIRED = NS_BOARDS.err(9)
     ALREADY_BANNED = NS_BOARDS.err(10)
+    BOARD_INACTIVE = NS_BOARDS.err(11)
 
 
 register(
@@ -26,5 +27,6 @@ register(
         BoardErr.DAILY_POST_LIMIT_REACHED: (429, "本板块今日发言已达上限"),
         BoardErr.CERTIFICATION_REQUIRED: (403, "需通过初级通识考试才能在本板块发言"),
         BoardErr.ALREADY_BANNED: (409, "该用户已被禁言"),
+        BoardErr.BOARD_INACTIVE: (403, "板块已停用"),
     }
 )

@@ -366,7 +366,7 @@ class TestProjectRoute:
     async def test_public_list(self, client, db):
         # 只读列表端点已下线，改由 GraphQL projects 承担
         resp = await client.post(
-            "/graphql",
+            "/graphql/v1",
             json={
                 "query": "query { projects { items { id title } } }",
                 "variables": {},

@@ -13,7 +13,6 @@ from starlette.responses import Response
 from strawberry.fastapi import BaseContext
 
 from app.api.graphql import (
-    GRAPHQL_DEFAULT_VERSION,
     GRAPHQL_VERSIONS,
     GuardedGraphQLRouter,
     build_schema,
@@ -235,8 +234,8 @@ def create_app() -> FastAPI:
         # cur 可选（带 Bearer 则解析出 user_id，供关注流/时间线等按登录态个性化）。
         return GraphQLContext(db=db, user_id=cur.id if cur is not None else None)
 
-    # §2 多端点版本化：每个版本各挂一个**独立 schema** 的端点（`{graphql_path}/vN`），
-    # 旧端点永久保留服务存量客户端；网关按 X-API-Version 分流（deploy/apisix/apisix.yaml）。
+    # §2 多端点版本化：每个版本各挂一个独立 schema 的端点（`{graphql_path}/vN`），
+    # 旧版本端点保留服务存量客户端。
     for _version in GRAPHQL_VERSIONS:
         application.include_router(
             GuardedGraphQLRouter(
@@ -245,14 +244,6 @@ def create_app() -> FastAPI:
                 context_getter=_graphql_context,
             )
         )
-    # 无版本路径 = 默认版本别名（与 REST 的「不带版本」对称），前端既有集成零改动。
-    application.include_router(
-        GuardedGraphQLRouter(
-            build_schema(GRAPHQL_DEFAULT_VERSION),
-            path=settings.graphql_path,
-            context_getter=_graphql_context,
-        )
-    )
 
     @application.get("/")
     async def root() -> dict[str, str]:

@@ -99,7 +99,7 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 > `docs/openapi/` 下那份手写 YAML 已过时（止于 2026-08，未含后续新增的 timeline/follow/points 等域），仅作历史参考。
 
 下表中的模块前缀均挂载在 `/api/v1` 下。例如表中的 `/auth` 对外完整路径为
-`/api/v1/auth`；GraphQL 使用独立入口 `/graphql`。
+`/api/v1/auth`；GraphQL 使用版本端点 `/graphql/v1`。
 
 以下为接口分组摘要：
 

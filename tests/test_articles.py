@@ -14,8 +14,8 @@ from tests.conftest import AuthUser, auth_user_uid
 async def _run_graphql(
     client: AsyncClient, query: str, variables: dict[str, Any]
 ) -> Any:
-    """只读端点已下线，改由 GraphQL 承担读取。走 /graphql 返回 data。"""
-    resp = await client.post("/graphql", json={"query": query, "variables": variables})
+    """只读端点已下线，改由 GraphQL 承担读取。走 /graphql/v1 返回 data。"""
+    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
     assert resp.status_code == 200
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")
@@ -125,7 +125,7 @@ async def test_get_article_detail(db, client):
 async def test_get_article_not_found(db, client):
     # 不存在的 slug：GraphQL resolver 返回 null
     resp = await client.post(
-        "/graphql",
+        "/graphql/v1",
         json={
             "query": "query($slug: String!) { article(slug: $slug) { slug } }",
             "variables": {"slug": "does-not-exist"},
@@ -170,7 +170,7 @@ async def test_search_articles(db, client):
 async def test_search_requires_q(db, client):
     # q 为必填参数：缺失时 GraphQL 返回校验/执行错误
     resp = await client.post(
-        "/graphql",
+        "/graphql/v1",
         json={"query": "query { searchArticles { items { slug } } }", "variables": {}},
     )
     assert resp.status_code == 200

@@ -121,9 +121,8 @@ class SecurityHeadersMiddleware:
 class GraphQLHTTPMiddleware:
     """
     GraphQL 端点的 HTTP 边缘关切（§2）：查询级**硬**超时 + 版本响应头。
-    只对 ``settings.graphql_path`` 下的请求生效，其余请求零开销直通。
-    **版本响应头**：**只**在端点路径显式带版本（``/graphql/v1``）时写 ``X-API-Version``，
-    无版本的别名路径（``/graphql``）不写——不替调用方猜「这条别名现在等价于哪个版本」。
+    只对 ``settings.graphql_path`` 下的版本请求生效，其余请求直通。
+    端点路径显式带版本（如 ``/graphql/v1``）时写 ``X-API-Version``。
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -135,7 +134,7 @@ class GraphQLHTTPMiddleware:
             return
         path = scope.get("path", "")
         prefix = settings.graphql_path.rstrip("/")
-        if path != prefix and not path.startswith(f"{prefix}/"):
+        if not path.startswith(f"{prefix}/"):
             await self.app(scope, receive, send)
             return
 
@@ -165,7 +164,7 @@ class GraphQLHTTPMiddleware:
 
 
 def _explicit_graphql_version(scope: Scope) -> str:
-    """端点路径里显式声明的版本号（``/graphql/v1`` → ``v1``）；别名路径返回空串。"""
+    """端点路径里显式声明的版本号（``/graphql/v1`` → ``v1``）。"""
     prefix = settings.graphql_path.rstrip("/")
     template = getattr(scope.get("route"), "path", "") or scope.get("path", "")
     if template != prefix and not template.startswith(f"{prefix}/"):
