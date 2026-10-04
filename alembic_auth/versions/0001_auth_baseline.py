@@ -1,13 +1,9 @@
-"""auth independent DB baseline
+"""Current auth schema baseline.
 
 Revision ID: 0001_auth_baseline
 Revises:
-Create Date: 2026-09-13
 
-实现取 ``auth_metadata.create_all(bind=...)``（checkfirst 幂等）：与 dev 的
-``AuthBase.create_all`` 通道同源，避免手写 19 张表 DDL 与模型漂移；对「表已由 create_all
-建出、现切 Alembic」的存量库亦安全（已存在的表跳过，仅补 alembic_version 版本戳）。后续
-auth 表结构变更仍照常 ``alembic -c alembic.auth.ini revision --autogenerate`` 生成增量。
+表结构取当前 auth_metadata；审计表的 TimescaleDB 装配在同一基线中完成。
 """
 
 from collections.abc import Sequence
@@ -23,6 +19,20 @@ down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+AUDIT_TIMESCALE_SQL = """
+DO $$
+BEGIN
+  BEGIN
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+    PERFORM create_hypertable('audit_logs', 'created_at',
+      chunk_time_interval => INTERVAL '7 days',
+      if_not_exists => TRUE, migrate_data => TRUE);
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'audit_logs TimescaleDB 装配跳过：%', SQLERRM;
+  END;
+END $$;
+"""
+
 
 def upgrade() -> None:
     """Upgrade schema：建出 auth 库全部缺失表（幂等）。"""
@@ -31,6 +41,7 @@ def upgrade() -> None:
     if not auth_metadata.tables:
         raise RuntimeError("auth_metadata 为空：auth 模型未注册到 AuthBase，拒绝空盖章")
     auth_metadata.create_all(bind=op.get_bind())
+    op.execute(AUDIT_TIMESCALE_SQL)
 
 
 def downgrade() -> None:

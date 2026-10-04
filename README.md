@@ -154,7 +154,7 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 - 每枚 access token 代表一个独立的激活会话；切换会签发新令牌，先前令牌仍可用至过期或撤销。DSD 限制的是单个会话中的并发角色；需要同一用户跨会话也不能持有两项职责时应配置 SSD。
 - RBAC3 将角色层级与职责分离组合裁决：SSD/DSD 均按继承闭包计数；若高级角色因 DSD 无法激活，默认会话继续尝试其可授权的低级角色，显式激活高级角色仍会被拒绝。对象级代管权限按当前会话的角色权限判定，附加角色取得权限时也能通过服务层的二次属主校验。
 - 后台角色管理：`GET /api/v1/admin/auth/users/{user_id}/roles` 查看用户角色；`GET /api/v1/admin/auth/roles/{role_name}/users` 分页查看角色成员；`PUT` / `DELETE /api/v1/admin/auth/users/{user_id}/roles/{role_name}` 分配 / 撤销附加角色。操作要求有效管理员 cookie、1 小时内的 2FA 信任和 `admin:super_admin` 角色；变更会撤销目标用户的旧会话。
-- 生产增量迁移需同时应用业务库的 `0003_role_permissions_enabled` 与 AUTH 库的 `0002_user_roles`、`0003_session_roles`。
+- 已压平的业务库与 AUTH 库基线分别包含权限开关、附加角色和会话角色字段。
 
 > **部署要求**：S5 拆库后 `users/profiles` 只在 auth 独立库，业务库已无 `users` 表。生产必须同时配置
 > `LKM_AUTH_HTTP_URL`（compose 默认 `http://auth:8001`）与 `LKM_AUTH_HTTP_TOKEN`（backend 与 auth 两侧同值）；
@@ -202,10 +202,10 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 
 ## 数据库与迁移
 
-- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；新库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 基线与增量迁移。**TimescaleDB**：`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区，已投递事件由 relay 归档后在冷表压缩；热表不按时间删除待投递事件），全局 `event_id` 由普通表 `outbox_event_keys` 唯一约束；`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`；独立 auth 库的 `audit_logs` 也按 `created_at` 分区，已有表通过 `alembic_auth` 迁移。扩展不可用时各表保留普通 PG 读写能力。详见根目录 `DEPLOYMENT.md`。
+- 业务库：开发环境启动执行 `Base.metadata.create_all(bind=engine)` 自动建表（对已存在的表另做 `_sync_additive_schema` **加性补列/补索引**，只增不改）；新库设 `LKM_USE_ALEMBIC=true` 走 `alembic/` 基线与增量迁移。**TimescaleDB**：`outbox_events`/`outbox_archived` 装配为 **hypertable**（按 `created_at` 分区，已投递事件由 relay 归档后在冷表压缩；热表不按时间删除待投递事件），全局 `event_id` 由普通表 `outbox_event_keys` 唯一约束；`points_ledger` 亦转 hypertable 以承载 continuous aggregate `points_daily`；独立 auth 库的 `audit_logs` 也按 `created_at` 分区。扩展不可用时各表保留普通 PG 读写能力。详见根目录 `DEPLOYMENT.md`。
 
-已应用旧版 `0001`/`0002`/`0003` 的数据库不能直接重跑压平后的基线；部署前须核对并补齐表结构，再将 `alembic_version` 标记为 `0001_uuid_baseline`。新库可直接运行 `alembic upgrade head`。
-- AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，19 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`，含基线 `0001_auth_baseline`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
+两条链各只有一条基线，revision 分别为 `0001_uuid_baseline`、`0001_auth_baseline`。当前没有需保留的数据，直接在空库运行两条迁移链的 `upgrade head`。
+- AUTH 独立库：表定义在 `auth/db/base.py`（AuthBase，19 张），迁移入口 `alembic_auth/`（`alembic.auth.ini`）；库初始化脚本 `deploy/initdb/01-auth-db.sh`（另 `02-timescaledb.sh` 建扩展，仅业务库需要）。schema 由 **auth 进程启动时**按 `LKM_USE_ALEMBIC` 自持初始化（`auth.db.init.init_auth_db`：非 alembic 走 `AuthBase.create_all`，否则走第二迁移链）——auth 表已迁出单体 `Base.metadata`，业务进程不再建它们。
 
 大表（`content_items`、`content_comments`、outbox、浏览日志、积分流水）超过 64 MiB
 或已转 Timescale hypertable 时，启动过程不会自动对既有表加列/建索引。

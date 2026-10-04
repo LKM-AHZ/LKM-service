@@ -1,6 +1,5 @@
 """Auth audit hypertable schema and optional TimescaleDB setup."""
 
-import importlib
 from unittest.mock import AsyncMock
 
 from sqlalchemy.exc import ProgrammingError
@@ -35,22 +34,3 @@ async def test_auth_timescale_missing_extension_keeps_plain_table() -> None:
 
     assert conn.execute.await_count == 1
     conn.begin_nested.return_value.rollback.assert_awaited_once()
-
-
-def test_auth_migration_rewrites_legacy_primary_key(monkeypatch) -> None:
-    revision = importlib.import_module("alembic_auth.versions.0004_audit_hypertable")
-    statements: list[str] = []
-
-    class _Bind:
-        def scalar(self, _sql: object) -> str:
-            return "PRIMARY KEY (id)"
-
-    monkeypatch.setattr(revision.op, "get_bind", _Bind)
-    monkeypatch.setattr(revision.op, "execute", statements.append)
-    revision.upgrade()
-
-    assert statements[:2] == [
-        "ALTER TABLE audit_logs DROP CONSTRAINT audit_logs_pkey",
-        "ALTER TABLE audit_logs ADD PRIMARY KEY (created_at, id)",
-    ]
-    assert "migrate_data => TRUE" in statements[2]

@@ -277,7 +277,9 @@ def test_auth_alembic_chain_baseline_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0004_audit_hypertable"
+    assert script.get_current_head() == "0001_auth_baseline"
+    assert len(list(script.walk_revisions())) == 1
+    assert script.get_revision("head").down_revision is None
 
 
 def test_business_alembic_chain_head() -> None:
@@ -288,7 +290,9 @@ def test_business_alembic_chain_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.ini")))
-    assert script.get_current_head() == "0007_outbox_retention"
+    assert script.get_current_head() == "0001_uuid_baseline"
+    assert len(list(script.walk_revisions())) == 1
+    assert script.get_revision("head").down_revision is None
 
 
 async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:

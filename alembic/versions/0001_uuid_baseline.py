@@ -1,27 +1,26 @@
 """
-uuid baseline
+Current business schema baseline.
 Revision ID: 0001_uuid_baseline
 Revises:
-Create Date: 2026-09-18 23:40:21.559710
-- 乐观锁 ``version`` 列（蓝图 §6.1）直接写进 ``content_items`` / ``boards`` / ``articles``
+- 乐观锁 ``version`` 列直接写进 ``content_items`` / ``boards`` / ``articles``
   的 create_table，无需事后 ``add_column``；
 - ``upload_sessions`` 表（预签名直传元数据落 DB）作为普通建表；
 - ``points_ledger`` 直接建成能承载 continuous aggregate 的形态：复合主键
   ``(created_at, id)`` + 含分区列的幂等唯一约束（约束名 ``uq_points_ledger_ref`` 不变，
   ``pg_upsert`` 按名解析 arbiter），hypertable 装配并入下方 ``TIMESCALE_DDL``。
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '0001_uuid_baseline'
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 UUID7_FUNCTION_SQL = """
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid AS $$
@@ -270,6 +269,14 @@ def upgrade() -> None:
     sa.Column('original_name', sa.String(length=255), nullable=False),
     sa.Column('stored_name', sa.String(length=255), nullable=False),
     sa.Column('sha3_hash', sa.String(length=64), nullable=True),
+    sa.Column('document_code', sa.String(length=40), nullable=True),
+    sa.Column('classification', sa.String(length=20), server_default='public', nullable=False),
+    sa.Column('project_id', sa.Uuid(), nullable=True),
+    sa.Column('version', sa.Integer(), server_default='1', nullable=False),
+    sa.Column('root_file_id', sa.Uuid(), nullable=True),
+    sa.Column('extracted_text', sa.Text(), server_default='', nullable=False),
+    sa.Column('archive_state', sa.String(length=20), server_default='active', nullable=False),
+    sa.Column('backed_up_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('ref_count', sa.Integer(), nullable=False),
     sa.Column('storage_path', sa.String(length=255), nullable=True),
     sa.Column('mime_type', sa.String(length=100), nullable=False),
@@ -283,9 +290,16 @@ def upgrade() -> None:
     sa.Column('view_count', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.ForeignKeyConstraint(['root_file_id'], ['library_files.id'], name='fk_library_files_root'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('stored_name')
+    sa.UniqueConstraint('stored_name'),
+    sa.UniqueConstraint('document_code', 'version', name='uq_library_document_version')
     )
+    op.create_index('ix_library_files_sha3_hash', 'library_files', ['sha3_hash'])
+    op.create_index('ix_library_files_project', 'library_files', ['project_id'])
+    op.create_index('ix_library_files_root_version', 'library_files', ['root_file_id', 'version'])
+    op.create_index('ix_library_files_name_trgm', 'library_files', ['original_name'], postgresql_using='gin', postgresql_ops={'original_name': 'gin_trgm_ops'})
+    op.create_index('ix_library_files_text_trgm', 'library_files', ['extracted_text'], postgresql_using='gin', postgresql_ops={'extracted_text': 'gin_trgm_ops'})
     op.create_table('moderation_rules',
     sa.Column('pattern', sa.String(length=255), nullable=False),
     sa.Column('is_regex', sa.Boolean(), nullable=False),
@@ -415,6 +429,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_foreign_key('fk_library_files_project', 'library_files', 'projects', ['project_id'], ['id'], ondelete='SET NULL')
     op.create_table('qa_answers',
     sa.Column('question_id', sa.Uuid(), nullable=False),
     sa.Column('author_id', sa.Uuid(), nullable=False),
@@ -437,6 +452,8 @@ def upgrade() -> None:
     sa.Column('bounty_per_person', sa.Integer(), nullable=False),
     sa.Column('bounty_total', sa.Integer(), nullable=False),
     sa.Column('bounty_distributed', sa.Integer(), nullable=False),
+    sa.Column('bounty_expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('urgent', sa.Boolean(), server_default=sa.false(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('category', sa.String(length=20), nullable=False),
     sa.Column('accepted_answer_id', sa.Uuid(), nullable=True),
@@ -448,6 +465,8 @@ def upgrade() -> None:
     )
     op.create_index('ix_qa_question_category_id', 'qa_questions', ['category', 'id'], unique=False)
     op.create_index('ix_qa_question_status_id', 'qa_questions', ['status', 'id'], unique=False)
+    op.create_index('ix_qa_questions_due', 'qa_questions', ['status', 'bounty_expires_at'])
+    op.create_index('ix_qa_questions_bounty_sort', 'qa_questions', ['category', 'bounty_total', 'id'])
     # 补上 qa_answers → qa_questions 的循环外键
     op.create_foreign_key(
         'fk_qa_answers_question_id', 'qa_answers', 'qa_questions', ['question_id'], ['id']
@@ -470,6 +489,7 @@ def upgrade() -> None:
     op.create_table('role_permissions',
     sa.Column('role_name', sa.String(length=40), nullable=False),
     sa.Column('permission', sa.String(length=80), nullable=False),
+    sa.Column('enabled', sa.Boolean(), server_default=sa.true(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
@@ -953,6 +973,8 @@ def upgrade() -> None:
     op.create_index('ix_interaction_view_user_viewed', 'interaction_view_logs', ['user_id', 'viewed_at'], unique=False)
     op.create_index('ix_interaction_view_viewed', 'interaction_view_logs', ['viewed_at'], unique=False)
     op.create_index('ix_interaction_view_content', 'interaction_view_logs', ['content_id'], unique=False)
+    # Treehole tables were introduced after the original baseline.
+    _create_treehole_tables()
     # ### end Alembic commands ###
     # 全部表建完后置：TimescaleDB 装配（hypertable 要求表已存在；失败仅告警不中断）
     op.execute(TIMESCALE_DDL)
@@ -960,6 +982,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
+    _drop_treehole_tables()
     # continuous aggregate `points_daily` 由应用启动时装配（core/db/init_db.py），不在本迁移内建，
     # 但它依赖 points_ledger 这个 hypertable——不先拆视图，DROP TABLE 会被 PG 以「被依赖」拒绝。
     # 幂等（IF EXISTS）：无 timescaledb 的环境下是空操作。
@@ -1047,11 +1070,14 @@ def downgrade() -> None:
     op.drop_table('reports')
     op.drop_constraint('fk_qa_answers_question_id', 'qa_answers', type_='foreignkey')
     op.drop_index('ix_qa_question_status_id', table_name='qa_questions')
+    op.drop_index('ix_qa_questions_due', table_name='qa_questions')
+    op.drop_index('ix_qa_questions_bounty_sort', table_name='qa_questions')
     op.drop_index('ix_qa_question_category_id', table_name='qa_questions')
     op.drop_table('qa_questions')
     op.drop_index('ix_qa_answer_question_accepted', table_name='qa_answers')
     op.drop_index('ix_qa_answer_question', table_name='qa_answers')
     op.drop_table('qa_answers')
+    op.drop_constraint('fk_library_files_project', 'library_files', type_='foreignkey')
     op.drop_table('projects')
     op.drop_index('uq_project_applications_pending', table_name='project_applications', postgresql_where=sa.text("status = 'pending'"))
     op.drop_table('project_applications')
@@ -1094,3 +1120,145 @@ def downgrade() -> None:
     op.drop_table('article_categories')
     op.drop_table('achievements')
     # ### end Alembic commands ###
+
+
+def _create_treehole_tables() -> None:
+    op.create_table(
+        "treehole_letters",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("owner_id", sa.String(64), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("category", sa.String(32), nullable=False),
+        sa.Column("privacy", sa.String(16), nullable=False),
+        sa.Column("codename", sa.String(80), nullable=False),
+        sa.Column("moods", sa.JSON(), nullable=False),
+        sa.Column("tags", sa.JSON(), nullable=False),
+        sa.Column("sticker", sa.Text(), nullable=False),
+        sa.Column("paper", sa.String(32), nullable=False),
+        sa.Column("scheduled_at", sa.DateTime(timezone=True)),
+        sa.Column("seal_until", sa.DateTime(timezone=True)),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_treehole_letters_owner_id", "treehole_letters", ["owner_id"])
+    op.create_index(
+        "ix_treehole_letters_public", "treehole_letters", ["privacy", "created_at"]
+    )
+
+    op.create_table(
+        "treehole_reactions",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("owner_id", sa.String(64), nullable=False),
+        sa.Column(
+            "letter_id",
+            sa.String(36),
+            sa.ForeignKey("treehole_letters.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("kind", sa.String(16), nullable=False),
+        sa.UniqueConstraint("owner_id", "letter_id", "kind"),
+    )
+    op.create_index(
+        "ix_treehole_reactions_owner_id", "treehole_reactions", ["owner_id"]
+    )
+
+    op.create_table(
+        "treehole_conversations",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column(
+            "letter_id",
+            sa.String(36),
+            sa.ForeignKey("treehole_letters.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("author_id", sa.String(64), nullable=False),
+        sa.Column("replier_id", sa.String(64), nullable=False),
+        sa.Column("replier_codename", sa.String(80), nullable=False),
+        sa.Column("author_blocked", sa.Boolean(), nullable=False),
+        sa.Column("replier_blocked", sa.Boolean(), nullable=False),
+        sa.Column("author_hidden", sa.Boolean(), nullable=False),
+        sa.Column("replier_hidden", sa.Boolean(), nullable=False),
+        sa.Column("author_cleared_at", sa.DateTime(timezone=True)),
+        sa.Column("replier_cleared_at", sa.DateTime(timezone=True)),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("letter_id", "replier_id"),
+    )
+    op.create_index(
+        "ix_treehole_conversations_author_id", "treehole_conversations", ["author_id"]
+    )
+    op.create_index(
+        "ix_treehole_conversations_replier_id", "treehole_conversations", ["replier_id"]
+    )
+    op.create_table(
+        "treehole_messages",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column(
+            "conversation_id",
+            sa.String(36),
+            sa.ForeignKey("treehole_conversations.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("sender_id", sa.String(64), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("recalled", sa.Boolean(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+
+    op.create_table(
+        "treehole_bottles",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("owner_id", sa.String(64), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("picked_by", sa.String(64)),
+        sa.Column("reply", sa.Text()),
+        sa.Column("replied_at", sa.DateTime(timezone=True)),
+    )
+    op.create_index("ix_treehole_bottles_owner_id", "treehole_bottles", ["owner_id"])
+    op.create_table(
+        "treehole_wishes",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("owner_id", sa.String(64), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("lights", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_treehole_wishes_owner_id", "treehole_wishes", ["owner_id"])
+    op.create_table(
+        "treehole_wish_lights",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column(
+            "wish_id",
+            sa.String(36),
+            sa.ForeignKey("treehole_wishes.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("owner_id", sa.String(64), nullable=False),
+        sa.UniqueConstraint("wish_id", "owner_id"),
+    )
+    op.create_table(
+        "treehole_reports",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("reporter_id", sa.String(64), nullable=False),
+        sa.Column("target_type", sa.String(16), nullable=False),
+        sa.Column("target_id", sa.String(36), nullable=False),
+        sa.Column("reason", sa.String(80), nullable=False),
+        sa.Column("detail", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("reporter_id", "target_type", "target_id"),
+    )
+
+
+def _drop_treehole_tables() -> None:
+    for table in (
+        "treehole_reports",
+        "treehole_wish_lights",
+        "treehole_wishes",
+        "treehole_bottles",
+        "treehole_messages",
+        "treehole_conversations",
+        "treehole_reactions",
+        "treehole_letters",
+    ):
+        op.drop_table(table)
