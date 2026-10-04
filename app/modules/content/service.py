@@ -91,7 +91,11 @@ from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError
 from core.metrics import post_created_total
-from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
+from core.ports.snapshot import get_user_display_names as _author_map
+from core.ports.snapshot import (
+    get_user_snapshot,
+    get_user_snapshot_batch,
+)
 
 READING_WPM = 300  # 每 300 字约 1 分钟阅读时间
 
@@ -128,14 +132,6 @@ def _comment_to_schema(c: ContentComment, author_name: str) -> ContentCommentInf
     return ContentCommentInfo.model_validate(c).model_copy(
         update={"author_name": author_name}
     )
-
-
-async def _author_map(db: DbSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
-    ids = {i for i in user_ids if i}
-    if not ids:
-        return {}
-    snaps = await get_user_snapshot_batch(db, user_ids=list(ids))
-    return {uid: s.display_name for uid, s in snaps.items()}
 
 
 async def _column_title_map(
@@ -1010,9 +1006,7 @@ async def create_question(
 ) -> QuestionOut:
     """发问：spend 锁定总悬赏 + 写 Question（同事务）。"""
     total = info.bounty_people * info.bounty_per_person
-    expires_at = (
-        now_iso() + _dt.timedelta(days=info.bounty_days) if total > 0 else None
-    )
+    expires_at = now_iso() + _dt.timedelta(days=info.bounty_days) if total > 0 else None
     # 先建 Question 拿 id（作为 spend 的 ref_id）
     q = QAQuestion(
         author_id=author_id,

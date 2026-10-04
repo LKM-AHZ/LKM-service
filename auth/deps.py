@@ -30,7 +30,7 @@ from auth.token_revocation import is_jti_blocked, token_version_is_stale
 from core.config import is_test_env
 from core.db.base import now_iso
 from core.err import BizError, CommonErr
-from core.ports.authz import MFA_TRUST_SECONDS
+from core.ports.authz import MFA_TRUST_SECONDS, _bearer_token, _parse_bearer
 from core.rbac_roles import (
     SSD_CONSTRAINTS,
     activated_roles,
@@ -51,28 +51,6 @@ class CurrentUser(BaseModel):
     active_roles: tuple[str, ...] | None = None
     email: str | None = None
     phone: str | None = None
-
-
-def _bearer_token(authorization: str | None) -> str | None:
-    """从 Authorization 头取出 Bearer 令牌；缺失/格式不对返回 None（与 _parse_bearer 共用同一套解析规则）。"""
-    if not authorization:
-        return None
-    parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return None
-    return parts[1]
-
-
-def _parse_bearer(
-    authorization: str | None = Header(None, alias="Authorization"),
-) -> str:
-    """从 Authorization 请求头中提取 Bearer 令牌。如果请求头缺失或格式错误，则抛出 BizError(FORBIDDEN)。"""
-    token = _bearer_token(authorization)
-    if token is not None:
-        return token
-    if not authorization:
-        raise BizError(CommonErr.FORBIDDEN, "Missing authorization header")
-    raise BizError(CommonErr.FORBIDDEN, "Invalid authorization header format")
 
 
 async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:

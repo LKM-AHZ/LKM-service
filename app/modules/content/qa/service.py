@@ -12,6 +12,7 @@ from app.modules.content.service import (
     close_question,
     create_answer,
     create_question,
+    expire_due_questions,
     get_question,
     list_questions,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "close_question",
     "create_answer",
     "create_question",
+    "expire_due_questions",
     "get_question",
     "list_questions",
 ]

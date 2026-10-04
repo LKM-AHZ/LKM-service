@@ -174,6 +174,7 @@ EVENT_CONTRACTS: dict[str, EventContract] = {
         _cron("reconcile_blog_repos", RKEY_RECONCILE),
         _cron("reconcile_content_counts", RKEY_RECONCILE),
         _cron("reconcile_content_counts_full", RKEY_RECONCILE),
+        _cron("expire_qa_bounties", RKEY_CLEANUP),
         _cron("reconcile_user_dim", RKEY_RECONCILE),
         _cron("export_analytics_clickhouse", RKEY_ANALYTICS),
         _cron("run_ops_daily", RKEY_OPS_DAILY),

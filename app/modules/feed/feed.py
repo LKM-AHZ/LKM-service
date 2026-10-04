@@ -35,7 +35,7 @@ from app.modules.content.models import (
 )
 from app.modules.feed.schemas import FeedItem
 from app.modules.projects.models import Project
-from core.ports.snapshot import get_user_snapshot_batch
+from core.ports.snapshot import get_user_display_names as _author_map
 
 _PREVIEW_LEN = 150
 
@@ -48,15 +48,6 @@ def _preview_of(text: str | None, limit: int = _PREVIEW_LEN) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[:limit].rstrip() + "..."
-
-
-async def _author_map(
-    db: AsyncSession, user_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, str]:
-    if not user_ids:
-        return {}
-    snaps = await get_user_snapshot_batch(db, user_ids=list(user_ids))
-    return {uid: s.display_name for uid, s in snaps.items()}
 
 
 def _before_conds(
@@ -82,7 +73,7 @@ def _after_conds(
     after_time: datetime,
     after_id: uuid.UUID | None,
 ) -> list[Any]:
-    """(created_at, id) 水位上滤条件（M6.11 fanout 增量扫描用，升序配套）。
+    """(created_at, id) 水位上滤条件。
 
     与 :func:`_before_conds` 严格互补：``> after`` 或 ``== after 且 id >``。
 

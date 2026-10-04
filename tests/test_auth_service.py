@@ -151,6 +151,20 @@ class TestLoginPassword:
         result = await _login(db, "13800001111", "secret123456")
         assert result["user_id"] == reg["user_id"]
 
+    async def should_ignore_missing_contacts_in_identity_lookup(self):
+        from unittest.mock import AsyncMock, patch
+
+        from auth.repository import UserRepository
+
+        repo = UserRepository(None)
+        with patch.object(UserRepository, "get_one", new_callable=AsyncMock) as get_one:
+            await repo.find_by_identity(username="missing", email=None, phone=None)
+            clause = get_one.await_args.args[0]
+            sql = str(clause.compile(compile_kwargs={"literal_binds": True}))
+            assert "users.username = 'missing'" in sql
+            assert "users.email" not in sql
+            assert "users.phone" not in sql
+
     # --- failure paths ---
 
     async def should_reject_wrong_password(self, db: AsyncSession):

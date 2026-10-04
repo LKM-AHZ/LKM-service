@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,17 @@ async def get_user_snapshot_batch(
 ) -> dict[uuid.UUID, UserSnapshot]:
     """批量用户快照，返回 ``{user_id: UserSnapshot}``（缺失的 id 不在结果里）。"""
     return await get("snapshot").get_user_snapshot_batch(db, user_ids=user_ids)
+
+
+async def get_user_display_names(
+    db: AsyncSession, user_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """批量读取展示名；重复或空 ID 不重复请求。"""
+    ids = {user_id for user_id in user_ids if user_id}
+    if not ids:
+        return {}
+    snaps = await get_user_snapshot_batch(db, user_ids=list(ids))
+    return {user_id: snap.display_name for user_id, snap in snaps.items()}
 
 
 async def list_user_snapshots(

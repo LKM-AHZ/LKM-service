@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 
 from app.modules.notification.models import (
     Notification,
@@ -35,8 +35,7 @@ class NotificationRepository(AsyncRepository[Notification]):
         """在当前事务内串行化同一聚合键的写入。"""
         key = f"notification:{user_id}:{type}:{actor_id}:{target_id}"
         await self.db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": key},
+            select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0)))
         )
 
     async def find_recent_unread(

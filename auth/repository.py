@@ -107,20 +107,17 @@ class UserRepository(AsyncRepository[User]):
             options=(selectinload(User.profile),),
         )
 
-    async def find_for_login(
-        self, *, username: str, email: str, phone: str
+    async def find_by_identity(
+        self, *, username: str, email: str | None, phone: str | None
     ) -> User | None:
-        """按用户名 / 邮箱 / 手机号任一命中取 User（登录入口，预载 profile）。
-
-        空联系方式不计入谓词（同 :meth:`find_for_registration`）：``User.email == None``
-        会编译成 ``email IS NULL``，把「没填邮箱」的任意用户当成命中，登录路径上即身份错配。
-        """
+        """登录和注册查重共用：按任一非空身份字段查找，并预载 profile。"""
+        conditions = [User.username == username]
+        if email:
+            conditions.append(User.email == email)
+        if phone:
+            conditions.append(User.phone == phone)
         return await self.get_one(
-            or_(
-                User.username == username,
-                (User.email == email) if email else False,
-                (User.phone == phone) if phone else False,
-            ),
+            or_(*conditions),
             options=(selectinload(User.profile),),
         )
 
@@ -128,19 +125,6 @@ class UserRepository(AsyncRepository[User]):
         if not contact:
             return None
         return await self.get_one(or_(User.email == contact, User.phone == contact))
-
-    async def find_for_registration(
-        self, *, username: str, email: str | None, phone: str | None
-    ) -> User | None:
-        """注册查重：用户名 / 邮箱 / 手机号任一命中（空联系方式不计入谓词）。"""
-        return await self.get_one(
-            or_(
-                User.username == username,
-                (User.email == email) if email else False,
-                (User.phone == phone) if phone else False,
-            ),
-            options=(selectinload(User.profile),),
-        )
 
     async def username_exists(self, username: str) -> bool:
         return await self.exists(User.username == username)

@@ -32,17 +32,9 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.db.repository import DbSession
 from core.err import BizError
 from core.metrics import search_engine_fallback_total
-from core.ports.snapshot import get_user_snapshot_batch
+from core.ports.snapshot import get_user_display_names as _author_map
 
 logger = logging.getLogger(__name__)
-
-
-async def _author_map(db: DbSession, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
-    ids = {i for i in user_ids if i}
-    if not ids:
-        return {}
-    snaps = await get_user_snapshot_batch(db, user_ids=list(ids))
-    return {uid: s.display_name for uid, s in snaps.items()}
 
 
 def _to_hit(item: Any, names: dict[uuid.UUID, str]) -> SearchHit:

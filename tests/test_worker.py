@@ -41,6 +41,7 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_CONTENT_PUBLISHED,
         messaging.RKEY_CONTENT_UPDATED,
         messaging.RKEY_CONTENT_DELETED,
+        messaging.RKEY_FILE_CHANGED,
         messaging.RKEY_AUDIT_LOGIN_FAIL,
         messaging.RKEY_AUDIT_PERMISSION_CHANGE,
     }

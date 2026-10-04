@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 
 from core import event_contract, messaging, metrics_relay, task_registry
 from core.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
@@ -63,8 +63,9 @@ async def _dispatch_with_dedup(
     db = await new_session()
     try:
         await db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": f"{scope}:{eid}"},
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(f"{scope}:{eid}", 0))
+            )
         )
         if await already_processed(db, eid, scope=scope):
             logger.info("幂等跳过已处理 scope=%s event_id=%s", scope, eid)

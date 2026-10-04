@@ -402,7 +402,7 @@ async def consume_pending_normal_registration(
     await PendingRegistrationRepository(db).update(pending, consumed=True)
 
     # 检查重复 —— 如果已存在且密码正确则自动登录
-    existing = await UserRepository(db).find_for_registration(
+    existing = await UserRepository(db).find_by_identity(
         username=str(pending.username),
         email=str(pending.email) if pending.email else None,
         phone=str(pending.phone) if pending.phone else None,
@@ -479,11 +479,9 @@ async def login_password(
     if ip_address:
         await check_password_login_rate_limit(ip_address)
 
-    account = _normalize_username(info.account)
-    email_normalized = _normalize_email(info.account)
-
-    user = await UserRepository(db).find_for_login(
-        username=account, email=email_normalized, phone=info.account.strip()
+    account = info.account.strip()
+    user = await UserRepository(db).find_by_identity(
+        username=account, email=account, phone=account
     )
 
     if not user:
