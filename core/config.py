@@ -172,7 +172,6 @@ class Settings(BaseSettings):
     outbox_archive_retention_s: float = 604800.0
     outbox_archive_batch: int = 500
     outbox_archive_interval_s: float = 3600.0
-    outbox_scan_window_s: float = 2592000.0
 
     # ---- 内容域领域事件（content.*，外部检索引擎增量同步的单一数据源）----
     content_events_enabled: bool = True

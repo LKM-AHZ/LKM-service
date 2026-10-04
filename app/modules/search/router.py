@@ -54,5 +54,5 @@ async def search(
         db, q, page=pag.page, limit=pag.limit, content_type=content_type
     )
     if settings.read_msgspec_enabled:
-        return msgspec_ok(to_wire(page))
+        return msgspec_ok(to_wire(page), headers={"X-Total": str(page.total)})
     return page

@@ -277,7 +277,18 @@ def test_auth_alembic_chain_baseline_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0001_auth_baseline"
+    assert script.get_current_head() == "0004_audit_hypertable"
+
+
+def test_business_alembic_chain_head() -> None:
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.ini")))
+    assert script.get_current_head() == "0007_outbox_retention"
 
 
 async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:
@@ -441,16 +452,25 @@ async def test_timescale_assembly_is_optional_and_non_fatal() -> None:
         await engine.dispose()
 
 
-def test_scan_window_aligns_with_retention_policy() -> None:
-    """relay 扫描窗口与 Timescale 保留策略必须同阈值（30 天）。
+def test_outbox_scan_does_not_drop_old_pending_events() -> None:
+    """长时间停机后的待投递事件仍可被 relay 认领。"""
+    from datetime import UTC, datetime
 
-    两者口径耦合：``relay_poll`` 只扫 ``created_at >= now-outbox_scan_window_s`` 的行，
-    窗口外的行由 Timescale 保留策略 DROP。窗口**大于**保留期 → 白扫即将被删的分区；
-    窗口**小于**保留期 → 窗口内被漏掉的行不会立刻被删，等于静默少投事件。故二者必须
-    对齐，改一个必须改另一个（此断言即那条耦合的可执行文档）。
-    """
-    from core.config import settings
-    from core.db.init_db import _RETENTION_POLICIES
+    from core.outbox_relay import _claimable
 
-    assert _RETENTION_POLICIES == (("outbox_events", "30 days"),)
-    assert settings.outbox_scan_window_s == 30 * 86400
+    assert all(
+        "created_at" not in str(condition)
+        for condition in _claimable(datetime.now(UTC))
+    )
+
+
+async def test_timescale_setup_removes_unsafe_outbox_retention() -> None:
+    from unittest.mock import AsyncMock
+
+    from core.db.init_db import _ensure_hypertables
+
+    conn = AsyncMock()
+    await _ensure_hypertables(conn)
+    statements = [str(call.args[0]) for call in conn.execute.call_args_list]
+    assert any("remove_retention_policy('outbox_events'" in sql for sql in statements)
+    assert not any("add_retention_policy" in sql for sql in statements)

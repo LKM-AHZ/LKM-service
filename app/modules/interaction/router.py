@@ -92,7 +92,7 @@ async def my_favorites(
 ) -> PageData[FavoriteItem] | Response:
     page = await list_favorites(db, cur.id, page=pag.page, limit=pag.limit)
     if settings.read_msgspec_enabled:
-        return msgspec_ok(favorites_to_wire(page))
+        return msgspec_ok(favorites_to_wire(page), headers={"X-Total": str(page.total)})
     return page
 
 
@@ -115,7 +115,7 @@ async def my_history(
 ) -> PageData[HistoryItem] | Response:
     page = await list_history(db, cur.id, page=pag.page, limit=pag.limit)
     if settings.read_msgspec_enabled:
-        return msgspec_ok(history_to_wire(page))
+        return msgspec_ok(history_to_wire(page), headers={"X-Total": str(page.total)})
     return page
 
 

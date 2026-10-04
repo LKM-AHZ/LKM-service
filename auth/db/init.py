@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from core.config import settings
 from core.db.migration_lock import acquire_migration_lock, release_migration_lock
@@ -60,6 +61,29 @@ async def _create_auth_all() -> None:
     async with engine.begin() as conn:
         await ensure_shared_objects(conn)
         await conn.run_sync(auth_metadata.create_all)
+        await _ensure_audit_hypertable(conn)
+
+
+async def _ensure_audit_hypertable(conn: Any) -> None:
+    """新库自动装配审计 hypertable；旧单列主键由 Alembic 迁移处理。"""
+    import sqlalchemy as sa
+    from sqlalchemy.exc import DBAPIError
+
+    # TimescaleDB 不存在或旧表主键尚未迁移时，保留普通 PG 表的读写能力。
+    for sql in (
+        "CREATE EXTENSION IF NOT EXISTS timescaledb",
+        "SELECT create_hypertable('audit_logs', 'created_at', "
+        "chunk_time_interval => INTERVAL '7 days', "
+        "if_not_exists => TRUE, migrate_data => TRUE)",
+    ):
+        sp = await conn.begin_nested()
+        try:
+            await conn.execute(sa.text(sql))
+            await sp.commit()
+        except DBAPIError as exc:
+            await sp.rollback()
+            logger.warning("auth audit_logs TimescaleDB 装配跳过：%s", exc)
+            return
 
 
 # —— schema 初始化完成标志（进程内状态，供 auth readiness 如实上报）——

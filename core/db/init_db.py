@@ -13,6 +13,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from sqlalchemy.exc import DBAPIError
+
 from core.db.migration_lock import (
     acquire_migration_lock,
     release_migration_lock,
@@ -147,7 +149,7 @@ def _sync_additive_schema(conn: Any) -> list[str]:
                     )
                 )
                 sp.commit()
-            except sa.exc.DBAPIError as exc:
+            except DBAPIError as exc:
                 sp.rollback()
                 # 例如生成列引用了同批次里尚未补上的依赖列；跳过并告警，不让启动挂掉
                 logger.warning("补列 %s.%s 失败：%s", table.name, col.name, exc)
@@ -171,7 +173,7 @@ def _sync_additive_schema(conn: Any) -> list[str]:
             try:
                 conn.execute(sa.text(ddl))
                 sp.commit()
-            except sa.exc.DBAPIError:
+            except DBAPIError:
                 # 多 worker 并发启动可能同时建同名索引（DuplicateTable）→ 视为已建成
                 sp.rollback()
                 continue
@@ -196,10 +198,6 @@ _COMPRESSION_SPECS: tuple[tuple[str, str, str], ...] = (
 
 # 压缩策略：(表名, 阈值)——超期 chunk 转列式压缩
 _COMPRESSION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_archived", "7 days"),)
-
-# 保留策略：(表名, 阈值)——超期 chunk 直接 DROP（仅 outbox_events，兜底；
-# outbox_archived 是「可查历史」，刻意不设，其增长由归档链路约束）
-_RETENTION_POLICIES: tuple[tuple[str, str], ...] = (("outbox_events", "30 days"),)
 
 _CONTINUOUS_AGGREGATE_SPECS: tuple[tuple[str, str], ...] = (
     (
@@ -236,7 +234,7 @@ async def _ensure_timescaledb(conn: Any) -> bool:
         await conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS timescaledb"))
         await sp.commit()
         return True
-    except sa.exc.DBAPIError as exc:
+    except DBAPIError as exc:
         await sp.rollback()
         exists = await conn.scalar(
             sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
@@ -251,7 +249,7 @@ async def _ensure_timescaledb(conn: Any) -> bool:
 
 
 async def _ensure_hypertables(conn: Any) -> list[str]:
-    """把 outbox 两表转 hypertable 并装配压缩/保留策略（幂等；须先 :func:`_ensure_timescaledb`）。
+    """把 outbox 两表转 hypertable 并装配冷表压缩（幂等；须先 :func:`_ensure_timescaledb`）。
 
     逐条 DDL 独立 savepoint：Timescale 的策略函数不支持 ``IF NOT EXISTS`` 的地方
     （如 ``ALTER TABLE ... SET (timescaledb.compress)``）重复执行会报错，视为「已装配」
@@ -266,7 +264,7 @@ async def _ensure_hypertables(conn: Any) -> list[str]:
         try:
             await conn.execute(sa.text(sql))
             await sp.commit()
-        except sa.exc.DBAPIError as exc:
+        except DBAPIError as exc:
             await sp.rollback()
             logger.warning("TimescaleDB %s 失败（按已装配跳过）：%s", label, exc)
             return
@@ -292,12 +290,11 @@ async def _ensure_hypertables(conn: Any) -> list[str]:
             f"if_not_exists => TRUE)",
             f"compression_policy:{table}",
         )
-    for table, threshold in _RETENTION_POLICIES:
-        await _run(
-            f"SELECT add_retention_policy('{table}', INTERVAL '{threshold}', "
-            f"if_not_exists => TRUE)",
-            f"retention_policy:{table}",
-        )
+    # 旧部署曾对热表启用按时间 DROP chunk；其中可能仍有 pending 事件。
+    await _run(
+        "SELECT remove_retention_policy('outbox_events', if_exists => TRUE)",
+        "remove_retention_policy:outbox_events",
+    )
     return changed
 
 
@@ -331,7 +328,7 @@ async def _ensure_continuous_aggregates(engine: Any) -> list[str]:
     async def _run(conn: Any, sql: str, label: str) -> None:
         try:
             await conn.execute(sa.text(sql))
-        except sa.exc.DBAPIError as exc:
+        except DBAPIError as exc:
             logger.warning("TimescaleDB %s 失败（按已装配跳过）：%s", label, exc)
             return
         changed.append(label)
@@ -342,8 +339,10 @@ async def _ensure_continuous_aggregates(engine: Any) -> list[str]:
             has_timescale = await conn.scalar(
                 sa.text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")
             )
-        except sa.exc.DBAPIError as exc:
-            logger.warning("TimescaleDB 扩展探测失败，跳过 continuous aggregate：%s", exc)
+        except DBAPIError as exc:
+            logger.warning(
+                "TimescaleDB 扩展探测失败，跳过 continuous aggregate：%s", exc
+            )
             return []
         if has_timescale is None:
             return []
@@ -357,7 +356,7 @@ async def _ensure_continuous_aggregates(engine: Any) -> list[str]:
                 )
             )
             existing = {row[0] for row in rows}
-        except sa.exc.DBAPIError as exc:
+        except DBAPIError as exc:
             logger.warning("TimescaleDB cagg 目录查询失败，按无已装配视图处理：%s", exc)
 
         for name, definition in _CONTINUOUS_AGGREGATE_SPECS:
@@ -393,7 +392,7 @@ async def _create_all() -> None:
     注意必须 import 所有模型模块，
     metadata 才会被填满；模型归位后由 ``model_registry.ensure_all_models`` 统一预注册
     各模块 models.py。加性同步的边界与理由见 :func:`_sync_additive_schema`；
-    建表后另做 TimescaleDB 装配（hypertable + 压缩/保留策略 + continuous aggregate），
+    建表后另做 TimescaleDB 装配（hypertable + 冷表压缩 + continuous aggregate），
     见 :func:`_ensure_hypertables` 与 :func:`_ensure_continuous_aggregates`。
     """
     from core.db.base import Base

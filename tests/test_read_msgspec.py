@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import datetime
+import importlib
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,8 +22,8 @@ from app.modules.notification.schemas import NotificationOut
 from app.modules.notification.wire import to_wire as notification_to_wire
 from app.modules.search.schemas import SearchHit
 from app.modules.search.wire import to_wire as search_to_wire
-from core.common import ApiResp, PageData
-from core.config import settings
+from core.common import ApiResp, PageData, PaginateParams
+from core.config import Settings, settings
 from core.err import _wrap_result
 from core.wire import msgspec_ok
 
@@ -47,6 +50,8 @@ def _without_request_id(body: dict[str, Any]) -> dict[str, Any]:
     「除它以外两条序列化路径逐字段相同」。
     """
     return {k: v for k, v in body.items() if k != "request_id"}
+
+
 _AUTHOR_ID = uuid.UUID("00000000-0000-7000-8000-000000000007")
 _BOARD_ID = uuid.UUID("00000000-0000-7000-8000-000000000003")
 
@@ -109,12 +114,12 @@ _PAYLOADS = [
 def test_msgspec_json_equivalent_to_pydantic(resp: FeedResponse) -> None:
     """msgspec 输出与既有 model_dump(mode="json") 解析后逐字段等价。"""
     old = ApiResp(code=0, message="OK", data=resp).model_dump(mode="json")
-    new = json.loads(msgspec_ok(to_wire(resp)).body)
+    new = json.loads(bytes(msgspec_ok(to_wire(resp)).body))
     assert new == old
 
 
 def test_envelope_shape_and_snake_case() -> None:
-    body = json.loads(msgspec_ok(to_wire(_PAYLOADS[1])).body)
+    body = json.loads(bytes(msgspec_ok(to_wire(_PAYLOADS[1])).body))
     assert set(body) == {"code", "message", "data", "request_id"}
     assert body["code"] == 0 and body["message"] == "OK"
     assert set(body["data"]) == {"items", "next_cursor"}
@@ -187,7 +192,7 @@ _SEARCH_PAGES = [
 @pytest.mark.parametrize("page", _SEARCH_PAGES)
 def test_search_msgspec_json_equivalent(page: PageData[SearchHit]) -> None:
     old = ApiResp(code=0, message="OK", data=page).model_dump(mode="json")
-    new = json.loads(msgspec_ok(search_to_wire(page)).body)
+    new = json.loads(bytes(msgspec_ok(search_to_wire(page)).body))
     assert new == old
 
 
@@ -212,7 +217,7 @@ _DT = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
 
 def _assert_equivalent(page: Any, wire: Any) -> None:
     old = ApiResp(code=0, message="OK", data=page).model_dump(mode="json")
-    new = json.loads(msgspec_ok(wire).body)
+    new = json.loads(bytes(msgspec_ok(wire).body))
     assert new == old
 
 
@@ -297,3 +302,61 @@ def test_files_json_equivalent() -> None:
         pages=1,
     )
     _assert_equivalent(page, files_to_wire(page))
+
+
+@pytest.mark.parametrize(
+    ("module_name", "service_name", "endpoint_name", "kwargs"),
+    [
+        ("search", "search_items", "search", {"q": "x", "content_type": None}),
+        (
+            "files",
+            "list_files",
+            "get_files",
+            {"category_id": None, "status": None, "sort": "newest", "cur": None},
+        ),
+        (
+            "notification",
+            "list_notifications",
+            "my_notifications",
+            {"cur": SimpleNamespace(id=_ITEM_ID), "unread": False},
+        ),
+        (
+            "interaction",
+            "list_favorites",
+            "my_favorites",
+            {"cur": SimpleNamespace(id=_ITEM_ID)},
+        ),
+        (
+            "interaction",
+            "list_history",
+            "my_history",
+            {"cur": SimpleNamespace(id=_ITEM_ID)},
+        ),
+    ],
+)
+async def test_msgspec_paged_endpoints_keep_x_total(
+    monkeypatch: Any,
+    module_name: str,
+    service_name: str,
+    endpoint_name: str,
+    kwargs: dict[str, Any],
+) -> None:
+    module = importlib.import_module(f"app.modules.{module_name}.router")
+    monkeypatch.setattr(
+        module,
+        service_name,
+        AsyncMock(return_value=PageData(items=[], total=37, page=2, pages=3)),
+    )
+    monkeypatch.setattr(settings, "read_msgspec_enabled", True)
+    response = await getattr(module, endpoint_name)(
+        pag=PaginateParams(page=2, limit=20, offset=20),
+        db=None,
+        **kwargs,
+    )
+    assert response.headers["X-Total"] == "37"
+    assert json.loads(response.body)["data"]["total"] == 37
+
+
+def test_msgspec_switch_uses_documented_env_name(monkeypatch: Any) -> None:
+    monkeypatch.setenv("LKM_READ_MSGSPEC_ENABLED", "false")
+    assert Settings(_env_file=None).read_msgspec_enabled is False

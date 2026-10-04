@@ -39,19 +39,6 @@ SessionFactory = Callable[..., Awaitable[AsyncSession]]
 _INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}"[:64]
 
 
-def _scan_window_start(now: datetime) -> datetime | None:
-    """
-    扫描窗口的时间下界
-    ``outbox_scan_window_s <= 0`` 时返回 None（不限窗）。它只用于让规划器跳过
-    ``created_at`` 过旧的分区，**不改变「哪些事件可投」的语义**——窗口外的行会被
-    Timescale 保留策略 DROP（两者阈值刻意对齐，见 ``init_db._RETENTION_POLICIES``）；
-    普通 PG（无 hypertable）上开启它也无副作用，只是少扫陈年滞留行。
-    """
-    if settings.outbox_scan_window_s <= 0:
-        return None
-    return now - timedelta(seconds=settings.outbox_scan_window_s)
-
-
 def _claimable(now: datetime) -> tuple[Any, ...]:
     """
     可领取窗口的 WHERE 条件：到期待投 **且** 未被别的进程有效认领
@@ -60,7 +47,9 @@ def _claimable(now: datetime) -> tuple[Any, ...]:
     该行永久卡死。未到期（`locked_at` 新鲜）的行留给持有者，别的副本不抢。
     """
     stale_before = now - timedelta(
-        seconds=max(settings.outbox_lock_ttl_s, settings.pulsar_operation_timeout_s + 10)
+        seconds=max(
+            settings.outbox_lock_ttl_s, settings.pulsar_operation_timeout_s + 10
+        )
     )
     conds: list[Any] = [
         OutboxMessage.status == OUTBOX_PENDING,
@@ -70,9 +59,6 @@ def _claimable(now: datetime) -> tuple[Any, ...]:
             OutboxMessage.locked_at < stale_before,
         ),
     ]
-    window_start = _scan_window_start(now)
-    if window_start is not None:
-        conds.append(OutboxMessage.created_at >= window_start)
     return tuple(conds)
 
 
@@ -258,9 +244,6 @@ async def archive_published(
             OutboxMessage.published_at.is_not(None),
             OutboxMessage.published_at < cutoff,
         ]
-        window_start = _scan_window_start(now)
-        if window_start is not None:
-            conds.append(OutboxMessage.created_at >= window_start)
         rows = list(
             (
                 await db.execute(

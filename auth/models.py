@@ -295,6 +295,8 @@ class PasskeyCredential(UUIDPrimaryKeyMixin, AuthBase):
 
 
 class AuditLog(UUIDPrimaryKeyMixin, AuthBase):
+    """审计流水按 ``created_at`` 分区；时间列必须参与 hypertable 主键。"""
+
     __tablename__: str = "audit_logs"
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -304,7 +306,7 @@ class AuditLog(UUIDPrimaryKeyMixin, AuthBase):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
+        UTCDateTime, nullable=False, default=now_iso, primary_key=True
     )
 
 

@@ -69,8 +69,6 @@ BEGIN
           timescaledb.compress_orderby = 'created_at DESC');
       PERFORM add_compression_policy('outbox_archived', INTERVAL '7 days',
           if_not_exists => TRUE);
-      PERFORM add_retention_policy('outbox_events', INTERVAL '30 days',
-          if_not_exists => TRUE);
     EXCEPTION WHEN OTHERS THEN
       RAISE WARNING 'timescaledb 装配失败，outbox/points_ledger 保持普通表：%', SQLERRM;
     END;

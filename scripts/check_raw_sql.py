@@ -30,6 +30,7 @@ ALLOWLIST: dict[str, str] = {
     "core/db/init_db.py": "建表/索引/扩展装配与 TimescaleDB 策略，DDL 无法 ORM 化",
     "core/db/shared_objects.py": "库级共享对象（pg_trgm / uuid_generate_v7）DDL，无法 ORM 化",
     "core/db/base.py": "uuid_generate_v7() 作为列 server_default",
+    "auth/db/init.py": "审计 hypertable 的扩展与建表装配 DDL",
     "auth/health.py": "auth 库探活 SELECT 1",
     "app/modules/health/router.py": "业务库探活 SELECT 1",
     "core/clickhouse.py": "ClickHouse 专用 client，无 ORM",
