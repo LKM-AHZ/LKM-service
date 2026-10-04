@@ -155,7 +155,7 @@ def test_pulsar_healthcheck_implies_namespace_initialized(compose: dict) -> None
 def test_no_one_shot_pulsar_init_service(compose: dict) -> None:
     """一次性 pulsar-init 服务必须已删除：它只在首次 up 时跑，pulsar 重启后不会重跑。
 
-    注：其它组件（如 prefect-init 之类）用 `service_completed_successfully` 是各自的合理形态，
+    注：其它一次性组件用 `service_completed_successfully` 是各自的合理形态，
     故此处只锁 pulsar 侧——不得有服务把「pulsar 初始化」当成一次性前置。
     """
     assert "pulsar-init" not in compose["services"]

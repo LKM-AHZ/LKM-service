@@ -216,7 +216,7 @@ Git HTTP 端点（`/blog/git`）使用 HTTP Basic Auth（用户名+密码）。
 ## CI 生产部署
 
 GitHub Actions 的 `deploy` 仅在 `master`/`main` 手动触发，在 `production`
-environment 中推送带 commit SHA 的镜像，并更新已有集群的 15 个后端
+environment 中推送带 commit SHA 的镜像，并更新已有集群的 14 个后端
 Deployment，等待 rollout 成功。先在父仓库部署 Kubernetes 清单，再于本仓库设置：
 
 - 仓库变量 `REGISTRY_IMAGE`（如 `ghcr.io/lkm-ahz/lkm-service`）；可选
@@ -226,8 +226,7 @@ Deployment，等待 rollout 成功。先在父仓库部署 Kubernetes 清单，�
 - 使用非 GHCR 镜像仓时，另设 `production` environment secret `REGISTRY_TOKEN`。
   私有镜像仓还须在集群预置 imagePullSecret。
 
-一次性 `prefect-init` Job 不参与滚动更新；Flow 定义变化时按父仓库
-`deploy/k8s/README.md` 重新创建该 Job。
+`prefect-worker` 每次启动会注册/更新 cron 和 flow deployments，滚动更新会同步调度定义。
 
 ## 运行
 

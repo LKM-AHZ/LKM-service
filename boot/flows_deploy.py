@@ -1,6 +1,6 @@
-"""注册 Prefect deployment（供 ``prefect-init`` 一次性服务调用）。
+"""注册 Prefect deployment（prefect-worker 每次启动时调用）。
 
-APScheduler 只做简单 cron 触发入口；deployment 在 server 就绪后注册一次即可。重复执行同名
+cron 任务也注册为 Prefect deployment；deployment 在 server 就绪后注册一次即可。重复执行同名
 deployment 会更新而非报错，故该服务可安全重跑。process 型 work pool 直接在 prefect-worker
 容器内以本地源码执行 flow，不需要构建/推送镜像（build/push=False）。
 
@@ -17,11 +17,14 @@ import logging
 from typing import Any
 
 from app.flows.analytics import analytics_export_flow
+from app.flows.cron import cron_dispatch_flow
 from app.flows.feed_backfill import feed_backfill_flow
 from app.flows.ops_daily import ops_daily_flow
 from app.flows.search_reindex import search_reindex_flow
 from app.flows.user_dim import user_dim_reconcile_flow
+from boot.assemble import assemble
 from core.config import settings
+from core.task_registry import cron_jobs, ensure_tasks_registered
 
 logger = logging.getLogger("lkm.flows.deploy")
 
@@ -82,9 +85,29 @@ def _check_entrypoint(flow_obj: Any, entrypoint: str) -> None:
 
 def main() -> None:
     failures: list[str] = []
-    for flow_obj, name, entrypoint in DEPLOYMENTS:
+    assemble()
+    ensure_tasks_registered()
+    deployments = [(*deployment, None) for deployment in DEPLOYMENTS]
+    deployments.extend(
+        (
+            cron_dispatch_flow,
+            job["id"],
+            "boot/flows.py:cron_dispatch_flow",
+            job,
+        )
+        for job in cron_jobs()
+    )
+    for flow_obj, name, entrypoint, cron_job in deployments:
         try:
             _check_entrypoint(flow_obj, entrypoint)
+            options = {}
+            if cron_job is not None:
+                options = {
+                    "cron": cron_job["cron"],
+                    "parameters": {"job_id": cron_job["id"]},
+                    "concurrency_limit": 1,
+                    "paused": not cron_job["enabled"],
+                }
             deployment_id = flow_obj.from_source(
                 source=SOURCE, entrypoint=entrypoint
             ).deploy(
@@ -92,6 +115,7 @@ def main() -> None:
                 work_pool_name=WORK_POOL,
                 build=False,
                 push=False,
+                **options,
             )
         except Exception as exc:
             logger.exception("注册 deployment 失败: %s (%s)", name, exc)

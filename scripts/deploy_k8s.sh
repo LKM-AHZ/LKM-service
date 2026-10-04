@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Update every long-running workload built from the lkm-service image.
-# The one-shot prefect-init Job is intentionally excluded: Kubernetes Job pod
-# templates are immutable and its rerun belongs to a separate operation.
+# prefect-worker registers deployments on startup, so each rollout refreshes schedules.
 set -euo pipefail
 
 image=${1:?usage: deploy_k8s.sh IMAGE [NAMESPACE]}
@@ -14,7 +13,7 @@ fi
 
 deployments=(
   auth backend worker worker-send worker-notify worker-notification
-  worker-content-index worker-dlq worker-outbox worker-scheduler
+  worker-content-index worker-dlq worker-outbox
   worker-points-reward worker-points-stats worker-points-tasks
   prefect-server prefect-worker
 )

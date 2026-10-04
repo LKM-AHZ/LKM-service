@@ -1,7 +1,7 @@
 """content 模块订阅任务：互动计数落库与对账（M6.10；B3 起 write-behind 退居回退）。
 
 - ``flush_content_counters``（每分钟，**仅回退模式下注册**）：把 Redis 里的计数差值落进
-  ``content_items``。写穿模式（默认）下写路径已直接落库，本 cron 无事可做故不注册。
+  ``content_items``。写穿模式（默认）下写路径已直接落库，本 cron 暂停。
 - ``reconcile_content_counts``（每 15 分钟，**增量拍**）：按明细表 ``COUNT(*)`` 重算并修正偏差，
   只扫尚未收敛（``counts_reconciled_at IS NULL``）的行，两种模式下都保留。
 - ``reconcile_content_counts_full``（每天，**全量拍**）：无视收敛标记全表重扫，兜「已打标
@@ -106,15 +106,14 @@ register_task(
 )
 register_task(SUB_JOBS.name, "expire_qa_bounties", expire_qa_bounties)
 
-# 写穿模式下写路径已直接落库、Redis 里不再有增量，flush cron 无事可做 → 不注册（少一个
-# 每分钟的定时唤醒）。开关关闭（回退 write-behind）时才注册，见 core/config.py 的口径。
-if not settings.counters_write_through:
-    register_cron_job(
-        job_id="flush_content_counters",
-        cron="* * * * *",  # 每分钟：把增量落库（写路径不写计数列）
-        routing_key=RKEY_CLEANUP,
-        fn="flush_content_counters",
-    )
+# 始终声明，Prefect 用 paused 同步状态；写穿模式下不触发，切换模式时可自动恢复。
+register_cron_job(
+    job_id="flush_content_counters",
+    cron="* * * * *",  # 每分钟：把增量落库（写路径不写计数列）
+    routing_key=RKEY_CLEANUP,
+    fn="flush_content_counters",
+    enabled=not settings.counters_write_through,
+)
 register_cron_job(
     job_id="reconcile_content_counts",
     cron="*/15 * * * *",  # 每 15 分钟：以明细为真相源收敛

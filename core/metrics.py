@@ -119,25 +119,6 @@ graphql_query_depth = Histogram(
 )
 
 
-# ---- 调度器运行态 ----
-scheduler_up = Gauge(
-    "scheduler_up",
-    "调度器心跳是否新鲜：1=在跑，0=进程没了/卡死/心跳不可读（§5.5 第 6 条，告警取数点）",
-)
-scheduler_state = Gauge(
-    "scheduler_state",
-    "调度器运行态：1=运行中，0=已暂停/已停止（心跳上报）",
-)
-scheduler_jobs = Gauge(
-    "scheduler_jobs",
-    "调度器已注册的 cron 作业数（待触发队列规模，心跳上报）",
-)
-scheduler_pending_jobs = Gauge(
-    "scheduler_pending_jobs",
-    "调度器在途（正在执行）作业数；收尾后保留残余值，供「未停残余」观测",
-)
-
-
 # ---- 跨进程指标中继的自观测（app/core/metrics_relay.py）----
 metrics_relay_instances = Gauge(
     "metrics_relay_instances",

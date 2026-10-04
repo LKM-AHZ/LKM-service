@@ -16,17 +16,20 @@ logger = logging.getLogger("lkm.task_registry")
 # 单一事实源：subscription_name -> {fn: handler}
 _TASK_HANDLERS: dict[str, dict[str, Callable[..., Any]]] = {}
 
-# 单一事实源：cron 任务声明（scheduler 聚合消费），供 APScheduler 构建
+# 单一事实源：cron 任务声明，供 Prefect deployment 注册
 # CRON_JOBS: list[dict]，含 id/trigger(cron 名)/routing_key/fn
 _CRON_JOBS: list[dict[str, Any]] = []
 
 _tasks_imported = False
 
 
-def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> None:
+def register_cron_job(
+    *, job_id: str, cron: str, routing_key: str, fn: str, enabled: bool = True
+) -> None:
     """
-    登记一条 cron 任务：到点由 scheduler 发布 ``fn`` 到 ``routing_key``。
-    ``cron`` 为 APScheduler ``CronTrigger.from_crontab`` 可解析的 crontab 表达式
+    登记一条 cron 任务：到点由 Prefect flow 发布 ``fn`` 到 ``routing_key``。
+    ``cron`` 为 Prefect 支持的五段 crontab 表达式
+    ``enabled=False`` 会注册为暂停的 deployment，状态切换时可自动恢复。
     """
     from core import event_contract
 
@@ -50,10 +53,18 @@ def register_cron_job(*, job_id: str, cron: str, routing_key: str, fn: str) -> N
     for existing in _CRON_JOBS:
         if existing["id"] == job_id:
             logger.warning("cron job %r 重复登记，覆盖", job_id)
-            existing.update(id=job_id, cron=cron, routing_key=routing_key, fn=fn)
+            existing.update(
+                id=job_id, cron=cron, routing_key=routing_key, fn=fn, enabled=enabled
+            )
             return
     _CRON_JOBS.append(
-        {"id": job_id, "cron": cron, "routing_key": routing_key, "fn": fn}
+        {
+            "id": job_id,
+            "cron": cron,
+            "routing_key": routing_key,
+            "fn": fn,
+            "enabled": enabled,
+        }
     )
 
 
@@ -61,8 +72,8 @@ def cron_jobs() -> list[dict[str, Any]]:
     """
     当前全部已登记的 cron 任务（scheduler 聚合数据源）。
     逐条返回**副本**（同 :func:`handlers_for` 的拷贝语义）：调用方若就地对 job 做归一化/
-    加字段（如把 cron 表达式换成 Trigger 后写回 dict），改到的是注册表的单一事实源，
-    后续 build_scheduler 会拿到被污染的声明。
+    加字段（如把 cron 表达式换成 Schedule 后写回 dict），改到的是注册表的单一事实源，
+    后续 deployment 注册会拿到被污染的声明。
     """
     return [dict(job) for job in _CRON_JOBS]
 

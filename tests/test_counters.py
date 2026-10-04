@@ -7,7 +7,7 @@
 - **回退（开关关闭）**：M6.10 的 Redis 增量链路——写路径只记增量、``flush_counters`` 落库。
 
 两套共用的：对账以明细为真相源修正偏差且**可证伪**（二次 ``affected == 0``）；
-cron 注册随模式变化（写穿下 flush 无事可做故不注册）。
+cron 启停随模式变化（写穿下 flush 无事可做故暂停）。
 """
 
 import uuid
@@ -359,18 +359,18 @@ async def test_bump_rejects_unknown_field(db: AsyncSession) -> None:
 
 
 def test_counts_cron_matches_mode() -> None:
-    """cron 注册随模式变化：写穿下 flush 无事可做（不注册），对账始终注册。
+    """cron 启停随模式变化：写穿下 flush 暂停，对账始终注册。
 
     断言按**当前模式**而非写死清单——否则把默认值改回 write-behind 时这条会误红。
     """
     ensure_tasks_registered()
-    job_ids = {j["id"] for j in cron_jobs()}
+    jobs = cron_jobs()
+    job_ids = {j["id"] for j in jobs}
     assert "reconcile_content_counts" in job_ids
     # 日级全量拍（蓝图 §5.6 第 5 条）与增量拍并列注册，与写穿/回退模式无关
     assert "reconcile_content_counts_full" in job_ids
-    assert ("flush_content_counters" in job_ids) is (
-        not settings.counters_write_through
-    )
+    flush = next(j for j in jobs if j["id"] == "flush_content_counters")
+    assert flush["enabled"] is not settings.counters_write_through
     # handler 两种模式都在（回退运行时 flush 仍可被手工触发）
     handlers = handlers_for(SUB_JOBS.name)
     assert "flush_content_counters" in handlers

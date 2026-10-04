@@ -40,7 +40,7 @@ def test_deploy_updates_and_waits_for_all_targets(tmp_path: Path) -> None:
     assert rc == 0
     updates = [call for call in calls if " set image " in call]
     rollouts = [call for call in calls if " rollout status " in call]
-    assert len(updates) == len(rollouts) == 15
+    assert len(updates) == len(rollouts) == 14
     assert any(
         "deployment/backend backend=ghcr.io/example/lkm-service:" in c for c in updates
     )

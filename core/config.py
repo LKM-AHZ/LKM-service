@@ -156,9 +156,6 @@ class Settings(BaseSettings):
     pulsar_dlq_max_redeliver: int = 1
     # lag 上报周期（秒）；API 进程统计各订阅 msgBacklog 到 Prometheus gauge
     pulsar_lag_interval_s: float = 30.0
-    # 调度器运行态心跳周期（秒）：worker-scheduler 进程写 Redis 心跳、
-    # API 进程的 reporter 据此 set gauge；心跳 TTL 取本值的 3 倍（无需另配）。
-    scheduler_heartbeat_interval_s: float = 10.0
     # readiness 探 broker 健康的 Admin REST 超时（秒）
     pulsar_probe_timeout_s: float = 2.0
     pulsar_probe_cache_s: float = 5.0

@@ -47,8 +47,6 @@ from core.ports.verify_keys import (
     stop_verify_key_refresh,
 )
 from core.pulsar_lag import start_lag_reporter, stop_lag_reporter
-from core.scheduler_state import start_reporter as start_scheduler_reporter
-from core.scheduler_state import stop_reporter as stop_scheduler_reporter
 from core.tracing import (
     instrument_sqlalchemy,
     setup_tracing,
@@ -119,8 +117,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
     start_lag_reporter()
-    start_scheduler_reporter()
-    # 聚合 worker、scheduler 和 auth 的 Redis 指标快照。
+    # 聚合 worker 和 auth 的 Redis 指标快照。
     start_metrics_relay_reporter()
 
     yield
@@ -148,7 +145,6 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 收尾验签公钥刷新 task（唯一在途的出站请求在此被取消）
     await _shutdown_step("verify_key_refresh", stop_verify_key_refresh)
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
-    await _shutdown_step("scheduler_state", stop_scheduler_reporter)
     await _shutdown_step("metrics_relay", stop_metrics_relay_reporter)
     await _shutdown_step("messaging", messaging.shutdown)
     # 收尾 ClickHouse 客户端（若 admin 查询曾建连；未启用则 no-op）

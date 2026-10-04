@@ -154,7 +154,7 @@ async def publish_snapshot(redis: Any | None = None) -> bool:
 
 
 async def run_publisher(interval_s: float | None = None) -> None:
-    """生产者心跳循环（由调用方 cancel 收尾，与 ``scheduler_state.run_heartbeat`` 同款）。"""
+    """生产者心跳循环（由调用方 cancel 收尾）。"""
     period = settings.metrics_relay_interval_s if interval_s is None else interval_s
     period = max(period, 1.0)  # 下界 1s：配成 0/负数会退化成紧凑轮询
     while True:

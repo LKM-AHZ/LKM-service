@@ -21,7 +21,7 @@ from core.err import (
 _async_engine: AsyncEngine | None = None
 _AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 # worker / 后台批处理的独立引擎与会话工厂（蓝图 §3.3「不同组件独立连接池」标"关键"）：
-# Web 请求、批处理各自持池，outbox relay/APScheduler/worker 的周期突发不会把在线请求的
+# Web 请求、批处理各自持池，outbox relay/Prefect/worker 的周期突发不会把在线请求的
 # 连接挤干。两者共用同一把 _engine_lock（成对创建，见下）。
 _worker_engine: AsyncEngine | None = None
 _WorkerSessionLocal: async_sessionmaker[AsyncSession] | None = None

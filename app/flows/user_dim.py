@@ -1,6 +1,6 @@
 """Prefect flow：user_dim 报表宽表增量对账 / 显式回填（M5 7.2.5）。
 
-蓝图《后端规划.md》§调度定案：APScheduler 只做简单 cron 触发入口（``cron.*`` 经总线），
+蓝图《后端规划.md》§调度定案：Prefect cron deployment 触发（``cron.*`` 经总线），
 DAG / 失败重试 / 回填由 Prefect flow 承接。本模块不复制 ETL SQL，全部经
 ``auth.seams`` 复用 auth 的既有 ETL 入口，保持其**命令数恒定 / 跨 realm 双会话 /
 幂等**不变量。
