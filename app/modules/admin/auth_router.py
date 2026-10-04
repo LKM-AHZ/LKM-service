@@ -33,7 +33,7 @@ async def admin_me(
     """
     await require_permission(db, cur, Permission.admin_dashboard)
     return {
-        "id": cur.id,
+        "id": str(cur.id),
         "account_level": cur.account_level,
         "role": cur.role,
     }

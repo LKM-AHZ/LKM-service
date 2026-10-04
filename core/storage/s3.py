@@ -14,7 +14,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from core.err import BizError
-from core.storage.base import SavedFile
+from core.storage.base import Readable, SavedFile
 from core.storage.errors import StorageErr
 
 _CHUNK = 1024 * 1024  # 下载读取分块
@@ -26,7 +26,7 @@ class _TooLarge(Exception):
 
 
 def _save_multipart_sync(
-    client: Any, bucket: str, key: str, stream: Any, max_bytes: int
+    client: Any, bucket: str, key: str, stream: Readable, max_bytes: int
 ) -> int:
     """同步分块写入 S3（multipart）：create -> upload_part*n -> complete。
 
@@ -128,7 +128,7 @@ class S3Storage:
         return f"{self.prefix}/{bucket_key.lstrip('/')}"
 
     async def save(
-        self, stream: Any, /, *, max_bytes: int, bucket_key: str
+        self, stream: Readable, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile:
         key = self._key(bucket_key)
         try:

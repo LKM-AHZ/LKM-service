@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Any, Literal, NoReturn, Protocol
+from typing import IO, Any, Literal, NoReturn
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
@@ -44,11 +44,10 @@ from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
 from core.messaging import RKEY_FILE_CHANGED
-from core.ports.snapshot import get_user_snapshot_batch
-from core.secrets import reveal
-from core.storage.base import StorageBackend
+from core.ports.snapshot import get_user_display_names as _uploader_map
+from core.storage.base import Readable, StorageBackend
 from core.storage.errors import StorageErr
-from core.storage.factory import get_storage
+from core.storage.factory import get_storage_for_settings as _get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +59,6 @@ async def _enqueue_file_change(db: DbSession, file_id: uuid.UUID) -> None:
             RKEY_FILE_CHANGED,
             {"fn": "apply_file_event", "args": [str(file_id)]},
         )
-
-
-class _Readable(Protocol):
-    """可同步分块读取的 file-like 对象最小协议。"""
-
-    def read(self, size: int = -1, /) -> bytes: ...
 
 
 def get_files_plan() -> dict[str, Any]:
@@ -84,15 +77,6 @@ def _file_to_schema(f: LibraryFile, uploader_name: str) -> FileInfo:
     return FileInfo.model_validate(f).model_copy(
         update={"uploader_name": uploader_name}
     )
-
-
-async def _uploader_map(
-    db: DbSession, user_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
-    if not user_ids:
-        return {}
-    snaps = await get_user_snapshot_batch(db, user_ids=list(set(user_ids)))
-    return {uid: s.display_name for uid, s in snaps.items()}
 
 
 async def upload_projects(db: DbSession, user_id: uuid.UUID) -> list[dict[str, str]]:
@@ -174,7 +158,7 @@ async def get_file(
 _CHUNK = 1024 * 1024  # 分块读写，避免整文件载入内存
 
 
-def _buffer_and_hash(stream: _Readable, limit: int) -> tuple[int, str, IO[bytes]]:
+def _buffer_and_hash(stream: Readable, limit: int) -> tuple[int, str, IO[bytes]]:
     """单遍读 ``stream``：一边算 SHA3-256、一边把内容 spool 到临时文件，返回可重读流。
 
     相比原 ``io.BytesIO``（整文件驻留内存，上限=整个上传大小，大文件有 OOM 风险）
@@ -250,29 +234,6 @@ def _storage_path_for(content_hash: str) -> str:
     return str(_content_path(content_hash).resolve())
 
 
-_storage_sig: tuple[object, ...] = ()
-
-
-def _get_storage() -> StorageBackend:
-    """按当前 ``settings`` 取后端；相关配置在测试中会被 monkeypatch，故配置变化时让工厂
-    重建，避免拿到缓存中旧 root 的后端。生产配置恒定 → ``cache_clear`` 不触发，等同单例。"""
-    global _storage_sig
-    sig = (
-        settings.storage_backend,
-        settings.files_store_dir,
-        settings.s3_endpoint_url,
-        settings.s3_region,
-        settings.s3_bucket,
-        reveal(settings.s3_access_key),
-        reveal(settings.s3_secret_key),
-        settings.s3_prefix,
-    )
-    if sig != _storage_sig:
-        get_storage.cache_clear()
-        _storage_sig = sig
-    return get_storage()
-
-
 def _raise_storage_as_file(exc: BizError) -> NoReturn:
     """把 storage 层抛的 ``BizError(StorageErr.*)`` 转成 files 既有 ``FileErr``，保持前端契约。
 
@@ -338,7 +299,7 @@ async def create_file(
     db: DbSession,
     uploader_id: uuid.UUID,
     info: FileCreate,
-    stream: _Readable,
+    stream: Readable,
     max_bytes: int | None = None,
 ) -> FileInfo:
     """把上传流交给 storage 层落盘（内容寻址去重）并登记元数据。

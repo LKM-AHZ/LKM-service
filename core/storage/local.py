@@ -11,19 +11,13 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Protocol
+from typing import Any
 
 from core.err import BizError
-from core.storage.base import SavedFile
+from core.storage.base import Readable, SavedFile
 from core.storage.errors import StorageErr
 
 _CHUNK = 1024 * 1024  # 分块读写，避免整文件载入内存
-
-
-class _Readable(Protocol):
-    """可同步分块读取的 file-like 对象最小协议。"""
-
-    def read(self, size: int = -1, /) -> bytes: ...
 
 
 class LocalStorage:
@@ -65,7 +59,7 @@ class LocalStorage:
         return dest
 
     async def save(
-        self, stream: Any, /, *, max_bytes: int, bucket_key: str
+        self, stream: Readable, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile:
         dest = self._resolve(bucket_key)
         temp: Path | None = None
@@ -160,7 +154,7 @@ def _new_temp_file(root_dir: Path) -> Path:
 
 
 def _stream_to_disk_hash(
-    stream: _Readable, dest_path: Path, limit: int
+    stream: Readable, dest_path: Path, limit: int
 ) -> tuple[int, str]:
     """同步分块读取 ``stream`` 写盘，返回 ``(总字节数, SHA3-256 hex)``。
 
@@ -198,6 +192,4 @@ def _open_reader(dest_path: Path) -> Any:
             StorageErr.NOT_FOUND, detail=f"Storage key not found: {exc}"
         ) from exc
     except OSError as exc:
-        raise BizError(
-            StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}"
-        ) from exc
+        raise BizError(StorageErr.STORE_ERROR, detail=f"Failed to read: {exc}") from exc

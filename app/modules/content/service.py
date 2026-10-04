@@ -92,10 +92,7 @@ from core.db.repository import DbSession
 from core.err import BizError
 from core.metrics import post_created_total
 from core.ports.snapshot import get_user_display_names as _author_map
-from core.ports.snapshot import (
-    get_user_snapshot,
-    get_user_snapshot_batch,
-)
+from core.ports.snapshot import get_user_snapshot
 
 READING_WPM = 300  # 每 300 字约 1 分钟阅读时间
 
@@ -1030,7 +1027,7 @@ async def create_question(
     await _sync_question_content_item(db, author_id, q)
     await db.flush()
     await bump_collection_version("qa")
-    names = await _qa_author_names(db, [q.author_id])
+    names = await _author_map(db, [q.author_id])
     return _question_to_schema(q, names.get(q.author_id, ""))
 
 
@@ -1074,17 +1071,6 @@ def _qa_plain(text: str, limit: int = 150) -> str:
     return t[:limit].rstrip() + ("..." if len(t) > limit else "")
 
 
-async def _qa_author_names(
-    db: DbSession, author_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
-    """批量取作者展示名（id → 昵称/用户名），委托 auth 只读缝批次读。"""
-    ids = {i for i in author_ids if i}
-    if not ids:
-        return {}
-    snaps = await get_user_snapshot_batch(db, user_ids=list(ids))
-    return {uid: s.display_name for uid, s in snaps.items()}
-
-
 async def list_questions(
     db: DbSession,
     page: int = 1,
@@ -1102,7 +1088,7 @@ async def list_questions(
             limit=limit,
         )
         questions = [q for q, _ in rows]
-        names = await _qa_author_names(db, [q.author_id for q in questions])
+        names = await _author_map(db, [q.author_id for q in questions])
         return [
             QuestionOut.model_validate(q)
             .model_copy(
@@ -1135,7 +1121,7 @@ async def get_question(db: DbSession, question_id: uuid.UUID) -> QuestionDetail:
     q = await repo.get_or_raise(question_id, QaErr.QUESTION_NOT_FOUND)
     answers = await QAAnswerRepository(db).list_in_question(question_id)
     images = await repo.list_images(question_id)
-    names = await _qa_author_names(db, [q.author_id])
+    names = await _author_map(db, [q.author_id])
     base = QuestionOut.model_validate(q).model_copy(
         update={
             "answer_count": len(answers),
@@ -1236,7 +1222,7 @@ async def close_question(
     await _settle_question(db, q)
     await repo.flush()
     await bump_collection_version("qa")
-    names = await _qa_author_names(db, [q.author_id])
+    names = await _author_map(db, [q.author_id])
     return _question_to_schema(q, names.get(q.author_id, ""))
 
 

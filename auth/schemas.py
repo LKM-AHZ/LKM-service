@@ -1,59 +1,17 @@
 import datetime
-import re
 import uuid
-from enum import StrEnum
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from auth.security import PASSWORD_MAX_LENGTH
+from core.contracts import Password as BasePassword
+from core.contracts import ProfileInfo as ProfileInfo
+from core.contracts import ProfileRole as ProfileRole
+from core.contracts import ProfileUpdate as ProfileUpdate
+from core.contracts import RawEmail
 
-
-class ProfileRole(StrEnum):
-    MEMBER = "member"
-    ADMIN = "admin"
-
-
-def _validate_password(v: str) -> str:
-    if len(v) < 6:
-        raise ValueError("Password must be at least 6 characters")
-    return v
-
-
-Password = Annotated[
-    str, Field(max_length=PASSWORD_MAX_LENGTH), AfterValidator(_validate_password)
-]
-
-
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def _validate_email_preserve_case(v: str) -> str:
-    """校验邮箱格式但**保留大小写原样**（大小写绝对敏感）。
-
-    Pydantic 内置 ``EmailStr`` 会把 domain 强制转小写，违背本项目「存储原值 + 精确匹配」
-    的大小写绝对敏感约定，故此处自定义：仅去首尾空白 + 宽松格式校验，不做任何小写转换。
-    """
-    v = v.strip()
-    if not _EMAIL_RE.match(v):
-        raise ValueError("Invalid email format")
-    return v
-
-
-RawEmail = Annotated[str, AfterValidator(_validate_email_preserve_case)]
-
-
-class ProfileInfo(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
-
-    nickname: str | None = None
-    avatar: str | None = None
-    role: ProfileRole = ProfileRole.MEMBER
-
-
-class ProfileUpdate(BaseModel):
-    nickname: str | None = Field(None, max_length=100)
-    avatar: str | None = None
+Password = Annotated[BasePassword, Field(max_length=PASSWORD_MAX_LENGTH)]
 
 
 class UserRegLocal(BaseModel):

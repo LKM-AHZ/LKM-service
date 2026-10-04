@@ -2,7 +2,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from typing import Protocol
 
 from fastapi.responses import StreamingResponse
 
@@ -11,14 +10,12 @@ from auth.errors import AuthErr
 from auth.models import Profile, User
 from auth.repository import ProfileRepository
 from auth.schemas import ProfileInfo, ProfileUpdate
-from core.config import settings
 from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
-from core.secrets import reveal
-from core.storage.base import StorageBackend
+from core.storage.base import Readable
 from core.storage.errors import StorageErr
-from core.storage.factory import get_storage
+from core.storage.factory import get_storage_for_settings as _get_storage
 
 
 async def get_profile(db: DbSession, user_id: uuid.UUID) -> ProfileInfo:
@@ -50,37 +47,8 @@ async def update_profile(
     await events.notify_user_updated(user_id)
 
 
-class _Readable(Protocol):
-    """可同步分块读取的 file-like 对象最小协议。"""
-
-    def read(self, size: int = -1, /) -> bytes: ...
-
-
 AVATAR_MAX_BYTES = 2 * 1024 * 1024  # 头像上限 2MB
 _AVATAR_EXT = "webp"
-
-_storage_sig: tuple[object, ...] = ()
-
-
-def _get_storage() -> StorageBackend:
-    """按当前 ``settings`` 取后端；配置变化（如测试 monkeypatch files_store_dir）时重建。"""
-    global _storage_sig
-    sig = (
-        settings.storage_backend,
-        settings.files_store_dir,
-        settings.s3_endpoint_url,
-        settings.s3_region,
-        settings.s3_bucket,
-        reveal(settings.s3_access_key),
-        reveal(settings.s3_secret_key),
-        settings.s3_prefix,
-        # 工厂把这个值也传给了 S3Storage，漏进签名会让「只改它」的配置变更留着旧后端
-        settings.s3_public_endpoint_url,
-    )
-    if sig != _storage_sig:
-        get_storage.cache_clear()
-        _storage_sig = sig
-    return get_storage()
 
 
 def _avatar_key(user_id: uuid.UUID) -> str:
@@ -94,7 +62,7 @@ def _avatar_key(user_id: uuid.UUID) -> str:
     return f"avatars/{user_id}/v{ms}-{uuid.uuid4().hex[:8]}.{_AVATAR_EXT}"
 
 
-async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: _Readable) -> str:
+async def update_avatar(db: DbSession, user_id: uuid.UUID, stream: Readable) -> str:
     """保存头像：写入版本化 key 并更新 ``Profile.avatar``，尽力删除旧 key。
 
     超过 2MB 由 storage 层抛 ``StorageErr.TOO_LARGE``（临时文件不落残留），此处映射为

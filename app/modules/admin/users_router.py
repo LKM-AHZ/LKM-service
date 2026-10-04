@@ -94,18 +94,7 @@ async def admin_list_users(
     )
     # 返回 schema 实例而非 model_dump，使响应体为 PageData 实例（Task 1 依赖
     # isinstance 判定位以自动附带 X-Total 头）。
-    items = [
-        AdminUserListItem(
-            id=m.id,
-            username=m.username,
-            account_level=m.account_level,
-            is_locked=m.is_locked,
-            created_at=m.created_at,
-            email=m.email,
-            phone=m.phone,
-        )
-        for m in rows
-    ]
+    items = [AdminUserListItem.model_validate(m, from_attributes=True) for m in rows]
 
     return PageData(
         items=items,
@@ -198,9 +187,8 @@ async def admin_trend(
             # 与 auth 侧 user_count_by_day 同口径：闭开区间 [start, start+days)，
             # 少了右界会把未来 created_at（时钟偏移/导入数据）也扫进来并产出区间外的 key
             end_dt = start_dt + timedelta(days=days)
-            stmt = (
-                select(day_expr.label("d"), func.count())
-                .where(col >= start_dt, col < end_dt)
+            stmt = select(day_expr.label("d"), func.count()).where(
+                col >= start_dt, col < end_dt
             )
             if extra_where is not None:
                 stmt = stmt.where(extra_where)

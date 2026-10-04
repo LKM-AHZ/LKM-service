@@ -5,7 +5,11 @@
 """
 
 from collections.abc import AsyncIterator
-from typing import IO, Protocol, TypedDict
+from typing import Protocol, TypedDict
+
+
+class Readable(Protocol):
+    def read(self, size: int = -1, /) -> bytes: ...
 
 
 class SavedFile(TypedDict):
@@ -23,7 +27,7 @@ class SavedFile(TypedDict):
 
 class StorageBackend(Protocol):
     async def save(
-        self, stream: IO[bytes], /, *, max_bytes: int, bucket_key: str
+        self, stream: Readable, /, *, max_bytes: int, bucket_key: str
     ) -> SavedFile: ...
 
     def open(self, bucket_key: str) -> AsyncIterator[bytes]: ...

@@ -22,6 +22,7 @@ from app.modules.projects.schemas import (
 from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError
+from core.ports.snapshot import get_user_display_names as _applicant_names
 from core.ports.snapshot import get_user_snapshot_batch
 
 
@@ -46,18 +47,6 @@ def _project_to_schema(p: Project, *, applicant_name: str) -> ProjectOut:
     out.members = [ProjectMemberOut.model_validate(m) for m in p.members]
     out.applicant_name = applicant_name
     return out
-
-
-async def _applicant_names(
-    db: DbSession, applicant_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
-    """批量取申请人展示名（seam 口径 = nickname or username）；缺失 id 不在结果里。"""
-    if not applicant_ids:
-        return {}
-    snaps = await get_user_snapshot_batch(
-        db, user_ids=list(dict.fromkeys(applicant_ids))
-    )
-    return {uid: s.display_name for uid, s in snaps.items()}
 
 
 async def submit_application(

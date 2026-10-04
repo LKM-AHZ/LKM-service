@@ -22,7 +22,7 @@ from app.modules.search.engines.factory import get_engine
 from app.modules.search.repository import SearchRepository
 from core.config import settings
 from core.db.session import new_worker_session as new_session
-from core.ports.snapshot import get_user_snapshot_batch
+from core.ports.snapshot import get_user_display_names
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,12 +63,7 @@ async def rebuild_index(
             if not rows:
                 break
             author_ids = {r.author_id for r in rows if r.author_id}
-            names: dict[uuid.UUID, str] = {}
-            if author_ids:
-                snaps = await get_user_snapshot_batch(
-                    session, user_ids=list(author_ids)
-                )
-                names = {uid: s.display_name for uid, s in snaps.items()}
+            names = await get_user_display_names(session, author_ids)
             docs = [
                 build_doc(r, names.get(r.author_id, "") if r.author_id else "")
                 for r in rows
@@ -80,16 +75,14 @@ async def rebuild_index(
             files = await repo.public_files_batch(after_id=last_file_id, limit=size)
             if not files:
                 break
-            snaps = await get_user_snapshot_batch(
-                session, user_ids=list({row.uploader_id for row in files})
+            names = await get_user_display_names(
+                session, (row.uploader_id for row in files)
             )
             indexed += await engine.upsert(
                 [
                     build_file_doc(
                         row,
-                        snaps[row.uploader_id].display_name
-                        if row.uploader_id in snaps
-                        else "",
+                        names.get(row.uploader_id, ""),
                     )
                     for row in files
                 ]

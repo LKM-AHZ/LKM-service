@@ -212,13 +212,6 @@ async def get_about() -> dict[str, str]:
     }
 
 
-async def _bump_article_count(
-    db: DbSession, article_id: uuid.UUID, column: str, delta: int
-) -> None:
-    """原子回填计数列（SET col = col ± N），防并发丢更新。"""
-    await ArticleRepository(db).bump_count(article_id, column, delta)
-
-
 async def toggle_article_like(
     db: DbSession, slug: str, user_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -230,11 +223,11 @@ async def toggle_article_like(
     if existing:
         # 原子删除：并发两次「取消」只有一个真删到行，不会重复 -1
         if await repo.release_like(article_id=article.id, user_id=user_id):
-            await _bump_article_count(db, article.id, "likes", -1)
+            await ArticleRepository(db).bump_count(article.id, "likes", -1)
         liked = False
     else:
         if await repo.claim_like(article_id=article.id, user_id=user_id):
-            await _bump_article_count(db, article.id, "likes", 1)
+            await ArticleRepository(db).bump_count(article.id, "likes", 1)
             # 仅新增点赞路径入队（取消点赞不重复计分）
             await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
         liked = True
@@ -268,7 +261,7 @@ async def create_article_comment(
         article_id=article.id, user_id=user_id, content=content, parent_id=parent_id
     )
     await ArticleCommentRepository(db).add(comment)
-    await _bump_article_count(db, article.id, "comments", 1)
+    await ArticleRepository(db).bump_count(article.id, "comments", 1)
     await _invalidate_article_cache(db, slug)
     return comment
 
@@ -314,7 +307,7 @@ async def delete_article_comment(
         raise BizError(CommonErr.FORBIDDEN)
     author_id = comment.user_id
     removed = await ArticleCommentRepository(db).soft_delete_subtree(comment.id)
-    await _bump_article_count(db, comment.article_id, "comments", -removed)
+    await ArticleRepository(db).bump_count(comment.article_id, "comments", -removed)
     article = await ArticleRepository(db).get(comment.article_id)
     if article is not None:
         await _invalidate_article_cache(db, article.slug)

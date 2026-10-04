@@ -40,7 +40,6 @@ import contextlib
 import datetime
 import logging
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import func, select
@@ -52,31 +51,12 @@ import core.singleflight as singleflight
 import core.user_cache as user_cache
 from auth import user_http
 from auth.models import Profile, User
-from auth.schemas import ProfileInfo, ProfileRole
 from core.config import settings
+from core.contracts import UserManagementItem, UserSnapshot
+from core.contracts import profile_info_from_snap as profile_info_from_snap
 from core.metrics import user_snap_singleflight_total
 
 logger = logging.getLogger("lkm.auth.snapshot")
-
-
-@dataclass(frozen=True)
-class UserSnapshot:
-    """业务侧固定身份读模型。不含 email/phone/凭证 等 PII/敏感列。
-
-    ``nickname``（raw，**非 PII**，同 username/display_name 属展示身份列）为 profiles.nickname
-    的逐字照搬：空白时是 None —— **不回退到 username**。这与 ``display_name``（nickname or
-    username 合成）刻意保持**语义分流**：需要"展示名默认回退"的用 display_name；需要"nickname
-    是否真被设置"（如 blog/articles 组 ProfileInfo 须保 blank-when-unset）的读 raw nickname。
-    """
-
-    user_id: uuid.UUID
-    username: str
-    display_name: str
-    avatar: str | None
-    role: str | None
-    account_level: str
-    banned: bool
-    nickname: str | None
 
 
 def _to_snap(user: User) -> UserSnapshot:
@@ -211,7 +191,9 @@ async def _retrieve_fields(
         try:
             fields, version = await user_http.fetch_user_http_payload(user_id)
         except user_http.UserHttpUnavailable:
-            logger.warning("auth_http read failed uid=%s; fail-open to local DB", user_id)
+            logger.warning(
+                "auth_http read failed uid=%s; fail-open to local DB", user_id
+            )
         else:
             if fields is None:  # 权威不存在：不回落 DB、不缓存缺行
                 return None, version
@@ -242,7 +224,9 @@ async def _fetch_fields_from_db(
     if row is None:
         return None, None
     snap = _to_snap(row)
-    version = user_cache.version_of_updated_at(row.updated_at) if row.updated_at else None
+    version = (
+        user_cache.version_of_updated_at(row.updated_at) if row.updated_at else None
+    )
     return _snap_to_dict(snap), version
 
 
@@ -387,46 +371,6 @@ async def _retrieve_fields_batch(
     return out
 
 
-def profile_info_from_snap(snap: UserSnapshot) -> ProfileInfo | None:
-    """快照缝 → ``ProfileInfo`` DTO（M3.A残项：blog/articles 组装作者资料时脱离直读 Profile）。
-
-    - ``nickname`` 取 snap 的 **raw nickname**（原样，空白即 None），**且不回退 username** ——
-      保持 blog/articles ProfileInfo blank-when-unset 语义（这与 display_name 的合成回退刻意分流）。
-    - ``role`` 由 snap.role 字符串转 ``ProfileRole``（None → 默认 MEMBER）。
-    - 无 Profile 的用户（snap.role 缺失 → 原 repo 路径不产出 ProfileInfo）返回 None，保持原先
-      ``profiles.get(uid)`` 对 no-profile 用户落 None 的语义；其余字段 avatar/nickname 逐字节照搬。
-    ``ProfileRole``/nickname/avatar 均非 PII，展示方本就承载；本转换不含 email/phone/凭证。
-    """
-    if snap.role is None:  # profile.role 非空(NOT NULL default='member')，None 即无 Profile 行
-        return None
-    try:
-        role = ProfileRole(snap.role)
-    except ValueError:
-        role = ProfileRole.MEMBER
-    return ProfileInfo(nickname=snap.nickname, avatar=snap.avatar, role=role)
-
-
-@dataclass(frozen=True)
-class UserManagementItem:
-    """后台管理面用户行：管理列(id/username/account_level/is_locked/created_at)恒定。
-
-    刻意**不是**展示型 ``UserSnapshot``：管理行是 admin 治理列表的必要字段（created_at/
-    is_locked 等展示缝不暴露），且可条件承载 PII。email/phone 字段在 ``include_pii=False``
-    的投影路径**根本不被 SELECT**，恒为 None（默认构造不读写 User 的 PII 列）；只有
-    ``include_pii=True`` 的项目才填充。本类型仅供管理授权读，不入展示缝——评论侧等展示
-    消费方接触到的仍是零 PII 的 ``UserSnapshot``。
-    """
-
-    id: uuid.UUID
-    username: str
-    account_level: str
-    is_locked: bool
-    created_at: datetime.datetime
-    # PII（默认隐藏；include_pii=True 才填充）
-    email: str | None = None
-    phone: str | None = None
-
-
 async def list_user_snapshots(
     db: AsyncSession,
     *,
@@ -454,62 +398,37 @@ async def list_user_snapshots(
         count_q = count_q.where(cond)
     total = int((await db.execute(count_q)).scalar_one() or 0)
 
-
+    stmt = select(
+        User.id,
+        User.username,
+        User.account_level,
+        User.is_locked,
+        User.created_at,
+    )
     if include_pii:
-        # 显式投影 email/phone：PII 只能在 gate 打开时接触这两列
-        stmt = select(
-            User.id,
-            User.username,
-            User.account_level,
-            User.is_locked,
-            User.created_at,
-            User.email,
-            User.phone,
+        stmt = stmt.add_columns(User.email, User.phone)
+    if cond is not None:
+        stmt = stmt.where(cond)
+    rows = (
+        await db.execute(stmt.order_by(User.id.desc()).offset(offset).limit(limit))
+    ).all()
+    items = [
+        UserManagementItem(
+            id=r[0],
+            username=r[1],
+            account_level=str(r[2]),
+            is_locked=bool(r[3]),
+            created_at=r[4],
+            email=r[5] if include_pii else None,
+            phone=r[6] if include_pii else None,
         )
-        if cond is not None:
-            stmt = stmt.where(cond)
-        stmt = stmt.order_by(User.id.desc()).offset(offset).limit(limit)
-        rows = (await db.execute(stmt)).all()
-        items = [
-            UserManagementItem(
-                id=r[0],
-                username=r[1],
-                account_level=str(r[2]),
-                is_locked=bool(r[3]),
-                created_at=r[4],
-                email=r[5],
-                phone=r[6],
-            )
-            for r in rows
-        ]
-    else:
-        # no-pii：SELECT 不投影 email/phone，内存/网络零 PII，字段落默认 None
-        stmt = select(
-            User.id,
-            User.username,
-            User.account_level,
-            User.is_locked,
-            User.created_at,
-        )
-        if cond is not None:
-            stmt = stmt.where(cond)
-        stmt = stmt.order_by(User.id.desc()).offset(offset).limit(limit)
-        rows = (await db.execute(stmt)).all()
-        items = [
-            UserManagementItem(
-                id=r[0],
-                username=r[1],
-                account_level=str(r[2]),
-                is_locked=bool(r[3]),
-                created_at=r[4],
-            )
-            for r in rows
-        ]
+        for r in rows
+    ]
     return items, total
 
 
 # ---------------------------------------------------------------------------
-# S5-A2 Step2：后台 admin 数据面板只读计数/趋势（auth authoritative，零 PII）
+# 后台 admin 数据面板只读计数/趋势（auth authoritative，零 PII）
 #
 # 拆库后 monolith biz admin reader 不再本地跨库 count/分组读 auth ``users``（users 已在
 # auth 库 lkm_auth）。以下两函数是 auth 域的**只读数字缝**：总数 / 按 UTC 日注册增量——

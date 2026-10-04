@@ -39,3 +39,28 @@ def get_storage() -> StorageBackend:
     raise ValueError(
         f"未知的 LKM_STORAGE_BACKEND={settings.storage_backend!r}（仅支持 local/s3）"
     )
+
+
+_settings_signature: tuple[object, ...] = ()
+
+
+def get_storage_for_settings() -> StorageBackend:
+    """测试修改存储配置时重建工厂缓存；生产配置固定时复用单例。"""
+    global _settings_signature
+    signature = (
+        settings.storage_backend,
+        settings.files_store_dir,
+        settings.s3_endpoint_url,
+        settings.s3_public_endpoint_url,
+        settings.s3_region,
+        settings.s3_bucket,
+        settings.s3_prefix,
+        reveal(settings.s3_access_key),
+        reveal(settings.s3_secret_key),
+        settings.s3_addressing_style,
+        settings.s3_public_addressing_style,
+    )
+    if signature != _settings_signature:
+        get_storage.cache_clear()
+        _settings_signature = signature
+    return get_storage()

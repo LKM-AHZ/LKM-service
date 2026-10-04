@@ -7,7 +7,6 @@ import uuid
 
 from fastapi import Depends, Header
 from jwt import PyJWTError
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -28,6 +27,7 @@ from auth.service_authz import (
 )
 from auth.token_revocation import is_jti_blocked, token_version_is_stale
 from core.config import is_test_env
+from core.contracts import CurrentUser
 from core.db.base import now_iso
 from core.err import BizError, CommonErr
 from core.ports.authz import MFA_TRUST_SECONDS, _bearer_token, _parse_bearer
@@ -40,17 +40,6 @@ from core.rbac_roles import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class CurrentUser(BaseModel):
-    """从已验证的 JWT 访问令牌中提取的用户信息。"""
-
-    id: uuid.UUID
-    account_level: str
-    role: str
-    active_roles: tuple[str, ...] | None = None
-    email: str | None = None
-    phone: str | None = None
 
 
 async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:

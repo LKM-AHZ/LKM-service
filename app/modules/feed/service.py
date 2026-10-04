@@ -33,7 +33,7 @@ from app.modules.interaction.service import (
     get_following_ids,
 )
 from core.db.repository import DbSession
-from core.ports.snapshot import get_user_snapshot_batch
+from core.ports.snapshot import get_user_display_names
 
 
 async def _fill_authors(db: DbSession, items: list[FeedItem]) -> None:
@@ -46,8 +46,7 @@ async def _fill_authors(db: DbSession, items: list[FeedItem]) -> None:
     author_ids = {it.author_id for it in items if it.author_id and not it.author_name}
     if not author_ids:
         return
-    snaps = await get_user_snapshot_batch(db, user_ids=list(author_ids))
-    name_of: dict[uuid.UUID, str] = {uid: s.display_name for uid, s in snaps.items()}
+    name_of = await get_user_display_names(db, author_ids)
     for it in items:
         if it.author_id is not None and it.author_id in name_of and not it.author_name:
             it.author_name = name_of[it.author_id]
