@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    false,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -375,7 +376,9 @@ class QAQuestion(UUIDPrimaryKeyMixin, Base):
     bounty_expires_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
-    urgent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    urgent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="open"
     )  # open|accepted|closed
