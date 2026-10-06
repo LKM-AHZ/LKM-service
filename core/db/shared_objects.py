@@ -85,3 +85,18 @@ async def ensure_shared_objects(conn: Any) -> None:
         )
         await conn.execute(sa.text("ALTER EXTENSION pg_trgm SET SCHEMA public"))
     await _run_shared_ddl(conn, UUID7_FUNCTION_SQL, "uuid_generate_v7")
+
+
+#: TimescaleDB ``create_hypertable``（``create_default_indexes`` 默认 TRUE）在时间列上
+#: 自动建的 ``<表名>_<时间列>_idx`` 索引。模型刻意不声明它们（装配时机在迁移之后、由
+#: 扩展决定），因此 autogenerate 会把「库里有、metadata 里没有」判成 ``remove_index``。
+#: 两条迁移链的 env.py 用本清单把它从反射里排除，保证 ``alembic check`` 零漂移。
+#: 新增 hypertable 时须同步补登，否则该索引会重新出现在漂移报告里。
+TIMESCALE_AUTO_INDEXES: frozenset[str] = frozenset(
+    {
+        "audit_logs_created_at_idx",
+        "outbox_events_created_at_idx",
+        "outbox_archived_created_at_idx",
+        "points_ledger_created_at_idx",
+    }
+)

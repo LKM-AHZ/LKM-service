@@ -300,7 +300,7 @@ async def test_auth_metadata_disjoint_from_business_base() -> None:
 
 
 def test_auth_alembic_chain_head() -> None:
-    """alembic_auth 第二链从基线升级到资料增量迁移。"""
+    """alembic_auth 第二链只有一条自包含基线（资料增量已折入基线）。"""
     from pathlib import Path
 
     from alembic.config import Config
@@ -308,9 +308,9 @@ def test_auth_alembic_chain_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0002_account_profile"
-    assert len(list(script.walk_revisions())) == 2
-    assert script.get_revision("head").down_revision == "0001_auth_baseline"
+    assert script.get_current_head() == "0001_auth_baseline"
+    assert len(list(script.walk_revisions())) == 1
+    assert script.get_revision("head").down_revision is None
 
 
 def test_business_alembic_chain_head() -> None:

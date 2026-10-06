@@ -298,8 +298,8 @@ def upgrade() -> None:
     op.create_index('ix_library_files_sha3_hash', 'library_files', ['sha3_hash'])
     op.create_index('ix_library_files_project', 'library_files', ['project_id'])
     op.create_index('ix_library_files_root_version', 'library_files', ['root_file_id', 'version'])
-    op.create_index('ix_library_files_name_trgm', 'library_files', ['original_name'], postgresql_using='gin', postgresql_ops={'original_name': 'gin_trgm_ops'})
-    op.create_index('ix_library_files_text_trgm', 'library_files', ['extracted_text'], postgresql_using='gin', postgresql_ops={'extracted_text': 'gin_trgm_ops'})
+    op.create_index('ix_library_files_name_trgm', 'library_files', ['original_name'], unique=False, postgresql_using='gin', postgresql_ops={'original_name': 'public.gin_trgm_ops'})
+    op.create_index('ix_library_files_text_trgm', 'library_files', ['extracted_text'], unique=False, postgresql_using='gin', postgresql_ops={'extracted_text': 'public.gin_trgm_ops'})
     op.create_table('moderation_rules',
     sa.Column('pattern', sa.String(length=255), nullable=False),
     sa.Column('is_regex', sa.Boolean(), nullable=False),

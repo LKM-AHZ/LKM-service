@@ -65,6 +65,20 @@ class LibraryFile(UUIDPrimaryKeyMixin, Base):
         ),
         Index("ix_library_files_project", "project_id"),
         Index("ix_library_files_root_version", "root_file_id", "version"),
+        # 文件名 / 正文模糊搜索（trgm GIN）。opclass 走 public 前缀：扩展由
+        # core.db.shared_objects 保证装在 public（schema-per-test 的 search_path 不含 public）。
+        Index(
+            "ix_library_files_name_trgm",
+            "original_name",
+            postgresql_using="gin",
+            postgresql_ops={"original_name": "public.gin_trgm_ops"},
+        ),
+        Index(
+            "ix_library_files_text_trgm",
+            "extracted_text",
+            postgresql_using="gin",
+            postgresql_ops={"extracted_text": "public.gin_trgm_ops"},
+        ),
     )
 
     uploader_id: Mapped[uuid.UUID] = mapped_column(

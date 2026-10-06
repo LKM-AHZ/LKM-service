@@ -25,11 +25,29 @@ config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"
 from app import bootstrap as app_bootstrap
 from core.db.base import Base
 from core.db.model_registry import ensure_all_models
+from core.db.shared_objects import TIMESCALE_AUTO_INDEXES
 
 app_bootstrap.register()
 ensure_all_models()
 
 target_metadata = Base.metadata
+
+
+def include_object(
+    obj: object,
+    name: str | None,
+    type_: str,
+    reflected: bool,
+    compare_to: object | None,
+) -> bool:
+    """autogenerate 反射过滤：排除 TimescaleDB 自动建的 hypertable 索引。
+
+    这些 ``<表>_<时间列>_idx`` 由扩展在装配 hypertable 时创建、模型不声明，
+    不过滤则每次 autogenerate/``alembic check`` 都误报 ``remove_index``。
+    """
+    if reflected and type_ == "index" and name in TIMESCALE_AUTO_INDEXES:
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -42,6 +60,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -80,6 +99,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

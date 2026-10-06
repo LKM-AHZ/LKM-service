@@ -27,10 +27,28 @@ if config.config_file_name is not None:
 # 由 auth 自己的注册钩子导入并 configure（幂等）。
 from auth import register as auth_register
 from auth.db.base import auth_metadata
+from core.db.shared_objects import TIMESCALE_AUTO_INDEXES
 
 auth_register.register_models()
 
 target_metadata = auth_metadata
+
+
+def include_object(
+    obj: object,
+    name: str | None,
+    type_: str,
+    reflected: bool,
+    compare_to: object | None,
+) -> bool:
+    """autogenerate 反射过滤：排除 TimescaleDB 自动建的 hypertable 索引。
+
+    ``audit_logs`` 装配为 hypertable 时由扩展创建 ``audit_logs_created_at_idx``，
+    模型不声明它，不过滤则每次 autogenerate/``alembic check`` 都误报 ``remove_index``。
+    """
+    if reflected and type_ == "index" and name in TIMESCALE_AUTO_INDEXES:
+        return False
+    return True
 
 
 def _sync_url(url: str) -> str:
@@ -50,6 +68,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -65,7 +84,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
