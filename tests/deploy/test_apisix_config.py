@@ -512,20 +512,33 @@ def test_apisix_mounts_rendered_config_not_repo_template() -> None:
 
     config.yaml 自本次改造起是模板（`__DNS_RESOLVER__` 占位），直接挂原文件会让 APISIX
     读到字面量占位符当 DNS 地址 → 启动即校验失败。两个产物（config.yaml/apisix.yaml）
-    都必须来自 apisix_conf 卷。
+    都必须出自 apisix-render 写出的**同一个目录**——不锁具体形态（命名卷或宿主目录），
+    只锁「同源」这条不变量：render 落哪里，apisix 就从哪里挂。
+    形态上现用**宿主目录 + 单文件 bind**：Docker 26.1.5 上「volume subpath → 镜像内已存在
+    的目标文件」会失败（open /var/lib/docker/tmp/safe-mountN: not a directory），bind 两种
+    版本都正常；且 render 是 `cat tmp > 目标` 就地写，inode 不变，bind 能收到 mtime 变化。
     """
-    mounts = _services()["apisix"]["volumes"]
+    services = _services()
+    mounts = services["apisix"]["volumes"]
     as_str = [str(m) for m in mounts]
     assert not any("./deploy/apisix/config.yaml" in m for m in as_str), (
-        "apisix 直接挂了模板文件；应改为挂 apisix_conf 卷里的渲染产物"
+        "apisix 直接挂了模板文件；应改为挂渲染产物"
     )
+    # render 的落盘目录：从 apisix-render 的 `/out` 挂载反查，避免两处各自硬编码
+    out_srcs = [
+        str(m).rsplit(":", 1)[0]
+        for m in services["apisix-render"]["volumes"]
+        if str(m).endswith(":/out")
+    ]
+    assert len(out_srcs) == 1, f"apisix-render 须有且仅有一个 /out 挂载，实得 {out_srcs}"
     for target in ("config.yaml", "apisix.yaml"):
-        assert any(target in m and "apisix_conf" in m for m in as_str), (
-            f"apisix 未从 apisix_conf 卷挂载渲染后的 {target}"
+        assert any(m.startswith(f"{out_srcs[0]}/{target}:") for m in as_str), (
+            f"apisix 未从 render 产物目录挂载渲染后的 {target}"
+            f"（期望源 {out_srcs[0]}/{target}）"
         )
     # render sidecar 的健康检查必须同时覆盖两个产物，否则 apisix 可能在没有 config.yaml
     # 的情况下被 depends_on 放行
-    hc = str(_services()["apisix-render"]["healthcheck"]["test"])
+    hc = str(services["apisix-render"]["healthcheck"]["test"])
     assert "/out/config.yaml" in hc and "/out/apisix.yaml" in hc
 
 
