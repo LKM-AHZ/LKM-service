@@ -10,6 +10,7 @@ class QaErr(ErrCode):
     CERTIFICATION_REQUIRED = NS_QA.err(6)
     SELF_ACCEPT_FORBIDDEN = NS_QA.err(7)
     BOUNTY_EXPIRED = NS_QA.err(8)
+    SELF_ANSWER_FORBIDDEN = NS_QA.err(9)
 
 
 register(
@@ -22,5 +23,6 @@ register(
         QaErr.CERTIFICATION_REQUIRED: (403, "需认证用户才可提问或回答"),
         QaErr.SELF_ACCEPT_FORBIDDEN: (403, "不能采纳自己的回答"),
         QaErr.BOUNTY_EXPIRED: (409, "悬赏已到期，等待自动退还"),
+        QaErr.SELF_ANSWER_FORBIDDEN: (403, "不能回答自己的问题"),
     }
 )

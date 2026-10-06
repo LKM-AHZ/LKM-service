@@ -25,7 +25,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth.admin_session import decode_admin_access
+from auth.admin_session import COOKIE_PATH, decode_admin_access
 from auth.models import TOTP, Profile, RefreshToken, User
 from auth.security import encrypt_secret, generate_totp_secret, hashpwd
 
@@ -214,10 +214,10 @@ class TestAuthProcessAdminRefreshAndLogout:
         first = await auth_app_client.post("/api/v1/admin/auth/refresh")
         assert first.status_code == 200
 
-        # 清掉旋转后写下的新 cookie，塞回旧值（cookie path 需与实际 COOKIE_PATH=/api/v1 一致）
-        for cp in ("/api/v1", "/api/v1/admin"):
+        # 清掉旋转后写下的新 cookie，塞回旧值验证复用检测。
+        for cp in (COOKIE_PATH, "/api/v1", "/api/v1/admin"):
             auth_app_client.cookies.delete("admin_refresh", path=cp)
-        auth_app_client.cookies.set("admin_refresh", old_refresh, path="/api/v1")
+        auth_app_client.cookies.set("admin_refresh", old_refresh, path=COOKIE_PATH)
         again = await auth_app_client.post("/api/v1/admin/auth/refresh")
         assert again.status_code == 403
 

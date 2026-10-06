@@ -187,6 +187,13 @@ async def list_projects(db: DbSession) -> list[ProjectOut]:
     ]
 
 
+async def list_my_applications(
+    db: DbSession, applicant_id: uuid.UUID
+) -> list[ProjectApplicationOut]:
+    rows = await ProjectApplicationRepository(db).list_for_applicant(applicant_id)
+    return [_app_to_schema(row) for row in rows]
+
+
 async def get_project(db: DbSession, project_id: uuid.UUID) -> Project:
     return await ProjectRepository(db).get_with_members_or_raise(
         project_id, ProjectErr.PROJECT_NOT_FOUND

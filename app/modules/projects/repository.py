@@ -27,6 +27,14 @@ def _project_options() -> tuple[Any, ...]:
 class ProjectApplicationRepository(AsyncRepository[ProjectApplication]):
     model = ProjectApplication
 
+    async def list_for_applicant(
+        self, applicant_id: uuid.UUID
+    ) -> list[ProjectApplication]:
+        return await self.get_many(
+            ProjectApplication.applicant_id == applicant_id,
+            order_by=(ProjectApplication.created_at.desc(),),
+        )
+
     async def pending_duplicate_exists(
         self, *, applicant_id: uuid.UUID, title: str
     ) -> bool:

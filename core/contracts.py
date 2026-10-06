@@ -71,6 +71,7 @@ class ContactLink(BaseModel):
 class ProfileInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
+    user_id: uuid.UUID | None = None
     nickname: str | None = None
     avatar: str | None = None
     role: str = ProfileRole.MEMBER

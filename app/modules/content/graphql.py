@@ -4,6 +4,8 @@
 GraphQL 字段 camelCase、时间 isoformat、id 用 int。boards 用于论坛分类轴。
 """
 
+import uuid
+
 import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
@@ -176,10 +178,16 @@ class ContentQuery:
         pageSize: int = 20,
         boardId: strawberry.ID | None = None,
         contentType: str | None = None,
+        authorId: strawberry.ID | None = None,
     ) -> GraphContentPage:
         db = _get_db(info)
         page_data = await list_items(
-            db, page=page, limit=pageSize, board_id=boardId, content_type=contentType
+            db,
+            page=page,
+            limit=pageSize,
+            board_id=uuid.UUID(str(boardId)) if boardId else None,
+            content_type=contentType,
+            author_id=uuid.UUID(str(authorId)) if authorId else None,
         )
         return GraphContentPage(
             items=[_map_item(i) for i in page_data.items],
@@ -193,8 +201,9 @@ class ContentQuery:
         self, info: Info, id: strawberry.ID
     ) -> GraphContentItem | None:
         db = _get_db(info)
+        item_id = uuid.UUID(str(id))
         try:
-            item = await get_item(db, id, bump_view=False)
+            item = await get_item(db, item_id, bump_view=False)
         except BizError as e:
             if e.errcode != ContentErr.CONTENT_NOT_FOUND:
                 raise
@@ -203,7 +212,7 @@ class ContentQuery:
         if item.status != PUBLISHED_STATUS:
             return None
         # 详情阅读计数增长：只在公开可见时原子 +1（草稿探测不计数）
-        await bump_item_view(id)
+        await bump_item_view(item_id)
         return _map_item(item)
 
     @strawberry.field
@@ -227,7 +236,9 @@ class ContentQuery:
     ) -> GraphCommentPage:
         db = _get_db(info)
         try:
-            page_data = await list_comments(db, itemId, page=page, limit=pageSize)
+            page_data = await list_comments(
+                db, uuid.UUID(str(itemId)), page=page, limit=pageSize
+            )
         except BizError as e:
             if e.errcode != ContentErr.CONTENT_NOT_FOUND:
                 raise

@@ -10,8 +10,9 @@ from fastapi import UploadFile
 from PIL import Image
 from pydantic import ValidationError
 
+from app.modules.content.qa.errors import QaErr
 from app.modules.content.qa.images import _webp
-from app.modules.content.qa.schemas import QuestionCreate
+from app.modules.content.qa.schemas import AnswerCreate, QuestionCreate
 from core.err import BizError
 
 
@@ -60,6 +61,29 @@ def test_invalid_question_image_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_asker_cannot_answer_own_question_without_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.content import service
+
+    author_id = uuid.uuid4()
+
+    class FakeRepo:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        async def get_locked(self, _question_id: uuid.UUID) -> SimpleNamespace:
+            return SimpleNamespace(author_id=author_id)
+
+    monkeypatch.setattr(service, "QAQuestionRepository", FakeRepo)
+    with pytest.raises(BizError) as exc:
+        await service.create_answer(
+            AsyncMock(), uuid.uuid4(), author_id, AnswerCreate(content="self")
+        )
+    assert exc.value.errcode == QaErr.SELF_ANSWER_FORBIDDEN
+
+
+@pytest.mark.asyncio
 async def test_image_upload_is_stored_and_retry_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,7 +103,11 @@ async def test_image_upload_is_stored_and_retry_is_idempotent(
             saved.append(stream.read())
             assert bucket_key == f"qa/{question_id}/{image_id}.webp"
             assert max_bytes > 0
-            return {"bucket_key": bucket_key, "storage_path": bucket_key, "size": len(saved[-1])}
+            return {
+                "bucket_key": bucket_key,
+                "storage_path": bucket_key,
+                "size": len(saved[-1]),
+            }
 
     class FakeRepo:
         def __init__(self, _db) -> None:
@@ -100,10 +128,12 @@ async def test_image_upload_is_stored_and_retry_is_idempotent(
     db = AsyncMock()
     monkeypatch.setattr(images, "QAQuestionRepository", FakeRepo)
     monkeypatch.setattr(images, "get_storage", lambda: FakeStorage())
+
     async def inline_webp(func, raw):
         return func(raw)
 
     monkeypatch.setattr(images.asyncio, "to_thread", inline_webp)
+
     class MemoryUpload(UploadFile):
         async def read(self, size: int = -1) -> bytes:
             return source.getvalue()[:size]

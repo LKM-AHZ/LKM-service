@@ -67,6 +67,7 @@ from core.rbac_roles import (
 )
 
 router = APIRouter(prefix="/admin/auth", tags=["admin-auth"])
+_LEGACY_COOKIE_PATH = f"/{settings.api_prefix.strip('/')}"
 
 
 async def _require_role_manager(request: Request, db: AsyncSession) -> User:
@@ -256,6 +257,7 @@ def _current_mfa_trust(request: Request) -> tuple[bool, int | None]:
 def _set_access_cookie(
     resp: Response, token: str, *, max_age: int | None = None
 ) -> None:
+    resp.delete_cookie(COOKIE_NAME, path=_LEGACY_COOKIE_PATH)
     resp.set_cookie(
         key=COOKIE_NAME,
         value=token,
@@ -282,6 +284,7 @@ def _remaining_access_age(expires_at: datetime.datetime) -> int:
 def _set_refresh_cookie(
     resp: Response, token: str, *, max_age: int | None = None
 ) -> None:
+    resp.delete_cookie(REFRESH_NAME, path=_LEGACY_COOKIE_PATH)
     resp.set_cookie(
         key=REFRESH_NAME,
         value=token,
@@ -298,6 +301,8 @@ def _set_refresh_cookie(
 def _clear_cookies(resp: Response) -> None:
     resp.delete_cookie(COOKIE_NAME, path=COOKIE_PATH)
     resp.delete_cookie(REFRESH_NAME, path=COOKIE_PATH)
+    resp.delete_cookie(COOKIE_NAME, path=_LEGACY_COOKIE_PATH)
+    resp.delete_cookie(REFRESH_NAME, path=_LEGACY_COOKIE_PATH)
 
 
 def _admin_user_dict(user: User) -> dict[str, Any]:

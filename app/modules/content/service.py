@@ -146,17 +146,26 @@ async def list_items(
     limit: int = 20,
     board_id: uuid.UUID | None = None,
     content_type: str | None = None,
+    author_id: uuid.UUID | None = None,
 ) -> PageData[ContentItemInfo]:
     repo = ContentItemRepository(db)
 
     # 计数走短 TTL 缓存 + content 集合版本号：任何增删 ContentItem 的行都会
     # bump_content_version() 递增集合版本，使旧(count)键立即失效，杜绝脏计数。
     async def _count() -> int:
-        return await repo.count_published(board_id=board_id, content_type=content_type)
+        return await repo.count_published(
+            board_id=board_id, content_type=content_type, author_id=author_id
+        )
 
     ver = await collection_version("content")
     total_count = await cached_read(
-        make_key("content:list:total", ver, board_id or "", content_type or ""),
+        make_key(
+            "content:list:total",
+            ver,
+            board_id or "",
+            content_type or "",
+            author_id or "",
+        ),
         60,
         _count,
     )
@@ -164,6 +173,7 @@ async def list_items(
     items = await repo.list_published(
         board_id=board_id,
         content_type=content_type,
+        author_id=author_id,
         offset=paginate_offset(page, limit),
         limit=limit,
     )
@@ -1079,12 +1089,14 @@ async def list_questions(
     limit: int = 20,
     category: str | None = None,
     sort: str = "newest",
+    author_id: uuid.UUID | None = None,
 ) -> PageData[QuestionOut]:
     repo = QAQuestionRepository(db)
 
     async def load() -> list[dict[str, Any]]:
         rows = await repo.list_with_answer_counts(
             category=category,
+            author_id=author_id,
             sort=sort,
             offset=paginate_offset(page, limit),
             limit=limit,
@@ -1105,10 +1117,14 @@ async def list_questions(
 
     ver = await collection_version("qa")
     payload = await cached_read(
-        make_key("qa:list", ver, page, limit, category or "", sort), 60, load
+        make_key("qa:list", ver, page, limit, category or "", sort, author_id or ""),
+        60,
+        load,
     )
     # 分页元信息（total 单独查，不缓存）
     total_where = [QAQuestion.category == category] if category else []
+    if author_id:
+        total_where.append(QAQuestion.author_id == author_id)
     total = await repo.count(*total_where)
     return PageData(
         items=[QuestionOut.model_validate(p) for p in payload],
@@ -1123,7 +1139,7 @@ async def get_question(db: DbSession, question_id: uuid.UUID) -> QuestionDetail:
     q = await repo.get_or_raise(question_id, QaErr.QUESTION_NOT_FOUND)
     answers = await QAAnswerRepository(db).list_in_question(question_id)
     images = await repo.list_images(question_id)
-    names = await _author_map(db, [q.author_id])
+    names = await _author_map(db, [q.author_id, *(a.author_id for a in answers)])
     base = QuestionOut.model_validate(q).model_copy(
         update={
             "answer_count": len(answers),
@@ -1132,7 +1148,12 @@ async def get_question(db: DbSession, question_id: uuid.UUID) -> QuestionDetail:
     )
     return QuestionDetail(
         **base.model_dump(),
-        answers=[AnswerOut.model_validate(a) for a in answers],
+        answers=[
+            AnswerOut.model_validate(a).model_copy(
+                update={"author_name": names.get(a.author_id, "")}
+            )
+            for a in answers
+        ],
         images=[img.url for img in images],
     )
 
@@ -1143,6 +1164,8 @@ async def create_answer(
     q = await QAQuestionRepository(db).get_locked(question_id)
     if q is None:
         raise BizError(QaErr.QUESTION_NOT_FOUND)
+    if q.author_id == author_id:
+        raise BizError(QaErr.SELF_ANSWER_FORBIDDEN)
     if q.status != "open":
         raise BizError(QaErr.QUESTION_NOT_OPEN)
     if q.bounty_expires_at is not None and q.bounty_expires_at <= now_iso():

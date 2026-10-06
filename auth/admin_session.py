@@ -34,7 +34,8 @@ REFRESH_NAME = "admin_refresh"
 ACCESS_TOKEN_MINUTES = settings.admin_access_cookie_minutes
 # 与前台/后台分离的 audience：后台 access cookie 只认本 audience，防被其它会话冒用。
 _ADMIN_AUD = "lkm:admin"
-COOKIE_PATH = f"/{settings.api_prefix.strip('/')}"
+# 后台 SSR 页面（/admin/bot）也要收到会话 cookie 才能换 SSO 票据。
+COOKIE_PATH = "/"
 # 危险操作 step-up 2FA 的信任窗口：验证通过后 1 小时内不再重复要求。
 MFA_TRUST_SECONDS = 3600
 

@@ -75,6 +75,7 @@ class AnswerOut(BaseModel):
     id: uuid.UUID
     question_id: uuid.UUID
     author_id: uuid.UUID
+    author_name: str = ""
     content: str
     is_accepted: bool
     created_at: datetime.datetime

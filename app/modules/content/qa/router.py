@@ -61,11 +61,17 @@ async def qa_status() -> ModuleStatus:
 async def qa_list(
     category: Literal["help", "volunteer"] | None = Query(default=None),
     sort: Literal["newest", "bounty"] = Query(default="newest"),
+    author_id: uuid.UUID | None = Query(default=None),
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
 ) -> PageData[QuestionOut]:
     return await list_questions(
-        db, page=pag.page, limit=pag.limit, category=category, sort=sort
+        db,
+        page=pag.page,
+        limit=pag.limit,
+        category=category,
+        sort=sort,
+        author_id=author_id,
     )
 
 
@@ -107,9 +113,7 @@ async def qa_upload_image(
     cur: CurrentUser = RequireLevel("normal"),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
-    return {
-        "url": await upload_question_image(db, question_id, cur.id, image_id, file)
-    }
+    return {"url": await upload_question_image(db, question_id, cur.id, image_id, file)}
 
 
 @router.get("/questions/{question_id}/images/{image_id}")

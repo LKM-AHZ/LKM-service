@@ -76,13 +76,20 @@ class TestAsk:
     def test_bounty_cap_and_urgent_rule(self):
         with pytest.raises(ValidationError):
             QuestionCreate(
-                title="t", situation="s", content="c",
-                bounty_people=10, bounty_per_person=101,
+                title="t",
+                situation="s",
+                content="c",
+                bounty_people=10,
+                bounty_per_person=101,
             )
         with pytest.raises(ValidationError):
             QuestionCreate(
-                title="t", situation="s", content="c",
-                bounty_per_person=10, bounty_days=14, urgent=True,
+                title="t",
+                situation="s",
+                content="c",
+                bounty_per_person=10,
+                bounty_days=14,
+                urgent=True,
             )
 
     async def test_asker_spends_escrow(
@@ -146,18 +153,18 @@ class TestAnswer:
         assert a.question_id == qid
         detail = await get_question(db, qid)
         assert detail.answer_count == 1
+        assert detail.answers[0].author_name == "answerer"
 
-
-class TestAccept:
-    async def test_self_accept_rejected(
+    async def test_asker_cannot_answer_own_question(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
         qid, asker = await _asker_with_bounty(db, auth_db)
-        own = await create_answer(db, qid, asker, AnswerCreate(content="self"))
         with pytest.raises(BizError) as exc:
-            await accept_answer(db, qid, own.id, asker)
-        assert exc.value.errcode == QaErr.SELF_ACCEPT_FORBIDDEN
+            await create_answer(db, qid, asker, AnswerCreate(content="self"))
+        assert exc.value.errcode == QaErr.SELF_ANSWER_FORBIDDEN
 
+
+class TestAccept:
     async def test_expired_bounty_cannot_be_accepted(
         self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
     ):
@@ -166,7 +173,9 @@ class TestAccept:
         answer = await create_answer(db, qid, answerer, AnswerCreate(content="late"))
         row = await db.get(QAQuestion, qid)
         assert row is not None
-        row.bounty_expires_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+        row.bounty_expires_at = datetime.datetime.now(
+            datetime.UTC
+        ) - datetime.timedelta(days=1)
         await db.flush()
         with pytest.raises(BizError) as exc:
             await accept_answer(db, qid, answer.id, asker)
@@ -226,7 +235,9 @@ class TestClose:
         qid, asker = await _asker_with_bounty(db, auth_db)
         row = await db.get(QAQuestion, qid)
         assert row is not None
-        row.bounty_expires_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+        row.bounty_expires_at = datetime.datetime.now(
+            datetime.UTC
+        ) - datetime.timedelta(days=1)
         await db.flush()
         assert await expire_due_questions(db) == 1
         assert await expire_due_questions(db) == 0
@@ -262,13 +273,15 @@ class TestList:
         asker = await _user(auth_db, "sort_asker")
         await reward(db, asker, 1000, "seed", "seed", "qa-sort")
         low = await create_question(
-            db, asker,
+            db,
+            asker,
             QuestionCreate(
                 title="low", situation="s", content="c", bounty_per_person=10
             ),
         )
         high = await create_question(
-            db, asker,
+            db,
+            asker,
             QuestionCreate(
                 title="high", situation="s", content="c", bounty_per_person=100
             ),

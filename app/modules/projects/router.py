@@ -13,6 +13,7 @@ from app.modules.projects.schemas import (
 )
 from app.modules.projects.service import (
     get_project_ex,
+    list_my_applications,
     list_projects,
     review_application,
     submit_application,
@@ -24,6 +25,7 @@ from core.common import ApiResp, ModuleStatus
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
+from core.ports.authz import get_current_user
 
 
 def _status() -> ModuleStatus:
@@ -53,6 +55,15 @@ async def project_list(
 ) -> list[ProjectOut]:
     """项目广场列表（只读）：全部展示型项目，pinned 置顶。"""
     return await list_projects(db)
+
+
+@router.get("/applications/me", response_model=ApiResp[list[ProjectApplicationOut]])
+@respond
+async def my_project_applications(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> list[ProjectApplicationOut]:
+    return await list_my_applications(db, cur.id)
 
 
 @router.get("/{project_id}", response_model=ApiResp[ProjectOut])

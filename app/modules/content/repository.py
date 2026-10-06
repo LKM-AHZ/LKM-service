@@ -42,13 +42,17 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
 
     @staticmethod
     def _published_conditions(
-        board_id: uuid.UUID | None, content_type: str | None
+        board_id: uuid.UUID | None,
+        content_type: str | None,
+        author_id: uuid.UUID | None = None,
     ) -> list[object]:
         conditions: list[object] = [ContentItem.status == ContentStatus.PUBLISHED]
         if board_id:
             conditions.append(ContentItem.board_id == board_id)
         if content_type:
             conditions.append(ContentItem.content_type == content_type)
+        if author_id:
+            conditions.append(ContentItem.author_id == author_id)
         return conditions
 
     async def count_published(
@@ -56,19 +60,23 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
         *,
         board_id: uuid.UUID | None = None,
         content_type: str | None = None,
+        author_id: uuid.UUID | None = None,
     ) -> int:
-        return await self.count(*self._published_conditions(board_id, content_type))
+        return await self.count(
+            *self._published_conditions(board_id, content_type, author_id)
+        )
 
     async def list_published(
         self,
         *,
         board_id: uuid.UUID | None = None,
         content_type: str | None = None,
+        author_id: uuid.UUID | None = None,
         offset: int = 0,
         limit: int = 20,
     ) -> list[ContentItem]:
         return await self.get_many(
-            *self._published_conditions(board_id, content_type),
+            *self._published_conditions(board_id, content_type, author_id),
             order_by=(ContentItem.is_pinned.desc(), ContentItem.id.desc()),
             offset=offset,
             limit=limit,
@@ -310,6 +318,7 @@ class QAQuestionRepository(AsyncRepository[QAQuestion]):
         self,
         *,
         category: str | None = None,
+        author_id: uuid.UUID | None = None,
         sort: str = "newest",
         offset: int = 0,
         limit: int = 20,
@@ -320,6 +329,8 @@ class QAQuestionRepository(AsyncRepository[QAQuestion]):
         )
         if category:
             stmt = stmt.where(QAQuestion.category == category)
+        if author_id:
+            stmt = stmt.where(QAQuestion.author_id == author_id)
         if sort == "bounty":
             order = (QAQuestion.bounty_total.desc(), QAQuestion.id.desc())
         else:
@@ -339,9 +350,7 @@ class QAQuestionRepository(AsyncRepository[QAQuestion]):
     async def get_locked(self, question_id: uuid.UUID) -> QAQuestion | None:
         return (
             await self.db.execute(
-                select(QAQuestion)
-                .where(QAQuestion.id == question_id)
-                .with_for_update()
+                select(QAQuestion).where(QAQuestion.id == question_id).with_for_update()
             )
         ).scalar_one_or_none()
 
@@ -389,9 +398,7 @@ class QAQuestionRepository(AsyncRepository[QAQuestion]):
         self, question_id: uuid.UUID, image_id: uuid.UUID, url: str, sort: int
     ) -> None:
         self.db.add(
-            QAQuestionImage(
-                id=image_id, question_id=question_id, url=url, sort=sort
-            )
+            QAQuestionImage(id=image_id, question_id=question_id, url=url, sort=sort)
         )
         await self.db.flush()
 
