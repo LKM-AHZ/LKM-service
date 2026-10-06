@@ -102,7 +102,7 @@ async def _revoke_sessions(db: AsyncSession, user: User) -> int:
         .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now_iso())
     )
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def cmd_revoke(username: str) -> int:
@@ -188,7 +188,7 @@ async def cmd_create(username: str, email: str, phone: str, password: str) -> in
             account_level="admin",
         )
         db.add(user)
-        db.add(Profile(user=user, nickname=username, role="admin"))
+        db.add(Profile(user=user, nickname=username, role="super_admin"))
         try:
             await db.commit()
         except IntegrityError:

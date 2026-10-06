@@ -429,6 +429,9 @@ class Profile(AuthBase):
     avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contact_links: Mapped[list[dict[str, str | None]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
 
     user: Mapped[User] = relationship(back_populates="profile")
 

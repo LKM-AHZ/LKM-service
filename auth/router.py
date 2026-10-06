@@ -29,6 +29,7 @@ from auth.deps import (
     get_current_user,
     get_email_provider,
 )
+from auth.errors import AuthErr
 from auth.limits import (
     GLOBAL_VERIFY_MAX_PER_WINDOW,
     GLOBAL_VERIFY_WINDOW_SECONDS,
@@ -37,9 +38,10 @@ from auth.limits import (
 )
 from auth.models import RefreshToken
 from auth.providers.base import EmailProvider
-from auth.repository import UserRoleRepository
+from auth.repository import UserRepository, UserRoleRepository
 from auth.schemas import (
     AuthTokenData,
+    MeInfo,
     MessageResponse,
     ProfileInfo,
     ProfileUpdate,
@@ -159,10 +161,25 @@ async def _complete_reg_verify(
     return await service_auth.register_by_verify(db, channel.name, contact)
 
 
-@router.get("/me", response_model=ApiResp[CurrentUser])
+@router.get("/me", response_model=ApiResp[MeInfo])
 @respond
-async def get_me(cur: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    return cur
+async def get_me(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_auth_session),
+) -> MeInfo:
+    user = await UserRepository(db).get_with_profile_or_raise(
+        cur.id, AuthErr.USER_NOT_FOUND
+    )
+    profile = user.profile
+    return MeInfo.model_validate(
+        {
+            **cur.model_dump(),
+            "username": user.username,
+            "nickname": profile.nickname if profile else None,
+            "avatar": profile.avatar if profile else None,
+            "contact_links": profile.contact_links if profile else [],
+        }
+    )
 
 
 @router.get("/user/by-username/{username}", response_model=ApiResp[ProfileInfo])

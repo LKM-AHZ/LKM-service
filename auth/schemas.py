@@ -5,13 +5,20 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 from auth.security import PASSWORD_MAX_LENGTH
+from core.contracts import ContactLink, CurrentUser, RawEmail
 from core.contracts import Password as BasePassword
 from core.contracts import ProfileInfo as ProfileInfo
 from core.contracts import ProfileRole as ProfileRole
 from core.contracts import ProfileUpdate as ProfileUpdate
-from core.contracts import RawEmail
 
 Password = Annotated[BasePassword, Field(max_length=PASSWORD_MAX_LENGTH)]
+
+
+class MeInfo(CurrentUser):
+    username: str
+    nickname: str | None = None
+    avatar: str | None = None
+    contact_links: list[ContactLink] = Field(default_factory=list)
 
 
 class UserRegLocal(BaseModel):

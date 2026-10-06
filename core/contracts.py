@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, ClassVar
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 
 class ProfileRole(StrEnum):
@@ -49,18 +49,39 @@ def _validate_email_preserve_case(v: str) -> str:
 RawEmail = Annotated[str, AfterValidator(_validate_email_preserve_case)]
 
 
+class ContactLink(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    icon: str | None = Field(default=None, max_length=100)
+    url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("url")
+    @classmethod
+    def safe_url(cls, value: str | None) -> str | None:
+        if value and (
+            "\\" in value
+            or (
+                not (value.startswith("/") and not value.startswith("//"))
+                and not value.lower().startswith(("http://", "https://"))
+            )
+        ):
+            raise ValueError("Contact link URL must be http(s) or a relative path")
+        return value
+
+
 class ProfileInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
     nickname: str | None = None
     avatar: str | None = None
-    role: ProfileRole = ProfileRole.MEMBER
+    role: str = ProfileRole.MEMBER
+    contact_links: list[ContactLink] = Field(default_factory=list)
 
 
 class ProfileUpdate(BaseModel):
     # 上界与 profiles.nickname 列（String(100)）一致
     nickname: str | None = Field(None, max_length=100)
     avatar: str | None = None
+    contact_links: list[ContactLink] | None = Field(default=None, max_length=20)
 
 
 class CurrentUser(BaseModel):

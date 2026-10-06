@@ -306,6 +306,7 @@ def _admin_user_dict(user: User) -> dict[str, Any]:
         "id": str(user.id),  # 主键已 UUID；JSON 无 uuid 类型，按字符串出 wire
         "username": str(user.username),
         "account_level": str(user.account_level),
+        "role": user.profile.role if user.profile else "member",
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -436,6 +437,7 @@ async def admin_login(
     if user.is_locked and user.locked_until and user.locked_until > now_iso():
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
+    await db.refresh(user, attribute_names=["profile"])
     raw_refresh = generate_refresh_token()
     access_token = create_admin_access_token(
         user, refresh_token_hash=hash_refresh_token(raw_refresh)
@@ -538,6 +540,7 @@ async def admin_refresh(
         session_expires_at=stored.expires_at,
         refresh_token_hash=hash_refresh_token(new_refresh),
     )
+    await db.refresh(user, attribute_names=["profile"])
     payload = _admin_user_dict(user)
 
     db.add(

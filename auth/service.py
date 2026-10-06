@@ -39,10 +39,14 @@ async def update_profile(
     profile = await get_or_raise(
         db, Profile, AuthErr.USER_NOT_FOUND, Profile.user_id == user_id
     )
-    if info.nickname is not None:
+    if "nickname" in info.model_fields_set:
         profile.nickname = info.nickname
     if info.avatar is not None:
         profile.avatar = info.avatar
+    if info.contact_links is not None:
+        profile.contact_links = [
+            link.model_dump(exclude_none=True) for link in info.contact_links
+        ]
     await ProfileRepository(db).flush()
     await events.notify_user_updated(user_id)
 

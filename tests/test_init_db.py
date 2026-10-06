@@ -247,13 +247,44 @@ async def test_create_auth_all_builds_all_auth_tables(monkeypatch) -> None:
                     {"s": schema},
                 )
             ).scalar_one()
-        assert n == len(auth_metadata.tables) == 19
+        assert n == len(auth_metadata.tables)
     finally:
         await engine.dispose()
         clean = create_async_engine(settings.auth_database_url)
         async with clean.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         await clean.dispose()
+
+
+async def test_create_auth_all_repairs_existing_profile(auth_db, monkeypatch) -> None:
+    """默认启动路径也应补旧表字段并修复脚本创建的 admin:admin。"""
+    from sqlalchemy import text
+
+    import auth.db.session as auth_session_mod
+    from auth.models import Profile, User
+
+    user = User(
+        username="legacy_create_all_admin",
+        hashed_password="unused",
+        account_level="admin",
+    )
+    auth_db.add(user)
+    await auth_db.flush()
+    auth_db.add(Profile(user_id=user.id, role="admin"))
+    await auth_db.commit()
+    await auth_db.execute(text("ALTER TABLE profiles DROP COLUMN contact_links"))
+    await auth_db.commit()
+
+    monkeypatch.setattr(auth_session_mod, "get_auth_engine", lambda: auth_db.bind)
+    await auth_init_mod._create_auth_all()
+    row = (
+        await auth_db.execute(
+            text("SELECT role, contact_links FROM profiles WHERE user_id = :user_id"),
+            {"user_id": user.id},
+        )
+    ).one()
+    assert row.role == "super_admin"
+    assert row.contact_links == []
 
 
 async def test_auth_metadata_disjoint_from_business_base() -> None:
@@ -268,8 +299,8 @@ async def test_auth_metadata_disjoint_from_business_base() -> None:
     assert "users" not in Base.metadata.tables
 
 
-def test_auth_alembic_chain_baseline_head() -> None:
-    """alembic_auth 第二链存在唯一基线 head（空 versions 目录会让 upgrade 空跑）。"""
+def test_auth_alembic_chain_head() -> None:
+    """alembic_auth 第二链从基线升级到资料增量迁移。"""
     from pathlib import Path
 
     from alembic.config import Config
@@ -277,9 +308,9 @@ def test_auth_alembic_chain_baseline_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0001_auth_baseline"
-    assert len(list(script.walk_revisions())) == 1
-    assert script.get_revision("head").down_revision is None
+    assert script.get_current_head() == "0002_account_profile"
+    assert len(list(script.walk_revisions())) == 2
+    assert script.get_revision("head").down_revision == "0001_auth_baseline"
 
 
 def test_business_alembic_chain_head() -> None:

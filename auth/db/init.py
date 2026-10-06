@@ -20,6 +20,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import sqlalchemy as sa
+
 from core.config import settings
 from core.db.migration_lock import acquire_migration_lock, release_migration_lock
 from core.db.shared_objects import ensure_shared_objects
@@ -61,6 +63,25 @@ async def _create_auth_all() -> None:
     async with engine.begin() as conn:
         await ensure_shared_objects(conn)
         await conn.run_sync(auth_metadata.create_all)
+        # create_all 不会修改已有 profiles 表；默认 Compose 也需补列并修复旧建号角色。
+        await conn.execute(
+            sa.text(
+                "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS "
+                "contact_links JSON NOT NULL DEFAULT '[]'::json"
+            )
+        )
+        await conn.execute(
+            sa.text(
+                """
+                UPDATE profiles AS p
+                SET role = 'super_admin'
+                FROM users AS u
+                WHERE p.user_id = u.id
+                  AND u.account_level = 'admin'
+                  AND p.role = 'admin'
+                """
+            )
+        )
         await _ensure_audit_hypertable(conn)
 
 

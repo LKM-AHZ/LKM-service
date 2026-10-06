@@ -94,6 +94,7 @@ class TestAuthProcessAdminLogin:
         body: dict[str, Any] = resp.json()
         assert body["code"] == 0
         assert body["data"]["account_level"] == "admin"
+        assert body["data"]["role"] == "super_admin"
         assert auth_app_client.cookies.get("admin_session")
         assert auth_app_client.cookies.get("admin_refresh")
 

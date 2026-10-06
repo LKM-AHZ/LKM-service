@@ -81,7 +81,7 @@ async def main() -> None:
             hashed_password=hashed,
             account_level="admin",
         )
-        profile = Profile(user=user, nickname=username, role="admin")
+        profile = Profile(user=user, nickname=username, role="super_admin")
         db.add(user)
         db.add(profile)
         try:
