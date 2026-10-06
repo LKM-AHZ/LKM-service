@@ -168,12 +168,27 @@ def test_no_one_shot_pulsar_init_service(compose: dict) -> None:
             )
 
 
-def test_app_services_depend_on_pulsar_being_healthy(compose: dict) -> None:
-    """依赖消息总线的应用服务必须按 `service_healthy` 依赖 pulsar（即等初始化完成）。"""
-    dependents = 0
+def test_app_services_select_broker_without_fixed_pulsar_dependency(compose: dict) -> None:
+    """应用按配置选 broker；固定依赖 Pulsar 会阻断 RabbitMQ 模式启动。"""
+    configured = 0
     for name, svc in compose["services"].items():
         dep = svc.get("depends_on") or {}
-        if isinstance(dep, dict) and "pulsar" in dep:
-            dependents += 1
-            assert dep["pulsar"]["condition"] == "service_healthy", (name, dep["pulsar"])
-    assert dependents >= 10, f"应至少有 10 个服务依赖 pulsar，实际 {dependents}"
+        assert "pulsar" not in dep, name
+        env = svc.get("environment") or {}
+        if "LKM_PULSAR_URL" in env:
+            configured += 1
+            assert "LKM_MESSAGE_BUS" in env and "LKM_RABBITMQ_URL" in env, name
+    assert configured >= 10
+
+
+def test_rabbitmq_override_switches_every_bus_client(compose: dict) -> None:
+    override = yaml.safe_load((_ROOT / "docker-compose.rabbitmq.yml").read_text())
+    assert "pulsar" in override["services"]
+    assert override["services"]["pulsar"]["profiles"] == ["pulsar"]
+    assert "rabbitmq" in override["services"]
+    for name, svc in compose["services"].items():
+        if "LKM_PULSAR_URL" not in (svc.get("environment") or {}):
+            continue
+        env = override["services"][name]["environment"]
+        assert env["LKM_MESSAGE_BUS"] == "rabbitmq", name
+        assert "LKM_RABBITMQ_URL" in env, name

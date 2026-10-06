@@ -192,9 +192,9 @@ async def _probe_verify_key() -> DependencyStatus:
 
 
 async def _probe_pulsar() -> DependencyStatus:
-    """探消息总线：复用 lag 上报的 Admin REST 通道（短超时 + up 结果短缓存）。
+    """探所选消息总线：Pulsar 用 Admin REST，RabbitMQ 用 AMQP 连接。
 
-    未启用消息总线/未配 ``pulsar_admin_url`` → ``disabled``（**不计入** readiness 硬依赖，
+    未启用消息总线/所选 Pulsar 未配 Admin URL → ``disabled``（**不计入** readiness 硬依赖，
     单机或尚未接总线的部署就绪语义明确）；否则 ``up``/``error``。
     """
     status, detail = await probe_pulsar_health()

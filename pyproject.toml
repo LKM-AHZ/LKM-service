@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "0.1.1"
+version = "0.1.2"
 description = "理科迷社区后端服务"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -35,6 +35,7 @@ dependencies = [
     "meilisearch>=0.43.0",
     "opensearch-py>=3.2.0",
     "pillow>=12.3.0",
+    "aio-pika>=10.0.1",
 ]
 
 [tool.pytest.ini_options]

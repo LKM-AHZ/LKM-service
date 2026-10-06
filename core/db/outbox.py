@@ -1,8 +1,8 @@
 """
 事务发件箱(outbox)模型与入队辅助（M1.1）。
 业务把"想可靠投递到消息总线的异步事件"与自身写入放同一事务（将行加入当前会话 commit），
-relay（`app/core/outbox_relay.py`）另行新会话领取并经 `core.messaging.publish` 投 Pulsar 后
-改 `published`，达成「DB 成、事件必达」的一致性。仅当 ``settings.pulsar_url`` 非空（生产/有
+relay（`app/core/outbox_relay.py`）另行新会话领取并经 `core.messaging.publish` 投消息总线后
+改 `published`，达成「DB 成、事件必达」的一致性。仅当所选消息总线 URL 非空（生产/有
 broker）才入队；未配置(dev/测试)直返 False，维持 fail-open 语义、不留积压。
 """
 
@@ -88,7 +88,7 @@ def _backoff_seconds(attempt: int) -> int:
 
 
 def _jsonable(value: Any) -> Any:
-    """递归把 UUID 转成字符串——payload 要经 JSONB 落库、再经 Pulsar JSON 编码投递，
+    """递归把 UUID 转成字符串——payload 要经 JSONB 落库、再经消息总线 JSON 编码投递，
     两者都无法编码 UUID 对象（UUID 为主键后 payload 里的 id 必然是 UUID 实例）。
 
     **消费侧契约**：handler 经事件链路收到的是**字符串形式**的 uuid，而直接调用路径
@@ -125,7 +125,7 @@ async def enqueue_outbox(
 ) -> bool:
     """把一次将投递事件加入当前事务（不 commit；由业务会话统一提交/回滚）。
 
-    - 未配置消息总线（settings.pulsar_url 空）→ 直接 False：维持 fail-open，dev/测试不产生积压。
+    - 未配置所选消息总线 URL → 直接 False：维持 fail-open，dev/测试不产生积压。
     - 显式 event_id 由普通表全局去重；人工重放用 replay=True 持键锁后重新入队。
     - payload 须为 worker 可直接分派的完整 dict（含 "fn"/"args"）。
 

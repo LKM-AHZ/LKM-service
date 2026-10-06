@@ -3,8 +3,7 @@
 被守的**规则**（不照抄当前取值，见路线图 §8 #26 的教训）：
 
 - compose 有 ``worker-content-index``，其 command 指向 ``core.worker_content_index``；
-- 它满足「消费型 worker 的依赖三件套」：postgres / redis / pulsar 均
-  ``condition: service_healthy``——少一个就会出现「中间件未就绪、worker 先崩」的启动竞态；
+- postgres / redis 使用 ``condition: service_healthy``；broker 由消息层重连，以便切换实现；
 - 继承 ``x-otel-env`` 锚点（与 ``test_compose_otel`` 同一规则，此处再钉一次，防锚点被换掉）；
 - k8s base 清单里有同名 Deployment——compose 与 k8s 双轨一致（§9.6 既定要求）。
 """
@@ -23,7 +22,7 @@ _WORKERS_YAML = _ROOT / "deploy" / "k8s" / "base" / "app" / "workers.yaml"
 
 _SERVICE = "worker-content-index"
 _MODULE = "boot.workers.content_index"
-_REQUIRED_DEPS = ("postgres", "redis", "pulsar")
+_REQUIRED_DEPS = ("postgres", "redis")
 _OTEL_KEY = "LKM_OTEL_ENABLED"
 
 
@@ -51,6 +50,9 @@ def test_service_waits_for_healthy_middleware(services: dict[str, Any]) -> None:
     assert not missing, (
         f"{_SERVICE} 缺 `condition: service_healthy` 的依赖：{missing}（启动竞态）"
     )
+    assert "pulsar" not in depends
+    env = services[_SERVICE]["environment"]
+    assert "LKM_MESSAGE_BUS" in env and "LKM_RABBITMQ_URL" in env
 
 
 def test_service_inherits_otel_anchor(services: dict[str, Any]) -> None:

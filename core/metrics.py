@@ -65,6 +65,11 @@ pulsar_subscription_backlog = Gauge(
     "Pulsar 订阅积压消息数 msgBacklog（API 进程周期上报）",
     ("subscription", "topic"),
 )
+message_subscription_backlog = Gauge(
+    "message_subscription_backlog",
+    "所选消息总线的订阅积压（API 进程周期上报）",
+    ("broker", "subscription", "topic"),
+)
 
 # user:snap 双级缓存（L1 本地 / L2 Redis）命中与未命中；供 roadmap §7.2「启用前后命中率
 # /延迟对比」取数。label: layer=l1|l2, result=hit|miss。

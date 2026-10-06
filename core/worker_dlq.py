@@ -1,9 +1,9 @@
 """
-死信消费者：消费 Pulsar ``system/dlq`` 订阅，把每条死信落库 dlq_messages 供人工重投/审计。
-Pulsar DeadLetterPolicy 在消费失败重投超限后把消息投到 ``persistent://lkm/system/dlq``；
+死信消费者：消费 ``system/dlq`` 订阅，把每条死信落库 dlq_messages 供人工重投/审计。
+所选 broker 在消费失败重投超限后把消息投到 ``persistent://lkm/system/dlq``；
 本订阅消费并落库（落库成功即 ack 移出 broker，后续从 DB 治理）。重投走 admin 端点
 入队 outbox，由 relay 发布回原 routing_key。
-死信消息的 routing_key 从消息 properties 还原（发布时写入），attempts 取 Pulsar
+死信消息的 routing_key 从消息 properties 还原（发布时写入），attempts 取
 ``redelivery_count``。DLQ 订阅不配置二次死信策略，落库失败继续负确认等待重投。
 """
 
@@ -118,7 +118,7 @@ async def requeue(
 
 
 async def _on_dlq(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
-    """死信消息回调：落库（失败抛出 → 负确认，Pulsar 重投）。"""
+    """死信消息回调：落库（失败抛出 → 负确认，broker 重投）。"""
     model = _make_model(
         routing_key=meta.properties.get("routing_key", ""),
         payload=payload,

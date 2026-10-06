@@ -1,5 +1,5 @@
 """
-消息总线抽象：逻辑 routing_key → Pulsar topic，业务发布/消费无感。
+消息总线入口：逻辑 routing_key → topic，按 settings.message_bus 选择 Pulsar 或 RabbitMQ。
 - ``ROUTING_KEY_TOPICS``：逻辑 routing_key → ``persistent://{tenant}/{ns}/{name}`` 映射，
   业务侧只认 routing_key（send_code / notify_upload / apply_point / user.* / cron.*），
   不感知命名空间与 topic 名。
@@ -14,6 +14,7 @@ Pulsar 官方 Python 客户端是**同步阻塞** API，故：
 - 发布侧：producer 懒建缓存，``producer.send`` 经 ``asyncio.to_thread`` 执行。
 - 消费侧：每个订阅一个 daemon 线程跑 ``consumer.receive``，消息经
   ``asyncio.run_coroutine_threadsafe`` 桥回主事件循环执行 async handler；成功 ack、异常负确认（触发 redelivery / 死信）。
+RabbitMQ 适配见 ``core.rabbitmq``，复用本模块的 topic/订阅清单和 handler。
 测试 seam：``set_transport(InMemoryTransport())`` 注入内存替身，默认套件不依赖真实 broker。
 """
 
@@ -457,12 +458,12 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
 
     # 发布 span：未启用 tracing 时为 no-op；traceparent 注入 props 供消费端续链
     with tracing.tracer("lkm.messaging").start_as_current_span(
-        "pulsar.publish"
+        f"{settings.message_bus}.publish"
     ) as span:
         with suppress(Exception):
-            span.set_attribute("messaging.system", "pulsar")
+            span.set_attribute("messaging.system", settings.message_bus)
             span.set_attribute("messaging.destination.name", topic)
-            span.set_attribute("messaging.pulsar.routing_key", routing_key)
+            span.set_attribute("messaging.routing_key", routing_key)
         try:
             data = _encode_event(dict(payload))
         except Exception:
@@ -478,6 +479,9 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         fn = payload.get("fn")
         if isinstance(fn, str):
             props["fn"] = fn
+        event_id = payload.get("event_id")
+        if isinstance(event_id, str):
+            props["event_id"] = event_id
         tracing.inject_context(props)
 
         transport = _transport
@@ -493,13 +497,20 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
         if not settings.message_bus_enabled:
             return False
         try:
+            if settings.message_bus == "rabbitmq":
+                from core import rabbitmq
+
+                await rabbitmq.publish(topic, data, props)
+                return True
             producer = await _get_producer(topic)
             if _closed:
                 return False
             await asyncio.to_thread(producer.send, dict(payload), properties=props)
             return True
         except Exception:
-            logger.exception("pulsar publish failed rk=%s topic=%s", routing_key, topic)
+            logger.exception(
+                "message publish failed rk=%s topic=%s", routing_key, topic
+            )
             notify_failed_total.inc()
             return False
 
@@ -679,6 +690,11 @@ async def run_subscription(
     if sub is None:
         logger.error("未知订阅名 %s", name)
         return
+    if settings.message_bus == "rabbitmq":
+        from core import rabbitmq
+
+        await rabbitmq.run_subscription(sub, handler)
+        return
     loop = asyncio.get_running_loop()
     stop = threading.Event()
     thread = threading.Thread(
@@ -702,6 +718,9 @@ async def _release_resources() -> None:
     释放 producer 缓存与 client，并复位 transport（不置终态标记）。
     """
     global _client, _transport
+    from core import rabbitmq
+
+    await rabbitmq.close()
     _transport = None
     with _client_lock:
         producers = list(_producers.values())

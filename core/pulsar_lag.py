@@ -1,7 +1,7 @@
 """
-Pulsar 订阅 lag 上报。
+消息总线订阅 lag 上报（沿用文件名以兼容既有导入）。
 只在 **API 进程**（暴露 /metrics 的进程）启动；worker 进程不暴露指标端点，故不上报。
-未配置消息总线或未配 ``pulsar_admin_url`` 时整体 no-op（fail-open），不影响应用启动。
+未配置消息总线，或 Pulsar 未配 ``pulsar_admin_url`` 时整体 no-op。
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import httpx
 
 from core.config import settings
 from core.messaging import SUBSCRIPTIONS
-from core.metrics import pulsar_subscription_backlog
+from core.metrics import message_subscription_backlog, pulsar_subscription_backlog
 from core.secrets import reveal
 
 logger = logging.getLogger("lkm.pulsar_lag")
@@ -56,6 +56,9 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
                     pulsar_subscription_backlog.labels(
                         subscription=name, topic=topic
                     ).set(backlog)
+                    message_subscription_backlog.labels(
+                        broker="pulsar", subscription=name, topic=topic
+                    ).set(backlog)
                 except Exception:
                     logger.warning(
                         "lag 单订阅解析失败 topic=%s sub=%s", topic, name, exc_info=True
@@ -68,10 +71,21 @@ async def _collect_once(client: httpx.AsyncClient) -> None:
 async def _run() -> None:
     while True:
         try:
-            async with httpx.AsyncClient(
-                base_url=settings.pulsar_admin_url, timeout=10.0
-            ) as client:
-                await _collect_once(client)
+            if settings.message_bus == "rabbitmq":
+                from core import rabbitmq
+
+                counts = await rabbitmq.collect_backlog()
+                for name, count in counts.items():
+                    message_subscription_backlog.labels(
+                        broker="rabbitmq",
+                        subscription=name,
+                        topic=SUBSCRIPTIONS[name].topic,
+                    ).set(count)
+            else:
+                async with httpx.AsyncClient(
+                    base_url=settings.pulsar_admin_url, timeout=10.0
+                ) as client:
+                    await _collect_once(client)
         except Exception:
             logger.exception("lag 上报轮次异常，跳过本轮")
         # 下界 1s：interval 配成 0/负数时 asyncio.sleep 不等待，会退化成对 Admin REST 的
@@ -82,12 +96,14 @@ async def _run() -> None:
 def start_lag_reporter() -> None:
     """启动 lag 上报后台任务（幂等；未配置则 no-op）。"""
     global _task
-    if not settings.message_bus_enabled or not settings.pulsar_admin_url:
+    if not settings.message_bus_enabled or (
+        settings.message_bus == "pulsar" and not settings.pulsar_admin_url
+    ):
         return
     if _task is None or _task.done():
         _task = asyncio.create_task(_run())
         logger.info(
-            "Pulsar lag 上报已启动 interval=%ss", settings.pulsar_lag_interval_s
+            "消息总线 lag 上报已启动 interval=%ss", settings.pulsar_lag_interval_s
         )
 
 
@@ -108,8 +124,16 @@ async def probe_health(timeout_s: float | None = None) -> tuple[str, str | None]
     探 Pulsar broker 健康（Admin REST ``/admin/v2/brokers/health``）。
     返回 ``(status, detail)``，status ∈ ``up | disabled | error``
     """
-    if not settings.message_bus_enabled or not settings.pulsar_admin_url:
-        return "disabled", "pulsar 未配置"
+    if not settings.message_bus_enabled:
+        return "disabled", f"{settings.message_bus} 未配置"
+    if settings.message_bus == "rabbitmq":
+        from core import rabbitmq
+
+        return await rabbitmq.probe_health(
+            timeout_s if timeout_s is not None else settings.pulsar_probe_timeout_s
+        )
+    if not settings.pulsar_admin_url:
+        return "disabled", "pulsar admin 未配置"
 
     global _probe_cache
     now = time.monotonic()

@@ -115,7 +115,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
 
-    # 可观测（M4）：Pulsar 订阅 lag 周期上报（未配置则 no-op）
+    # 可观测（M4）：所选消息总线订阅 lag 周期上报（未配置则 no-op）
     start_lag_reporter()
     # 聚合 worker 和 auth 的 Redis 指标快照。
     start_metrics_relay_reporter()

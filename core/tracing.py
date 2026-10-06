@@ -184,12 +184,12 @@ def consume_span(
     """消费一条消息的 span：从 properties 续父链，标注 topic/subscription。"""
     ctx = extract_context(properties)
     with tracer("lkm.messaging").start_as_current_span(
-        "pulsar.consume", context=ctx
+        f"{settings.message_bus}.consume", context=ctx
     ) as span:
         with contextlib.suppress(Exception):
-            span.set_attribute("messaging.system", "pulsar")
+            span.set_attribute("messaging.system", settings.message_bus)
             span.set_attribute("messaging.destination.name", topic)
-            span.set_attribute("messaging.pulsar.subscription", subscription)
+            span.set_attribute("messaging.subscription", subscription)
         yield span
 
 

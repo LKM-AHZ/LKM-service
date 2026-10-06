@@ -1,9 +1,9 @@
 """
-Pulsar worker：注册表驱动的订阅消费。
-每个 worker 进程常驻消费一个（或一组）Pulsar 订阅，按 payload.fn 从注册表分发 handler。
+消息总线 worker：注册表驱动的订阅消费。
+每个 worker 进程常驻消费一个（或一组）订阅，按 payload.fn 从注册表分发 handler。
 各模块 ``tasks.py`` 经 ``task_registry.register_task`` 把 handler 注册到订阅名下（订阅本身
 定义在 ``core.messaging.SUBSCRIPTIONS``）；**新增任务不再改本文件**。
-- 死信：Pulsar DeadLetterPolicy 在消费失败重投超限后投到 ``system/dlq`` topic，
+- 死信：所选 broker 在消费失败重投超限后投到 ``system/dlq`` topic，
   由 ``worker_dlq`` 消费落库（见 app/core/worker_dlq.py）。
 - 幂等：``_dispatch_with_dedup`` 复用 ``EventProcessed`` 账本，``scope`` = 订阅名，
   多订阅消费同一事件各自独立记账（points 扇出）。
@@ -80,7 +80,7 @@ async def _dispatch_with_dedup(
 
 
 async def _consume(subscription_name: str) -> None:
-    """常驻消费一个 Pulsar 订阅，按 payload.fn 从注册表分发 handler。
+    """常驻消费一个消息总线订阅，按 payload.fn 从注册表分发 handler。
 
     成功 → ack；handler 异常/超时 → core.messaging 负确认（重投超限后进死信）。
     """

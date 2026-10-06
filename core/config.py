@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     # GraphQL 端点基址
     graphql_path: str = "/graphql"
 
+    message_bus: Literal["pulsar", "rabbitmq"] = "pulsar"
+    rabbitmq_url: SecretStr = SecretStr("")
     pulsar_url: str = ""
     # Pulsar Admin REST 基址，供 lag 上报拉取订阅 stats。
     pulsar_admin_url: str = ""
@@ -408,10 +410,14 @@ class Settings(BaseSettings):
     @property
     def message_bus_enabled(self) -> bool:
         """
-        消息总线是否启用（pulsar_url 非空）。
+        消息总线是否启用（所选 broker URL 非空）。
         发布 fail-open、outbox 入队 gate、relay 空转判定统一引用此属性。
         """
-        return bool(self.pulsar_url)
+        return (
+            bool(reveal(self.rabbitmq_url))
+            if self.message_bus == "rabbitmq"
+            else bool(self.pulsar_url)
+        )
 
     @property
     def database_url(self) -> str:
