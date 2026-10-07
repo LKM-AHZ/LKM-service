@@ -953,6 +953,13 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['content_id'], ['content_items.id'], ),
     sa.PrimaryKeyConstraint('content_id', 'user_id')
     )
+    op.create_table('content_comment_likes',
+    sa.Column('comment_id', sa.Uuid(), nullable=False),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['comment_id'], ['content_comments.id'], ),
+    sa.PrimaryKeyConstraint('comment_id', 'user_id')
+    )
     op.create_table('interaction_favorites',
     sa.Column('content_id', sa.Uuid(), nullable=False),
     sa.Column('user_id', sa.Uuid(), nullable=False),
@@ -995,6 +1002,8 @@ def downgrade() -> None:
     op.drop_index('ix_interaction_fav_user_created', table_name='interaction_favorites')
     op.drop_table('interaction_favorites')
     op.drop_table('content_likes')
+    # 必须先于 content_comments：本表对它有外键，顺序反了 DROP TABLE 会被 PG 以「被依赖」拒绝
+    op.drop_table('content_comment_likes')
     op.drop_index(op.f('ix_content_comments_user_id'), table_name='content_comments')
     op.drop_index('ix_content_comments_item_floor', table_name='content_comments')
     op.drop_table('content_comments')

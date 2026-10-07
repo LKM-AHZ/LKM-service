@@ -24,6 +24,7 @@ from app.modules.content.models import (
     ColumnApplication,
     ColumnPost,
     ContentComment,
+    ContentCommentLike,
     ContentItem,
     ContentLike,
     ContentStatus,
@@ -189,6 +190,35 @@ class ContentLikeRepository(AsyncRepository[ContentLike]):
         return await self.get_one(
             ContentLike.content_id == content_id, ContentLike.user_id == user_id
         )
+
+
+class ContentCommentLikeRepository(AsyncRepository[ContentCommentLike]):
+    model = ContentCommentLike
+
+    async def get_one_like(
+        self, *, comment_id: uuid.UUID, user_id: uuid.UUID
+    ) -> ContentCommentLike | None:
+        return await self.get_one(
+            ContentCommentLike.comment_id == comment_id,
+            ContentCommentLike.user_id == user_id,
+        )
+
+    async def liked_comment_ids(
+        self, *, comment_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> set[uuid.UUID]:
+        """批量取「该用户点过赞的评论 id」。
+
+        评论列表逐条查会退化成 N+1（一页 20 条评论 = 20 次往返），故按页一次查完。
+        """
+        if not comment_ids:
+            return set()
+        rows = await self.db.scalars(
+            select(ContentCommentLike.comment_id).where(
+                ContentCommentLike.comment_id.in_(comment_ids),
+                ContentCommentLike.user_id == user_id,
+            )
+        )
+        return set(rows)
 
 
 class ColumnRepository(AsyncRepository[Column]):

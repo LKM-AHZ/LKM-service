@@ -144,6 +144,24 @@ async def remove_favorite(
     )
 
 
+async def get_content_viewer_state(
+    db: DbSession, user_id: uuid.UUID | None, content_id: uuid.UUID
+) -> tuple[bool, bool, int, int]:
+    """互动态 ``(liked, favorited, like_count, bookmark_count)``；``user_id`` 可空。
+
+    详情页按钮的初值用它回填：SSR 阶段拿不到登录态（后端 ``get_optional_user`` 只认
+    ``Authorization`` 头，而 SSR 只转发 Cookie），故由组件挂载后在客户端补拉。
+    匿名（``user_id is None``）时回计数、点赞/收藏恒 false。
+    内容不存在（含已软删）→ 404，避免读到一个「空状态」把按钮画成未赞/未藏。
+    """
+    state = await InteractionContentItemRepository(db).get_viewer_state(
+        content_id=content_id, user_id=user_id
+    )
+    if state is None:
+        raise BizError(InteractionErr.CONTENT_NOT_FOUND)
+    return state
+
+
 async def list_favorites(
     db: DbSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
 ) -> PageData[FavoriteItem]:

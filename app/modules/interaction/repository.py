@@ -9,8 +9,8 @@
 - 关注关系的「软删墓碑」语义：follow 时已有行 ``deleted_at`` 置 NULL（复活），否则新插；
   unfollow 只置 ``deleted_at``。故取配对行必须 ``include_deleted=True``，否则复活路径
   永远看不到墓碑行。
-- 跨模块只读内容/板块表（``ContentItem`` / ``Board``）的 import 缝由
-  ``interaction.repository -> content.models`` 承接。
+- 跨模块只读内容/板块表（``ContentItem`` / ``Board`` / 点赞明细 ``ContentLike``）的 import
+  缝由 ``interaction.repository -> content.models`` 承接。
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.modules.content.models import Board, ContentItem
+from app.modules.content.models import Board, ContentItem, ContentLike
 from app.modules.interaction.models import (
     BoardFollow,
     InteractionFavorite,
@@ -72,6 +72,42 @@ class InteractionContentItemRepository(AsyncRepository[ContentItem]):
     async def exists_content(self, content_id: uuid.UUID) -> bool:
         """内容行是否存在（浏览上报的 404 前置判定）。"""
         return await self.exists(ContentItem.id == content_id)
+
+    async def get_viewer_state(
+        self, *, content_id: uuid.UUID, user_id: uuid.UUID | None
+    ) -> tuple[bool, bool, int, int] | None:
+        """互动态 ``(liked, favorited, like_count, bookmark_count)``。
+
+        内容行不存在（含已软删）返回 ``None``，由 service 转 404——与
+        :meth:`get_bookmark_count` 同口径。``user_id`` 为 ``None``（匿名访客）时只回计数，
+        ``liked``/``favorited`` 恒 false，且**不查**两张明细表。
+
+        点赞明细 ``content_likes`` 属 content 域，本类是 interaction 侧既有的
+        「只读内容表」缝（``interaction.repository -> content.models`` 已豁免），
+        故直接按行存在性判定，不再绕一层服务调用。
+        """
+        counts = (
+            await self.db.execute(
+                select(ContentItem.like_count, ContentItem.bookmark_count).where(
+                    ContentItem.id == content_id,
+                    ContentItem.deleted_at.is_(None),
+                )
+            )
+        ).first()
+        if counts is None:
+            return None
+        if user_id is None:
+            return False, False, int(counts[0]), int(counts[1])
+        liked = await self.db.scalar(
+            select(ContentLike.content_id).where(
+                ContentLike.content_id == content_id,
+                ContentLike.user_id == user_id,
+            )
+        )
+        favorited = await InteractionFavoriteRepository(self.db).is_favorited(
+            user_id=user_id, content_id=content_id
+        )
+        return liked is not None, favorited, int(counts[0]), int(counts[1])
 
 
 class InteractionFavoriteRepository(AsyncRepository[InteractionFavorite]):

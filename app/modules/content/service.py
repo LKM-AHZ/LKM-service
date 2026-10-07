@@ -28,7 +28,11 @@ from app.modules.content.columns.schemas import (
     ColumnPostCreate,
     ColumnPostInfo,
 )
-from app.modules.content.counters import bump_content_counter, read_count
+from app.modules.content.counters import (
+    bump_comment_like_count,
+    bump_content_counter,
+    read_count,
+)
 from app.modules.content.errors import ContentErr
 from app.modules.content.events import (
     CONTENT_ACTION_DELETED,
@@ -62,6 +66,7 @@ from app.modules.content.repository import (
     ColumnApplicationRepository,
     ColumnPostRepository,
     ColumnRepository,
+    ContentCommentLikeRepository,
     ContentCommentRepository,
     ContentItemRepository,
     ContentLikeRepository,
@@ -125,9 +130,22 @@ def _item_to_schema(
     )
 
 
-def _comment_to_schema(c: ContentComment, author_name: str) -> ContentCommentInfo:
+def _comment_to_schema(
+    c: ContentComment, author_name: str, liked: bool = False
+) -> ContentCommentInfo:
     return ContentCommentInfo.model_validate(c).model_copy(
-        update={"author_name": author_name}
+        update={"author_name": author_name, "liked": liked}
+    )
+
+
+async def _liked_comment_ids(
+    db: DbSession, comments: list[ContentComment], viewer_id: uuid.UUID | None
+) -> set[uuid.UUID]:
+    """批量取「viewer 点过赞的评论 id」；未登录时直接空集，不查库。"""
+    if viewer_id is None or not comments:
+        return set()
+    return await ContentCommentLikeRepository(db).liked_comment_ids(
+        comment_ids=[c.id for c in comments], user_id=viewer_id
     )
 
 
@@ -459,11 +477,78 @@ async def unlike_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> 
     return await bump_content_counter(db, item_id, "like_count", -1)
 
 
+async def _assert_comment_in_item(
+    db: DbSession, item_id: uuid.UUID, comment_id: uuid.UUID
+) -> ContentComment:
+    """取评论并断言它确实属于该内容（不存在/已软删 → COMMENT_NOT_FOUND）。
+
+    路由把 ``item_id`` 与 ``comment_id`` 都放在路径里，若只按 comment_id 查，调用方拿
+    别的内容的 item_id 拼出的 URL 也能命中同一条评论——计数与删除都会落在错误的帖子上。
+    """
+    return await ContentCommentRepository(db).get_one_or_raise(
+        ContentErr.COMMENT_NOT_FOUND,
+        ContentComment.id == comment_id,
+        ContentComment.content_id == item_id,
+    )
+
+
+async def like_comment(
+    db: DbSession, item_id: uuid.UUID, comment_id: uuid.UUID, user_id: uuid.UUID
+) -> int:
+    """点赞评论（幂等）。返回评论的最新点赞数。
+
+    与 ``like_item`` 同款：先锁帖子行串行化同一帖下的并发互动，再查明细，重复请求不重复计数。
+
+    刻意**不发积分事件**（``like_item`` 会发 ``"like"``）：那会同时喂进统计/成就链路，让
+    「点赞评论」与「点赞帖子」混成同一指标。要不要计入属于积分策略，需产品侧确认后再加。
+    """
+    await ContentItemRepository(db).lock_active(item_id)
+    comment = await _assert_comment_in_item(db, item_id, comment_id)
+    repo = ContentCommentLikeRepository(db)
+    if await repo.get_one_like(comment_id=comment_id, user_id=user_id) is not None:
+        # 帖子行锁已持有，本事务内读到的 like_count 不会被同帖的并发点赞越过
+        return comment.like_count
+
+    await repo.create(comment_id=comment_id, user_id=user_id)
+    return await bump_comment_like_count(db, comment_id, 1)
+
+
+async def unlike_comment(
+    db: DbSession, item_id: uuid.UUID, comment_id: uuid.UUID, user_id: uuid.UUID
+) -> int:
+    """取消评论点赞（幂等）。未点过赞时直接返回当前计数，不产生负向影响。"""
+    await ContentItemRepository(db).lock_active(item_id)
+    comment = await _assert_comment_in_item(db, item_id, comment_id)
+    repo = ContentCommentLikeRepository(db)
+    existing = await repo.get_one_like(comment_id=comment_id, user_id=user_id)
+    if existing is None:
+        return comment.like_count
+
+    await repo.delete(existing)
+    return await bump_comment_like_count(db, comment_id, -1)
+
+
+async def delete_comment(
+    db: DbSession, item_id: uuid.UUID, comment_id: uuid.UUID
+) -> None:
+    """软删评论并同步递减帖子的 ``comment_count``。
+
+    软删口径与 ``counters.reconcile_counts`` 的评论明细统计一致（``deleted_at IS NULL``），
+    否则对账下一拍会把减掉的一票算回来、与写路径互相覆盖、永久震荡。
+    子评论不级联软删：``parent_id`` 保留，回复关系在列表里照旧可见（当前列表是扁平的）。
+    鉴权在路由层（``check_owner``：属主放行，代管需 ``content_owner_delete``）。
+    """
+    comment = await _assert_comment_in_item(db, item_id, comment_id)
+    await ContentCommentRepository(db).soft_delete(comment)
+    await bump_content_counter(db, item_id, "comment_count", -1)
+
+
 async def list_comments(
     db: DbSession,
     item_id: uuid.UUID,
     page: int = 1,
     limit: int = 20,
+    viewer_id: uuid.UUID | None = None,
 ) -> PageData[ContentCommentInfo]:
     await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
     repo = ContentCommentRepository(db)
@@ -472,7 +557,11 @@ async def list_comments(
         item_id, offset=paginate_offset(page, limit), limit=limit
     )
     names = await _author_map(db, [c.user_id for c in comments])
-    items = [_comment_to_schema(c, names.get(c.user_id, "")) for c in comments]
+    liked = await _liked_comment_ids(db, comments, viewer_id)
+    items = [
+        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked)
+        for c in comments
+    ]
     return PageData(
         items=items,
         total=total,
@@ -482,13 +571,17 @@ async def list_comments(
 
 
 async def list_all_comments(
-    db: DbSession, item_id: uuid.UUID
+    db: DbSession, item_id: uuid.UUID, viewer_id: uuid.UUID | None = None
 ) -> list[ContentCommentInfo]:
     """一次取回某内容的全部评论（floor 升序），供 GraphQL 组装评论树。"""
     await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
     comments = await ContentCommentRepository(db).list_all_in_content(item_id)
     names = await _author_map(db, [c.user_id for c in comments])
-    return [_comment_to_schema(c, names.get(c.user_id, "")) for c in comments]
+    liked = await _liked_comment_ids(db, comments, viewer_id)
+    return [
+        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked)
+        for c in comments
+    ]
 
 
 async def create_comment(

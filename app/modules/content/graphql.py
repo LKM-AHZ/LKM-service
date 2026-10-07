@@ -80,6 +80,8 @@ class GraphContentComment:
     floorNumber: int
     parentId: strawberry.ID | None
     likeCount: int
+    # 当前请求者是否点过赞；匿名请求恒 false（计数照常返回）
+    liked: bool
     createdAt: str
     children: list["GraphContentComment"] = strawberry.field(default_factory=list)
 
@@ -160,6 +162,7 @@ def _map_comment(c: ContentCommentInfo) -> GraphContentComment:
         floorNumber=c.floor_number,
         parentId=c.parent_id,
         likeCount=c.like_count,
+        liked=c.liked,
         createdAt=c.created_at.isoformat(),
     )
 
@@ -236,8 +239,13 @@ class ContentQuery:
     ) -> GraphCommentPage:
         db = _get_db(info)
         try:
+            # viewer 决定每条的 liked：匿名时 service 不查明细表（user_id is None）
             page_data = await list_comments(
-                db, uuid.UUID(str(itemId)), page=page, limit=pageSize
+                db,
+                uuid.UUID(str(itemId)),
+                page=page,
+                limit=pageSize,
+                viewer_id=info.context.user_id,
             )
         except BizError as e:
             if e.errcode != ContentErr.CONTENT_NOT_FOUND:
@@ -278,7 +286,7 @@ class ContentQuery:
         """某内容的完整评论树（根为 parent_id is None 的楼层评论）。"""
         db = _get_db(info)
         try:
-            comments = await list_all_comments(db, itemId)
+            comments = await list_all_comments(db, itemId, info.context.user_id)
         except BizError as e:
             if e.errcode != ContentErr.CONTENT_NOT_FOUND:
                 raise

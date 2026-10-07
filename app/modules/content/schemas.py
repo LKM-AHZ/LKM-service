@@ -94,4 +94,6 @@ class ContentCommentInfo(BaseModel):
     floor_number: int
     parent_id: uuid.UUID | None = None
     like_count: int
+    # 当前读口所属用户是否点过赞；未登录/未指定 viewer 时恒 False
+    liked: bool = False
     created_at: datetime.datetime

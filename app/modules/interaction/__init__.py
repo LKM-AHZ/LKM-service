@@ -29,8 +29,11 @@ def __getattr__(name: str) -> Any:
         return _exported_routers
     if name == "GRAPHQL":
         if _exported_graphql is None:
-            from app.modules.interaction.graphql import FollowQuery
+            from app.modules.interaction.graphql import (
+                ContentViewerQuery,
+                FollowQuery,
+            )
 
-            _exported_graphql = [FollowQuery]
+            _exported_graphql = [FollowQuery, ContentViewerQuery]
         return _exported_graphql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

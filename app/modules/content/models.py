@@ -335,6 +335,9 @@ class ContentComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     replies: Mapped[list[ContentComment]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
     )
+    like_records: Mapped[list[ContentCommentLike]] = relationship(
+        back_populates="comment", cascade="all, delete-orphan"
+    )
 
 
 class ContentLike(Base):
@@ -351,6 +354,26 @@ class ContentLike(Base):
     )
 
     content: Mapped[ContentItem] = relationship(back_populates="like_records")
+
+
+class ContentCommentLike(Base):
+    """评论点赞记录，复合主键保证同一用户对同一评论最多一条（点赞幂等）。
+
+    与 ``ContentLike`` 同款：``content_comments.like_count`` 是它的派生计数，
+    真相源是本表行数（见 ``content/counters.py``）。
+    """
+
+    __tablename__: str = "content_comment_likes"
+
+    comment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_comments.id"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+    comment: Mapped[ContentComment] = relationship(back_populates="like_records")
 
 
 class QAQuestion(UUIDPrimaryKeyMixin, Base):

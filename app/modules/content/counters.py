@@ -6,6 +6,12 @@
 - ``comment_count``  ← ``content_comments`` 行数
 - ``bookmark_count`` ← ``interaction_favorites`` 行数
 
+评论自身的 ``content_comments.like_count`` 同样是派生列，真相源是 ``content_comment_likes``
+行数（见 :func:`bump_comment_like_count`）。它**不参与 item 的三项对账分数**，但在
+:func:`reconcile_counts` 扫到某批 item 时顺带按明细重算——复用 item 的
+``counts_reconciled_at`` 两级拍（15 分钟增量 + 日级全量），不另立收敛标记列。
+评论点赞没有 Redis write-behind 通道（写路径恒为写穿），故无 ``flush`` 侧逻辑。
+
 **写穿（默认，``LKM_COUNTERS_WRITE_THROUGH=true``）**：写路径与明细同事务原子 UPDATE 计数列，
 派生列与明细强一致——读数是真值，无 flush 窗口偏差，也不再需要「DB 值 + pending」的近似合成。
 
@@ -33,7 +39,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.errors import ContentErr
-from app.modules.content.models import ContentComment, ContentItem, ContentLike
+from app.modules.content.models import (
+    ContentComment,
+    ContentCommentLike,
+    ContentItem,
+    ContentLike,
+)
 from app.modules.interaction.models import InteractionFavorite
 from core import counters
 from core.config import settings
@@ -118,6 +129,56 @@ async def read_count(db: AsyncSession, item_id: uuid.UUID, field: str) -> int:
     if settings.counters_write_through:
         return int(base)
     return int(base) + await counters.pending_delta(field, item_id)
+
+
+async def bump_comment_like_count(
+    db: AsyncSession, comment_id: uuid.UUID, delta: int
+) -> int:
+    """评论点赞计数：写穿原子 UPDATE（下限 0），返回新值。
+
+    不接 Redis write-behind：那套是为 ``content_items`` 三项计数设计的回退通道，评论点赞
+    只有写穿一条路径，不存在 flush 窗口。行不存在（含已硬删）抛 ``COMMENT_NOT_FOUND``，
+    使调用方事务整体回滚。
+    """
+    result = await db.execute(
+        sa.update(ContentComment)
+        .where(ContentComment.id == comment_id)
+        .values(like_count=func.greatest(ContentComment.like_count + delta, 0))
+        .returning(ContentComment.like_count)
+    )
+    row = result.first()
+    if row is None:
+        raise BizError(ContentErr.COMMENT_NOT_FOUND)
+    return int(row[0])
+
+
+async def _reconcile_comment_likes(
+    db: AsyncSession, item_ids: list[uuid.UUID]
+) -> int:
+    """把这批 item 下所有评论的 ``like_count`` 按明细重算，返回被修正的行数。
+
+    单条 UPDATE + 相关子查询（不是逐行回写）：一页 500 条 item 下的评论可能上千，逐行发
+    UPDATE 会把这拍拖成全表往返。``synchronize_session=False`` 是必须的——WHERE 里的
+    相关子查询无法在 Python 侧求值，默认的 evaluate 策略会直接抛错。
+    """
+    if not item_ids:
+        return 0
+    real_like = (
+        select(func.count())
+        .select_from(ContentCommentLike)
+        .where(ContentCommentLike.comment_id == ContentComment.id)
+        .scalar_subquery()
+    )
+    result = await db.execute(
+        sa.update(ContentComment)
+        .where(
+            ContentComment.content_id.in_(item_ids),
+            ContentComment.like_count != real_like,
+        )
+        .values(like_count=real_like)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
 
 
 async def flush_counters(db: AsyncSession) -> int:
@@ -259,6 +320,17 @@ async def reconcile_counts(
         ).all()
         if not rows:
             break
+
+        # 顺带把这批 item 下评论的 like_count 按明细拉回真值（见 _reconcile_comment_likes）。
+        # 刻意不计入 affected：affected 的语义是「需修正的 item 数」，且 _record_oscillation
+        # 用 item id 判震荡，混入评论会污染该判定。
+        fixed_comments = await _reconcile_comment_likes(
+            db, [row[0] for row in rows]
+        )
+        if fixed_comments:
+            logger.info(
+                "reconciled comment like counts: %d comments", fixed_comments
+            )
 
         for row in rows:
             item_id = row[0]
