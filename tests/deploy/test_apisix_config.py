@@ -73,8 +73,10 @@ def _run_render(cert_root: Path, out_dir: Path, extra_env: dict | None = None) -
     subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
 
-def _fake_certs(cert_root: Path) -> None:
-    for domain in _DOMAINS:
+def _fake_certs(cert_root: Path, domains: list[str] | None = None) -> None:
+    """预置假证书，使渲染**确定性**：证书缺失时 render.sh 会现生成自签证书（每次字节都不同），
+    跨两次渲染比较产物就永远不相等。"""
+    for domain in domains or _DOMAINS:
         d = cert_root / domain
         d.mkdir(parents=True, exist_ok=True)
         (d / "fullchain.pem").write_text(
@@ -250,6 +252,45 @@ def test_render_expands_domains_and_body_limit() -> None:
     assert (
         routes["api-prefix"]["plugins"]["client-control"]["max_body_size"] == 104857600
     )
+
+
+def _render_with_domains(raw: str) -> dict:
+    """按给定的 APISIX_COMMUNITY_DOMAINS 原样渲染一次（证书预置为假文件，保证可比较）。"""
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="apisix-domains-"))
+    cert_root = tmp / "live"
+    _fake_certs(cert_root, ["a.com", "b.com"])
+    out_dir = tmp / "out"
+    out_dir.mkdir(parents=True)
+    _run_render(cert_root, out_dir, extra_env={"APISIX_COMMUNITY_DOMAINS": raw})
+    return yaml.safe_load((out_dir / "apisix.yaml").read_text())
+
+
+def test_domain_list_separator_is_normalized() -> None:
+    """逗号与空格都算分隔符：`a.com,b.com` 绝不能被当成**一个**域名。
+
+    render.sh 的下游（hosts_of / origins_of / ssl_block 的 `for d in …`、取首个裸域的
+    `${COMMUNITY%% *}`）一律按空格切词，而 .env 里紧邻的 LKM_ALLOWED_HOSTS 是逗号分隔 ——
+    照那边写法填域名，hosts 会渲染成 `a.com,b.com` 且**静默**匹配不上任何请求。
+    tools/preflight.py 的证书检查用同一条规整规则（此前它按逗号切，多域名必然误报「无证书」）。
+    """
+    space = _render_with_domains("a.com b.com")
+    assert _render_with_domains("a.com,b.com") == space
+    assert _render_with_domains(" a.com , b.com ") == space  # 首尾空白 + 逗号后带空格
+
+    routes = {r["id"]: r for r in space["routes"]}
+    assert routes["api-prefix"]["hosts"] == [
+        "a.com",
+        "www.a.com",
+        "b.com",
+        "www.b.com",
+    ]
+    assert routes["api-prefix"]["plugins"]["cors"]["allow_origins"] == (
+        "https://a.com,https://www.a.com,https://b.com,https://www.b.com"
+    )
+    # MinIO 路由的 Host 改写取首个裸域（`${COMMUNITY%% *}`）：前导空白没被规整掉就会取到空串
+    assert routes["minio"]["upstream"]["upstream_host"] == "a.com"
 
 
 def test_exact_admin_me_beats_prefix() -> None:
