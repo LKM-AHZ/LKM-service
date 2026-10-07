@@ -1,15 +1,17 @@
-"""评论点赞（content_comment_likes）与评论删除：幂等、计数、越界、软删、权限点。
+"""论坛互动写路径：评论点赞/删除、转发上账、内容举报。
 
 拆库后业务库(Base 无 users)不再有 User/Profile：content_comments.user_id 是 auth realm
 稳定裸 uuid。凡需作者身份/展示名回填的用例注入 ``auth_db`` + ``auth_seam_realm``。
 
 覆盖：
-- 评论点赞幂等 / 取消幂等 / 多用户各自计数
+- 评论点赞幂等 / 取消幂等 / 多用户各自计数 / 计入积分事件
 - item_id 与 comment_id 不配套 → COMMENT_NOT_FOUND（计数不会记到别的帖子上）
 - 已软删评论点赞 → COMMENT_NOT_FOUND
 - 删除评论：软删 + 帖子 comment_count 递减 + 重复删除 404
 - 列表按 viewer 回填 liked
 - 对账把评论 like_count 拉回明细真值
+- 转发：计数自增、软删内容 404、local 账户 403
+- 举报：target_title 由后端回填、同一目标待处理举报去重、目标不存在 404
 - HTTP：点赞路由挂了 content.like 权限点（local 账户 403）；评论列表路由分页与 liked
 """
 
@@ -21,8 +23,10 @@ from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.admin.models import Report as AdminReport
 from app.modules.admin.models import RolePermission
 from app.modules.content import graphql as content_graphql
+from app.modules.content import service as content_service
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import (
@@ -37,10 +41,12 @@ from app.modules.content.service import (
     create_comment,
     create_item,
     delete_comment,
+    forward_item,
     get_item,
     like_comment,
     like_item,
     list_comments,
+    report_content,
     unlike_comment,
 )
 from app.modules.interaction import graphql as interaction_graphql
@@ -239,6 +245,160 @@ async def test_viewer_state_missing_item_is_404(
     with pytest.raises(BizError) as exc:
         await interaction_service.get_content_viewer_state(db, uid, uuid.uuid4())
     assert exc.value.errcode == InteractionErr.CONTENT_NOT_FOUND
+
+
+async def test_comment_like_emits_points_event(
+    db: AsyncSession,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """评论点赞与帖子点赞同记一次 "like"，靠 ref_id 前缀区分目标。
+
+    直接断言事件不落 outbox 的后果（未配总线时 enqueue_outbox 是门控直返，看不见），
+    故替换掉 service 里的同名引用而不是去查表。
+    """
+    uid = (await _au(auth_db, "pts")).id
+    item_id = await _make_item(db, uid)
+    cid = await _make_comment(db, item_id, uid)
+
+    seen: list[tuple[uuid.UUID, str, str]] = []
+
+    async def spy(_db: object, u: uuid.UUID, event: str, ref_id: str) -> None:
+        seen.append((u, event, ref_id))
+
+    # 桩必须装在造数**之后**：建帖/发评论本身也会发积分事件，装早了会把它们一起收进来
+    monkeypatch.setattr(content_service, "enqueue_points_event", spy)
+
+    await like_comment(db, item_id, cid, uid)
+    # 幂等路径不得重复发分（否则反复赞/取消就能刷分）
+    await like_comment(db, item_id, cid, uid)
+
+    assert seen == [(uid, "like", f"comment:{cid}")]
+
+
+async def test_forward_item_bumps_count(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = (await _au(auth_db, "fwd")).id
+    item_id = await _make_item(db, uid)
+
+    # 转发无明细表、刻意不去重：同一人分享两次就是两次
+    assert await forward_item(db, item_id) == 1
+    assert await forward_item(db, item_id) == 2
+    assert (await get_item(db, item_id)).forward_count == 2
+
+
+async def test_forward_missing_item_is_404(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    with pytest.raises(BizError) as exc:
+        await forward_item(db, uuid.uuid4())
+    assert exc.value.errcode == ContentErr.CONTENT_NOT_FOUND
+
+
+async def test_report_post_fills_title_from_row_and_dedupes(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = (await _au(auth_db, "rep")).id
+    item_id = await _make_item(db, uid)
+
+    await report_content(db, uid, "post", item_id, "垃圾广告")
+    # 同一目标重复提交：静默成功、不重复入队
+    await report_content(db, uid, "post", item_id, "垃圾广告")
+
+    rows = (
+        (await db.execute(select(AdminReport).where(AdminReport.target_id == str(item_id))))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    # target_title 由后端从内容行回填，不接受前端传入
+    assert row.target_title == "t"
+    assert row.type == "post"
+    assert row.status == "pending"
+    assert row.reporter_id == uid
+
+
+async def test_report_comment_uses_comment_body_as_title(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = (await _au(auth_db, "repc")).id
+    item_id = await _make_item(db, uid)
+    cid = await _make_comment(db, item_id, uid, "带人身攻击的评论")
+
+    await report_content(db, uid, "comment", cid, "人身攻击")
+
+    row = (
+        await db.execute(select(AdminReport).where(AdminReport.target_id == str(cid)))
+    ).scalar_one()
+    assert row.target_title == "带人身攻击的评论"
+    assert row.type == "comment"
+
+
+async def test_report_missing_target_is_404(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = (await _au(auth_db, "repm")).id
+    with pytest.raises(BizError) as exc:
+        await report_content(db, uid, "post", uuid.uuid4(), "x")
+    assert exc.value.errcode == ContentErr.CONTENT_NOT_FOUND
+
+    with pytest.raises(BizError) as exc2:
+        await report_content(db, uid, "comment", uuid.uuid4(), "x")
+    assert exc2.value.errcode == ContentErr.COMMENT_NOT_FOUND
+
+    # 未知目标类型不是「举报成功」的静默降级
+    with pytest.raises(BizError) as exc3:
+        await report_content(db, uid, "file", uuid.uuid4(), "x")
+    assert exc3.value.errcode == ContentErr.UNSUPPORTED_TYPE
+
+
+async def test_http_report_requires_login(
+    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    """举报是安全出口：只要求登录，不挂权限点（local 账户也能举报违规内容）。"""
+    local = await _au(auth_db, "local_rep", account_level="local")
+    item_id = await _make_item(db, local.id)
+
+    r_anon = await client.post(
+        "/api/v1/content/reports",
+        json={"target_type": "post", "target_id": str(item_id), "reason": "广告"},
+    )
+    # 缺 Authorization 头由 core/ports/authz.py::_parse_bearer 抛 CommonErr.FORBIDDEN
+    # （即 403，不是 401）——全站既有口径，与令牌过期（401）是两条路径。
+    # 前端据「是否已被全局无权限对话框承接」而非状态码区分这两者，见
+    # lib/http/permission-denied.ts 的 handledByDialog。
+    assert r_anon.status_code == 403
+
+    r_local = await client.post(
+        "/api/v1/content/reports",
+        headers=_h(local),
+        json={"target_type": "post", "target_id": str(item_id), "reason": "广告"},
+    )
+    assert r_local.status_code == 200
+    assert r_local.json()["data"]["ok"] is True
+
+
+async def test_http_forward_requires_permission(
+    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    await _seed_perm(db, "normal:member", "content.forward")
+    normal = await _au(auth_db, "fwd_h")
+    local = await _au(auth_db, "local_fwd", account_level="local")
+    item_id = await _make_item(db, normal.id)
+
+    r_local = await client.post(
+        f"/api/v1/content/items/{item_id}/forward", headers=_h(local)
+    )
+    assert r_local.status_code == 403
+
+    r_ok = await client.post(
+        f"/api/v1/content/items/{item_id}/forward", headers=_h(normal)
+    )
+    assert r_ok.status_code == 200
+    assert r_ok.json()["data"]["forward_count"] == 1
 
 
 async def _seed_perm(db: DB, role: str, permission: str) -> None:

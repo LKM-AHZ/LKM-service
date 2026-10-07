@@ -14,15 +14,18 @@ from app.modules.content.schemas import (
     ContentCommentInfo,
     ContentItemCreate,
     ContentItemInfo,
+    ContentReportCreate,
 )
 from app.modules.content.service import (
     create_comment,
     create_item,
     delete_comment,
     delete_item,
+    forward_item,
     like_comment,
     like_item,
     list_comments,
+    report_content,
     unlike_comment,
     unlike_item,
 )
@@ -97,6 +100,33 @@ async def unlike_content_item(
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     return {"like_count": await unlike_item(db, item_id, cur.id)}
+
+
+@router.post("/items/{item_id}/forward", response_model=ApiResp[dict[str, Any]])
+@respond
+async def forward_content_item(
+    item_id: uuid.UUID,
+    cur: CurrentUser = RequirePermission(Permission.content_forward),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """转发上报：由前端在「链接已复制」之后调用，返回新的转发数。"""
+    return {"forward_count": await forward_item(db, item_id)}
+
+
+@router.post("/reports", response_model=ApiResp[dict[str, Any]])
+@respond
+async def report_content_target(
+    info: ContentReportCreate,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """提交内容举报（帖子 / 评论），进后台「举报」队列。
+
+    刻意只用 ``get_current_user``、不挂权限点：举报是安全出口，把 local（未绑定邮箱/手机号）
+    账户挡在外面等于让他们无法举报违规内容——这与点赞/收藏的档位门槛是两种性质。
+    """
+    await report_content(db, cur.id, info.target_type, info.target_id, info.reason)
+    return {"ok": True}
 
 
 @router.delete("/items/{item_id}", response_model=ApiResp[dict[str, Any]])

@@ -14,6 +14,7 @@ import datetime
 import uuid
 
 from sqlalchemy import case, func, select
+from sqlalchemy import update as sa_update
 
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import (
@@ -137,6 +138,24 @@ class ContentItemRepository(AsyncRepository[ContentItem]):
         await self.update_where(
             {"view_count": ContentItem.view_count + 1}, ContentItem.id == item_id
         )
+
+    async def bump_forward_count(self, item_id: uuid.UUID) -> int:
+        """原子 ``forward_count + 1`` 并返回新值；行不存在（含已软删）抛 ``CONTENT_NOT_FOUND``。
+
+        ``forward_count`` 没有明细表（不参与对账，见 ``content/counters.py`` 的说明），
+        故不像 like/comment/bookmark 那样走 ``bump_content_counter``，直接原子自增即可。
+        返回新值是为了让调用方拿服务端真值校正本地乐观值。
+        """
+        result = await self.db.execute(
+            sa_update(ContentItem)
+            .where(ContentItem.id == item_id, ContentItem.deleted_at.is_(None))
+            .values(forward_count=ContentItem.forward_count + 1)
+            .returning(ContentItem.forward_count)
+        )
+        row = result.first()
+        if row is None:
+            raise BizError(ContentErr.CONTENT_NOT_FOUND)
+        return int(row[0])
 
     async def count_daily_discussions(
         self, *, author_id: uuid.UUID, board_id: uuid.UUID, since: datetime.datetime

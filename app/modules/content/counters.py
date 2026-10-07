@@ -21,9 +21,13 @@
 ``reconcile_counts`` 两条路径下都保留：按明细 ``COUNT(*)`` 重算并修正偏差（**可证伪**：
 连续两次对账，第二次 ``affected == 0``），作为历史脏值与异常路径的兜底收敛。
 
-**不纳入本链路的计数**：``view_count``（浏览数）。它没有可重算的真相源——浏览明细
-``interaction_view_logs`` 是「每用户每内容一行」的 upsert，行数与累计浏览次数不可换算，
-对不上账。故 ``view_count`` 维持原有原子 UPDATE 直改 DB，登记于路线图 §8。
+**不纳入本链路的计数**：``view_count``（浏览数）与 ``forward_count``（转发数）。
+
+- ``view_count``：浏览明细 ``interaction_view_logs`` 是「每用户每内容一行」的 upsert，
+  行数与累计浏览次数不可换算，对不上账。维持原有原子 UPDATE 直改 DB，登记于路线图 §8。
+- ``forward_count``：压根没有明细表——同一用户分享同一内容多次就是多次（见
+  ``service.forward_item``），没有可去重的自然键，也就没有能 ``COUNT(*)`` 的真相源。
+  与 ``view_count`` 同为「原子自增、无对账」的一类。
 
 跨模块只读：``bookmark_count`` 的明细在 interaction 域，故 import
 ``interaction.models``（已在 pyproject 契约中精确豁免）。

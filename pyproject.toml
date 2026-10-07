@@ -195,4 +195,5 @@ ignore_imports = [
     "app.modules.search.documents -> app.modules.files.models",  # 文件行 → 索引文档
     "app.modules.search.sync -> app.modules.files.models",  # 文件审核变更同步索引
     "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
+    "app.modules.content.service -> app.modules.admin.models",  # 用户举报写入 reports 表（后台举报队列）
 ]

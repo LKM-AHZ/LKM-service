@@ -4,6 +4,9 @@ import re
 import uuid
 from typing import Any
 
+from sqlalchemy import select
+
+from app.modules.admin.models import Report as AdminReport
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.boards.schemas import (
     BanRequest,
@@ -492,6 +495,70 @@ async def _assert_comment_in_item(
     )
 
 
+async def report_content(
+    db: DbSession,
+    user_id: uuid.UUID,
+    target_type: str,
+    target_id: uuid.UUID,
+    reason: str,
+) -> None:
+    """提交内容举报，落 admin 域的 ``reports`` 表（后台「举报」页据此审核）。
+
+    - ``target_title`` 由后端从内容行回填，**不接受前端传入**：审核队列要显示的是内容自己的
+      标题/正文摘录，客户端能随意伪造的话队列里只剩无意义字符串。
+    - 同一用户对同一目标的**待处理**举报只留一条：重复提交静默成功（不报错、也不重复入队），
+      否则一个人连点就能把队列刷满。
+    - 是否允许举报（只要求登录）由路由层决定，见 ``router.py`` 的说明。
+    """
+    if target_type == "post":
+        item = await ContentItemRepository(db).get_or_raise(
+            target_id, ContentErr.CONTENT_NOT_FOUND
+        )
+        title = item.title
+    elif target_type == "comment":
+        comment = await ContentCommentRepository(db).get_or_raise(
+            target_id, ContentErr.COMMENT_NOT_FOUND
+        )
+        title = comment.content
+    else:
+        raise BizError(ContentErr.UNSUPPORTED_TYPE)
+
+    already = await db.scalar(
+        select(AdminReport.id).where(
+            AdminReport.reporter_id == user_id,
+            AdminReport.type == target_type,
+            AdminReport.target_id == str(target_id),
+            AdminReport.status == "pending",
+        )
+    )
+    if already is not None:
+        return
+
+    names = await _author_map(db, [user_id])
+    db.add(
+        AdminReport(
+            type=target_type,
+            target_id=str(target_id),
+            target_title=title[:200],
+            reporter_id=user_id,
+            reporter_name=names.get(user_id, ""),
+            reason=reason[:500],
+            status="pending",
+        )
+    )
+    await db.flush()
+
+
+async def forward_item(db: DbSession, item_id: uuid.UUID) -> int:
+    """记一次转发（用户把内容链接带出去），返回新的 ``forward_count``。
+
+    与「浏览上报」相对：这里的动作是用户主动复制/分享链接，由前端在复制成功后才上报，
+    故不需要幂等去重——同一人分享多次就是多次；也**没有**明细表可对账
+    （见 ``counters.py`` 中与 ``view_count`` 并列的说明）。
+    """
+    return await ContentItemRepository(db).bump_forward_count(item_id)
+
+
 async def like_comment(
     db: DbSession, item_id: uuid.UUID, comment_id: uuid.UUID, user_id: uuid.UUID
 ) -> int:
@@ -499,8 +566,9 @@ async def like_comment(
 
     与 ``like_item`` 同款：先锁帖子行串行化同一帖下的并发互动，再查明细，重复请求不重复计数。
 
-    刻意**不发积分事件**（``like_item`` 会发 ``"like"``）：那会同时喂进统计/成就链路，让
-    「点赞评论」与「点赞帖子」混成同一指标。要不要计入属于积分策略，需产品侧确认后再加。
+    积分事件与帖子点赞同用 ``"like"``、靠 ref_id 前缀区分目标（``comment:{id}`` vs
+    ``item:{id}``）；积分入账按 ledger ref 幂等（见 points/tasks.py::apply_point_reward），
+    反复赞/取消不会重复发分。
     """
     await ContentItemRepository(db).lock_active(item_id)
     comment = await _assert_comment_in_item(db, item_id, comment_id)
@@ -510,6 +578,7 @@ async def like_comment(
         return comment.like_count
 
     await repo.create(comment_id=comment_id, user_id=user_id)
+    await enqueue_points_event(db, user_id, "like", f"comment:{comment_id}")
     return await bump_comment_like_count(db, comment_id, 1)
 
 

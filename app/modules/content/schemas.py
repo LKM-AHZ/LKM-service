@@ -83,6 +83,17 @@ class ContentCommentCreate(BaseModel):
     parent_id: uuid.UUID | None = Field(default=None)
 
 
+class ContentReportCreate(BaseModel):
+    """提交举报的入参。
+
+    ``target_title`` 刻意**不在入参里**：由后端从内容行回填，见 service.report_content。
+    """
+
+    target_type: str = Field(..., pattern="^(post|comment)$")
+    target_id: uuid.UUID
+    reason: str = Field(..., min_length=1, max_length=200)
+
+
 class ContentCommentInfo(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 

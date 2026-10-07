@@ -23,6 +23,7 @@ class Permission(StrEnum):
     content_create = "content.create"
     content_comment_create = "content.comment_create"
     content_like = "content.like"
+    content_forward = "content.forward"
     interaction_favorite = "interaction.favorite"
     interaction_history = "interaction.history"
     notification_read = "notification.read"
@@ -92,6 +93,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.files_upload),
@@ -108,6 +110,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.columns_publish),
@@ -125,6 +128,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.columns_publish),
@@ -143,6 +147,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.files_upload),
@@ -159,6 +164,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.boards_create_application),
         Grant(Permission.columns_application_create),
         Grant(Permission.files_upload),
@@ -179,6 +185,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.content_create),
         Grant(Permission.content_comment_create),
         Grant(Permission.content_like),
+        Grant(Permission.content_forward),
         Grant(Permission.files_upload),
         Grant(Permission.files_download),
         Grant(Permission.interaction_favorite),
