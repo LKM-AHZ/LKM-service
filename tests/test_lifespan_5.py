@@ -102,3 +102,25 @@ async def test_lifespan_does_not_wait_for_redis_connect(monkeypatch) -> None:
     async with asyncio.timeout(2):
         async with main_mod.lifespan(None):  # ty: ignore[invalid-argument-type]
             await connect_started.wait()
+
+
+async def test_lifespan_skips_auth_cleanup_when_auth_seam_enabled(monkeypatch) -> None:
+    """拆库部署（authz 缝启用）时主进程**不**起 passkey 清理 task。
+
+    拆库后 auth 库归 AUTH 进程（``auth/db/session.py`` 的「进程=库边界」明写主进程永不实例化
+    该库），主进程起这条只会每 5 分钟刷一条 ConnectionRefusedError 且从未真正清理过——
+    清理改由 ``auth.main`` 承担。其余启动步骤不受影响。
+    """
+    calls = _patch_common(monkeypatch)
+
+    async def _fake_init_db() -> None:
+        calls.append("init_db")
+
+    monkeypatch.setattr(main_mod, "init_db", _fake_init_db)
+    monkeypatch.setattr(main_mod, "seam_enabled", lambda: True)
+
+    async with main_mod.lifespan(None):  # ty: ignore[invalid-argument-type]
+        await asyncio.sleep(0)
+
+    assert "init_db" in calls  # 其余启动步骤照常
+    assert "cleanup_start" not in calls  # 清理不归主进程

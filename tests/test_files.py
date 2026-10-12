@@ -389,6 +389,15 @@ class TestFilesRoutes:
             },
         )
 
+    async def _approve(self, db: AsyncSession, file_id: str) -> None:
+        """把上传产物置为已审核。
+
+        上传落 ``PENDING``，而列表/详情/下载这些公开读面走 ``enforce_visibility=True``，
+        只认 ``APPROVED``（审核流见 ``TestFilesDedupAndReview`` / ``TestFilesPhase2A``）；
+        要断言"公开可见"就必须先过审。
+        """
+        await review_file(db, uuid.UUID(file_id), FileStatus.APPROVED, is_admin=True)
+
     async def should_reject_upload_without_auth(
         self,
         client: Any,
@@ -439,7 +448,8 @@ class TestFilesRoutes:
     ):
         monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
         uploader = await self._mk_user(db, auth_db, upload=True)
-        await self._upload(client, uploader, original_name="公开资料.zip")
+        created = (await self._upload(client, uploader, original_name="公开资料.zip")).json()
+        await self._approve(db, created["data"]["id"])
 
         resp = await client.get("/api/v1/files")
 
@@ -462,6 +472,7 @@ class TestFilesRoutes:
         uploader = await self._mk_user(db, auth_db, upload=True)
         created = (await self._upload(client, uploader)).json()["data"]
         file_id = created["id"]
+        await self._approve(db, file_id)
 
         resp = await client.get(f"/api/v1/files/{file_id}")
 
@@ -481,6 +492,7 @@ class TestFilesRoutes:
         uploader = await self._mk_user(db, auth_db, download=True, upload=True)
         created = (await self._upload(client, uploader)).json()["data"]
         file_id = created["id"]
+        await self._approve(db, file_id)
 
         resp = await client.post(
             f"/api/v1/files/{file_id}/download",

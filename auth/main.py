@@ -51,6 +51,7 @@ from auth import (
 )
 from auth.db.init import init_auth_db
 from auth.db.session import dispose_auth_engine
+from auth.service_passkey import cleanup_expired_challenges
 from core import logging as app_logging
 from core import metrics_relay
 from core import redis as redis_client
@@ -133,6 +134,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     app_logging.setup_logging()
     init_sentry()
     init_db_task = asyncio.create_task(_startup_preheat_bloom())
+    # passkey 挑战码周期清理：本进程是 auth 库的宿主（「进程=库边界」），拆库部署下这条只能由
+    # 这里承担——主进程没有 auth 库连接（起不来，见 app.main.lifespan 的 seam 判断）。融合
+    # 部署（无独立 AUTH 进程）仍由 app.main 起，两者按 authz 缝开关互斥，不会重复跑。
+    cleanup_task = asyncio.create_task(cleanup_expired_challenges())
     # 跨进程指标中继（选项③）：本进程写 user_snap_cache_total / user_snap_singleflight_total /
     # notify_failed_total，且刻意不挂 /metrics（见 create_auth_app 说明）——快照交给 API 进程代报。
     metrics_relay.start_publisher()
@@ -147,6 +152,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             pass
         except Exception:
             logger.exception("auth schema init task failed during shutdown")
+        # 同 init_db_task：不取消会在下面 dispose_auth_engine 之后继续用已释放的连接池。
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("passkey cleanup task failed during shutdown")
         await metrics_relay.stop_publisher()
         # 退出清理：dispose 引擎(auth 专属 + 既有业务引擎) / close redis，不泄漏连接
         shutdown_tracing()

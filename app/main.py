@@ -40,7 +40,7 @@ from core.metrics import setup_metrics
 from core.metrics_relay import start_reporter as start_metrics_relay_reporter
 from core.metrics_relay import stop_reporter as stop_metrics_relay_reporter
 from core.middleware import GraphQLHTTPMiddleware, install_security_middleware
-from core.ports.authz import get_optional_user
+from core.ports.authz import get_optional_user, seam_enabled
 from core.ports.verify_keys import (
     cleanup_expired_challenges,
     start_verify_key_refresh,
@@ -113,7 +113,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     await start_verify_key_refresh()
 
-    cleanup_task = asyncio.create_task(cleanup_expired_challenges())
+    # passkey 挑战码清理只在「本进程就是 auth 库宿主」时起。拆库部署（authz 缝启用、auth 独立
+    # 进程持库）下主进程既连不上也无权直连 auth 库（`auth/db/session.py` 明写「monolith 主进程
+    # 永不实例化本模块」），此前该 task 每 5 分钟以 ConnectionRefusedError 刷一条 ERROR 且从未
+    # 真正清理过任何东西。拆库态的清理归 ``auth.main``（见其 lifespan）。
+    cleanup_task = (
+        None if seam_enabled() else asyncio.create_task(cleanup_expired_challenges())
+    )
 
     # 可观测（M4）：所选消息总线订阅 lag 周期上报（未配置则 no-op）
     start_lag_reporter()
@@ -122,14 +128,15 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        # 清理异常只记日志，继续释放其他资源。
-        request_logger.exception("background cleanup task failed during shutdown")
+    if cleanup_task is not None:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # 清理异常只记日志，继续释放其他资源。
+            request_logger.exception("background cleanup task failed during shutdown")
 
     # 关闭前取消 schema 初始化任务。
     init_db_task.cancel()

@@ -1,8 +1,9 @@
 """跨 auth/业务域共享的 RBAC 角色层级与职责分离规则。"""
 
 import json
-import os
 from dataclasses import dataclass
+
+from core.config import settings
 
 KNOWN_ROLES = frozenset(
     {
@@ -34,9 +35,12 @@ class SeparationConstraint:
     max_roles: int
 
 
-def _load_constraints(name: str) -> tuple[SeparationConstraint, ...]:
-    """Load deployment policy from a JSON array of {roles,max_roles} objects."""
-    raw = os.getenv(name, "[]")
+def _load_constraints(name: str, raw: str) -> tuple[SeparationConstraint, ...]:
+    """Load deployment policy from a JSON array of {roles,max_roles} objects.
+
+    ``raw`` 来自 ``settings.rbac_{ssd,dsd}_constraints``（配置收口到 Settings，见
+    ``tests/test_env_single_source.py``）；``name`` 只用于报错文案，保持与 env 名一致。
+    """
     try:
         items = json.loads(raw)
         if not isinstance(items, list):
@@ -65,8 +69,12 @@ def _load_constraints(name: str) -> tuple[SeparationConstraint, ...]:
 
 # Existing business roles do not express conflicting duties, so the default policy
 # is empty. Operators can declare actual conflicts identically in auth deployments.
-SSD_CONSTRAINTS = _load_constraints("LKM_RBAC_SSD_CONSTRAINTS")
-DSD_CONSTRAINTS = _load_constraints("LKM_RBAC_DSD_CONSTRAINTS")
+SSD_CONSTRAINTS = _load_constraints(
+    "LKM_RBAC_SSD_CONSTRAINTS", settings.rbac_ssd_constraints
+)
+DSD_CONSTRAINTS = _load_constraints(
+    "LKM_RBAC_DSD_CONSTRAINTS", settings.rbac_dsd_constraints
+)
 
 
 def _validate_hierarchy() -> None:

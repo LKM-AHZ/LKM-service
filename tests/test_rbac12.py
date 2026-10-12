@@ -17,7 +17,7 @@ from app.modules.rbac.service import user_has_permission
 from auth.deps import CurrentUser as AuthCurrentUser
 from auth.repository import UserRoleRepository
 from auth.router import _ActivateRolesRequest, activate_roles
-from auth.service_auth import refresh_access_token
+from auth.service_auth import hash_refresh_token, refresh_access_token
 from auth.service_authz import CAUSE_SESSION_REVOKED, authorize_user
 from auth.service_roles import list_users_for_role, set_user_role
 from core.contracts import CurrentUser
@@ -253,16 +253,26 @@ async def test_authz_returns_explicit_empty_session(monkeypatch) -> None:
 
 
 async def test_role_activation_binds_refresh_session(monkeypatch) -> None:
-    stored = SimpleNamespace(active_roles=None)
+    # expires_at 必填：新签的 access 不许活过它所属的 refresh 会话（session_expires_at）。
+    stored = SimpleNamespace(
+        active_roles=None,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1),
+    )
     db = SimpleNamespace(scalar=AsyncMock(return_value=stored))
     monkeypatch.setattr(
         UserRoleRepository,
         "list_roles",
         AsyncMock(return_value=["admin:content_reviewer"]),
     )
+    # access 令牌须带与 refresh 同源的 rt_hash：激活会校验「access 与 refresh 属同一会话」，
+    # 否则拿到别人的 access 就能替他换角色（2268aaa 起）。
     monkeypatch.setattr(
         "auth.router.decode_access_token",
-        lambda _: {"token_version": 3, "mfa": False},
+        lambda _: {
+            "token_version": 3,
+            "mfa": False,
+            "rt_hash": hash_refresh_token("refresh-secret"),
+        },
     )
     mint = Mock(return_value="scoped-token")
     monkeypatch.setattr("auth.router.create_access_token", mint)
@@ -278,6 +288,10 @@ async def test_role_activation_binds_refresh_session(monkeypatch) -> None:
     assert result == {"access_token": "scoped-token"}
     assert stored.active_roles == ["admin:content_reviewer"]
     assert mint.call_args.kwargs["active_roles"] == ("admin:content_reviewer",)
+    # 新令牌的寿命钉在 refresh 会话上，激活角色不能把会话续命
+    assert mint.call_args.kwargs["session_expires_at"] == int(
+        stored.expires_at.timestamp()
+    )
 
 
 async def test_refresh_preserves_selected_roles(monkeypatch) -> None:
@@ -293,9 +307,14 @@ async def test_refresh_preserves_selected_roles(monkeypatch) -> None:
     monkeypatch.setattr(
         "auth.service_auth.get_or_raise", AsyncMock(return_value=stored)
     )
+    # 挂起的账户在换令牌前就被拒（8e0dfa5 起），替身须带上这两个字段。
     monkeypatch.setattr(
         "auth.service_auth.UserRepository.get_with_profile_or_raise",
-        AsyncMock(return_value=SimpleNamespace(id=user_id)),
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id=user_id, is_locked=False, locked_until=None
+            )
+        ),
     )
     issue = AsyncMock(return_value=("new-access", "new-refresh"))
     monkeypatch.setattr("auth.service_auth.issue_session_tokens", issue)

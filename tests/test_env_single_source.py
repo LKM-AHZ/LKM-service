@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _PACKAGES = ("app", "auth", "boot", "core", "scripts", "loadtest")
 #: 允许出现 ``os.environ`` 的文件（理由见模块 docstring）。
 _ALLOWED_ENVIRON_FILES = {
@@ -69,6 +71,34 @@ def test_os_environ_only_in_allowlisted_files() -> None:
         "os.environ 只允许出现在本测试允许清单内的文件（理由见 docstring）。"
         f"命中：{offenders}"
     )
+
+
+def test_rbac_constraints_come_from_settings(monkeypatch) -> None:
+    """RBAC 职责分离策略经 Settings 收口（env 名不变），非法配置仍拒绝启动。
+
+    门禁禁止 ``os.getenv``，故策略从 ``settings.rbac_{ssd,dsd}_constraints`` 取；本用例证明
+    ``LKM_RBAC_SSD_CONSTRAINTS`` → 字段 → 解析这条链是通的，且畸形输入仍抛 ValueError。
+    """
+    from core import rbac_roles
+    from core.config import Settings
+
+    monkeypatch.setenv(
+        "LKM_RBAC_SSD_CONSTRAINTS",
+        '[{"roles":["admin:content_reviewer","admin:content_publisher"],"max_roles":1}]',
+    )
+    fresh = Settings()
+    assert rbac_roles._load_constraints(
+        "LKM_RBAC_SSD_CONSTRAINTS", fresh.rbac_ssd_constraints
+    ) == (
+        rbac_roles.SeparationConstraint(
+            frozenset({"admin:content_reviewer", "admin:content_publisher"}), 1
+        ),
+    )
+    assert fresh.rbac_dsd_constraints == "[]"  # 未设 env → 默认空策略
+
+    for bad in ("not-json", '[{"roles":["admin:super_admin"],"max_roles":1}]'):
+        with pytest.raises(ValueError):
+            rbac_roles._load_constraints("LKM_RBAC_SSD_CONSTRAINTS", bad)
 
 
 def test_settings_expose_the_collected_fields() -> None:

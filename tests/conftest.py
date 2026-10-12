@@ -166,6 +166,25 @@ def _reset_local_caches() -> Iterator[None]:
     _singleflight.reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_message_bus_shutdown() -> Iterator[None]:
+    """每测解除消息总线的「终态关闭」标记。
+
+    ``app.main.lifespan`` 的收尾会调 ``messaging.shutdown()``（终态，生产语义正确），把进程级
+    ``_closed`` 永久置真——此后同 worker 里任何 ``publish`` 都被丢弃。跑过 lifespan 的用例
+    （``tests/test_lifespan_5.py``）因此会带崩落在同一 worker 的用例（如
+    ``test_rabbitmq::test_publish_selects_rabbitmq``，且失败随 ``-n`` 的分配漂移，很难定位）。
+
+    ``shutdown()``/``_release_resources()`` 已经把 client、producer 缓存与 transport 全部释放，
+    故这里只需复位标记：模块回到「未初始化、首次使用时惰性重建」的状态。
+    """
+    from core import messaging
+
+    messaging._closed = False
+    yield
+    messaging._closed = False
+
+
 # ───────────────────────────────────────────────────────────────────────
 # database-per-test：模板库 + 文件级克隆
 #

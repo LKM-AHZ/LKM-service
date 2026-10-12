@@ -362,7 +362,7 @@ class TestBlogProfileInfoBlankPreservedFromSeam:
         )
         assert comment.profile is not None
         assert comment.profile.nickname == "写手昵称"   # 设置即逐字照搬
-        assert comment.profile.role.value == "member"
+        assert comment.profile.role == "member"  # profiles.role 是 String 列，非枚举
 
 
 # ---- comments ----

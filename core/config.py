@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
+    # RBAC2 静态/动态职责分离策略：JSON 数组字符串（默认空 = 不限制）。
+    # 解析与校验在 ``core.rbac_roles``（非法配置在 import 期抛 ValueError → 服务拒绝启动）。
+    # 字段名 + ``env_prefix=LKM_`` 即 env 名，与 README 记载的部署契约一字不差。
+    rbac_ssd_constraints: str = "[]"
+    rbac_dsd_constraints: str = "[]"
+
     # 后台 cookie 会话：access cookie 存活分钟（refresh 天数复用 refresh_token_expire_days）
     admin_access_cookie_minutes: int = 15
     # 一次性运维脚本与压测入口也统一走 Settings；敏感值不进入 repr。

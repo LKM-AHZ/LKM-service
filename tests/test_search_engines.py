@@ -134,7 +134,9 @@ async def test_engine_failure_falls_back_to_pg(
     monkeypatch.setattr(search_service, "get_engine", lambda: engine)
     before = search_engine_fallback_total.labels("fake")._value.get()
 
-    page = await search_service.search_items(db, "费马大定理")
+    # 必须带 content_type：content_type 为空时检索面**直接走 PG**（文件库要按 DB 审核/密级
+    # 实时过滤，外索引滞后不得绕过），压根不碰引擎，也就谈不上回落（f885cd3 起）。
+    page = await search_service.search_items(db, "费马大定理", content_type="discussion")
 
     assert page.total == 1  # 结果来自 PG 兜底
     after = search_engine_fallback_total.labels("fake")._value.get()

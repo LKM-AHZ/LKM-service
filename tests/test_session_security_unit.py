@@ -117,6 +117,8 @@ async def test_admin_refresh_keeps_expiry_without_reinstating_missing_mfa_time(
 ):
     stored = _stored_token()
     stored.mfa_verified = True  # Legacy row written without its verification time.
+    # profile=None：本用例的 Db.refresh 是空替身，故直接把关系摆成「无档案」的终态，
+    # 这也是 _admin_user_dict 回落 "member" 的那条分支（6d2cc88）。
     user = SimpleNamespace(
         id=stored.user_id,
         username="admin",
@@ -124,6 +126,7 @@ async def test_admin_refresh_keeps_expiry_without_reinstating_missing_mfa_time(
         created_at=None,
         is_locked=False,
         locked_until=None,
+        profile=None,
     )
     inserted = []
     signed = {}
@@ -131,6 +134,10 @@ async def test_admin_refresh_keeps_expiry_without_reinstating_missing_mfa_time(
     class Db:
         def add(self, row):
             inserted.append(row)
+
+        async def refresh(self, obj, attribute_names=None):
+            # 生产在异步会话里显式预载 profile（6d2cc88），避免 _admin_user_dict 触懒加载。
+            pass
 
         async def commit(self):
             pass
@@ -166,8 +173,14 @@ async def test_admin_refresh_keeps_expiry_without_reinstating_missing_mfa_time(
 
 @pytest.mark.asyncio
 async def test_admin_stepup_persists_verification_time(monkeypatch):
+    # profile=None：_admin_user_dict 读 user.profile 回落 "member"（6d2cc88）；生产里该关系
+    # 由 _active_cookie_roles 的 db.refresh 预载，本用例把那个依赖整个 patch 掉了。
     user = SimpleNamespace(
-        id=uuid.uuid4(), username="admin", account_level="admin", created_at=None
+        id=uuid.uuid4(),
+        username="admin",
+        account_level="admin",
+        created_at=None,
+        profile=None,
     )
     stored = SimpleNamespace(
         mfa_verified=False,

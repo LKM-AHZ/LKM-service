@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
@@ -156,8 +157,20 @@ class TestRefreshFromJwks:
         assert await jk.refresh_public_key_from_jwks() is True
         assert jk.verification_status() == "ok"
 
-        token = jwt.encode({"sub": "u1", "aud": _AUD}, private, algorithm="RS256")
+        # decode 强制要求 aud/exp/iat（缺一即 MissingRequiredClaimError）——签一枚与真实
+        # 签发同形的令牌，证明拉来的公钥真能验真令牌。
+        now = int(time.time())
+        token = jwt.encode(
+            {"sub": "u1", "aud": _AUD, "iat": now, "exp": now + 60},
+            private,
+            algorithm="RS256",
+        )
         assert jk.decode(token, audience=_AUD)["sub"] == "u1"
+
+        # 反向：缺 exp 的令牌必须被拒（不能因为「验签过了」就放行）
+        incomplete = jwt.encode({"sub": "u1", "aud": _AUD}, private, algorithm="RS256")
+        with pytest.raises(jwt.MissingRequiredClaimError):
+            jk.decode(incomplete, audience=_AUD)
 
     async def should_return_false_on_non_200(self, monkeypatch) -> None:
         monkeypatch.setattr(settings, "auth_http_url", "http://auth:8001")
