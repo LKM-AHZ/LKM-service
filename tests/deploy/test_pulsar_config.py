@@ -181,14 +181,22 @@ def test_app_services_select_broker_without_fixed_pulsar_dependency(compose: dic
     assert configured >= 10
 
 
-def test_rabbitmq_override_switches_every_bus_client(compose: dict) -> None:
-    override = yaml.safe_load((_ROOT / "docker-compose.rabbitmq.yml").read_text())
-    assert "pulsar" in override["services"]
-    assert override["services"]["pulsar"]["profiles"] == ["pulsar"]
-    assert "rabbitmq" in override["services"]
-    for name, svc in compose["services"].items():
-        if "LKM_PULSAR_URL" not in (svc.get("environment") or {}):
+def test_merged_compose_defaults_to_rabbitmq(compose: dict) -> None:
+    """两份 compose 已合并成单文件：默认 RabbitMQ，Pulsar 仅 `--profile pulsar` 启用。
+
+    覆盖文件删除后，若有人把 RabbitMQ 服务挪到 profile 后面、或把默认值改回 pulsar，
+    单文件部署会静默跑错总线，故在这里钉住默认语义。
+    """
+    services = compose["services"]
+    assert "rabbitmq" in services
+    assert "profiles" not in services["rabbitmq"], "RabbitMQ 是默认总线，不能挂在 profile 下"
+    assert services["pulsar"]["profiles"] == ["pulsar"]
+    configured = 0
+    for name, svc in services.items():
+        env = svc.get("environment") or {}
+        if "LKM_PULSAR_URL" not in env:
             continue
-        env = override["services"][name]["environment"]
-        assert env["LKM_MESSAGE_BUS"] == "rabbitmq", name
+        configured += 1
+        assert "rabbitmq" in env["LKM_MESSAGE_BUS"], name
         assert "LKM_RABBITMQ_URL" in env, name
+    assert configured >= 10
