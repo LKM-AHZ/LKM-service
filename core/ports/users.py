@@ -120,5 +120,33 @@ async def grant_incubation_from_business(db: Any, applicant_id: uuid.UUID) -> No
     await get("users").grant_incubation_from_business(db, applicant_id)
 
 
+async def list_admin_ids(db: Any) -> list[uuid.UUID]:
+    """管理员 user id 列表（每日待办摘要收件人）；auth 域权威，业务库无 users。"""
+    return await get("users").list_admin_ids(db)
+
+
+async def list_admission_users(db: Any, status: str) -> list[dict[str, Any]]:
+    """按准入状态列用户（后台审核页）；auth 域权威。"""
+    return await get("users").list_admission_users(db, status)
+
+
+async def decide_admission(
+    db: Any,
+    *,
+    user_id: uuid.UUID,
+    action: str,
+    reviewer_id: uuid.UUID,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """approve/reject 一个待审账号（auth 域权威写，含会话撤销与审计）。"""
+    return await get("users").decide_admission(
+        db,
+        user_id=user_id,
+        action=action,
+        reviewer_id=reviewer_id,
+        reason=reason,
+    )
+
+
 #: 供实现方参考的回调类型别名（测试桩可用普通函数替代）。
 SessionPairRunner = Callable[[Any, Any], Awaitable[int]]

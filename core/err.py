@@ -271,6 +271,8 @@ class AuthErr(ErrCode):
     AVATAR_NOT_FOUND = NS_AUTH.err(27)
     EMAIL_TAKEN = NS_AUTH.err(28)
     USERNAME_TAKEN = NS_AUTH.err(29)
+    ADMISSION_PENDING = NS_AUTH.err(30)
+    ADMISSION_REJECTED = NS_AUTH.err(31)
 
 
 register(
@@ -310,6 +312,8 @@ register(
         AuthErr.AVATAR_NOT_FOUND: (404, "Avatar not found"),
         AuthErr.EMAIL_TAKEN: (409, "Email already taken"),
         AuthErr.USERNAME_TAKEN: (409, "Username already taken"),
+        AuthErr.ADMISSION_PENDING: (403, "Registration pending admin approval"),
+        AuthErr.ADMISSION_REJECTED: (403, "Registration was rejected"),
     }
 )
 

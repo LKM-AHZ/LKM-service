@@ -1,6 +1,6 @@
 import datetime
 import uuid
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,6 +55,42 @@ class AdminStats(BaseModel):
     post_count: int
     file_count: int
     file_pending_count: int
+
+
+class AdminReviewQueueItem(BaseModel):
+    """单个待办队列：数量 + 最旧一条的等待时长（秒）+ 审核页深链。"""
+
+    key: str
+    count: int
+    oldest_waiting_seconds: int | None = None
+    # 暂无后台审核页的队列为 None（避免前端链到 404）
+    href: str | None = None
+
+
+class AdminReviewSummary(BaseModel):
+    """后台待办审核聚合（dashboard 卡片与每日摘要共用）。"""
+
+    total_pending: int
+    queues: list[AdminReviewQueueItem]
+
+
+class AdmissionUserItem(BaseModel):
+    """准入审核行（auth 权威侧投影；时间已是 ISO 字符串）。"""
+
+    user_id: str
+    username: str
+    email: str | None = None
+    account_level: str
+    admission_status: str
+    apply_reason: str | None = None
+    applied_at: str | None = None
+    reviewed_at: str | None = None
+    reject_reason: str | None = None
+
+
+class AdmissionDecisionIn(BaseModel):
+    action: Literal["approve", "reject"]
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class AdminReportListItem(BaseModel):

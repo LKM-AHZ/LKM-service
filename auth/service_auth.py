@@ -9,6 +9,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from auth import events
 from auth.account_state import clear_expired_lock, lock_is_active
+from auth.admission import (
+    admission_is_active,
+    admission_status_of,
+    assert_admission_allowed,
+)
 from auth.channels import CHANNELS, channel_for
 from auth.errors import AuthErr
 from auth.models import (
@@ -130,9 +135,10 @@ async def issue_session_tokens(
     并同步写入刷新记录，供 1 小时信任窗口与刷新轮换继承使用。
 
     这是**所有会话令牌签发**的唯一汇合点（登录、注册、2FA 完成、step-up、refresh），
-    因此账号锁定门禁也放在这里：任何入口漏检都不会给被锁账号发 token。
+    因此锁定与准入门禁也放在这里：任何入口漏检都不会给被锁/待审账号发 token。
     """
     await _check_account_locked(user)
+    assert_admission_allowed(user)
     if "profile" not in user.__dict__:
         await db.refresh(user, attribute_names=["profile"])
     profile = user.profile
@@ -183,9 +189,11 @@ async def _create_auth_response(
 ) -> dict[str, Any]:
     """构建作为登录 / 注册响应返回的字典。
 
-    锁定门禁先于 ``requires_2fa`` 分支：被锁账号连临时 2FA token 也不该拿到。
+    锁定与准入门禁先于 ``requires_2fa`` 分支：被锁/待审/被拒账号连临时 token 也不该拿到。
+    注册场景请走 :func:`build_registration_response`（pending 账号返回待审信封而非报错）。
     """
     await _check_account_locked(user)
+    assert_admission_allowed(user)
     if requires_2fa:
         temp_token = create_temp_token(user.id)
         return {
@@ -206,6 +214,25 @@ async def _create_auth_response(
         "requires_2fa": False,
         "temp_token": None,
     }
+
+
+async def build_registration_response(db: DbSession, user: User) -> dict[str, Any]:
+    """注册完成响应：apply 模式下 pending 账号不发令牌，返回待审信封。
+
+    只给**新建账号**的注册路径用；已有账号的自动登录仍走 ``_create_auth_response``
+    （pending/rejected 会以 ADMISSION_* 明确拒绝）。
+    """
+    if not admission_is_active(user):
+        return {
+            "access_token": None,
+            "refresh_token": None,
+            "user_id": user.id,
+            "account_level": str(user.account_level),
+            "requires_2fa": False,
+            "temp_token": None,
+            "admission_status": admission_status_of(user),
+        }
+    return await _create_auth_response(db, user)
 
 
 async def _check_account_locked(user: User) -> None:
@@ -256,6 +283,10 @@ async def ensure_unique_username(db: DbSession, base: str) -> str:
 async def create_user_with_profile(db: DbSession, **fields: Any) -> User:
     """创建用户 + 默认 Profile；唯一性冲突统一转 ALREADY_REGISTERED。"""
     user = User(**fields)
+    # apply 模式：所有自注册账号（密码/验证码/OAuth）先落 pending，管理员通过后才可登录。
+    if settings.admission_mode == "apply":
+        user.admission_status = "pending"
+        user.applied_at = now_iso()
     db.add(user)
     try:
         await UserRepository(db).flush()
@@ -282,7 +313,7 @@ async def register_local(db: DbSession, info: UserRegLocal) -> dict[str, Any]:
         account_level="local",
     )
 
-    return await _create_auth_response(db, user)
+    return await build_registration_response(db, user)
 
 
 def handle_duplicate_user_error(exc: Exception) -> None:
@@ -351,7 +382,7 @@ async def register_by_verify(db: DbSession, field: str, value: str) -> dict[str,
     )
 
     await log_audit(db, user.id, "register_code", f"registered via {field}")
-    return await _create_auth_response(db, user)
+    return await build_registration_response(db, user)
 
 
 async def store_pending_normal_registration(
@@ -445,7 +476,7 @@ async def consume_pending_normal_registration(
     )
 
     await log_audit(db, user.id, "register_normal", "password registration complete")
-    return await _create_auth_response(db, user)
+    return await build_registration_response(db, user)
 
 
 async def _check_admin_totp_required(
@@ -470,13 +501,14 @@ async def _check_admin_totp_required(
 
 
 async def finalize_auth_response(db: DbSession, user: User) -> dict[str, Any]:
-    """检查账号锁定、管理员 TOTP 和 2FA 要求，返回认证响应。
+    """检查账号锁定、准入状态、管理员 TOTP 和 2FA 要求，返回认证响应。
 
-    所有发令牌入口（密码 / 验证码 / 注册自动登录 / OAuth / passkey）都汇到这里，故锁定
-    门禁放在最前：新增入口即使忘了自查，也不会给被锁账号签发 token（passkey 曾漏掉）。
-    登录路径已先行检查过，这里对未锁定用户是幂等的。
+    所有发令牌入口（密码 / 验证码 / 注册自动登录 / OAuth / passkey / magic link）都汇到
+    这里，故锁定与准入门禁放在最前：新增入口即使忘了自查，也不会给被锁/待审账号签发
+    token（passkey 曾漏掉锁定检查）。登录路径已先行检查过，这里对 active 用户是幂等的。
     """
     await _check_account_locked(user)
+    assert_admission_allowed(user)
     admin_setup = await _check_admin_totp_required(db, user)
     if admin_setup is not None:
         return admin_setup
@@ -524,6 +556,9 @@ async def login_password(
         await events.notify_audit_login_fail(user.id, "password_mismatch", ip_address)
         raise BizError(AuthErr.INVALID_CREDENTIALS)
 
+    # 准入在验密成功后判：pending/rejected 给出明确原因，且不在验密前泄露账号状态。
+    assert_admission_allowed(user)
+
     await isolated_update(db, UserRepository(db).reset_login_failures_stmt(user.id))
     await db.refresh(user)
 
@@ -556,6 +591,9 @@ async def login_code(db: DbSession, contact: str, code: str) -> dict[str, Any]:
     if was_locked:
         # 走到这里说明上面的过期锁已被自动解除（仍锁定会直接抛），发失效让快照跟上
         await events.notify_user_updated(user.id)
+
+    # 验证码已消费（凭证通过）后再判准入，理由同 login_password。
+    assert_admission_allowed(user)
 
     # 没有 TOTP 的管理员 —— 与密码登录相同的设置流程
     return await finalize_auth_response(db, user)
@@ -712,6 +750,10 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
         stored.user_id, AuthErr.USER_NOT_FOUND
     )
     if lock_is_active(user):
+        raise BizError(AuthErr.ACCOUNT_LOCKED)
+    # 准入已非 active（如审核后被置 rejected）：旧 refresh 会话一律拒，
+    # 与 decide_admission 的 token_version+revoke 形成双保险。
+    if not admission_is_active(user):
         raise BizError(AuthErr.ACCOUNT_LOCKED)
 
     try:

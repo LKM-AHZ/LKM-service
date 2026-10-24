@@ -1,10 +1,12 @@
 import datetime as _dt
 import json
+import math
 import re
 import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.admin.models import Report as AdminReport
 from app.modules.content.boards.errors import BoardErr
@@ -97,7 +99,7 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.config import settings
 from core.db.base import now_iso
 from core.db.repository import DbSession
-from core.err import BizError
+from core.err import BizError, ErrCode
 from core.metrics import post_created_total
 from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _author_map
@@ -771,15 +773,55 @@ def get_column_plan() -> dict[str, Any]:
     }
 
 
+# 申请被拒后的重申请冷却窗口（文档口径 24h）。按被拒行的 reviewed_at 计算，
+# 不另存 last_rejected_at——reviewed_at 在驳回时已必填。
+APPLICATION_COOLDOWN = _dt.timedelta(hours=24)
+
+
+def _assert_reapply_allowed(
+    reviewed_at: _dt.datetime | None,
+    errcode: ErrCode,
+    now: _dt.datetime,
+) -> None:
+    """被拒后 24h 冷却：未到期抛 429 并带 ``Retry-After``（秒）。"""
+    if reviewed_at is None:
+        return
+    until = reviewed_at + APPLICATION_COOLDOWN
+    if until <= now:
+        return
+    retry_after = max(1, math.ceil((until - now).total_seconds()))
+    hours = max(1, math.ceil(retry_after / 3600))
+    raise BizError(
+        errcode,
+        f"上次申请被拒，约 {hours} 小时后可重新申请",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 async def create_application(
     db: DbSession, user_id: uuid.UUID, info: ColumnApplicationCreate
 ) -> ColumnApplicationInfo:
-    app = await ColumnApplicationRepository(db).create(
-        user_id=user_id,
-        title=info.title,
-        description=info.description,
-        reason=info.reason,
-    )
+    """提交专栏申请：同一用户仅一条 pending，被拒后 24h 冷却。"""
+    repo = ColumnApplicationRepository(db)
+    now = now_iso()
+    if await repo.has_pending(user_id):
+        raise BizError(ColumnErr.APPLICATION_PENDING_EXISTS)
+    latest = await repo.latest_rejected(user_id)
+    if latest is not None:
+        _assert_reapply_allowed(
+            latest.reviewed_at, ColumnErr.APPLICATION_COOLDOWN, now
+        )
+    try:
+        # 唯一索引兜底并发双提交：只回滚这一条插入，不污染调用方事务。
+        async with db.begin_nested():
+            app = await repo.create(
+                user_id=user_id,
+                title=info.title,
+                description=info.description,
+                reason=info.reason,
+            )
+    except IntegrityError:
+        raise BizError(ColumnErr.APPLICATION_PENDING_EXISTS) from None
     return ColumnApplicationInfo.model_validate(app)
 
 
@@ -1068,18 +1110,32 @@ def _assert_owner(
 async def submit_application(
     db: DbSession, applicant_id: uuid.UUID, info: BoardApplicationCreate
 ) -> BoardApplicationOut:
-    if await BoardApplicationRepository(db).slug_taken(info.slug):
+    """提交板块申请：同一 slug 同一条待审，被拒后释放 slug 并冷却 24h。"""
+    repo = BoardApplicationRepository(db)
+    if await repo.has_pending(applicant_id, info.slug):
+        raise BizError(BoardErr.APPLICATION_PENDING_EXISTS)
+    if await repo.slug_taken(info.slug):
         raise BizError(BoardErr.SLUG_CONFLICT)
     if await BoardRepository(db).slug_taken(info.slug):
         raise BizError(BoardErr.SLUG_CONFLICT)
-    app_ = await BoardApplicationRepository(db).create(
-        applicant_id=applicant_id,
-        title=info.title,
-        description=info.description,
-        reason=info.reason,
-        slug=info.slug,
-        status="pending",
-    )
+    latest = await repo.latest_rejected(applicant_id, info.slug)
+    if latest is not None:
+        _assert_reapply_allowed(
+            latest.reviewed_at, BoardErr.APPLICATION_COOLDOWN, now_iso()
+        )
+    try:
+        async with db.begin_nested():
+            app_ = await repo.create(
+                applicant_id=applicant_id,
+                title=info.title,
+                description=info.description,
+                reason=info.reason,
+                slug=info.slug,
+                status="pending",
+            )
+    except IntegrityError:
+        # 并发下撞 uq_board_applications_slug_active：slug 仍被非被拒申请占用
+        raise BizError(BoardErr.SLUG_CONFLICT) from None
     return _bb_application_to_schema(app_)
 
 

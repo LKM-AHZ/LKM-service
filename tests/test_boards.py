@@ -10,6 +10,7 @@ autouse fixture 统一启用 ``auth_seam_realm``。
 真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
+import datetime as dt
 import json
 
 import pytest
@@ -37,8 +38,9 @@ from app.modules.content.boards.service import (
     unban_user,
     update_board_ex,
 )
-from app.modules.content.models import Board
+from app.modules.content.models import Board, BoardApplication
 from auth.models import AuditLog
+from core.db.base import now_iso
 from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
@@ -124,6 +126,116 @@ class TestBoardService:
 
         assert {row.id for row in rows} == {first.id, second.id}
         assert {row.status for row in rows} == {"pending"}
+
+    async def test_duplicate_pending_slug_rejected(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        applicant = (await _au(auth_db, "dup_slug")).id
+        payload = BoardApplicationCreate(
+            title="A", description="d", reason="r", slug="dup-slug"
+        )
+        await submit_application(db, applicant, payload)
+
+        with pytest.raises(BizError) as exc:
+            await submit_application(db, applicant, payload)
+
+        assert exc.value.errcode == BoardErr.APPLICATION_PENDING_EXISTS
+
+    async def test_rejected_slug_released_but_cooldown_enforced(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        applicant = (await _au(auth_db, "rej_slug")).id
+        reviewer = (await _au(auth_db, "rv_slug", account_level="admin")).id
+        app = await submit_application(
+            db,
+            applicant,
+            BoardApplicationCreate(
+                title="A", description="d", reason="r", slug="free-slug"
+            ),
+        )
+        await review_application(
+            db,
+            app.id,
+            reviewer,
+            ReviewBoardApplicationRequest(approve=False, note="暂不符合"),
+        )
+
+        with pytest.raises(BizError) as exc:
+            await submit_application(
+                db,
+                applicant,
+                BoardApplicationCreate(
+                    title="A2", description="d", reason="r", slug="free-slug"
+                ),
+            )
+
+        assert exc.value.errcode == BoardErr.APPLICATION_COOLDOWN
+        assert exc.value.headers is not None
+        assert int(exc.value.headers["Retry-After"]) > 0
+
+    async def test_other_user_can_take_released_slug(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        first_user = (await _au(auth_db, "slug_a")).id
+        second_user = (await _au(auth_db, "slug_b")).id
+        reviewer = (await _au(auth_db, "rv_slug2", account_level="admin")).id
+        app = await submit_application(
+            db,
+            first_user,
+            BoardApplicationCreate(
+                title="A", description="d", reason="r", slug="take-me"
+            ),
+        )
+        await review_application(
+            db,
+            app.id,
+            reviewer,
+            ReviewBoardApplicationRequest(approve=False),
+        )
+
+        out = await submit_application(
+            db,
+            second_user,
+            BoardApplicationCreate(
+                title="A", description="d", reason="r", slug="take-me"
+            ),
+        )
+
+        assert out.status == "pending"
+        assert out.applicant_id == second_user
+
+    async def test_reapply_same_slug_after_cooldown(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        applicant = (await _au(auth_db, "later_slug")).id
+        reviewer = (await _au(auth_db, "rv_later", account_level="admin")).id
+        app = await submit_application(
+            db,
+            applicant,
+            BoardApplicationCreate(
+                title="A", description="d", reason="r", slug="later-me"
+            ),
+        )
+        await review_application(
+            db,
+            app.id,
+            reviewer,
+            ReviewBoardApplicationRequest(approve=False),
+        )
+        row = await db.get(BoardApplication, app.id)
+        assert row is not None
+        row.reviewed_at = now_iso() - dt.timedelta(hours=25)
+        await db.flush()
+
+        out = await submit_application(
+            db,
+            applicant,
+            BoardApplicationCreate(
+                title="A2", description="d", reason="r", slug="later-me"
+            ),
+        )
+
+        assert out.status == "pending"
 
     async def test_application_review_creates_board(
         self, db: AsyncSession, auth_db: AsyncSession

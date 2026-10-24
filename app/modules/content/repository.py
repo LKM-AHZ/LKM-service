@@ -285,6 +285,20 @@ class ColumnApplicationRepository(AsyncRepository[ColumnApplication]):
             order_by=ColumnApplication.id.desc(),
         )
 
+    async def has_pending(self, user_id: uuid.UUID) -> bool:
+        return await self.exists(
+            ColumnApplication.user_id == user_id,
+            ColumnApplication.status == "pending",
+        )
+
+    async def latest_rejected(self, user_id: uuid.UUID) -> ColumnApplication | None:
+        """该用户最近一次被拒的申请（冷却期按它的 reviewed_at 算）。"""
+        return await self.get_one(
+            ColumnApplication.user_id == user_id,
+            ColumnApplication.status == "rejected",
+            order_by=ColumnApplication.reviewed_at.desc(),
+        )
+
 
 class ColumnPostRepository(AsyncRepository[ColumnPost]):
     model = ColumnPost
@@ -345,7 +359,11 @@ class BoardApplicationRepository(AsyncRepository[BoardApplication]):
     model = BoardApplication
 
     async def slug_taken(self, slug: str) -> bool:
-        return await self.exists(BoardApplication.slug == slug)
+        """slug 是否被**非被拒**申请占用：被拒申请释放标识，允许 24h 后重提。"""
+        return await self.exists(
+            BoardApplication.slug == slug,
+            BoardApplication.status != "rejected",
+        )
 
     async def list_for_applicant(
         self, applicant_id: uuid.UUID
@@ -354,6 +372,24 @@ class BoardApplicationRepository(AsyncRepository[BoardApplication]):
         return await self.get_many(
             BoardApplication.applicant_id == applicant_id,
             order_by=BoardApplication.id.desc(),
+        )
+
+    async def has_pending(self, applicant_id: uuid.UUID, slug: str) -> bool:
+        return await self.exists(
+            BoardApplication.applicant_id == applicant_id,
+            BoardApplication.slug == slug,
+            BoardApplication.status == "pending",
+        )
+
+    async def latest_rejected(
+        self, applicant_id: uuid.UUID, slug: str
+    ) -> BoardApplication | None:
+        """同一申请人同一 slug 最近一次被拒（冷却期按它的 reviewed_at 算）。"""
+        return await self.get_one(
+            BoardApplication.applicant_id == applicant_id,
+            BoardApplication.slug == slug,
+            BoardApplication.status == "rejected",
+            order_by=BoardApplication.reviewed_at.desc(),
         )
 
 

@@ -1,4 +1,9 @@
-from core.err import NS_BOARDS, ErrCode, register
+from core.err import (
+    NS_BOARDS,
+    ErrCode,
+    register,
+    register_unique_constraint,
+)
 
 
 class BoardErr(ErrCode):
@@ -13,6 +18,8 @@ class BoardErr(ErrCode):
     CERTIFICATION_REQUIRED = NS_BOARDS.err(9)
     ALREADY_BANNED = NS_BOARDS.err(10)
     BOARD_INACTIVE = NS_BOARDS.err(11)
+    APPLICATION_PENDING_EXISTS = NS_BOARDS.err(12)
+    APPLICATION_COOLDOWN = NS_BOARDS.err(13)
 
 
 register(
@@ -28,5 +35,15 @@ register(
         BoardErr.CERTIFICATION_REQUIRED: (403, "需通过初级通识考试才能在本板块发言"),
         BoardErr.ALREADY_BANNED: (409, "该用户已被禁言"),
         BoardErr.BOARD_INACTIVE: (403, "板块已停用"),
+        BoardErr.APPLICATION_PENDING_EXISTS: (409, "该板块标识已有待审核申请"),
+        BoardErr.APPLICATION_COOLDOWN: (
+            429,
+            "板块申请被拒后 24 小时内不可重复提交",
+        ),
     }
+)
+
+# 部分唯一索引（同 slug 仅一条 pending/approved）：被拒申请释放标识。
+register_unique_constraint(
+    "uq_board_applications_slug_active", BoardErr.SLUG_CONFLICT
 )

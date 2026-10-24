@@ -37,6 +37,7 @@ from core.messaging import (
     RKEY_OPS_DAILY,
     RKEY_POINTS,
     RKEY_RECONCILE,
+    RKEY_REVIEW_DIGEST,
     RKEY_SEND_CODE,
     RKEY_SEND_MAGIC,
     RKEY_USER_BANNED,
@@ -179,6 +180,7 @@ EVENT_CONTRACTS: dict[str, EventContract] = {
         _cron("export_analytics_clickhouse", RKEY_ANALYTICS),
         _cron("run_ops_daily", RKEY_OPS_DAILY),
         _cron("seed_user_id_bloom", RKEY_BLOOM_SEED),
+        _cron("send_review_digest", RKEY_REVIEW_DIGEST),
     )
 }
 

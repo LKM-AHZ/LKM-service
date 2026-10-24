@@ -56,6 +56,7 @@ RKEY_RECONCILE = "cron.reconcile"
 RKEY_ANALYTICS = "cron.analytics_export"
 RKEY_OPS_DAILY = "cron.ops_daily"
 RKEY_BLOOM_SEED = "cron.bloom_seed"
+RKEY_REVIEW_DIGEST = "cron.review_digest"
 # 内容域领域事件：外部检索引擎（Meilisearch/OpenSearch）增量同步的数据源
 RKEY_CONTENT_PUBLISHED = "event.content.published"
 RKEY_CONTENT_UPDATED = "event.content.updated"
@@ -149,6 +150,7 @@ ROUTING_KEY_TOPICS: dict[str, str] = {
     RKEY_ANALYTICS: TOPIC_CRON,
     RKEY_OPS_DAILY: TOPIC_CRON,
     RKEY_BLOOM_SEED: TOPIC_CRON,
+    RKEY_REVIEW_DIGEST: TOPIC_CRON,
 }
 
 
@@ -181,7 +183,14 @@ SUB_USER_INVALIDATE = Subscription(
 SUB_JOBS = Subscription(
     "jobs",
     TOPIC_CRON,
-    (RKEY_CLEANUP, RKEY_RECONCILE, RKEY_ANALYTICS, RKEY_OPS_DAILY, RKEY_BLOOM_SEED),
+    (
+        RKEY_CLEANUP,
+        RKEY_RECONCILE,
+        RKEY_ANALYTICS,
+        RKEY_OPS_DAILY,
+        RKEY_BLOOM_SEED,
+        RKEY_REVIEW_DIGEST,
+    ),
 )
 SUB_CONTENT_INDEX = Subscription(
     "content-index",

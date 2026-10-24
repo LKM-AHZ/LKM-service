@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from auth import events, user_http
 from auth.account_state import lock_is_active
+from auth.admission import admission_is_active
 from auth.models import User
 from auth.repository import (
     ProfileRepository,
@@ -104,6 +105,8 @@ async def authorize_user(
         }
 
     if lock_is_active(user):
+        return {"ok": False, "cause": CAUSE_LOCKED, "account_level": None, "role": None}
+    if not admission_is_active(user):
         return {"ok": False, "cause": CAUSE_LOCKED, "account_level": None, "role": None}
 
     tv = int(expect_token_version or 0)

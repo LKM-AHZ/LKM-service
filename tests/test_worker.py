@@ -44,6 +44,7 @@ def test_routing_key_topic_map_covers_all_events() -> None:
         messaging.RKEY_FILE_CHANGED,
         messaging.RKEY_AUDIT_LOGIN_FAIL,
         messaging.RKEY_AUDIT_PERMISSION_CHANGE,
+        messaging.RKEY_REVIEW_DIGEST,
     }
     assert set(messaging.ROUTING_KEY_TOPICS) == expected
 

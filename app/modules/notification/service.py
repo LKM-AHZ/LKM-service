@@ -44,6 +44,8 @@ class NotificationType(StrEnum):
     CONTENT_COMMENTED = "content_commented"
     COMMENT_REPLIED = "comment_replied"
     QA_ANSWER_ACCEPTED = "qa_answer_accepted"
+    # 管理员每日待办摘要（系统通知，actor/target 均为 None）
+    REVIEW_DIGEST = "review_digest"
 
 
 NOTIFICATION_TYPES: tuple[str, ...] = tuple(t.value for t in NotificationType)

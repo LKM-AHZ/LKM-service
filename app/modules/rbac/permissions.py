@@ -53,6 +53,7 @@ class Permission(StrEnum):
     admin_dashboard = "admin.dashboard"
     admin_reports_view = "admin.reports_view"
     admin_users_manage = "admin.users_manage"
+    admin_users_review = "admin.users_review"
     admin_content_review = "admin.content_review"
     admin_moderation_manage = "admin.moderation_manage"
     admin_analytics_view = "admin.analytics_view"
@@ -209,6 +210,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.admin_dashboard),
         Grant(Permission.admin_reports_view),
         Grant(Permission.admin_users_manage),
+        Grant(Permission.admin_users_review),
         Grant(Permission.admin_content_review),
         Grant(Permission.admin_moderation_manage),
         Grant(Permission.admin_analytics_view),

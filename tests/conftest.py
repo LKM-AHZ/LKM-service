@@ -758,6 +758,45 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             carrier, user_id, action, detail=detail, ip_address=ip_address
         )
 
+    async def _admin_ids() -> list[uuid.UUID]:
+        """管理员名单替身（等价 AUTH ``/auth/internal/admin-ids``）：直查本测 auth realm。"""
+        from sqlalchemy import select
+
+        from auth.models import User
+
+        rows = (
+            await carrier.execute(
+                select(User.id)
+                .where(User.account_level == "admin")
+                .order_by(User.id)
+            )
+        ).scalars().all()
+        return list(rows)
+
+    async def _admission_list(status: str) -> list[dict[str, object]]:
+        """准入列表替身（等价 AUTH ``/auth/internal/admission``）。"""
+        from auth.service_admission import list_admission_users as _list
+
+        return await _list(carrier, status)
+
+    async def _admission_decide(
+        *,
+        user_id: uuid.UUID,
+        action: str,
+        reviewer_id: uuid.UUID,
+        reason: str | None = None,
+    ) -> dict[str, object]:
+        """准入决策替身（等价 AUTH ``/auth/internal/admission/{id}``）。"""
+        from auth.service_admission import decide_admission as _decide
+
+        return await _decide(
+            carrier,
+            user_id=user_id,
+            action=action,  # type: ignore[arg-type]
+            reviewer_id=reviewer_id,
+            reason=reason,
+        )
+
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)
     monkeypatch.setattr(uh, "fetch_user_http_payload", _fetch)
     monkeypatch.setattr(uh, "fetch_users_http_batch", _fetch_batch)
@@ -765,6 +804,9 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(uh, "mint_bot_sso_ticket", _mint_bot_ticket)
     monkeypatch.setattr(uh, "verify_password_via_seam", _verify_password)
     monkeypatch.setattr(uh, "write_audit_via_seam", _audit)
+    monkeypatch.setattr(uh, "fetch_admin_ids_via_seam", _admin_ids)
+    monkeypatch.setattr(uh, "fetch_admission_users_via_seam", _admission_list)
+    monkeypatch.setattr(uh, "decide_admission_via_seam", _admission_decide)
 
 
 @pytest.fixture

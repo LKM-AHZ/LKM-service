@@ -24,7 +24,7 @@ import logging
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,7 @@ from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
 from auth.security import dummy_verify, verifypwd
+from auth.service_admission import decide_admission, list_admission_users
 from auth.service_auth import log_audit
 from auth.service_authz import (
     authorize_user,
@@ -175,6 +176,30 @@ async def internal_verify_password(
     return {"ok": True, "user_id": str(user.id), "username": user.username}
 
 
+@router.get("/admin-ids")
+async def internal_admin_ids(
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, list[str]]:
+    """列出 ``account_level=admin`` 的用户 id（每日待办摘要的收件人）。
+
+    业务库没有 users 表，管理员名单只能在 auth 权威侧取；返回 id 即可，零 PII。
+    按 id 排序保证同一批收件人顺序稳定（通知去重/重放可复现）。
+    """
+    rows = (
+        (
+            await db.execute(
+                select(User.id)
+                .where(User.account_level == "admin")
+                .order_by(User.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {"ids": [str(user_id) for user_id in rows]}
+
+
 @router.post("/audit")
 async def internal_audit(
     body: _AuditIn,
@@ -202,3 +227,39 @@ async def internal_audit(
         ip_address=body.ip_address,
     )
     return {"ok": True}
+
+
+class _AdmissionDecisionIn(BaseModel):
+    action: Literal["approve", "reject"]
+    reviewer_id: uuid.UUID
+    reason: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/admission")
+async def internal_admission_list(
+    status: str = Query(default="pending"),
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, list[dict[str, object]]]:
+    """按准入状态列用户（pending/rejected/active），供后台审核页读。
+
+    内部缝：含 email，仅供业务进程的服务端调用，不暴露公网。
+    """
+    return {"items": await list_admission_users(db, status)}
+
+
+@router.post("/admission/{user_id}")
+async def internal_admission_decide(
+    user_id: uuid.UUID,
+    body: _AdmissionDecisionIn,
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, object]:
+    """approve/reject 一个待审账号；reject 同时撤销其全部会话。"""
+    return await decide_admission(
+        db,
+        user_id=user_id,
+        action=body.action,
+        reviewer_id=body.reviewer_id,
+        reason=body.reason,
+    )

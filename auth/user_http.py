@@ -30,6 +30,7 @@ import httpx
 
 from auth.circuit_breaker import auth_http_breaker
 from core.config import settings
+from core.err import AuthErr, BizError, CommonErr
 from core.secrets import reveal
 
 _SNAP_FIELDS: tuple[str, ...] = (
@@ -340,6 +341,101 @@ async def grant_via_seam(
 
 
 _VERIFY_FIELDS: tuple[str, ...] = ("ok", "user_id", "username")
+
+
+async def fetch_admin_ids_via_seam() -> list[uuid.UUID]:
+    """经 AUTH internal 端点取管理员 user id 列表（每日待办摘要收件人）。
+
+    fail-closed：任何非 200/畸形体抛 ``UserHttpUnavailable``——拿不到收件人就不发摘要，
+    绝不猜或回落到业务库（那里没有 users 表）。
+    """
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/admin-ids"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    resp = await _request(
+        "GET", url, label="auth_http admin-ids request", headers=headers
+    )
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http admin-ids unexpected status {resp.status_code}"
+        )
+    payload = _coerce_json(resp)
+    ids = payload.get("ids")
+    if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+        raise UserHttpUnavailable("auth_http admin-ids malformed ids")
+    try:
+        return [uuid.UUID(i) for i in ids]
+    except ValueError:
+        raise UserHttpUnavailable("auth_http admin-ids malformed uuid") from None
+
+
+async def fetch_admission_users_via_seam(status: str) -> list[dict[str, Any]]:
+    """经 AUTH internal 端点按准入状态列用户（含 email，仅内部缝）。"""
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/admission"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    resp = await _request(
+        "GET",
+        url,
+        label="auth_http admission list request",
+        headers=headers,
+        params={"status": status},
+    )
+    if resp.status_code == 422:
+        raise BizError(CommonErr.INVALID_INPUT, "unknown admission status")
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http admission list unexpected status {resp.status_code}"
+        )
+    payload = _coerce_json(resp)
+    items = payload.get("items")
+    if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+        raise UserHttpUnavailable("auth_http admission list malformed items")
+    return items
+
+
+async def decide_admission_via_seam(
+    *,
+    user_id: uuid.UUID,
+    action: str,
+    reviewer_id: uuid.UUID,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """经 AUTH internal 端点 approve/reject 一个待审账号，返回更新后的行。"""
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/admission/{user_id}"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    body: dict[str, object] = {
+        "action": action,
+        "reviewer_id": str(reviewer_id),
+    }
+    if reason is not None:
+        body["reason"] = reason
+    resp = await _request(
+        "POST",
+        url,
+        label="auth_http admission decision request",
+        headers=headers,
+        json=body,
+    )
+    if resp.status_code == 404:
+        raise BizError(AuthErr.USER_NOT_FOUND)
+    if resp.status_code == 409:
+        raise BizError(CommonErr.CONFLICT, "该申请已审核或不在待审状态")
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http admission decision unexpected status {resp.status_code}"
+        )
+    payload = _coerce_json(resp)
+    if not isinstance(payload.get("user_id"), str):
+        raise UserHttpUnavailable("auth_http admission decision malformed payload")
+    return payload
 
 
 async def write_audit_via_seam(

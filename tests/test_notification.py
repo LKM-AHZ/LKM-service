@@ -331,6 +331,7 @@ class TestService:
             NotificationType.CONTENT_COMMENTED,
             NotificationType.COMMENT_REPLIED,
             NotificationType.QA_ANSWER_ACCEPTED,
+            NotificationType.REVIEW_DIGEST,
         }
         assert await is_type_enabled(db, uid, NotificationType.CONTENT_LIKED)
 

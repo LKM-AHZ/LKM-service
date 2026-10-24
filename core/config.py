@@ -267,6 +267,12 @@ class Settings(BaseSettings):
     auth_http_circuit_failures: int = 5
     auth_http_circuit_reset_s: float = 30.0
 
+    # 注册准入模式（P2）：
+    # - open  ：注册即可用（默认，不改变现有体验）
+    # - apply ：注册进 pending，管理员通过（admission_status=active）后才可登录
+    # 敏感时期可切 apply，无需改代码。未知取值启动即校验失败。
+    admission_mode: Literal["open", "apply"] = "open"
+
     # AUTH 独立库
     auth_db_host: str = "localhost"
     auth_db_port: int = 5432

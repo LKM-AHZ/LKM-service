@@ -25,6 +25,7 @@ APP_MODEL_MODULES: tuple[str, ...] = (
 
 #: 需在装配期导入的 Pulsar 任务模块（导入即副作用注册 handler / cron）。
 APP_TASK_MODULES: tuple[str, ...] = (
+    "app.modules.admin.tasks",
     "app.modules.content.blog.tasks",
     "app.modules.content.tasks",
     "app.modules.feed.tasks",

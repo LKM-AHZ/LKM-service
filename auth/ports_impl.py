@@ -280,6 +280,35 @@ class _UsersImpl:
 
         await _seams.grant_incubation_from_business(db, applicant_id)
 
+    async def list_admin_ids(self, db: Any) -> list[uuid.UUID]:
+        from auth import seams as _seams
+
+        return await _seams.list_admin_ids(db)
+
+    async def list_admission_users(self, db: Any, status: str) -> list[dict[str, Any]]:
+        from auth import seams as _seams
+
+        return await _seams.list_admission_users(db, status)
+
+    async def decide_admission(
+        self,
+        db: Any,
+        *,
+        user_id: uuid.UUID,
+        action: str,
+        reviewer_id: uuid.UUID,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        from auth import seams as _seams
+
+        return await _seams.decide_admission(
+            db,
+            user_id=user_id,
+            action=action,
+            reviewer_id=reviewer_id,
+            reason=reason,
+        )
+
 
 class _VerifyKeysImpl:
     """验签公钥与 passkey 挑战清理。"""

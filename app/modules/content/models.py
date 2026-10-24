@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    column,
     false,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -39,6 +40,17 @@ if TYPE_CHECKING:
 
 class ColumnApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "column_applications"
+    __table_args__ = (
+        # 同一用户同时只能有一条待审专栏申请；被拒/已通过的行不占用该槽位
+        # （冷却期由 service 层按 reviewed_at 判）。
+        Index(
+            "uq_column_applications_pending_user",
+            "user_id",
+            unique=True,
+            postgresql_where=column("status") == "pending",
+        ),
+        Index("ix_column_applications_user_status", "user_id", "status"),
+    )
 
     # S5 拆库后 user FK 断为逻辑 user_id（auth 独立库权威，此处不再物理外键）
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
@@ -506,6 +518,17 @@ class Board(UUIDPrimaryKeyMixin, Base):
 
 class BoardApplication(UUIDPrimaryKeyMixin, Base):
     __tablename__: str = "board_applications"
+    # slug 不再全局唯一：被拒的申请必须释放标识（否则同 slug 永远无法重新申请），
+    # 但 pending/approved 仍要拦住重复占用。冷却期由 service 层按 reviewed_at 判。
+    __table_args__ = (
+        Index(
+            "uq_board_applications_slug_active",
+            "slug",
+            unique=True,
+            postgresql_where=column("status") != "rejected",
+        ),
+        Index("ix_board_applications_applicant_slug", "applicant_id", "slug"),
+    )
 
     applicant_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, nullable=False
@@ -513,7 +536,7 @@ class BoardApplication(UUIDPrimaryKeyMixin, Base):
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(300), nullable=False)
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
-    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )  # pending|approved|rejected

@@ -66,6 +66,7 @@ __all__ = [
     "block_payload_jti",
     "cleanup_expired_challenges",
     "create_admin_access_token",
+    "decide_admission",
     "decode_admin_access",
     "ensure_demo_user",
     "export_audit_logs",
@@ -77,6 +78,8 @@ __all__ = [
     "grant_incubation_from_business",
     "hashpwd",
     "is_jti_blocked",
+    "list_admin_ids",
+    "list_admission_users",
     "log_audit",
     "mint_bot_sso_ticket",
     "new_auth_session",
@@ -200,6 +203,43 @@ async def verify_password_via_seam(
     return {"user_id": payload["user_id"], "username": payload["username"]}
 
 
+async def list_admin_ids(db: Any) -> list[uuid.UUID]:
+    """管理员 user id 列表（每日待办摘要收件人）：拆库走 AUTH internal，单库直查。
+
+    **fail-closed**：缝不可用时抛 ``BizError(UNAVAILABLE)``，调用方放弃本次发送——
+    宁可不发，也不猜收件人。缝未配置（单库/蓝绿）时 ``db`` 与 auth 表同库，可直接查。
+    """
+    from auth import user_http
+
+    if user_http.enabled():
+        try:
+            return await user_http.fetch_admin_ids_via_seam()
+        except user_http.UserHttpUnavailable as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}"
+            ) from None
+        except Exception as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}"
+            ) from exc
+    from sqlalchemy import select
+
+    from auth.models import User
+
+    rows = (
+        (
+            await db.execute(
+                select(User.id)
+                .where(User.account_level == "admin")
+                .order_by(User.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
 async def record_audit_from_business(
     db: Any,
     user_id: uuid.UUID | None,
@@ -241,3 +281,65 @@ async def record_audit_from_business(
             ) from exc
         return
     await log_audit(db, user_id, action, detail=detail, ip_address=ip_address)
+
+
+async def list_admission_users(db: Any, status: str) -> list[dict[str, Any]]:
+    """按准入状态列用户（管理端审核页）：拆库走 AUTH internal，单库直调 auth 服务。"""
+    from auth import user_http
+
+    if user_http.enabled():
+        try:
+            return await user_http.fetch_admission_users_via_seam(status)
+        except BizError:
+            raise
+        except user_http.UserHttpUnavailable as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
+            ) from None
+        except Exception as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
+            ) from exc
+    from auth.service_admission import list_admission_users as _list
+
+    return await _list(db, status)
+
+
+async def decide_admission(
+    db: Any,
+    *,
+    user_id: uuid.UUID,
+    action: str,
+    reviewer_id: uuid.UUID,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """approve/reject 一个待审账号（auth 权威写）：拆库走内部端点，单库直调。"""
+    from auth import user_http
+
+    if user_http.enabled():
+        try:
+            return await user_http.decide_admission_via_seam(
+                user_id=user_id,
+                action=action,
+                reviewer_id=reviewer_id,
+                reason=reason,
+            )
+        except BizError:
+            raise
+        except user_http.UserHttpUnavailable as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
+            ) from None
+        except Exception as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
+            ) from exc
+    from auth.service_admission import decide_admission as _decide
+
+    return await _decide(
+        db,
+        user_id=user_id,
+        action=action,
+        reviewer_id=reviewer_id,
+        reason=reason,
+    )

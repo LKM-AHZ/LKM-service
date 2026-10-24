@@ -384,6 +384,23 @@ class User(UUIDPrimaryKeyMixin, AuthBase):
         Integer, nullable=False, default=0
     )
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 准入状态：active=可登录；pending=待管理员审批；rejected=已拒绝。
+    # 与 is_locked 分离：is_locked 是失败次数/封禁语义，admission_status 只表达「准不准进」。
+    admission_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active", index=True
+    )
+    apply_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    admission_reviewed_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    admission_reviewed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_rejected_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )

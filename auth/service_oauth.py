@@ -22,6 +22,7 @@ from auth.repository import (
 )
 from auth.service_auth import (
     _check_account_locked,
+    build_registration_response,
     create_user_with_profile,
     ensure_unique_username,
     finalize_auth_response,
@@ -137,7 +138,8 @@ async def handle_oauth_callback(
 
     await log_audit(db, user.id, "oauth_login", provider.name)
 
-    return await _oauth_login_response(db, user)
+    # apply 模式：新建的 OAuth 账号同样是待审申请，不能直接发令牌。
+    return await build_registration_response(db, user)
 
 
 async def bind_github(db: DbSession, code: str, state: str) -> dict[str, Any]:

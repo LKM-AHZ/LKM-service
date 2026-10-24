@@ -54,6 +54,8 @@ class AuthTokenData(BaseModel):
     requires_2fa: bool = False
     setup_required: bool = False
     temp_token: str | None = None
+    # apply 模式下注册返回 pending/（异常路径）rejected；active 时为 None
+    admission_status: str | None = None
 
 
 class RefreshRequest(BaseModel):

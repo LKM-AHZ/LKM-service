@@ -21,6 +21,7 @@ from auth.models import AuditLog, Profile, User
 from auth.security import hashpwd
 from auth.service_authz import grant_exam_unlock
 from core.config import settings
+from core.db.base import now_iso
 from core.secrets import reveal
 from tests.conftest import DB, Client
 
@@ -110,6 +111,80 @@ async def test_internal_seams_fail_closed_without_token(
         assert r.status_code == 401
         r2 = await client.post(path, json=payload, headers=_auth_headers())
         assert r2.status_code == 401
+
+    r = await client.get("/api/v1/auth/internal/admin-ids")
+    assert r.status_code == 401
+    r = await client.get("/api/v1/auth/internal/admission")
+    assert r.status_code == 401
+
+
+async def test_internal_admin_ids_lists_only_admins(
+    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """admin-ids 只回 account_level=admin 的 id（每日摘要收件人）。"""
+    monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
+    await _mk_user(db, "plain_user", account_level="normal")
+    admin_id = await _mk_user(db, "digest_admin", account_level="admin")
+
+    resp = await client.get(
+        "/api/v1/auth/internal/admin-ids", headers=_auth_headers()
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ids": [str(admin_id)]}
+
+
+async def test_internal_admission_list_and_decide(
+    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """准入内部缝：pending 列表 + approve 落 active。"""
+    monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
+    admin_id = await _mk_user(db, "admission_admin", account_level="admin")
+    pending = User(
+        username="admit_me",
+        email="admit@example.com",
+        hashed_password="x",
+        account_level="normal",
+        admission_status="pending",
+        applied_at=now_iso(),
+    )
+    db.add(pending)
+    await db.flush()
+
+    resp = await client.get(
+        "/api/v1/auth/internal/admission",
+        params={"status": "pending"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [item["username"] for item in items] == ["admit_me"]
+    assert items[0]["email"] == "admit@example.com"
+
+    resp = await client.post(
+        f"/api/v1/auth/internal/admission/{pending.id}",
+        json={
+            "action": "approve",
+            "reviewer_id": str(admin_id),
+            "reason": "资料齐全",
+        },
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["admission_status"] == "active"
+    await db.commit()
+    row = (
+        await db.execute(select(User).where(User.id == pending.id))
+    ).scalar_one()
+    assert row.admission_status == "active"
+
+    # 再决策一次：已非 pending → 409
+    resp = await client.post(
+        f"/api/v1/auth/internal/admission/{pending.id}",
+        json={"action": "reject", "reviewer_id": str(admin_id), "reason": "x"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 409
 
 
 async def test_internal_audit_writes_row(

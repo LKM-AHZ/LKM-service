@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from auth.account_state import lock_is_active
+from auth.admission import admission_is_active
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import User
@@ -93,6 +94,10 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
 
     # 检查账号是否被锁定（判据统一在 auth.account_state：永久锁 locked_until=NULL 也算锁定）
     if lock_is_active(user):
+        raise BizError(AuthErr.ACCOUNT_LOCKED)
+    # 准入非 active（待审/被拒）的既有 token 一并失效：审核拒绝时已 bump token_version，
+    # 这里兜住「状态变更但版本未及更新」的窗口；错误码复用 ACCOUNT_LOCKED 不额外泄露状态。
+    if not admission_is_active(user):
         raise BizError(AuthErr.ACCOUNT_LOCKED)
 
     # token_version 检查：如果用户的 token_version 已经被提升（例如注销或密码重置后），令牌无效。

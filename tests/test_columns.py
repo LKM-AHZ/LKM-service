@@ -9,6 +9,7 @@
 真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
+import datetime as dt
 import json
 import uuid
 from typing import Any
@@ -39,9 +40,11 @@ from app.modules.content.columns.service import (
     list_posts,
     review_application,
 )
+from app.modules.content.models import ColumnApplication
 from auth.errors import AuthErr
 from auth.models import AuditLog
 from auth.security import create_access_token
+from core.db.base import now_iso
 from core.err import BizError, CommonErr
 from tests.conftest import AuthUser, auth_user_uid
 
@@ -161,6 +164,60 @@ class TestColumnApplications:
         assert rows[0].status == ColumnApplicationStatus.PENDING
         assert rows[0].review_note is None
         assert rows[0].created_at is not None
+
+    async def should_reject_second_pending_application(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        user = await _au(auth_db)
+        await _application(db, user_id=user.id)
+
+        with pytest.raises(BizError) as exc:
+            await _application(db, user_id=user.id)
+
+        assert exc.value.errcode == ColumnErr.APPLICATION_PENDING_EXISTS
+
+    async def should_enforce_cooldown_after_rejection(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        user = await _au(auth_db)
+        reviewer = await _au(auth_db, username="cooldown_reviewer", account_level="admin")
+        application = await _application(db, user_id=user.id)
+        await review_application(
+            db,
+            application.id,
+            ColumnApplicationReview(
+                status=ColumnApplicationStatus.REJECTED, review_note="暂不符合"
+            ),
+            reviewer.id,
+        )
+
+        with pytest.raises(BizError) as exc:
+            await _application(db, user_id=user.id)
+
+        assert exc.value.errcode == ColumnErr.APPLICATION_COOLDOWN
+        assert exc.value.headers is not None
+        assert int(exc.value.headers["Retry-After"]) > 0
+
+    async def should_allow_reapply_after_cooldown(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        user = await _au(auth_db)
+        reviewer = await _au(auth_db, username="later_reviewer", account_level="admin")
+        application = await _application(db, user_id=user.id)
+        await review_application(
+            db,
+            application.id,
+            ColumnApplicationReview(status=ColumnApplicationStatus.REJECTED),
+            reviewer.id,
+        )
+        row = await db.get(ColumnApplication, application.id)
+        assert row is not None
+        row.reviewed_at = now_iso() - dt.timedelta(hours=25)
+        await db.flush()
+
+        again = await _application(db, user_id=user.id)
+
+        assert again.status == ColumnApplicationStatus.PENDING
 
     async def should_get_application(self, db: AsyncSession, auth_db: AsyncSession):
         user = await _au(auth_db)
@@ -422,6 +479,42 @@ class TestColumnRoutes:
         assert [item["id"] for item in data] == [str(mine.id)]
         assert data[0]["status"] == "pending"
         assert data[0]["review_note"] is None
+
+    async def should_return_retry_after_in_cooldown(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+    ) -> None:
+        """冷却期内再次提交：429 + Retry-After（秒）+ 语义化错误码。"""
+        user = await self._setup_user(db, auth_db)
+        reviewer = await _au(
+            auth_db, username="http_cooldown_reviewer", account_level="admin"
+        )
+        application = await _application(db, user_id=user.id)
+        await review_application(
+            db,
+            application.id,
+            ColumnApplicationReview(
+                status=ColumnApplicationStatus.REJECTED, review_note="暂不符合"
+            ),
+            reviewer.id,
+        )
+
+        resp = await client.post(
+            "/api/v1/content/columns/applications",
+            headers={"Authorization": f"Bearer {user.token}"},
+            json={
+                "title": "再试一次",
+                "description": "补充说明。",
+                "reason": "希望重新申请。",
+            },
+        )
+
+        assert resp.status_code == 429
+        assert int(resp.headers["retry-after"]) > 0
+        assert resp.json()["code"] == ColumnErr.APPLICATION_COOLDOWN
 
     async def should_reject_my_applications_without_auth(
         self, client: AsyncClient, db: AsyncSession
