@@ -130,6 +130,11 @@ async def list_admission_users(db: Any, status: str) -> list[dict[str, Any]]:
     return await get("users").list_admission_users(db, status)
 
 
+async def count_admission_users(db: Any, status: str) -> int:
+    """按准入状态计数（后台角标/待办聚合）；auth 域权威。"""
+    return await get("users").count_admission_users(db, status)
+
+
 async def decide_admission(
     db: Any,
     *,

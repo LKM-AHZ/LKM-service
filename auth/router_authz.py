@@ -33,13 +33,22 @@ from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
 from auth.security import dummy_verify, verifypwd
-from auth.service_admission import decide_admission, list_admission_users
+from auth.service_admission import (
+    count_admission_users,
+    decide_admission,
+    list_admission_users,
+)
 from auth.service_auth import log_audit
 from auth.service_authz import (
     authorize_user,
     grant_exam_unlock,
     grant_incubation,
 )
+from auth.service_verify import (
+    create_email_verification,
+    create_phone_verification,
+)
+from core.config import settings
 from core.err import BizError, CommonErr
 
 router = APIRouter(prefix="/auth/internal", tags=["auth-internal"])
@@ -246,6 +255,42 @@ async def internal_admission_list(
     内部缝：含 email，仅供业务进程的服务端调用，不暴露公网。
     """
     return {"items": await list_admission_users(db, status)}
+
+
+@router.get("/dev-code")
+async def internal_dev_code(
+    contact: str = Query(min_length=3, max_length=200),
+    channel: Literal["email", "phone"] = Query(...),
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, str]:
+    """dev 专用：为 register 用途铸造一个新验证码并返回明文（金路径脚本用）。
+
+    默认关闭，仅 dev/local/test 可开（Settings 启动校验拒绝生产）；验证码仍只以哈希
+    落库，明文只出现在本次内部响应里，不写日志、不落盘。
+    """
+    if not settings.dev_code_sink:
+        raise BizError(CommonErr.NOT_FOUND)
+    # 与注册侧 _normalize_email 对齐（邮箱小写、去空白）；否则 pending.email 与验证记录
+    # 大小写不一致，verify 时 hash 对不上。
+    normalized = (
+        contact.strip().lower() if channel == "email" else contact.strip()
+    )
+    if channel == "email":
+        code, _ = await create_email_verification(db, normalized, "register")
+    else:
+        code, _ = await create_phone_verification(db, normalized, "register")
+    return {"code": code}
+
+
+@router.get("/admission/count")
+async def internal_admission_count(
+    status: str = Query(default="pending"),
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, int]:
+    """按准入状态计数（后台角标 / 待办聚合，不拉行）。"""
+    return {"count": await count_admission_users(db, status)}
 
 
 @router.post("/admission/{user_id}")

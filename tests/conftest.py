@@ -779,6 +779,12 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
 
         return await _list(carrier, status)
 
+    async def _admission_count(status: str) -> int:
+        """准入计数替身（等价 AUTH ``/auth/internal/admission/count``）。"""
+        from auth.service_admission import count_admission_users as _count
+
+        return await _count(carrier, status)
+
     async def _admission_decide(
         *,
         user_id: uuid.UUID,
@@ -806,6 +812,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(uh, "write_audit_via_seam", _audit)
     monkeypatch.setattr(uh, "fetch_admin_ids_via_seam", _admin_ids)
     monkeypatch.setattr(uh, "fetch_admission_users_via_seam", _admission_list)
+    monkeypatch.setattr(uh, "fetch_admission_count_via_seam", _admission_count)
     monkeypatch.setattr(uh, "decide_admission_via_seam", _admission_decide)
 
 

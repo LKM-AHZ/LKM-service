@@ -13,16 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth.admission import ACTIVE, PENDING, REJECTED
 from auth.errors import AuthErr
 from auth.models import RefreshToken, User
-from auth.schemas import UserLoginPassword
+from auth.schemas import UserLoginPassword, UserRegLocal
 from auth.security import hashpwd
 from auth.service_admission import decide_admission, list_admission_users
 from auth.service_auth import (
+    consume_pending_normal_registration,
     create_user_with_profile,
     issue_session_tokens,
     login_password,
+    register_local,
+    store_pending_normal_registration,
     store_refresh_token,
 )
 from auth.service_authz import authorize_user
+from auth.service_verify import create_email_verification
 from core.config import settings
 from core.err import BizError, CommonErr
 
@@ -173,3 +177,49 @@ async def test_http_registration_returns_pending(
     data = resp.json()["data"]
     assert data["access_token"] is None
     assert data["admission_status"] == "pending"
+
+
+async def test_local_registration_stores_apply_reason(
+    auth_db: AsyncSession, apply_mode: None
+) -> None:
+    resp = await register_local(
+        auth_db,
+        UserRegLocal(
+            username="reason_local",
+            password="secret123456",
+            apply_reason="想加入社区一起整理资料",
+        ),
+    )
+
+    assert resp["admission_status"] == PENDING
+    user = (
+        await auth_db.execute(select(User).where(User.username == "reason_local"))
+    ).scalar_one()
+    assert user.admission_status == PENDING
+    assert user.apply_reason == "想加入社区一起整理资料"
+
+
+async def test_pending_normal_registration_carries_reason(
+    auth_db: AsyncSession, apply_mode: None
+) -> None:
+    code, _ = await create_email_verification(
+        auth_db, "reason_norm@example.com", "register"
+    )
+    txn = await store_pending_normal_registration(
+        auth_db,
+        "reason_norm",
+        "secret123456",
+        "reason_norm@example.com",
+        None,
+        apply_reason="数学爱好者",
+    )
+
+    result = await consume_pending_normal_registration(
+        auth_db, txn, email_code=code
+    )
+
+    assert result["admission_status"] == PENDING
+    user = (
+        await auth_db.execute(select(User).where(User.username == "reason_norm"))
+    ).scalar_one()
+    assert user.apply_reason == "数学爱好者"

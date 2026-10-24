@@ -152,13 +152,19 @@ async def _send_reg_code(
 
 
 async def _complete_reg_verify(
-    db: AsyncSession, channel: ContactChannel, contact: str, code: str
+    db: AsyncSession,
+    channel: ContactChannel,
+    contact: str,
+    code: str,
+    apply_reason: str | None = None,
 ) -> dict[str, Any]:
     await check_code_rate_limit(
         f"reg:{channel.name}:verify:{contact}", max_count=5, window=3600
     )
     await channel.consume_code(db, contact, code, "register")
-    return await service_auth.register_by_verify(db, channel.name, contact)
+    return await service_auth.register_by_verify(
+        db, channel.name, contact, apply_reason=apply_reason
+    )
 
 
 @router.get("/me", response_model=ApiResp[MeInfo])
@@ -318,10 +324,15 @@ async def register_phone(
 @router.post("/reg/phone/verify", response_model=ApiResp[AuthTokenData])
 @respond
 async def register_phone_verify(
-    phone: str, code: str, db: AsyncSession = Depends(get_auth_session)
+    phone: str,
+    code: str,
+    apply_reason: str | None = None,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """完成仅手机号的注册 — 创建一个普通账号（无密码）。"""
-    return await _complete_reg_verify(db, PHONE_CHANNEL, phone, code)
+    return await _complete_reg_verify(
+        db, PHONE_CHANNEL, phone, code, apply_reason=apply_reason
+    )
 
 
 @router.post("/reg/email", response_model=ApiResp[RegByEmailResponse])
@@ -339,10 +350,15 @@ async def register_email(
 @router.post("/reg/email/verify", response_model=ApiResp[AuthTokenData])
 @respond
 async def register_email_verify(
-    email: str, code: str, db: AsyncSession = Depends(get_auth_session)
+    email: str,
+    code: str,
+    apply_reason: str | None = None,
+    db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """完成仅邮箱的注册 — 创建一个普通账号（无密码）。"""
-    return await _complete_reg_verify(db, EMAIL_CHANNEL, email, code)
+    return await _complete_reg_verify(
+        db, EMAIL_CHANNEL, email, code, apply_reason=apply_reason
+    )
 
 
 @router.post("/login/code/request", response_model=ApiResp[MessageResponse])

@@ -39,3 +39,12 @@ def test_production_auth_seam_requires_token_when_url_set() -> None:
 def test_dev_ignores_conditional_secrets() -> None:
     s = _mk(env="test", storage_backend="s3", auth_http_url="http://auth:8001")
     assert s.is_production is False
+
+
+def test_dev_code_sink_rejected_outside_permissive_envs() -> None:
+    with pytest.raises(ValueError, match="DEV_CODE_SINK"):
+        _mk(env="production", dev_code_sink=True)
+
+
+def test_dev_code_sink_allowed_in_dev() -> None:
+    assert _mk(env="dev", dev_code_sink=True).dev_code_sink is True

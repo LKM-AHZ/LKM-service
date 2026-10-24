@@ -24,6 +24,8 @@ class MeInfo(CurrentUser):
 class UserRegLocal(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
     password: Password = Field(...)
+    # apply 模式：申请理由（open 模式忽略）
+    apply_reason: str | None = Field(default=None, max_length=500)
 
 
 class UserRegNormal(BaseModel):
@@ -31,6 +33,8 @@ class UserRegNormal(BaseModel):
     password: Password = Field(...)
     email: RawEmail | None = None
     phone: str | None = Field(None, min_length=5, max_length=20)
+    # apply 模式：申请理由（随 pending 注册一起暂存，验证后落到 users.apply_reason）
+    apply_reason: str | None = Field(default=None, max_length=500)
 
 
 class UserRegByPhone(BaseModel):

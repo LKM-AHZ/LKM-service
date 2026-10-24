@@ -96,6 +96,16 @@ async def _seed_queues(db: DB) -> uuid.UUID:
             status="pending",
         )
     )
+    # auth 域队列：待审账号（fused 库里的 auth.users）
+    db.add(
+        User(
+            username="pending_admission",
+            hashed_password="pending-placeholder",
+            account_level="normal",
+            admission_status="pending",
+            applied_at=now_iso() - dt.timedelta(minutes=5),
+        )
+    )
     await db.flush()
     return uid
 
@@ -110,7 +120,7 @@ async def test_summary_counts_oldest_and_links(db: DB, client: Client) -> None:
 
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["total_pending"] == 5
+    assert data["total_pending"] == 6
     queues = {item["key"]: item for item in data["queues"]}
     assert set(queues) == {
         "files",
@@ -118,6 +128,7 @@ async def test_summary_counts_oldest_and_links(db: DB, client: Client) -> None:
         "board_applications",
         "column_applications",
         "project_applications",
+        "admission_users",
     }
     assert queues["files"]["count"] == 1
     assert queues["files"]["oldest_waiting_seconds"] >= 7_000
@@ -127,6 +138,10 @@ async def test_summary_counts_oldest_and_links(db: DB, client: Client) -> None:
     assert queues["board_applications"]["href"] is None
     assert queues["column_applications"]["href"] is None
     assert queues["project_applications"]["href"] is None
+    # 待审账号有独立审核入口（用户管理页）
+    assert queues["admission_users"]["count"] == 1
+    assert queues["admission_users"]["href"] == "/admin/users"
+    assert queues["admission_users"]["oldest_waiting_seconds"] is None
     for item in data["queues"]:
         assert item["count"] == 1
 

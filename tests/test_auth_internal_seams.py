@@ -116,6 +116,8 @@ async def test_internal_seams_fail_closed_without_token(
     assert r.status_code == 401
     r = await client.get("/api/v1/auth/internal/admission")
     assert r.status_code == 401
+    r = await client.get("/api/v1/auth/internal/admission/count")
+    assert r.status_code == 401
 
 
 async def test_internal_admin_ids_lists_only_admins(
@@ -160,6 +162,14 @@ async def test_internal_admission_list_and_decide(
     items = resp.json()["items"]
     assert [item["username"] for item in items] == ["admit_me"]
     assert items[0]["email"] == "admit@example.com"
+
+    count = await client.get(
+        "/api/v1/auth/internal/admission/count",
+        params={"status": "pending"},
+        headers=_auth_headers(),
+    )
+    assert count.status_code == 200
+    assert count.json() == {"count": 1}
 
     resp = await client.post(
         f"/api/v1/auth/internal/admission/{pending.id}",
@@ -355,3 +365,38 @@ async def test_authz_primitives_idempotent(db: DB) -> None:
     assert ch1 == 0  # 已是目标 → 无动作
     lvl, role, tv = await _level(db, uid)
     assert (lvl, role, tv) == ("admin", "author", 0)
+
+
+async def test_internal_dev_code_disabled_by_default(
+    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
+
+    resp = await client.get(
+        "/api/v1/auth/internal/dev-code",
+        params={"channel": "email", "contact": "dev@example.com"},
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 404
+
+
+async def test_internal_dev_code_mints_register_code(
+    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from auth.service_verify import consume_email_code
+
+    monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
+    monkeypatch.setattr(settings, "dev_code_sink", True)
+
+    resp = await client.get(
+        "/api/v1/auth/internal/dev-code",
+        params={"channel": "email", "contact": "Dev@Example.com"},
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 200
+    code = resp.json()["code"]
+    assert len(code) == 6
+    # contact 归一化后与注册流程的 pending.email 一致，verify 才能消费
+    assert await consume_email_code(db, "dev@example.com", code, "register") is True

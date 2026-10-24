@@ -398,6 +398,33 @@ async def fetch_admission_users_via_seam(status: str) -> list[dict[str, Any]]:
     return items
 
 
+async def fetch_admission_count_via_seam(status: str) -> int:
+    """经 AUTH internal 端点取准入计数（后台角标/待办聚合）。"""
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/admission/count"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    resp = await _request(
+        "GET",
+        url,
+        label="auth_http admission count request",
+        headers=headers,
+        params={"status": status},
+    )
+    if resp.status_code == 422:
+        raise BizError(CommonErr.INVALID_INPUT, "unknown admission status")
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http admission count unexpected status {resp.status_code}"
+        )
+    payload = _coerce_json(resp)
+    count = payload.get("count")
+    if not isinstance(count, int):
+        raise UserHttpUnavailable("auth_http admission count malformed count")
+    return count
+
+
 async def decide_admission_via_seam(
     *,
     user_id: uuid.UUID,

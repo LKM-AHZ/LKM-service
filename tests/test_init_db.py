@@ -308,9 +308,12 @@ def test_auth_alembic_chain_head() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0002_user_admission"
-    assert len(list(script.walk_revisions())) == 2
-    assert script.get_revision("head").down_revision == "0001_auth_baseline"
+    assert script.get_current_head() == "0003_pending_apply_reason"
+    assert len(list(script.walk_revisions())) == 3
+    assert script.get_revision("head").down_revision == "0002_user_admission"
+    assert script.get_revision("0002_user_admission").down_revision == (
+        "0001_auth_baseline"
+    )
     assert script.get_revision("0001_auth_baseline").down_revision is None
 
 

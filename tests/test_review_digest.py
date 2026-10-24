@@ -11,6 +11,7 @@ from app.modules.admin.models import Report
 from app.modules.files.models import LibraryFile
 from app.modules.notification.models import Notification
 from auth.models import Profile, User
+from core.config import settings
 from core.err import BizError, CommonErr
 from core.messaging import RKEY_REVIEW_DIGEST
 from core.task_registry import cron_jobs, ensure_tasks_registered
@@ -120,6 +121,65 @@ async def test_admin_list_unavailable_fails_closed(
     assert (await db.execute(select(Notification))).scalars().all() == []
 
 
+def _enable_bot_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "bot_push_url", "http://bot.local/api/v1/im/messages")
+    monkeypatch.setattr(settings, "bot_push_api_key", "bot-key")
+    monkeypatch.setattr(settings, "bot_push_umo", "umo://admin")
+
+
+async def test_bot_push_sent_when_configured(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _mk_user(db, "digest_bot_admin", "admin")
+    await _seed_pending(db)
+    _enable_bot_push(monkeypatch)
+    captured: list[str] = []
+
+    async def _fake_push(text: str) -> bool:
+        captured.append(text)
+        return True
+
+    monkeypatch.setattr(digest, "_push_to_bot", _fake_push)
+
+    assert await digest.send_daily_digest() == 1
+    assert captured and "待办审核 2 条" in captured[0]
+
+
+async def test_bot_push_failure_does_not_fail_digest(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _mk_user(db, "digest_bot_admin2", "admin")
+    await _seed_pending(db)
+    _enable_bot_push(monkeypatch)
+
+    async def _boom(_text: str) -> bool:
+        raise RuntimeError("bot down")
+
+    monkeypatch.setattr(digest, "_push_to_bot", _boom)
+
+    # 站内信是正本：bot 副本失败不影响发送结果与已落库通知
+    assert await digest.send_daily_digest() == 1
+    assert len((await db.execute(select(Notification))).scalars().all()) == 1
+
+
+async def test_bot_push_disabled_by_default(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _mk_user(db, "digest_bot_admin3", "admin")
+    await _seed_pending(db)
+    called = False
+
+    async def _fake_push(_text: str) -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    monkeypatch.setattr(digest, "_push_to_bot", _fake_push)
+
+    assert await digest.send_daily_digest() == 1
+    assert called is False
+
+
 def test_digest_cron_registered() -> None:
     ensure_tasks_registered()
     jobs = {job["id"]: job for job in cron_jobs()}
@@ -127,3 +187,57 @@ def test_digest_cron_registered() -> None:
     assert job["fn"] == "send_review_digest"
     assert job["routing_key"] == RKEY_REVIEW_DIGEST
     assert job["cron"] == "0 12 * * *"
+
+
+class _FakeBotResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+def _fake_bot_client(status_code: int, captured: dict[str, object]) -> type:
+    class _Client:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> _FakeBotResponse:
+            captured.update(url=url, headers=headers, payload=json)
+            return _FakeBotResponse(status_code)
+
+    return _Client
+
+
+async def test_push_to_bot_payload_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "bot_push_url", "http://bot.local/api/v1/im/messages")
+    monkeypatch.setattr(settings, "bot_push_api_key", "bot-key")
+    monkeypatch.setattr(settings, "bot_push_umo", "umo://admin")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        digest.httpx, "AsyncClient", _fake_bot_client(200, captured)
+    )
+
+    assert await digest._push_to_bot("待办摘要") is True
+    assert captured["url"] == "http://bot.local/api/v1/im/messages"
+    assert captured["headers"] == {
+        "Authorization": "Bearer bot-key",
+        "Content-Type": "application/json",
+    }
+    assert captured["payload"] == {"umo": "umo://admin", "message": "待办摘要"}
+
+    monkeypatch.setattr(
+        digest.httpx, "AsyncClient", _fake_bot_client(500, captured)
+    )
+    assert await digest._push_to_bot("待办摘要") is False

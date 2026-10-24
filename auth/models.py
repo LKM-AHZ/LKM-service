@@ -233,6 +233,8 @@ class PendingRegistration(UUIDPrimaryKeyMixin, AuthBase):
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # apply 模式注册理由：在「发起注册」时收集、存到 pending，验证完成后写进 users.apply_reason
+    apply_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(

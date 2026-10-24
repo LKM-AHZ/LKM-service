@@ -281,12 +281,19 @@ async def ensure_unique_username(db: DbSession, base: str) -> str:
 
 
 async def create_user_with_profile(db: DbSession, **fields: Any) -> User:
-    """创建用户 + 默认 Profile；唯一性冲突统一转 ALREADY_REGISTERED。"""
+    """创建用户 + 默认 Profile；唯一性冲突统一转 ALREADY_REGISTERED。
+
+    ``apply_reason`` 只在 apply 模式下写入 ``users.apply_reason``（随注册申请一起展示），
+    open 模式不落该字段，避免普通注册留下无意义的“申请理由”。
+    """
+    apply_reason = str(fields.pop("apply_reason", None) or "").strip()[:500]
     user = User(**fields)
     # apply 模式：所有自注册账号（密码/验证码/OAuth）先落 pending，管理员通过后才可登录。
     if settings.admission_mode == "apply":
         user.admission_status = "pending"
         user.applied_at = now_iso()
+        if apply_reason:
+            user.apply_reason = apply_reason
     db.add(user)
     try:
         await UserRepository(db).flush()
@@ -311,6 +318,7 @@ async def register_local(db: DbSession, info: UserRegLocal) -> dict[str, Any]:
         username=username,
         hashed_password=await hashpwd(info.password),
         account_level="local",
+        apply_reason=info.apply_reason,
     )
 
     return await build_registration_response(db, user)
@@ -357,7 +365,9 @@ async def _login_or_error(
     return user
 
 
-async def register_by_verify(db: DbSession, field: str, value: str) -> dict[str, Any]:
+async def register_by_verify(
+    db: DbSession, field: str, value: str, *, apply_reason: str | None = None
+) -> dict[str, Any]:
     """通过邮箱或手机验证创建一个*无密码*的普通用户，若已存在则自动登录。"""
     channel = CHANNELS.get(field)
     if channel is None:
@@ -378,6 +388,7 @@ async def register_by_verify(db: DbSession, field: str, value: str) -> dict[str,
         username=username,
         hashed_password="",
         account_level="normal",
+        apply_reason=apply_reason,
         **{field: normalized_value},
     )
 
@@ -391,6 +402,7 @@ async def store_pending_normal_registration(
     password: str,
     email: str | None,
     phone: str | None,
+    apply_reason: str | None = None,
 ) -> str:
     txn_id = secrets.token_hex(32)
     expiry = expires_at(minutes=15)
@@ -401,6 +413,7 @@ async def store_pending_normal_registration(
         hashed_password=await hashpwd(password),
         email=_normalize_email(email) if email else None,
         phone=phone,
+        apply_reason=(apply_reason or "").strip()[:500] or None,
         consumed=False,
         expires_at=expiry,
     )
@@ -473,6 +486,7 @@ async def consume_pending_normal_registration(
         phone=str(pending.phone) if pending.phone else None,
         hashed_password=str(pending.hashed_password),
         account_level="normal",
+        apply_reason=pending.apply_reason,
     )
 
     await log_audit(db, user.id, "register_normal", "password registration complete")

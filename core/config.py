@@ -273,6 +273,16 @@ class Settings(BaseSettings):
     # 敏感时期可切 apply，无需改代码。未知取值启动即校验失败。
     admission_mode: Literal["open", "apply"] = "open"
 
+    # 每日待办摘要的可选 bot 推送（LKM-bot 的 OpenAPI：POST /api/v1/im/messages，
+    # 需要 im scope 的 api key）。三项全部配置才启用；失败只告警，不影响站内信。
+    bot_push_url: str = ""
+    bot_push_api_key: SecretStr = SecretStr("")
+    bot_push_umo: str = ""
+
+    # 仅 dev/local/test：允许 ``/auth/internal/dev-code`` 为 register 用途铸造验证码并回明文。
+    # 供金路径脚本走真实验证码注册；生产（非宽松环境）启动即拒绝。默认关闭。
+    dev_code_sink: bool = False
+
     # AUTH 独立库
     auth_db_host: str = "localhost"
     auth_db_port: int = 5432
@@ -382,6 +392,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Insecure secrets in production (set LKM_ENV to a non-dev value but secrets "
                 f"missing/placeholder): {', '.join(insecure)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _dev_code_sink_only_permissive(self) -> "Settings":
+        """验证码铸造入口只允许在宽松环境开启，避免生产出现“可自助取码”的旁路。"""
+        env = (self.env or "").strip().lower()
+        if self.dev_code_sink and env not in _PERMISSIVE_ENVS:
+            raise ValueError(
+                "LKM_DEV_CODE_SINK is only allowed in dev/local/test environments"
             )
         return self
 

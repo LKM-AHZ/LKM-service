@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from auth.admission import ACTIVE, PENDING, REJECTED
 from auth.errors import AuthErr
@@ -44,6 +44,21 @@ def _row_to_dict(user: User) -> dict[str, Any]:
         ),
         "reject_reason": user.reject_reason,
     }
+
+
+async def count_admission_users(db: DbSession, status: str) -> int:
+    """按准入状态计数（后台角标/待办聚合用，不拉行）。"""
+    if status not in (ACTIVE, PENDING, REJECTED):
+        raise BizError(CommonErr.INVALID_INPUT, f"unknown admission status {status!r}")
+    return int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.admission_status == status)
+            )
+        ).scalar_one()
+    )
 
 
 async def list_admission_users(db: DbSession, status: str) -> list[dict[str, Any]]:

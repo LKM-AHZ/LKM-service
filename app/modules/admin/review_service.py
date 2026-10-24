@@ -1,11 +1,13 @@
-"""后台待办审核聚合（service 层）：dashboard 卡片与每日摘要共用同一口径。
+"""后台待办审核聚合（service 层）：dashboard 卡片、侧边栏角标与每日摘要共用同一口径。
 
-五个队列：文件待审、举报待处理、板块/专栏/项目申请待审。每项返回数量 + 最旧一条的
-等待时长（秒）+ 后台审核页深链。全部在业务库内聚合，不跨库 join。
+队列：文件待审、举报待处理、板块/专栏/项目申请待审，外加 auth 域的待审账号。
+业务表在业务库内聚合；待审账号经 users 端口取 auth 权威计数（不可用时该队列缺省、
+不影响其余队列与 dashboard 可用性）。
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +19,9 @@ from app.modules.admin.schemas import AdminReviewQueueItem, AdminReviewSummary
 from app.modules.content.models import BoardApplication, ColumnApplication
 from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.projects.models import ProjectApplication
+from core.ports.users import count_admission_users
+
+logger = logging.getLogger(__name__)
 
 # (key, model, status 列, 待办状态, 后台深链)；暂无审核页的队列 href=None。
 _QUEUES: tuple[tuple[str, Any, Any, str, str | None], ...] = (
@@ -53,7 +58,7 @@ _QUEUES: tuple[tuple[str, Any, Any, str, str | None], ...] = (
 
 
 async def build_review_summary(db: AsyncSession) -> AdminReviewSummary:
-    """聚合五个待办队列（只读）。"""
+    """聚合待办队列（只读）；待审账号计数不可用时该队列缺省，不影响其余队列。"""
     now = datetime.now(UTC)
     queues: list[AdminReviewQueueItem] = []
     for key, model, status_col, pending, href in _QUEUES:
@@ -75,6 +80,22 @@ async def build_review_summary(db: AsyncSession) -> AdminReviewSummary:
                 href=href,
             )
         )
+
+    # auth 域队列：计数走 users 端口（拆库 HTTP / 单库直查）；失败只丢这一项。
+    try:
+        pending_users = await count_admission_users(db, "pending")
+    except Exception:
+        logger.warning("review summary: admission count unavailable", exc_info=True)
+    else:
+        queues.append(
+            AdminReviewQueueItem(
+                key="admission_users",
+                count=pending_users,
+                oldest_waiting_seconds=None,
+                href="/admin/users",
+            )
+        )
+
     return AdminReviewSummary(
         total_pending=sum(item.count for item in queues),
         queues=queues,

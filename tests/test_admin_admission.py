@@ -36,7 +36,9 @@ async def _mk_admin(db: DB, username: str = "admission_admin") -> User:
     return user
 
 
-async def _mk_pending(db: DB, username: str = "pending_user") -> User:
+async def _mk_pending(
+    db: DB, username: str = "pending_user", apply_reason: str | None = None
+) -> User:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -44,6 +46,7 @@ async def _mk_pending(db: DB, username: str = "pending_user") -> User:
         account_level="normal",
         admission_status="pending",
         applied_at=now_iso(),
+        apply_reason=apply_reason,
     )
     db.add(user)
     await db.flush()
@@ -75,7 +78,7 @@ async def test_list_requires_permission(db: DB, client: Client) -> None:
 async def test_list_returns_pending(db: DB, client: Client) -> None:
     await _grant(db)
     admin = await _mk_admin(db)
-    pending = await _mk_pending(db)
+    pending = await _mk_pending(db, apply_reason="想参与资料整理")
     _cookie(client, admin)
 
     resp = await client.get("/api/v1/admin/admission/users")
@@ -84,6 +87,7 @@ async def test_list_returns_pending(db: DB, client: Client) -> None:
     rows = resp.json()["data"]
     assert [row["user_id"] for row in rows] == [str(pending.id)]
     assert rows[0]["admission_status"] == "pending"
+    assert rows[0]["apply_reason"] == "想参与资料整理"
 
 
 async def test_decision_requires_2fa(db: DB, client: Client) -> None:

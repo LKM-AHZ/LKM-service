@@ -290,6 +290,11 @@ class _UsersImpl:
 
         return await _seams.list_admission_users(db, status)
 
+    async def count_admission_users(self, db: Any, status: str) -> int:
+        from auth import seams as _seams
+
+        return await _seams.count_admission_users(db, status)
+
     async def decide_admission(
         self,
         db: Any,

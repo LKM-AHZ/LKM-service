@@ -65,6 +65,7 @@ __all__ = [
     "_ADMIN_AUD",
     "block_payload_jti",
     "cleanup_expired_challenges",
+    "count_admission_users",
     "create_admin_access_token",
     "decide_admission",
     "decode_admin_access",
@@ -303,6 +304,28 @@ async def list_admission_users(db: Any, status: str) -> list[dict[str, Any]]:
     from auth.service_admission import list_admission_users as _list
 
     return await _list(db, status)
+
+
+async def count_admission_users(db: Any, status: str) -> int:
+    """按准入状态计数（后台角标/待办聚合）：拆库走 AUTH internal，单库直查。"""
+    from auth import user_http
+
+    if user_http.enabled():
+        try:
+            return await user_http.fetch_admission_count_via_seam(status)
+        except BizError:
+            raise
+        except user_http.UserHttpUnavailable as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
+            ) from None
+        except Exception as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
+            ) from exc
+    from auth.service_admission import count_admission_users as _count
+
+    return await _count(db, status)
 
 
 async def decide_admission(
