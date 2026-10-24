@@ -35,6 +35,7 @@ from app.modules.content.columns.service import (
     get_post,
     list_applications,
     list_columns,
+    list_my_column_applications,
     list_posts,
     review_application,
 )
@@ -145,6 +146,21 @@ class TestColumnApplications:
 
         assert applications.total == 1
         assert applications.items[0].title == "数学思维训练"
+
+    async def should_list_only_my_applications(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        user = await _au(auth_db)
+        other = await _au(auth_db, username="someone_else")
+        mine = await _application(db, user_id=user.id)
+        await _application(db, user_id=other.id)
+
+        rows = await list_my_column_applications(db, user.id)
+
+        assert [row.id for row in rows] == [mine.id]
+        assert rows[0].status == ColumnApplicationStatus.PENDING
+        assert rows[0].review_note is None
+        assert rows[0].created_at is not None
 
     async def should_get_application(self, db: AsyncSession, auth_db: AsyncSession):
         user = await _au(auth_db)
@@ -382,6 +398,37 @@ class TestColumnRoutes:
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == AuthErr.ACCOUNT_LEVEL_INSUFFICIENT
+
+    async def should_return_only_own_applications(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+    ) -> None:
+        """``/applications/me`` 不被 ``/applications/{id}`` 吞掉，且只回本人行。"""
+        user = await self._setup_user(db, auth_db)
+        other = await _au(auth_db, username="http_other")
+        mine = await _application(db, user_id=user.id)
+        await _application(db, user_id=other.id)
+
+        resp = await client.get(
+            "/api/v1/content/columns/applications/me",
+            headers={"Authorization": f"Bearer {user.token}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert [item["id"] for item in data] == [str(mine.id)]
+        assert data[0]["status"] == "pending"
+        assert data[0]["review_note"] is None
+
+    async def should_reject_my_applications_without_auth(
+        self, client: AsyncClient, db: AsyncSession
+    ) -> None:
+        resp = await client.get("/api/v1/content/columns/applications/me")
+        assert resp.status_code == 403
+        assert resp.json()["code"] == CommonErr.FORBIDDEN
 
     async def should_reject_review_for_non_admin(
         self,

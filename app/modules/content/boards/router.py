@@ -21,6 +21,7 @@ from app.modules.content.boards.service import (
     ban_user,
     create_board_ex,
     get_board_ex,
+    list_my_board_applications,
     review_application,
     submit_application,
     unban_user,
@@ -33,7 +34,7 @@ from app.modules.rbac.service import check_owner, user_has_permission
 from core.common import ApiResp, ModuleStatus
 from core.contracts import CurrentUser
 from core.db.repository import VersionConflictError
-from core.db.session import get_session
+from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, ErrCode, respond
 from core.ports.authz import get_current_user
 
@@ -73,6 +74,16 @@ async def admin_create_board(
     db: AsyncSession = Depends(get_session),
 ) -> BoardOut:
     return await create_board_ex(db, info, owner_id=None)
+
+
+@router.get("/applications/me", response_model=ApiResp[list[BoardApplicationOut]])
+@respond
+async def my_board_applications(
+    cur: CurrentUserDep,
+    db: AsyncSession = Depends(get_read_session),
+) -> list[BoardApplicationOut]:
+    """申请人视角：本人提交的板块申请（状态 / 审核意见 / 提交与审核时间）。"""
+    return await list_my_board_applications(db, cur.id)
 
 
 @router.post("/applications", response_model=ApiResp[BoardApplicationOut])

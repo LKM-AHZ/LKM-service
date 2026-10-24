@@ -801,6 +801,14 @@ async def list_applications(
     )
 
 
+async def list_my_column_applications(
+    db: DbSession, user_id: uuid.UUID
+) -> list[ColumnApplicationInfo]:
+    """申请人视角：本人提交的专栏申请（状态 / 审核意见 / 提交与审核时间）。"""
+    rows = await ColumnApplicationRepository(db).list_for_user(user_id)
+    return [ColumnApplicationInfo.model_validate(row) for row in rows]
+
+
 async def get_application(
     db: DbSession, application_id: uuid.UUID
 ) -> ColumnApplicationInfo:
@@ -1073,6 +1081,14 @@ async def submit_application(
         status="pending",
     )
     return _bb_application_to_schema(app_)
+
+
+async def list_my_board_applications(
+    db: DbSession, applicant_id: uuid.UUID
+) -> list[BoardApplicationOut]:
+    """申请人视角：本人提交的板块申请（状态 / 审核意见 / 提交与审核时间）。"""
+    rows = await BoardApplicationRepository(db).list_for_applicant(applicant_id)
+    return [_bb_application_to_schema(row) for row in rows]
 
 
 async def review_board_application(

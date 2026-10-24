@@ -278,6 +278,13 @@ class ColumnApplicationRepository(AsyncRepository[ColumnApplication]):
             order_by=ColumnApplication.id.desc(), offset=offset, limit=limit
         )
 
+    async def list_for_user(self, user_id: uuid.UUID) -> list[ColumnApplication]:
+        """申请人视角：本人全部申请，最新在前（id 为 uuid7，单调递增近似时间序）。"""
+        return await self.get_many(
+            ColumnApplication.user_id == user_id,
+            order_by=ColumnApplication.id.desc(),
+        )
+
 
 class ColumnPostRepository(AsyncRepository[ColumnPost]):
     model = ColumnPost
@@ -339,6 +346,15 @@ class BoardApplicationRepository(AsyncRepository[BoardApplication]):
 
     async def slug_taken(self, slug: str) -> bool:
         return await self.exists(BoardApplication.slug == slug)
+
+    async def list_for_applicant(
+        self, applicant_id: uuid.UUID
+    ) -> list[BoardApplication]:
+        """申请人视角：本人全部板块申请，最新在前。"""
+        return await self.get_many(
+            BoardApplication.applicant_id == applicant_id,
+            order_by=BoardApplication.id.desc(),
+        )
 
 
 class BoardBanRepository(AsyncRepository[BoardBan]):

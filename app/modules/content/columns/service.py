@@ -17,6 +17,7 @@ from app.modules.content.service import (
     get_post,
     list_applications,
     list_columns,
+    list_my_column_applications,
     list_posts,
     review_application,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "get_post",
     "list_applications",
     "list_columns",
+    "list_my_column_applications",
     "list_posts",
     "review_application",
 ]

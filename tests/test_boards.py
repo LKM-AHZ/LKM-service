@@ -31,6 +31,7 @@ from app.modules.content.boards.service import (
     get_board_ex,
     is_banned,
     list_boards,
+    list_my_board_applications,
     review_application,
     submit_application,
     unban_user,
@@ -97,6 +98,32 @@ class TestBoardService:
         # owner 能改
         await update_board_ex(db, b.id, owner, BoardUpdate(title="新标题"))
         assert (await get_board_ex(db, b.id)).title == "新标题"
+
+    async def test_list_my_applications(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
+        mine = (await _au(auth_db, "mine")).id
+        other = (await _au(auth_db, "other")).id
+        first = await submit_application(
+            db,
+            mine,
+            BoardApplicationCreate(title="A", description="d", reason="r", slug="a1"),
+        )
+        second = await submit_application(
+            db,
+            mine,
+            BoardApplicationCreate(title="B", description="d", reason="r", slug="a2"),
+        )
+        await submit_application(
+            db,
+            other,
+            BoardApplicationCreate(title="C", description="d", reason="r", slug="a3"),
+        )
+
+        rows = await list_my_board_applications(db, mine)
+
+        assert {row.id for row in rows} == {first.id, second.id}
+        assert {row.status for row in rows} == {"pending"}
 
     async def test_application_review_creates_board(
         self, db: AsyncSession, auth_db: AsyncSession

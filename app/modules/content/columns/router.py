@@ -21,6 +21,7 @@ from app.modules.content.columns.service import (
     get_column,
     get_column_plan,
     list_applications,
+    list_my_column_applications,
     review_application,
 )
 from app.modules.content.models import Column, ColumnApplication
@@ -82,6 +83,20 @@ async def get_applications(
     if not await user_has_permission(db, cur, Permission.columns_application_review):
         raise BizError(CommonErr.FORBIDDEN)
     return await list_applications(db, page=pag.page, limit=pag.limit)
+
+
+@router.get("/applications/me", response_model=ApiResp[list[ColumnApplicationInfo]])
+@respond
+async def my_column_applications(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> list[ColumnApplicationInfo]:
+    """申请人视角：本人提交的专栏申请（状态 / 审核意见 / 提交与审核时间）。
+
+    与管理员列表分开：本端点只看自己的行，不需要任何 review 权限点。必须注册在
+    ``/applications/{application_id}`` 之前，否则 ``me`` 会被当成 UUID 路径参数。
+    """
+    return await list_my_column_applications(db, cur.id)
 
 
 @router.get(
