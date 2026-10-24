@@ -18,6 +18,7 @@
    确定性、无需消息总线 worker（失效 handler 在进程内直接驱动，等价 worker 分派）。
 """
 
+import datetime
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -339,7 +340,12 @@ class TestLoginUnlockInvalidatesSnap:
         db.add(user)
         await db.flush()
         uid = user.id  # commit 前置 ID，避免 commit 后 expire 触发 greenlet 懒读
-        user.is_locked = True  # 模拟先前被自动锁定(banned)，locked_until=None(解锁后可成功登)
+        # 模拟一次**已到期**的自动锁定：锁定门禁会把 is_locked 翻回 False 后放行登录，
+        # 从而触发 user.updated 事件与快照失效（永久锁 locked_until=None 现在会被拒）。
+        user.is_locked = True
+        user.locked_until = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+            minutes=1
+        )
         await db.commit()
         return uid
 

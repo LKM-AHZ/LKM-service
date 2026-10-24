@@ -322,6 +322,8 @@ async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
     if user.account_level == "local":
         raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
 
+    # 锁定门禁在 finalize_auth_response 内（所有发令牌入口的汇合点）：passkey 登录
+    # 曾绕过 is_locked 直接发 token，勿在别处再补一份判据。
     from auth.service_auth import finalize_auth_response
 
     return await finalize_auth_response(db, user)

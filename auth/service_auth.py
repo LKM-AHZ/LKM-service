@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from auth import events
+from auth.account_state import clear_expired_lock, lock_is_active
 from auth.channels import CHANNELS, channel_for
 from auth.errors import AuthErr
 from auth.models import (
@@ -127,7 +128,11 @@ async def issue_session_tokens(
 
     mfa_verified=True 时把 step-up 2FA 标记（含信任时刻 mfa_at，默认 now）编入 access token，
     并同步写入刷新记录，供 1 小时信任窗口与刷新轮换继承使用。
+
+    这是**所有会话令牌签发**的唯一汇合点（登录、注册、2FA 完成、step-up、refresh），
+    因此账号锁定门禁也放在这里：任何入口漏检都不会给被锁账号发 token。
     """
+    await _check_account_locked(user)
     if "profile" not in user.__dict__:
         await db.refresh(user, attribute_names=["profile"])
     profile = user.profile
@@ -176,7 +181,11 @@ async def issue_session_tokens(
 async def _create_auth_response(
     db: DbSession, user: User, requires_2fa: bool = False
 ) -> dict[str, Any]:
-    """构建作为登录 / 注册响应返回的字典。"""
+    """构建作为登录 / 注册响应返回的字典。
+
+    锁定门禁先于 ``requires_2fa`` 分支：被锁账号连临时 2FA token 也不该拿到。
+    """
+    await _check_account_locked(user)
     if requires_2fa:
         temp_token = create_temp_token(user.id)
         return {
@@ -200,18 +209,18 @@ async def _create_auth_response(
 
 
 async def _check_account_locked(user: User) -> None:
-    """检查用户是否被锁定 —— 但返回 INVALID_CREDENTIALS 以防止通过锁检测进行账号枚举。"""
+    """登录门禁：生效中的锁（含永久锁）一律以 INVALID_CREDENTIALS 拒，防账号枚举。
+
+    过期临时锁自动解除（字段就地改，落库由调用方事务负责）；永久锁
+    （``locked_until=NULL``）不再被当成“未锁定”。判据统一在 ``auth.account_state``。
+    """
     if not user.is_locked:
         return
-    if user.locked_until:
-        if user.locked_until > now_iso():
-            # 执行虚拟哈希以保持时序一致
-            await dummy_verify()
-            raise BizError(AuthErr.INVALID_CREDENTIALS)
-        # 锁定已过期 —— 自动解锁
-        user.is_locked = False
-        user.locked_until = None
-        user.failed_login_attempts = 0
+    if lock_is_active(user):
+        # 执行虚拟哈希以保持时序一致
+        await dummy_verify()
+        raise BizError(AuthErr.INVALID_CREDENTIALS)
+    clear_expired_lock(user)
 
 
 async def _record_failed_attempt(db: DbSession, user: User) -> bool:
@@ -461,7 +470,13 @@ async def _check_admin_totp_required(
 
 
 async def finalize_auth_response(db: DbSession, user: User) -> dict[str, Any]:
-    """检查管理员 TOTP 和 2FA 要求，返回认证响应。"""
+    """检查账号锁定、管理员 TOTP 和 2FA 要求，返回认证响应。
+
+    所有发令牌入口（密码 / 验证码 / 注册自动登录 / OAuth / passkey）都汇到这里，故锁定
+    门禁放在最前：新增入口即使忘了自查，也不会给被锁账号签发 token（passkey 曾漏掉）。
+    登录路径已先行检查过，这里对未锁定用户是幂等的。
+    """
+    await _check_account_locked(user)
     admin_setup = await _check_admin_totp_required(db, user)
     if admin_setup is not None:
         return admin_setup
@@ -643,6 +658,12 @@ async def verify_magic_link(
         if not totp or not totp.enabled:
             raise BizError(AuthErr.TOTP_SETUP_REQUIRED)
 
+    # reset 用途只做令牌校验：密码恢复流程随后自行重置口令并解除失败锁，不应在这里
+    # 发会话令牌（被失败次数锁定的账号必须能走恢复；真正的登录发令牌由
+    # ``_create_auth_response`` 的锁定门禁拦截）。
+    if purpose == "reset":
+        return {"user_id": user.id, "account_level": user.account_level}
+
     # 与 login_password 相同：登录不再每次强制 2FA，直接发会话令牌。
     return await _create_auth_response(db, user, requires_2fa=False)
 
@@ -690,7 +711,7 @@ async def refresh_access_token(db: DbSession, raw_refresh: str) -> dict[str, Any
     user = await UserRepository(db).get_with_profile_or_raise(
         stored.user_id, AuthErr.USER_NOT_FOUND
     )
-    if user.is_locked and user.locked_until and user.locked_until > now:
+    if lock_is_active(user):
         raise BizError(AuthErr.ACCOUNT_LOCKED)
 
     try:

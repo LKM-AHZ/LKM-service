@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from auth.account_state import lock_is_active
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
 from auth.models import User
@@ -28,7 +29,6 @@ from auth.service_authz import (
 from auth.token_revocation import is_jti_blocked, token_version_is_stale
 from core.config import is_test_env
 from core.contracts import CurrentUser
-from core.db.base import now_iso
 from core.err import BizError, CommonErr
 from core.ports.authz import MFA_TRUST_SECONDS, _bearer_token, _parse_bearer
 from core.rbac_roles import (
@@ -91,8 +91,8 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     if user is None:
         raise BizError(AuthErr.USER_NOT_FOUND)
 
-    # 检查账号是否被锁定
-    if user.is_locked and user.locked_until and user.locked_until > now_iso():
+    # 检查账号是否被锁定（判据统一在 auth.account_state：永久锁 locked_until=NULL 也算锁定）
+    if lock_is_active(user):
         raise BizError(AuthErr.ACCOUNT_LOCKED)
 
     # token_version 检查：如果用户的 token_version 已经被提升（例如注销或密码重置后），令牌无效。

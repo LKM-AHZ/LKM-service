@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import jwt_keys
+from auth.account_state import lock_is_active
 from auth.admin_session import (
     _ADMIN_AUD,
     COOKIE_NAME,
@@ -384,7 +385,7 @@ async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
 
     user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
-    if user.is_locked and user.locked_until and user.locked_until > now_iso():
+    if lock_is_active(user):
         raise BizError(CommonErr.FORBIDDEN, "Admin account is locked")
     if int(payload.get("token_version", 0)) != int(user.token_version):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalidated")
@@ -439,7 +440,7 @@ async def admin_login(
     if user.account_level != "admin":
         return resp_json(CommonErr.FORBIDDEN, detail="无后台访问权限")
 
-    if user.is_locked and user.locked_until and user.locked_until > now_iso():
+    if lock_is_active(user):
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
     await db.refresh(user, attribute_names=["profile"])
@@ -512,7 +513,7 @@ async def admin_refresh(
     )
     if user.account_level != "admin":
         return resp_json(CommonErr.FORBIDDEN, detail="会话无效")
-    if user.is_locked and user.locked_until and user.locked_until > now:
+    if lock_is_active(user):
         return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
 
     # 2FA 信任以 auth 库 refresh 行为真值：access cookie 只活 15min，只读它的话

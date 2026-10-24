@@ -74,6 +74,8 @@ async def test_issued_access_is_bound_to_refresh_token(monkeypatch):
         id=uuid.uuid4(),
         account_level="normal",
         token_version=0,
+        is_locked=False,
+        locked_until=None,
         profile=SimpleNamespace(role="member"),
     )
     access, refresh = await service_auth.issue_session_tokens(object(), user)

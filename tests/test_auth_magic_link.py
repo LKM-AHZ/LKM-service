@@ -236,3 +236,32 @@ class TestVerifyMagicLink:
         assert result["temp_token"] is None
         assert result["access_token"] is not None
         assert result["refresh_token"] is not None
+
+
+class TestMagicLinkLockGate:
+    async def should_block_session_issuance_for_locked_account(
+        self, db: AsyncSession
+    ):
+        """purpose=login 是登录入口：被锁（含永久锁）账号不得拿到会话令牌。"""
+        user = await _create_user(db, email="locked@example.com")
+        user.is_locked = True
+        user.locked_until = None
+        await db.flush()
+        raw_token, _ = await _make_magic_link(db, "locked@example.com")
+
+        svc = _service()
+        with pytest.raises(BizError) as exc:
+            await svc.verify_magic_link(db, raw_token, purpose="login")
+        assert exc.value.errcode == AuthErr.INVALID_CREDENTIALS
+
+    async def should_only_validate_for_reset_purpose(self, db: AsyncSession):
+        """purpose=reset 只校验令牌、不发会话：被失败次数锁定的账号必须能走恢复。"""
+        user = await _create_user(db, email="reset@example.com")
+        user.is_locked = True
+        await db.flush()
+        raw_token, _ = await _make_magic_link(db, "reset@example.com", purpose="reset")
+
+        result = await _service().verify_magic_link(db, raw_token, purpose="reset")
+
+        assert result["user_id"] == user.id
+        assert "access_token" not in result
