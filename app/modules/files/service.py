@@ -44,6 +44,7 @@ from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
 from core.messaging import RKEY_FILE_CHANGED
+from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _uploader_map
 from core.storage.base import Readable, StorageBackend
 from core.storage.errors import StorageErr
@@ -451,8 +452,13 @@ async def review_file(
     target_status: FileStatus,
     review_comment: str | None = None,
     is_admin: bool = False,
+    reviewer_id: uuid.UUID | None = None,
 ) -> FileInfo:
-    """管理员审核文件：通过或驳回；共享同一内容的其他文件独立审核。"""
+    """管理员审核文件：通过或驳回；共享同一内容的其他文件独立审核。
+
+    ``reviewer_id`` 只进审计（谁审的），不参与授权判定；缺省（脚本/内部调用）时审计的
+    ``user_id`` 为空，但仍记录目标、决定、理由与时间。
+    """
     if not is_admin:
         raise BizError(FileErr.STORE_ERROR, detail="Only admin can review files")
     if target_status not in (FileStatus.APPROVED, FileStatus.REJECTED):
@@ -496,6 +502,22 @@ async def review_file(
                 if older.id != f.id and older.status == FileStatus.APPROVED:
                     await _enqueue_file_change(db, older.id)
 
+    await record_audit(
+        db,
+        reviewer_id,
+        "review_file",
+        detail=json.dumps(
+            {
+                "target_type": "file",
+                "target_id": str(f.id),
+                "decision": target_status.value,
+                "reason": review_comment,
+                "previous_status": FileStatus.PENDING.value,
+                "at": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
     names = await _uploader_map(db, [f.uploader_id])
     return _file_to_schema(f, names.get(f.uploader_id, ""))
 

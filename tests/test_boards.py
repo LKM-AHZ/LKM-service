@@ -5,9 +5,12 @@ users/profiles 迁 auth 库(AuthBase)。凡 service 需要用户身份的用例�
 - ``_au(auth_db,...)`` 建 auth realm 用户返回稳定 ``AuthUser``，以其裸 ``.id`` 作
   业务行 owner_id/applicant_id/reviewer/user_id（业务库只存裸 int，不存 User）。
 这些 boards.* service 纯按 int user_id 行事（属主/申请/审核/禁言比对 id + 业务 realm
-RolePermission 权限点），不跨 realm 读展示名，故**无需** auth_seam_realm。
+RolePermission 权限点），不跨 realm 读展示名；但**审核**会写审计（auth 独立库），故模块级
+autouse fixture 统一启用 ``auth_seam_realm``。
 真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
+
+import json
 
 import pytest
 from sqlalchemy import select
@@ -34,8 +37,18 @@ from app.modules.content.boards.service import (
     update_board_ex,
 )
 from app.modules.content.models import Board
+from auth.models import AuditLog
 from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
+
+
+@pytest.fixture(autouse=True)
+async def _review_audit_seam(auth_seam_realm: None) -> None:
+    """审核动作写 ``review_board_application`` 审计（auth 独立库）→ 本模块统一启用 seam。
+
+    其余 boards service 仍只按裸 int user_id 行事；这里开 seam 仅为让审计写落到本测
+    auth schema，而不是业务库（``audit_logs`` 属 ``AuthBase``）。
+    """
 
 
 async def _au(
@@ -99,12 +112,28 @@ class TestBoardService:
         assert app.status == "pending"
         reviewer = (await _au(auth_db, "admin_", account_level="admin")).id
         out = await review_application(
-            db, app.id, reviewer, ReviewBoardApplicationRequest(approve=True)
+            db,
+            app.id,
+            reviewer,
+            ReviewBoardApplicationRequest(approve=True, note="通过"),
         )
         assert out.status == "approved"
         board = await db.scalar(select(Board).where(Board.slug == "newb"))
         assert board is not None
         assert board.owner_id == applicant.id
+        audit = (
+            await auth_db.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "review_board_application"
+                )
+            )
+        ).scalar_one()
+        assert audit.user_id == reviewer
+        payload = json.loads(audit.detail or "{}")
+        assert payload["target_id"] == str(app.id)
+        assert payload["applicant_id"] == str(applicant.id)
+        assert payload["decision"] == "approved"
+        assert payload["reason"] == "通过"
 
     async def test_review_twice_rejected(
         self, db: AsyncSession, auth_db: AsyncSession

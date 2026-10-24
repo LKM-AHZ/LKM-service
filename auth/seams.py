@@ -8,6 +8,7 @@ app 侧（业务域 / flows / worker 装配 / 运维脚本）不得直接 import
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from auth.admin_session import (
@@ -82,6 +83,7 @@ __all__ = [
     "open_session_pair",
     "reconcile_user_dim_incremental",
     "reconcile_user_dim_periodic",
+    "record_audit_from_business",
     "refresh_verify_key",
     "resolve_current_user",
     "resolve_via_seam",
@@ -196,3 +198,46 @@ async def verify_password_via_seam(
     if not payload.get("ok"):
         return None
     return {"user_id": payload["user_id"], "username": payload["username"]}
+
+
+async def record_audit_from_business(
+    db: Any,
+    user_id: uuid.UUID | None,
+    action: str,
+    *,
+    detail: str | None = None,
+    ip_address: str | None = None,
+) -> None:
+    """业务进程写一条审计：拆库走 ``/auth/internal/audit``，单库回落同库直写。
+
+    业务域**不得**把业务 ``get_session`` 传给 ``log_audit``：``audit_logs`` 是 ``AuthBase``
+    表，拆库后业务库无此表，INSERT 必 ``UndefinedTable`` 并把整个业务事务一起回滚。
+
+    **fail-closed**：缝模式下 AUTH 不可用/畸形 → 抛 ``BizError(UNAVAILABLE)``，调用方的
+    业务事务应随之中止（审计缺失优先于操作生效）。缝未配置时（单库/蓝绿）才回落
+    ``log_audit(db, …)``，此时 ``db`` 必须与 auth 表同库（fused 装配）。
+
+    惰性取 ``auth.user_http`` 模块属性，保持测试对 ``write_audit_via_seam`` 的
+    monkeypatch 依然生效。
+    """
+    from auth import user_http
+
+    if user_http.enabled():
+        try:
+            await user_http.write_audit_via_seam(
+                user_id=user_id,
+                action=action,
+                detail=detail,
+                ip_address=ip_address,
+            )
+        except user_http.UserHttpUnavailable as exc:
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}"
+            ) from None
+        except Exception as exc:
+            # 同 mint_bot_sso_ticket：非 HTTPError（InvalidURL 等）也要收口在 fail-closed 内。
+            raise BizError(
+                CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}"
+            ) from exc
+        return
+    await log_audit(db, user_id, action, detail=detail, ip_address=ip_address)

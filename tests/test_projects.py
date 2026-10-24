@@ -26,7 +26,7 @@ from app.modules.projects.service import (
     review_application,
     submit_application,
 )
-from auth.models import Profile, User
+from auth.models import AuditLog, Profile, User
 from core.err import BizError
 from tests.conftest import AuthUser, auth_user_uid
 
@@ -233,6 +233,20 @@ class TestProjectApplicationService:
         by_name = {m.display_name: m for m in members}
         assert by_name["艾尔"].user_id == member_uid
         assert by_name["外援"].user_id is None
+
+        audit = (
+            await auth_db.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "review_project_application"
+                )
+            )
+        ).scalar_one()
+        assert audit.user_id == reviewer
+        payload = json.loads(audit.detail or "{}")
+        assert payload["target_id"] == str(app.id)
+        assert payload["applicant_id"] == str(applicant)
+        assert payload["decision"] == "approved"
+        assert payload["reason"] == "ok"
 
         # 申请人升级（auth realm）
         assert await _user_level(auth_db, applicant) == "admin"

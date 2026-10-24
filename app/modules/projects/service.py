@@ -22,6 +22,7 @@ from app.modules.projects.schemas import (
 from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError
+from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _applicant_names
 from core.ports.snapshot import get_user_snapshot_batch
 
@@ -161,6 +162,24 @@ async def review_application(
         await member_repo.add_all(members)
         await member_repo.flush()
         await _apply_incubation(db, app_.applicant_id)
+
+    await record_audit(
+        db,
+        reviewer_id,
+        "review_project_application",
+        detail=json.dumps(
+            {
+                "target_type": "project_application",
+                "target_id": str(app_.id),
+                "applicant_id": str(app_.applicant_id),
+                "decision": status,
+                "reason": body.note,
+                "previous_status": "pending",
+                "at": now_iso().isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
     return _app_to_schema(app_)
 
 

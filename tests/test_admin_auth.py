@@ -26,7 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import RolePermission
-from auth.models import User
+from app.modules.content.models import Board, ContentItem
+from auth.models import AuditLog, User
 from tests.conftest import DB, Client, auth_user_uid
 
 # 拆库后业务 realm 无 users：本文件一律经 auth realm 造 User + 从 auth_db ORM row mint
@@ -208,3 +209,47 @@ class TestAdminDangerContentDelete:
         resp = await client.delete(CONTENT_DELETE)
         assert resp.status_code == 401
         assert resp.json()["code"] == 4
+
+    async def should_audit_successful_delete(
+        self,
+        db: DB,
+        client: Client,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+    ) -> None:
+        """成功删除写审计，且审计落 auth 库（业务库无 audit_logs）。
+
+        回归锚：审计曾把业务 ``get_session`` 直接交给 ``log_audit``，拆库后必
+        ``relation "audit_logs" does not exist``，并把删除本身一起回滚。
+        """
+        admin = await _mk_admin(auth_db, "danger_audit")
+        await _grant_super_admin(db, "admin.content_review")
+        author = await auth_user_uid(
+            auth_db, username="deleted_author", account_level="normal", role="member"
+        )
+        board = Board(slug="b-audit", title="审计板")
+        db.add(board)
+        await db.flush()
+        item = ContentItem(
+            content_type="discussion",
+            board_id=board.id,
+            author_id=author.id,
+            title="待删帖",
+            content="正文",
+            excerpt="",
+        )
+        db.add(item)
+        await db.flush()
+        _set_admin_cookie(client, admin, mfa=True)
+
+        resp = await client.delete(f"/api/v1/admin/content/item/{item.id}")
+        assert resp.status_code == 200
+
+        row = (
+            await auth_db.execute(
+                select(AuditLog).where(AuditLog.action == "admin_delete_content_item")
+            )
+        ).scalar_one()
+        assert row.user_id == author.id  # 既有语义：user_id=被删内容作者
+        assert f"item={item.id}" in (row.detail or "")
+        assert f"admin={admin.id}" in (row.detail or "")

@@ -342,6 +342,45 @@ async def grant_via_seam(
 _VERIFY_FIELDS: tuple[str, ...] = ("ok", "user_id", "username")
 
 
+async def write_audit_via_seam(
+    *,
+    user_id: uuid.UUID | None,
+    action: str,
+    detail: str | None = None,
+    ip_address: str | None = None,
+) -> None:
+    """经 AUTH internal 写端点落一条审计（业务 realm 不能直写 ``auth.audit_logs``）。
+
+    **fail-closed**：4xx/5xx/网络/超时/畸形体一律抛 ``UserHttpUnavailable``，调用方必须让
+    业务事务失败——宁可这次审核/删除不生效，也不留下“做了但没审计”的记录。``user_id=None``
+    是合法值（无主体的系统动作），与 ``audit_logs.user_id`` 可空一致。
+    """
+    url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/audit"
+    headers = {
+        "Authorization": f"Bearer {reveal(settings.auth_http_token)}",
+        "Accept": "application/json",
+    }
+    body: dict[str, object] = {"action": action}
+    if user_id is not None:
+        body["user_id"] = str(user_id)
+    if detail is not None:
+        body["detail"] = detail
+    if ip_address is not None:
+        body["ip_address"] = ip_address
+    resp = await _request(
+        "POST", url, label="auth_http audit request", headers=headers, json=body
+    )
+
+    if resp.status_code != 200:
+        raise UserHttpUnavailable(
+            f"auth_http audit unexpected status {resp.status_code}"
+        )
+
+    payload = _coerce_json(resp)
+    if payload.get("ok") is not True:
+        raise UserHttpUnavailable("auth_http audit malformed ok flag")
+
+
 async def verify_password_via_seam(
     *, username: str, password: str
 ) -> dict[str, object]:

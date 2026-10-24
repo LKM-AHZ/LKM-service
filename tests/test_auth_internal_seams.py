@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import auth.router_authz  # noqa: F401  # 确保 ROUTERS 已装好 router_authz
 from app.main import app as _app
 from auth.db.session import get_auth_session
-from auth.models import Profile, User
+from auth.models import AuditLog, Profile, User
 from auth.security import hashpwd
 from auth.service_authz import grant_exam_unlock
 from core.config import settings
@@ -101,11 +101,61 @@ async def test_internal_seams_fail_closed_without_token(
             "/api/v1/auth/internal/verify-password",
             {"username": "bob", "password": "x"},
         ),
+        (
+            "/api/v1/auth/internal/audit",
+            {"action": "review_file"},
+        ),
     ):
         r = await client.post(path, json=payload)
         assert r.status_code == 401
         r2 = await client.post(path, json=payload, headers=_auth_headers())
         assert r2.status_code == 401
+
+
+async def test_internal_audit_writes_row(
+    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """内部审计缝：带 user_id 写主体，省略 user_id 写系统动作（可空）。"""
+    monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
+    uid = await _mk_user(db, "audit_subject")
+
+    r = await client.post(
+        "/api/v1/auth/internal/audit",
+        json={
+            "user_id": str(uid),
+            "action": "review_file",
+            "detail": '{"decision":"approved"}',
+            "ip_address": "203.0.113.7",
+        },
+        headers=_auth_headers(),
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+    r2 = await client.post(
+        "/api/v1/auth/internal/audit",
+        json={"action": "system_cleanup", "detail": "no actor"},
+        headers=_auth_headers(),
+    )
+    assert r2.status_code == 200
+
+    await db.commit()
+    rows = (
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(AuditLog.action.in_(["review_file", "system_cleanup"]))
+                .order_by(AuditLog.action)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [row.action for row in rows] == ["review_file", "system_cleanup"]
+    assert rows[0].user_id == uid
+    assert rows[0].detail == '{"decision":"approved"}'
+    assert rows[0].ip_address == "203.0.113.7"
+    assert rows[1].user_id is None
 
 
 async def test_grant_exam_unlock_upgrades_and_bumps_token(

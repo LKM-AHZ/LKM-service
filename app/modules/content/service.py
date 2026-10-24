@@ -99,6 +99,7 @@ from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError
 from core.metrics import post_created_total
+from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _author_map
 from core.ports.snapshot import get_user_snapshot
 
@@ -833,6 +834,23 @@ async def review_application(
     if info.status == ColumnApplicationStatus.APPROVED:
         column = await _ensure_column_for_application(db, app)
 
+    await record_audit(
+        db,
+        reviewer_id,
+        "review_column_application",
+        detail=json.dumps(
+            {
+                "target_type": "column_application",
+                "target_id": str(app.id),
+                "applicant_id": str(app.user_id),
+                "decision": info.status.value,
+                "reason": info.review_note,
+                "previous_status": ColumnApplicationStatus.PENDING.value,
+                "at": now_iso().isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
     return {
         "application": ColumnApplicationInfo.model_validate(app).model_dump(),
         "column": column.model_dump() if column else None,
@@ -1085,6 +1103,23 @@ async def review_board_application(
             ),
             owner_id=app_.applicant_id,
         )
+    await record_audit(
+        db,
+        reviewer_id,
+        "review_board_application",
+        detail=json.dumps(
+            {
+                "target_type": "board_application",
+                "target_id": str(app_.id),
+                "applicant_id": str(app_.applicant_id),
+                "decision": app_.status,
+                "reason": body.note,
+                "previous_status": "pending",
+                "at": now_iso().isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
     return _bb_application_to_schema(app_)
 
 

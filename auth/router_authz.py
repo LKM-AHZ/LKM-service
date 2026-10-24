@@ -1,4 +1,4 @@
-"""AUTH 内部授权/升权/验密 写缝（M3.B S2）：供业务进程经 HTTP 把“升权/升格/凭证校验”交给 auth 权威。
+"""AUTH 内部授权/升权/验密/审计 写缝（M3.B S2）：供业务进程经 HTTP 把“升权/升格/凭证校验/审计”交给 auth 权威。
 
 定位：auth 拆独立库后，业务进程不会再本地动 users/profiles；一切**身份状态的变更**（解锁考试、
 纳入成员）与**凭证校验**（blog git_http 等需要验密）都收口到 auth。本 router 只挂 ``/auth/internal``，
@@ -10,7 +10,12 @@
 
 写缝语义（Phase 4 消费）：升权只单向提升不降级、有改才 bump token_version；auth 自己的事务内 commit。
 返回内部信封（非 ApiResp）：grant → ``{"changed": 0|1}``；
-verify-password → ``{"ok": bool, "user_id": str|null, "username": str|null}``。
+verify-password → ``{"ok": bool, "user_id": str|null, "username": str|null}``；
+audit → ``{"ok": true}``。
+
+审计为什么也在这里：``audit_logs`` 属 ``AuthBase``（auth 独立库），业务会话写它必然
+``UndefinedTable``。业务域的审核/删除审计只能经本缝落到 auth 权威库，不能像旧
+``app/modules/admin/content_router.py`` 那样把业务 ``get_session`` 塞给 ``log_audit``。
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +33,7 @@ from auth.db.session import get_auth_session
 from auth.models import User
 from auth.router_read import _require_internal_token
 from auth.security import dummy_verify, verifypwd
+from auth.service_auth import log_audit
 from auth.service_authz import (
     authorize_user,
     grant_exam_unlock,
@@ -62,6 +68,19 @@ class _GrantIn(BaseModel):
 class _VerifyPasswordIn(BaseModel):
     username: str
     password: str
+
+
+class _AuditIn(BaseModel):
+    """内部审计写缝入参。
+
+    ``user_id`` 的语义由调用方定义（业务审核决定里用**操作者**，管理员删内容沿用
+    “被删内容作者 + detail 记 admin”）。这里不做语义裁决，只保证落库字段合法。
+    """
+
+    user_id: uuid.UUID | None = None
+    action: str = Field(min_length=1, max_length=200)
+    detail: str | None = None
+    ip_address: str | None = Field(default=None, max_length=45)
 
 
 @router.post("/authz")
@@ -154,3 +173,32 @@ async def internal_verify_password(
     if not ok:
         return {"ok": False, "user_id": None, "username": None}
     return {"ok": True, "user_id": str(user.id), "username": user.username}
+
+
+@router.post("/audit")
+async def internal_audit(
+    body: _AuditIn,
+    _auth: None = Depends(_require_internal_token),
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, bool]:
+    """内部审计写缝：业务进程把审核决定/管理员删除等审计落到 auth 权威库。
+
+    为什么需要这条缝：``audit_logs`` 是 ``AuthBase`` 表（auth 独立库），业务进程的
+    ``get_session`` 看不到它（拆库后必 ``UndefinedTable``）。业务域只经
+    ``core.ports.audit.record_audit`` → 本端点写审计，不直连 auth 库。
+
+    commit 由 ``get_auth_session`` 在请求末完成；**fail-closed**：写失败即 5xx，调用方
+    的业务事务必须随之回滚（宁可这次审核/删除不生效，也不留下“做了但没审计”的记录）。
+
+    已知取舍：拆库模式下本端点在业务事务 commit **之前**提交，若业务随后回滚，会留下一条
+    “曾尝试”的审计（detail 带目标与决定）。这是跨库无分布式事务的必然结果，方向是**多记**
+    而不是漏记；需要严格一致时再上 outbox。
+    """
+    await log_audit(
+        db,
+        body.user_id,
+        body.action,
+        detail=body.detail,
+        ip_address=body.ip_address,
+    )
+    return {"ok": True}

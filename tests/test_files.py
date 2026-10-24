@@ -40,6 +40,7 @@ from app.modules.files.service import (
     review_file,
     upload_init,
 )
+from auth.models import AuditLog
 from core.config import settings
 from core.err import BizError, CommonErr
 from core.storage.s3 import S3Storage
@@ -690,14 +691,32 @@ class TestFilesDedupAndReview:
     ):
         monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
         uploader = await _au(auth_db)
+        reviewer = await _au(auth_db, username="file_reviewer", account_level="admin")
         f = await self._upload_raw(db, uploader, b"approve-me")
 
         reviewed = await review_file(
-            db, f.id, FileStatus.APPROVED, review_comment="ok", is_admin=True
+            db,
+            f.id,
+            FileStatus.APPROVED,
+            review_comment="ok",
+            is_admin=True,
+            reviewer_id=reviewer.id,
         )
 
         assert reviewed.status == "approved"
         assert reviewed.review_comment == "ok"
+        audit = (
+            await auth_db.execute(
+                select(AuditLog).where(AuditLog.action == "review_file")
+            )
+        ).scalar_one()
+        assert audit.user_id == reviewer.id  # 审核动作的 user_id 记操作者
+        payload = json.loads(audit.detail or "{}")
+        assert payload["target_type"] == "file"
+        assert payload["target_id"] == str(f.id)
+        assert payload["decision"] == "approved"
+        assert payload["reason"] == "ok"
+        assert payload["previous_status"] == "pending"
 
     async def should_reject_review_removing_physical(
         self,

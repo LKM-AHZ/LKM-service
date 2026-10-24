@@ -31,7 +31,7 @@ from core.common import ApiResp, PageData, PaginateDep, PaginateParams
 from core.contracts import CurrentUser
 from core.db.session import get_session
 from core.err import respond
-from core.ports.audit import log_audit
+from core.ports.audit import record_audit
 
 from .deps import require_admin, require_admin_2fa
 from .permissions import require_permission
@@ -66,8 +66,12 @@ async def _audit_admin_delete(
     action: str,
     detail: str,
 ) -> None:
-    """记录管理员删除内容审计：user_id=被删内容作者，detail 含内容与执行者。"""
-    await log_audit(
+    """记录管理员删除内容审计：user_id=被删内容作者，detail 含内容与执行者。
+
+    走 ``record_audit``（拆库经 ``/auth/internal/audit``），**不得**把业务 ``get_session``
+    直接交给 ``log_audit``——``audit_logs`` 属 auth 独立库，直写必 ``UndefinedTable``。
+    """
+    await record_audit(
         db,
         target_user_id,
         action,

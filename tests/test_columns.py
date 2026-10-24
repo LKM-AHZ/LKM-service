@@ -9,11 +9,13 @@
 真双 PG(lkm / lkm_auth) schema-per-test 跑绿。
 """
 
+import json
 import uuid
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.column_models import ColumnApplicationStatus
@@ -37,9 +39,19 @@ from app.modules.content.columns.service import (
     review_application,
 )
 from auth.errors import AuthErr
+from auth.models import AuditLog
 from auth.security import create_access_token
 from core.err import BizError, CommonErr
 from tests.conftest import AuthUser, auth_user_uid
+
+
+@pytest.fixture(autouse=True)
+async def _review_audit_seam(auth_seam_realm: None) -> None:
+    """审核动作现在写 ``review_column_application`` 审计（auth 独立库）→ 本模块统一启用 seam。
+
+    ``_approved_column`` 这类夹具内部也会触发审核，逐用例声明容易漏配；seam 下审计替身
+    直写本测 auth schema，业务 db 不再尝试 INSERT ``audit_logs``（那里没有这张表）。
+    """
 
 # db 与 client fixture 均由 tests/conftest.py 提供（business realm schema + httpx.AsyncClient）
 # auth_db 亦为 conftest：各测试在自己的 auth schema 以 auth_user_uid 造真实 auth 用户。
@@ -154,19 +166,35 @@ class TestColumnReview:
         self, db: AsyncSession, auth_db: AsyncSession
     ):
         user = await _au(auth_db)
+        reviewer = await _au(auth_db, username="column_reviewer", account_level="admin")
         application = await _application(db, user_id=user.id)
 
         result: dict[str, Any] = await review_application(
             db,
             application.id,
-            ColumnApplicationReview(status=ColumnApplicationStatus.APPROVED),
-            user.id,
+            ColumnApplicationReview(
+                status=ColumnApplicationStatus.APPROVED, review_note="方向明确"
+            ),
+            reviewer.id,
         )
 
         assert result["application"]["status"] == ColumnApplicationStatus.APPROVED
         assert isinstance(result["column"]["id"], uuid.UUID)
         assert result["column"]["owner_id"] == user.id
         assert result["column"]["application_id"] == application.id
+        audit = (
+            await auth_db.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "review_column_application"
+                )
+            )
+        ).scalar_one()
+        assert audit.user_id == reviewer.id
+        payload = json.loads(audit.detail or "{}")
+        assert payload["target_id"] == str(application.id)
+        assert payload["applicant_id"] == str(user.id)
+        assert payload["decision"] == "approved"
+        assert payload["reason"] == "方向明确"
 
     async def should_not_create_column_when_application_is_rejected(
         self, db: AsyncSession, auth_db: AsyncSession

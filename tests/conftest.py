@@ -744,12 +744,27 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
             return {"ok": False, "user_id": None, "username": None}
         return {"ok": True, "user_id": str(u.id), "username": u.username}
 
+    async def _audit(
+        *,
+        user_id: uuid.UUID | None,
+        action: str,
+        detail: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        """审计写缝替身（等价 AUTH ``/auth/internal/audit``）：直写本测 auth realm。"""
+        from auth.service_auth import log_audit as _log_audit
+
+        await _log_audit(
+            carrier, user_id, action, detail=detail, ip_address=ip_address
+        )
+
     monkeypatch.setattr(uh, "authorize_via_seam", _authz)
     monkeypatch.setattr(uh, "fetch_user_http_payload", _fetch)
     monkeypatch.setattr(uh, "fetch_users_http_batch", _fetch_batch)
     monkeypatch.setattr(uh, "grant_via_seam", _grant)
     monkeypatch.setattr(uh, "mint_bot_sso_ticket", _mint_bot_ticket)
     monkeypatch.setattr(uh, "verify_password_via_seam", _verify_password)
+    monkeypatch.setattr(uh, "write_audit_via_seam", _audit)
 
 
 @pytest.fixture

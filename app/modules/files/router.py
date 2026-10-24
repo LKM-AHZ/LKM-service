@@ -233,6 +233,7 @@ async def review_uploaded_file(
         target_status=status,
         review_comment=review_comment,
         is_admin=True,
+        reviewer_id=_cur.id,
     )
 
 

@@ -139,6 +139,20 @@ class _AuditImpl:
 
         await log_audit(db, user_id, action, detail=detail, ip_address=ip_address)
 
+    async def record_audit(
+        self,
+        db: Any,
+        user_id: uuid.UUID | None,
+        action: str,
+        detail: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        from auth import seams as _seams
+
+        await _seams.record_audit_from_business(
+            db, user_id, action, detail=detail, ip_address=ip_address
+        )
+
     async def export_audit_logs(self, db: Any, client: Any, *, window: int) -> int:
         from auth.audit_export import export_audit_logs
 

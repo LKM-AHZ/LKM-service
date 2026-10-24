@@ -19,8 +19,27 @@ async def log_audit(
     detail: str | None = None,
     ip_address: str | None = None,
 ) -> None:
-    """创建一条审计日志记录（写入 auth 库）。"""
+    """创建一条审计日志记录（**调用方必须已持有 auth realm 会话**）。"""
     await get("audit").log_audit(
+        db, user_id, action, detail=detail, ip_address=ip_address
+    )
+
+
+async def record_audit(
+    db: Any,
+    user_id: uuid.UUID | None,
+    action: str,
+    detail: str | None = None,
+    ip_address: str | None = None,
+) -> None:
+    """业务域写审计：内部按部署形态走 AUTH internal 端点或同库直写。
+
+    与 :func:`log_audit` 的区别：本函数面向**业务库会话**（``core.db.session.get_session``），
+    实现方负责跨 realm；直接把业务会话传给 :func:`log_audit` 会在拆库后
+    ``UndefinedTable``（``audit_logs`` 属 ``AuthBase``）。失败是 **fail-closed** 的：
+    抛 ``BizError(UNAVAILABLE)``，调用方业务事务应随之回滚。
+    """
+    await get("audit").record_audit(
         db, user_id, action, detail=detail, ip_address=ip_address
     )
 
