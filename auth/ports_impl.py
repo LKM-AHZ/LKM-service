@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 
 class _AuthzImpl:
@@ -295,7 +295,7 @@ class _UsersImpl:
         db: Any,
         *,
         user_id: uuid.UUID,
-        action: str,
+        action: Literal["approve", "reject"],
         reviewer_id: uuid.UUID,
         reason: str | None = None,
     ) -> dict[str, Any]:

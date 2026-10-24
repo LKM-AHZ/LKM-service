@@ -75,6 +75,27 @@ class UploadInitResp(BaseModel):
         return self
 
 
+class BatchReviewIn(BaseModel):
+    """批量审核入参：同一决定、有限条数、逐条独立事务（部分成功）。"""
+
+    file_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+    status: Literal["approved", "rejected"]
+    review_comment: str | None = Field(default=None, max_length=500)
+
+
+class BatchReviewItemResult(BaseModel):
+    file_id: uuid.UUID
+    ok: bool
+    status: str | None = None
+    error: str | None = None
+
+
+class BatchReviewResult(BaseModel):
+    results: list[BatchReviewItemResult]
+    succeeded: int
+    failed: int
+
+
 class DownloadUrlInfo(BaseModel):
     """下载 URL 描述对象：frontend 依 kind 分叉下载方式。"""
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 from core.ports.registry import get
 
@@ -134,7 +134,7 @@ async def decide_admission(
     db: Any,
     *,
     user_id: uuid.UUID,
-    action: str,
+    action: Literal["approve", "reject"],
     reviewer_id: uuid.UUID,
     reason: str | None = None,
 ) -> dict[str, Any]:

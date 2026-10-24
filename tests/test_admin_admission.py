@@ -1,6 +1,5 @@
 """后台准入审核端点：权限点、2FA、列表、approve/reject 与会话撤销。"""
 
-import uuid
 
 import pytest
 from sqlalchemy import select

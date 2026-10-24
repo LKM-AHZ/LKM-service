@@ -9,7 +9,7 @@ app 侧（业务域 / flows / worker 装配 / 运维脚本）不得直接 import
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from auth.admin_session import (
     _ADMIN_AUD,
@@ -309,7 +309,7 @@ async def decide_admission(
     db: Any,
     *,
     user_id: uuid.UUID,
-    action: str,
+    action: Literal["approve", "reject"],
     reviewer_id: uuid.UUID,
     reason: str | None = None,
 ) -> dict[str, Any]:

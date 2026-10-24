@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Annotated, Any
 
@@ -10,6 +11,9 @@ from starlette.responses import Response
 from app.modules.admin.deps import require_admin_2fa
 from app.modules.files.models import FileClassification, FileStatus, LibraryFile
 from app.modules.files.schemas import (
+    BatchReviewIn,
+    BatchReviewItemResult,
+    BatchReviewResult,
     DownloadUrlInfo,
     FileCreate,
     FileInfo,
@@ -52,6 +56,8 @@ from core.ports.authz import get_current_user, get_optional_user
 from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/status", response_model=ModuleStatus)
@@ -207,6 +213,65 @@ async def download_file(
     if info.status != FileStatus.APPROVED:
         raise BizError(CommonErr.FORBIDDEN)
     return {"download_count": await bump_download(db, file_id)}
+
+
+@router.post("/review-batch", response_model=ApiResp[BatchReviewResult])
+@respond
+async def review_files_batch(
+    body: BatchReviewIn,
+    _cur: Annotated[CurrentUser, require_admin_2fa],
+    db: AsyncSession = Depends(get_session),
+) -> BatchReviewResult:
+    """批量审核文件（仅此低风险同质队列）：限 50 条、逐条独立事务、允许部分成功。
+
+    - 批量驳回必须填写原因；每条都走 ``review_file``（内含逐条审计）。
+    - 成功即 commit、失败 rollback：已成功条目不受后续失败影响，结果逐条返回。
+    - 账号审批/封禁/删除类**不提供**批量入口，避免无约束“全部通过”。
+    """
+    if not await user_has_permission(db, _cur, Permission.files_review):
+        raise BizError(CommonErr.FORBIDDEN)
+    target = FileStatus(body.status)
+    comment = (body.review_comment or "").strip() or None
+    if target == FileStatus.REJECTED and comment is None:
+        raise BizError(CommonErr.INVALID_INPUT, "批量驳回必须填写原因")
+
+    results: list[BatchReviewItemResult] = []
+    # 去重保序：同一 id 只审一次，避免第二个必然失败污染结果
+    for file_id in dict.fromkeys(body.file_ids):
+        try:
+            info = await review_file(
+                db,
+                file_id,
+                target_status=target,
+                review_comment=comment,
+                is_admin=True,
+                reviewer_id=_cur.id,
+            )
+            # 每条独立提交：后续条目失败时不回滚已成功的审核。
+            # 先取纯值再 commit——commit 后 ORM 对象可能到期，惰性取属性会触发 IO。
+            reviewed_status = str(info.status)
+            await db.commit()
+            results.append(
+                BatchReviewItemResult(
+                    file_id=file_id, ok=True, status=reviewed_status
+                )
+            )
+        except BizError as exc:
+            await db.rollback()
+            results.append(
+                BatchReviewItemResult(file_id=file_id, ok=False, error=exc.detail)
+            )
+        except Exception:
+            await db.rollback()
+            logger.exception("batch review failed file_id=%s", file_id)
+            results.append(
+                BatchReviewItemResult(file_id=file_id, ok=False, error="internal error")
+            )
+
+    succeeded = sum(1 for item in results if item.ok)
+    return BatchReviewResult(
+        results=results, succeeded=succeeded, failed=len(results) - succeeded
+    )
 
 
 @router.post("/{file_id}/review", response_model=ApiResp[FileInfo])
