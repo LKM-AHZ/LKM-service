@@ -25,12 +25,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ruff check app auth tests scripts
+      # core/boot 原先不在扫描面里（typecheck 覆盖了它们，lint 没有）：把范围补齐，
+      # 免得依赖方向与风格问题只在 pyright/ty 里被间接发现。
+      - run: uv run ruff check app auth core boot tests scripts
+      # 格式门禁：此前只有 ruff check（规则），没有 ruff format（排版），
+      # 换行/引号风格全靠人工。实测 605 个文件已全部格式化，可直接收成阻断门禁。
+      - run: uv run ruff format --check app auth core boot tests scripts
       - run: uv run lint-imports
       - run: uv run python scripts/check_raw_sql.py
 
@@ -44,8 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -59,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -94,8 +99,8 @@ jobs:
       # （设了真实 Redis 会让「Redis 不可用应直改 DB」这类断言失真）。
       # 真实 Redis 由 integration job 的 Testcontainers 提供。
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -120,17 +125,37 @@ jobs:
         redis_image:
           - redis:7-alpine
           - docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
+    services:
+      # 集成用例除 Redis 外还要业务库/auth 库：它们走 settings.database_url（localhost:5432），
+      # 不是 Testcontainers。原先本 job 只起了 Redis，24 条集成用例全部在 setup 阶段
+      # Connect call failed。这里与 test job 用同一套 PG service。
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
+          POSTGRES_DB: lkm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       LKM_IT_USE_TESTCONTAINERS: "1"
       LKM_IT_REDIS_IMAGE: ${{ matrix.redis_image }}
       LKM_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
       LKM_AUTH_DB_PASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - run: uv sync --frozen
+      - name: 建 auth 库
+        env:
+          PGPASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
+        run: psql -h localhost -U postgres -c "CREATE DATABASE lkm_auth"
       # Testcontainers 刻意**不进 pyproject/lock**：它只在集成 job 需要，装进主依赖会让
       # 所有镜像与本地环境都背上它（且改 lock 会击穿镜像依赖层缓存）。用 --with 临时装，
       # 但必须钉死版本：>=4.8 每次跑都重新解析，上游发新版会在零代码改动下改变行为。
@@ -143,10 +168,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: false
@@ -162,7 +187,7 @@ jobs:
     # 清单在父仓库，集群需预先 apply；本 job 更新所有 lkm-service Deployment 的镜像。
     name: deploy（手动：推镜像并滚动更新集群）
     if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    needs: [lint, migrations, test, integration, image]
+    needs: [lint, typecheck, migrations, test, integration, image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
@@ -170,8 +195,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: 校验镜像仓配置
         env:
           REGISTRY_IMAGE: ${{ vars.REGISTRY_IMAGE }}
@@ -215,7 +240,7 @@ jobs:
           echo "$REGISTRY_TOKEN" | docker login "${REGISTRY_HOST:-ghcr.io}" \
             -u "$REGISTRY_USER" --password-stdin
       - name: 构建并推送
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true

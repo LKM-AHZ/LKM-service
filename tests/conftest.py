@@ -26,6 +26,7 @@ import os
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 # 确保测试始终以 test 标志运行（宽松环境：放行占位密钥等）
@@ -127,6 +128,22 @@ _hypothesis_settings.register_profile(
 _hypothesis_settings.load_profile("lkm")
 
 
+# 本次会话是否需要数据库。
+# `tests/deploy/` 是纯文件断言（只读根仓库的 compose / deploy/ 资产），从不碰 PG；
+# 根仓库的 contracts 工作流只跑这批用例，不该被逼着起一个数据库。
+# 规则刻意保守：**只有**全部用例都在 tests/deploy 下时才跳过 DB 初始化；其余任何情况
+# （含属性测试自建引擎、混合收集）都照常建库，避免判断太聪明反而漏建模板库。
+_DB_NEEDED = True
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    global _DB_NEEDED
+    deploy_dir = Path(__file__).resolve().parent / "deploy"
+    _DB_NEEDED = any(deploy_dir not in item.path.parents for item in items)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_pg_shared_objects() -> None:
     """两个测试库（业务库 + auth 独立库）各自确保装有建表前置的共享对象。
@@ -139,6 +156,9 @@ def _ensure_pg_shared_objects() -> None:
     public schema 与业务库互不相通，必须各建一份。幂等；库不可达时静默跳过，交由既有
     DB fixture 给出更明确的连接错误。
     """
+
+    if not _DB_NEEDED:
+        return
 
     async def _run() -> None:
         # 与生产两条建库链同源（core.db.shared_objects），避免测试与生产漂移。
@@ -308,6 +328,12 @@ async def _drop_database(name: str, base_url: str = "") -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _pg_templates() -> Iterator[None]:
     """session 级建三个模板库（业务 / auth / 融合），测毕清理。"""
+
+    if not _DB_NEEDED:
+        # 生成器型 fixture 必须 yield 才能真正结束；裸 return 会被 pytest 判成
+        # 「did not yield a value」。
+        yield
+        return
 
     async def _build() -> None:
         from core.db.model_registry import ensure_all_models

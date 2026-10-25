@@ -80,15 +80,21 @@ async def test_points_fanout_three_subscriptions(
         )
         for n in names
     ]
+    # user_id 必须是字符串形式的 UUID：事件契约（core/event_contract.py）把它声明为
+    # ``str``，而 publish() 在编码后按契约校验、不符直接返回 False（不投递）。生产路径
+    # 经 outbox 落库再 relay 取回时本来就是字符串，这里用 int/裸数字会绕过真实形态，
+    # 让用例在真实 broker 上稳定失败。
+    user_id = uuid.uuid4()
+    args = [str(user_id), "post", "it:p1"]
     try:
         ok = await messaging.publish(
             messaging.RKEY_POINTS,
-            {"fn": "apply_point_event", "args": [7, "post", "it:p1"]},
+            {"fn": "apply_point_event", "args": args},
         )
         assert ok is True
         for consumer in consumers:
             msg = await asyncio.to_thread(consumer.receive, 15000)
-            assert json.loads(msg.data())["args"] == [7, "post", "it:p1"]
+            assert json.loads(msg.data())["args"] == args
             consumer.acknowledge(msg)
     finally:
         for consumer in consumers:

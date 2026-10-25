@@ -1,3 +1,4 @@
+import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -6,6 +7,16 @@ import pytest
 
 from app.modules.content.blog import git_svc
 from core.config import settings
+
+# CI runner 没有全局 user.name/user.email，`git commit-tree` 会以 exit 128 失败
+# （本地开发机恰好配了身份，所以只在 CI 红）。显式给出提交身份，不依赖环境配置。
+_GIT_IDENTITY_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "LKM CI",
+    "GIT_AUTHOR_EMAIL": "ci@lkm.invalid",
+    "GIT_COMMITTER_NAME": "LKM CI",
+    "GIT_COMMITTER_EMAIL": "ci@lkm.invalid",
+}
 
 
 @pytest.fixture
@@ -62,6 +73,7 @@ def _make_repo(repo_dir: str, repo_name: str, files: dict[str, str]) -> str:
             ["git", "--git-dir", bare, "commit-tree", tree, "-m", "init"],
             capture_output=True,
             check=True,
+            env=_GIT_IDENTITY_ENV,
         )
         .stdout.decode()
         .strip()

@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    # 所有 action 的更新合成一个 PR，避免每周开一堆单条升级
+    groups:
+      github-actions:
+        patterns: ["*"]
+    schedule:
+      interval: weekly
+
+  # 依赖以 pyproject.toml + uv.lock 为准；pip 生态覆盖 pyproject 的依赖声明，
+  # 也负责安全更新（Dependabot 对 uv.lock 的锁定版本支持有限，升级后仍需 `uv lock` 复核）。
+  - package-ecosystem: pip
+    directory: /
+    groups:
+      python-deps:
+        patterns: ["*"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly

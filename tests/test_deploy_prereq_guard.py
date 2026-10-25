@@ -46,9 +46,22 @@ def _make_root(tmp_path: Path, *, root_assets: bool, bot: bool) -> Path:
 
 
 def test_monorepo_layout_is_recognised() -> None:
-    """当前布局必须判为「根仓库前提齐备」，否则真正的契约测试会被跳过。"""
+    """monorepo 布局必须判为「根仓库前提齐备」。
+
+    子仓库单独 checkout 时 `_ROOT_REPO` 指向 runner 工作目录（没有 docker-compose.yml），
+    这条断言在那里**必然**失败——它不是被测逻辑有问题，而是前提不存在。所以先判布局，
+    不是 monorepo 就跳过；合成布局的正例由下面那条不受环境影响的用例覆盖。
+    """
     assert _CONFTEST.is_file()
+    if not (_ROOT_REPO / "docker-compose.yml").is_file():
+        pytest.skip("当前不是 monorepo 布局（子仓库单独 checkout），跳过真实布局断言")
     assert _guard().missing_prereqs(_ROOT_REPO, {"requires_root"}) == []
+
+
+def test_synthetic_monorepo_layout_is_recognised(tmp_path: Path) -> None:
+    """合成 monorepo 布局：前提齐备，判定必须为空（与真实环境无关）。"""
+    root = _make_root(tmp_path, root_assets=True, bot=False)
+    assert _guard().missing_prereqs(root, {"requires_root"}) == []
 
 
 def test_standalone_checkout_misses_root(tmp_path: Path) -> None:
