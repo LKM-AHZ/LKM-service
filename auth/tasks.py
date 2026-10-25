@@ -257,9 +257,7 @@ register_task(SUB_JOBS.name, "reconcile_user_dim", reconcile_user_dim)
 register_task(SUB_JOBS.name, "export_analytics_clickhouse", export_analytics_clickhouse)
 register_task(SUB_JOBS.name, "run_ops_daily", run_ops_daily)
 register_task(SUB_JOBS.name, "seed_user_id_bloom", seed_user_id_bloom)
-register_task(
-    SUB_JOBS.name, "purge_revoked_access_tokens", purge_revoked_access_tokens
-)
+register_task(SUB_JOBS.name, "purge_revoked_access_tokens", purge_revoked_access_tokens)
 # 审计事件：两个 topic 各自的订阅绑同一 handler（action 由路由键区分）
 register_task(SUB_AUDIT.name, "record_audit_event", record_audit_event)
 register_task(SUB_AUDIT_PERMISSION.name, "record_audit_event", record_audit_event)

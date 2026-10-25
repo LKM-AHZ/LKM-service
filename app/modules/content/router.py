@@ -175,7 +175,8 @@ async def create_content_comment(
 
 
 @router.post(
-    "/items/{item_id}/comments/{comment_id}/like", response_model=ApiResp[dict[str, Any]]
+    "/items/{item_id}/comments/{comment_id}/like",
+    response_model=ApiResp[dict[str, Any]],
 )
 @respond
 async def like_content_comment(
@@ -188,7 +189,8 @@ async def like_content_comment(
 
 
 @router.delete(
-    "/items/{item_id}/comments/{comment_id}/like", response_model=ApiResp[dict[str, Any]]
+    "/items/{item_id}/comments/{comment_id}/like",
+    response_model=ApiResp[dict[str, Any]],
 )
 @respond
 async def unlike_content_comment(

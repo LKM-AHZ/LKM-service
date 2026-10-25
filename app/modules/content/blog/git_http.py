@@ -312,7 +312,5 @@ async def git_http_backend(
         if new_sha and new_sha != old_sha:
             await maybe_backfill_after_push(repo_name, old_sha)
         else:
-            logger.info(
-                "push 未推进 refs（被拒/空提交），跳过回填 repo=%s", repo_name
-            )
+            logger.info("push 未推进 refs（被拒/空提交），跳过回填 repo=%s", repo_name)
     return resp

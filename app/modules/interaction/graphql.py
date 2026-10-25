@@ -86,10 +86,13 @@ class ContentViewerQuery:
         刻意与 ``contentItem`` 分开：后者带正文，详情页已在 SSR 拉过一遍，客户端为了补初值
         再拉整篇等于把正文重复传一遍。匿名访客也回计数，只是 liked/favorited 为 false。
         """
-        liked, favorited, like_count, bookmark_count = (
-            await interaction_service.get_content_viewer_state(
-                _get_db(info), _get_user_id(info), uuid.UUID(str(contentId))
-            )
+        (
+            liked,
+            favorited,
+            like_count,
+            bookmark_count,
+        ) = await interaction_service.get_content_viewer_state(
+            _get_db(info), _get_user_id(info), uuid.UUID(str(contentId))
         )
         return GraphContentViewerState(
             liked=liked,

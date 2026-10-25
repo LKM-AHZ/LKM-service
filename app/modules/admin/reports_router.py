@@ -30,9 +30,7 @@ router = APIRouter(prefix="/admin", tags=["admin-data"])
 @router.get("/reports", response_model=ApiResp[PageData[AdminReportListItem]])
 @respond
 async def admin_list_reports(
-    status: str | None = Query(
-        default=None, pattern="^(pending|resolved|dismissed)$"
-    ),
+    status: str | None = Query(default=None, pattern="^(pending|resolved|dismissed)$"),
     _cur: CurrentUser = require_admin,
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),

@@ -31,7 +31,9 @@ class Project(UUIDPrimaryKeyMixin, Base):
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     summary: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
-    applicant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    applicant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     is_incubated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # ———————— 项目广场展示字段（后端扩充，供 GET /projects 展示） ————————
     type: Mapped[str] = mapped_column(
@@ -49,7 +51,9 @@ class Project(UUIDPrimaryKeyMixin, Base):
     recruiting_roles: Mapped[list] = mapped_column(
         MutableList.as_mutable(JSON), default=list
     )  # [str] 招募角色
-    tags: Mapped[list] = mapped_column(MutableList.as_mutable(JSON), default=list)  # [str]
+    tags: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSON), default=list
+    )  # [str]
     reports: Mapped[list] = mapped_column(
         MutableList.as_mutable(JSON), default=list
     )  # [{title,content,revision,date}] 进展报告
@@ -83,7 +87,9 @@ class ProjectApplication(UUIDPrimaryKeyMixin, Base):
         ),
     )
 
-    applicant_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # S5: auth user_id
+    applicant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, nullable=False
+    )  # S5: auth user_id
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     summary: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)

@@ -41,8 +41,8 @@ class DlqMessage(UUIDPrimaryKeyMixin, Base):
     requeued_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
-    source_message_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    source_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    __table_args__ = (Index("uq_dlq_source_message_id", "source_message_id", unique=True),)
+    __table_args__ = (
+        Index("uq_dlq_source_message_id", "source_message_id", unique=True),
+    )

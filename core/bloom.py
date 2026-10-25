@@ -148,7 +148,9 @@ async def mark_seeded() -> bool:
     if client is None:
         return False
     try:
-        await client.set(_seeded_key(), "1", ex=max(1, settings.bloom_filter_seed_ttl_s))
+        await client.set(
+            _seeded_key(), "1", ex=max(1, settings.bloom_filter_seed_ttl_s)
+        )
     except Exception:
         return False
     return True

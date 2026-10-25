@@ -87,7 +87,9 @@ class RedisRateLimiter:
                 return await awaitable == 1
             except ResponseError as exc:
                 detail = str(exc).upper()
-                if attempt == 0 and ("NOSCRIPT" in detail or "NO MATCHING SCRIPT" in detail):
+                if attempt == 0 and (
+                    "NOSCRIPT" in detail or "NO MATCHING SCRIPT" in detail
+                ):
                     _script_shas.pop(redis, None)
                     return await _eval(1)
                 raise

@@ -60,9 +60,7 @@ class TestTestRulesService:
 
 
 class TestTestRulesHttp:
-    async def _mk_admin(
-        self, db: DB, auth_db, username: str = "root"
-    ) -> uuid.UUID:
+    async def _mk_admin(self, db: DB, auth_db, username: str = "root") -> uuid.UUID:
         """auth realm 建 super_admin；业务 realm 授 moderation 权限点。返回其 uuid id。"""
         from app.modules.admin.models import RolePermission
 

@@ -225,9 +225,7 @@ async def test_push_to_bot_payload_and_failure(
     monkeypatch.setattr(settings, "bot_push_api_key", "bot-key")
     monkeypatch.setattr(settings, "bot_push_umo", "umo://admin")
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        digest.httpx, "AsyncClient", _fake_bot_client(200, captured)
-    )
+    monkeypatch.setattr(digest.httpx, "AsyncClient", _fake_bot_client(200, captured))
 
     assert await digest._push_to_bot("待办摘要") is True
     assert captured["url"] == "http://bot.local/api/v1/im/messages"
@@ -237,7 +235,5 @@ async def test_push_to_bot_payload_and_failure(
     }
     assert captured["payload"] == {"umo": "umo://admin", "message": "待办摘要"}
 
-    monkeypatch.setattr(
-        digest.httpx, "AsyncClient", _fake_bot_client(500, captured)
-    )
+    monkeypatch.setattr(digest.httpx, "AsyncClient", _fake_bot_client(500, captured))
     assert await digest._push_to_bot("待办摘要") is False

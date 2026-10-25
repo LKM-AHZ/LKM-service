@@ -198,13 +198,12 @@ async def test_fresh_claim_lock_blocks_other_poller(fact, monkeypatch) -> None:
 
 async def test_stale_lock_is_reclaimed(fact, monkeypatch) -> None:
     """持锁进程崩溃（locked_at 早于 TTL）→ 该行可被重新领取并投出，锁标记清除。"""
+
     async def _pub(_rk: str, _payload: dict) -> bool:
         return True
 
     monkeypatch.setattr(messaging, "publish", _pub)
-    stale = datetime.now(UTC) - timedelta(
-        seconds=settings.outbox_lock_ttl_s + 30
-    )
+    stale = datetime.now(UTC) - timedelta(seconds=settings.outbox_lock_ttl_s + 30)
     await _seed(fact, locked_at=stale, locked_by="dead:1")
 
     assert await outbox_relay.relay_poll(session_factory=fact) == 1
@@ -217,6 +216,7 @@ async def test_skip_locked_does_not_block_on_concurrently_locked_row(
     fact, engine, monkeypatch
 ) -> None:
     """行锁被别的事务持有时 → SKIP LOCKED 跳过而非阻塞等待（否则本用例会挂住）。"""
+
     async def _pub(_rk: str, _payload: dict) -> bool:
         raise AssertionError("不应投递被别的事务锁住的行")
 
@@ -227,9 +227,7 @@ async def test_skip_locked_does_not_block_on_concurrently_locked_row(
     holder = maker()
     try:
         # 另开事务把该行 FOR UPDATE 锁住且不提交（模拟并发 poller 正领取）
-        await holder.execute(
-            select(OutboxMessage).with_for_update()
-        )
+        await holder.execute(select(OutboxMessage).with_for_update())
         result = await asyncio.wait_for(
             outbox_relay.relay_poll(session_factory=fact), timeout=10
         )
@@ -241,6 +239,7 @@ async def test_skip_locked_does_not_block_on_concurrently_locked_row(
 
 async def test_lock_cleared_after_retryable_failure(fact, monkeypatch) -> None:
     """瞬时失败 → 退避待重试，且认领标记已清（下轮可重新领取）。"""
+
     async def _fail(_rk: str, _payload: dict) -> bool:
         return False
 
@@ -309,12 +308,17 @@ async def test_archive_moves_only_expired_published_rows(fact) -> None:
     )
     await _seed(fact, event_id="still-pending")
 
-    assert await outbox_relay.archive_published(retention_s=3600, session_factory=fact) == 1
+    assert (
+        await outbox_relay.archive_published(retention_s=3600, session_factory=fact)
+        == 1
+    )
 
     db = await fact()
     try:
         left = {r.event_id for r in (await db.execute(select(OutboxMessage))).scalars()}
-        arch = {r.event_id for r in (await db.execute(select(OutboxArchived))).scalars()}
+        arch = {
+            r.event_id for r in (await db.execute(select(OutboxArchived))).scalars()
+        }
     finally:
         await db.close()
     assert left == {"fresh", "still-pending"}  # 未超期/未发布的都不动
@@ -332,9 +336,12 @@ async def test_archive_respects_batch_limit(fact) -> None:
             published_at=old,
         )
 
-    assert await outbox_relay.archive_published(
-        retention_s=3600, batch=2, session_factory=fact
-    ) == 2
+    assert (
+        await outbox_relay.archive_published(
+            retention_s=3600, batch=2, session_factory=fact
+        )
+        == 2
+    )
     db = await fact()
     try:
         remaining = int(

@@ -77,9 +77,7 @@ def _dim_row(
     )
 
 
-async def mk_auth_admin(
-    auth_db: AsyncSession, username: str = "root"
-) -> User:
+async def mk_auth_admin(auth_db: AsyncSession, username: str = "root") -> User:
     """在 auth realm 建 admin(super_admin)，返回该 User ORM 供 mint 后台 cookie。"""
     au = await auth_user_uid(
         auth_db,
@@ -214,9 +212,9 @@ class TestAdminManagementStaysOfflineIsolated:
         await _grant(db, Permission.admin_users_manage, Permission.admin_dashboard)
         set_admin_cookie(client, root)
 
-        resp = await client.get(
-            "/api/v1/admin/users", params={"include_pii": "true"}
-        )
+        resp = await client.get("/api/v1/admin/users", params={"include_pii": "true"})
         assert resp.status_code == 200
-        alice = next(i for i in resp.json()["data"]["items"] if i["username"] == "alice")
+        alice = next(
+            i for i in resp.json()["data"]["items"] if i["username"] == "alice"
+        )
         assert alice["email"] == "alice@example.com"

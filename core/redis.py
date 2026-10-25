@@ -47,7 +47,7 @@ def secondary_prefixes() -> tuple[str, ...]:
 def _route_target(key: str) -> str:
     """把 key 归一为用于前缀匹配的串：剥掉 ``lkm:{env}:`` 命名空间头（裸键原样返回）。"""
     head = f"lkm:{settings.env or 'dev'}:"
-    return key[len(head):] if key.startswith(head) else key
+    return key[len(head) :] if key.startswith(head) else key
 
 
 def _matches(target: str, prefix: str) -> bool:
@@ -57,7 +57,7 @@ def _matches(target: str, prefix: str) -> bool:
     """
     if not target.startswith(prefix):
         return False
-    rest = target[len(prefix):]
+    rest = target[len(prefix) :]
     return rest == "" or rest.startswith(":")
 
 

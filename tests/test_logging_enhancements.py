@@ -92,7 +92,9 @@ class TestSetupLoggingSink:
 
 
 class TestLogExceptions:
-    async def should_log_and_reraise_async(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def should_log_and_reraise_async(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         @lkm_logging.log_exceptions
         async def _boom() -> None:
             raise ValueError("async-ouch")

@@ -22,7 +22,9 @@ from core.config import settings
 
 
 @pytest.fixture(autouse=True)
-async def _reset_redis_and_disable_l1(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+async def _reset_redis_and_disable_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[None]:
     """逐测复位 Redis 单例；并关掉 L1，让断言只针对 L2（负值不进 L1，此处也免干扰）。"""
     monkeypatch.setattr(settings, "user_snap_l1_enabled", False)
     await redis_mod.close_redis()
@@ -77,7 +79,9 @@ async def test_cache_set_applies_jitter(monkeypatch: pytest.MonkeyPatch) -> None
     assert 210 <= ttl <= 390
 
 
-async def test_user_snap_l2_write_applies_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_user_snap_l2_write_applies_jitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """user:snap 走自己的 CAS 写路径（不经 cache_set），须单独接入扰动。"""
     _enable_fake_redis(monkeypatch)
     uid = uuid.uuid4()
@@ -157,7 +161,9 @@ class TestNegativeCache:
         negative, _ = await uc.read_snap_state(uid)
         assert negative is False
 
-    async def should_fail_open_without_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def should_fail_open_without_redis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(settings, "redis_url", "")
         uid = uuid.uuid4()
         assert await uc.write_negative(uid, 0) is False

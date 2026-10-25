@@ -135,5 +135,6 @@ class TestRedisRateLimiterIntegration:
         assert await limiter.check(k, max_count=5, window_seconds=10) is True
         await real_redis.script_flush()  # 令已缓存的 SHA 失效
         assert (
-            await limiter.check(k, max_count=5, window_seconds=10, fail_open=False) is True
+            await limiter.check(k, max_count=5, window_seconds=10, fail_open=False)
+            is True
         )

@@ -45,7 +45,9 @@ async def _get(storage: LocalStorage, key: str) -> bytes:
     return out
 
 
-async def test_generates_every_variant_with_expected_size(storage: LocalStorage) -> None:
+async def test_generates_every_variant_with_expected_size(
+    storage: LocalStorage,
+) -> None:
     await _put(storage, _KEY, _image_bytes(2000, 1000))
 
     made = await generate_variants(storage, bucket_key=_KEY, mime_type="image/png")
@@ -102,7 +104,9 @@ async def test_is_idempotent_on_rerun(storage: LocalStorage) -> None:
 async def test_fails_open_when_source_missing(storage: LocalStorage) -> None:
     """源对象读不到只降级为空表——缩图是增强，不能把上传主链路拖挂。"""
     assert (
-        await generate_variants(storage, bucket_key="cd/not-there", mime_type="image/png")
+        await generate_variants(
+            storage, bucket_key="cd/not-there", mime_type="image/png"
+        )
         == []
     )
 

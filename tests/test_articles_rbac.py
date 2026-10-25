@@ -19,9 +19,7 @@ from app.modules.content.articles.service import create_category_ex
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 
-async def _au(
-    auth_db: AsyncSession, username: str, level: str, role: str
-) -> AuthUser:
+async def _au(auth_db: AsyncSession, username: str, level: str, role: str) -> AuthUser:
     """在 auth realm 建一线用户并 mint 对应 (account_level, role) 的 token。"""
     return await auth_user_uid(
         auth_db,

@@ -65,9 +65,7 @@ async def _au(auth_db: AsyncSession, username: str) -> AuthUser:
 
 
 async def _make_board(db: AsyncSession, slug: str, owner_id: Any = None) -> Any:
-    return (
-        await create_board_ex(db, BoardCreate(slug=slug, title=slug), owner_id)
-    ).id
+    return (await create_board_ex(db, BoardCreate(slug=slug, title=slug), owner_id)).id
 
 
 async def _make_item(

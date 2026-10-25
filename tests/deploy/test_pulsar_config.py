@@ -62,9 +62,13 @@ def test_entrypoint_inits_namespaces_after_broker_is_ready(script: str) -> None:
     body = _no_comments(script)
     start = body.find("bin/pulsar standalone")
     create = body.find("tenants create")
-    assert create > start, "建租户必须发生在启动 broker 之后（否则 broker 未就绪必失败）"
+    assert create > start, (
+        "建租户必须发生在启动 broker 之后（否则 broker 未就绪必失败）"
+    )
     # 就绪探针存在（用 tenants list 之类）——没有等待就没有「就绪后」
-    assert re.search(r"until .*pulsar-admin", body), "缺少 broker 就绪探针（until ... pulsar-admin）"
+    assert re.search(r"until .*pulsar-admin", body), (
+        "缺少 broker 就绪探针（until ... pulsar-admin）"
+    )
     assert "namespaces create" in body, "缺少 namespace 创建步骤"
     for ns in _NAMESPACES:
         assert ns in body, f"缺 namespace {ns} 的创建"
@@ -82,7 +86,9 @@ def test_entrypoint_creates_are_idempotent(script: str) -> None:
     # 不在就非 0 退出 —— 否则鉴权失败/admin-url 写错也被吞掉，脚本照样打「已就绪」，
     # 而 compose healthcheck 正是校验 namespace 存在，依赖方会无限等待。
     assert "tenants list" in body, "创建租户后缺少存在性复查（tenants list）"
-    assert "namespaces list" in body, "创建 namespace 后缺少存在性复查（namespaces list）"
+    assert "namespaces list" in body, (
+        "创建 namespace 后缺少存在性复查（namespaces list）"
+    )
     assert "exit 1" in body, "复查不通过必须非 0 退出，而不是继续打「已就绪」"
 
 
@@ -138,8 +144,13 @@ def test_pulsar_service_wires_entrypoint_and_volume(compose: dict) -> None:
     assert any("entrypoint.sh" in str(x) for x in entry), entry
     binds = [v for v in svc.get("volumes", []) if isinstance(v, str) and ":" in v]
     assert any("deploy/pulsar/entrypoint.sh" in b for b in binds), binds
-    assert any(b.startswith("pulsar_data:") or b.split(":")[0].endswith("pulsar_data") for b in binds), binds
-    assert "command" not in svc, "command 不应再直接启动 standalone（会绕过清空+初始化）"
+    assert any(
+        b.startswith("pulsar_data:") or b.split(":")[0].endswith("pulsar_data")
+        for b in binds
+    ), binds
+    assert "command" not in svc, (
+        "command 不应再直接启动 standalone（会绕过清空+初始化）"
+    )
 
 
 def test_pulsar_healthcheck_implies_namespace_initialized(compose: dict) -> None:
@@ -168,7 +179,9 @@ def test_no_one_shot_pulsar_init_service(compose: dict) -> None:
             )
 
 
-def test_app_services_select_broker_without_fixed_pulsar_dependency(compose: dict) -> None:
+def test_app_services_select_broker_without_fixed_pulsar_dependency(
+    compose: dict,
+) -> None:
     """应用按配置选 broker；固定依赖 Pulsar 会阻断 RabbitMQ 模式启动。"""
     configured = 0
     for name, svc in compose["services"].items():
@@ -189,7 +202,9 @@ def test_merged_compose_defaults_to_rabbitmq(compose: dict) -> None:
     """
     services = compose["services"]
     assert "rabbitmq" in services
-    assert "profiles" not in services["rabbitmq"], "RabbitMQ 是默认总线，不能挂在 profile 下"
+    assert "profiles" not in services["rabbitmq"], (
+        "RabbitMQ 是默认总线，不能挂在 profile 下"
+    )
     assert services["pulsar"]["profiles"] == ["pulsar"]
     configured = 0
     for name, svc in services.items():

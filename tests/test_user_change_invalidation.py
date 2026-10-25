@@ -101,10 +101,7 @@ async def _dim_sync_throwaway(monkeypatch, _fused_realm) -> None:
         s = maker()
         return s, s
 
-    monkeypatch.setattr(
-        "auth.user_dim_sync._session_factory", _factory
-    )
-
+    monkeypatch.setattr("auth.user_dim_sync._session_factory", _factory)
 
 
 @pytest.fixture(autouse=True)
@@ -163,7 +160,11 @@ async def _enabled() -> Any:
 
 
 async def _mk_user(
-    db: AsyncSession, username: str, *, nickname: str = "旧名", account_level: str = "normal"
+    db: AsyncSession,
+    username: str,
+    *,
+    nickname: str = "旧名",
+    account_level: str = "normal",
 ) -> uuid.UUID:
     user = User(
         username=username,
@@ -181,7 +182,9 @@ async def _mk_user(
 async def _rows(db: AsyncSession) -> list[Any]:
     """查全部 pending outbox 事件行（断言源发落点用）。"""
     res = await db.execute(
-        select(OutboxMessage).where(OutboxMessage.status == "pending").order_by(OutboxMessage.id)
+        select(OutboxMessage)
+        .where(OutboxMessage.status == "pending")
+        .order_by(OutboxMessage.id)
     )
     return list(res.scalars().all())
 
@@ -216,7 +219,9 @@ class TestMutationSitesEmitOutboxEvents:
         user = (
             (
                 await db.execute(
-                    select(User).where(User.id == uid).options(selectinload(User.profile))
+                    select(User)
+                    .where(User.id == uid)
+                    .options(selectinload(User.profile))
                 )
             )
             .scalars()
@@ -239,7 +244,9 @@ class TestMutationSitesEmitOutboxEvents:
         user = (
             (
                 await db.execute(
-                    select(User).where(User.id == uid).options(selectinload(User.profile))
+                    select(User)
+                    .where(User.id == uid)
+                    .options(selectinload(User.profile))
                 )
             )
             .scalars()
@@ -289,8 +296,8 @@ class TestConsumerHandlerInvalidates:
         # worker 分派对 payload fn=invalidate_user_snap args=[uid] 会展开调用同名 handler
         await invalidate_user_snap(uid)
 
-        assert await uc.read_snap(uid) is None          # 缓存已空（del 生效）
-        assert await uc.current_epoch(uid) == e + 1      # epoch 反陈旧 bump
+        assert await uc.read_snap(uid) is None  # 缓存已空（del 生效）
+        assert await uc.current_epoch(uid) == e + 1  # epoch 反陈旧 bump
         # 幂等：再跑一次不抛、不破坏（epoch 继续单增，缓存仍空）
         await invalidate_user_snap(uid)
         assert await uc.read_snap(uid) is None
@@ -368,7 +375,9 @@ class TestLoginUnlockInvalidatesSnap:
         assert await uc.write_if_newer(
             uid, {"banned": True, "display_name": u_row.username}, sv, e
         )
-        assert (await uc.read_snap(uid))["banned"] is True  # 缓存此刻仍是 stale banned=True
+        assert (await uc.read_snap(uid))[
+            "banned"
+        ] is True  # 缓存此刻仍是 stale banned=True
 
         # 成功登录（密码对）→ is_locked True→False 翻转
         await login_password(

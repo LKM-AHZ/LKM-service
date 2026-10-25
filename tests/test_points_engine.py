@@ -24,9 +24,7 @@ from tests.conftest import auth_user_uid
 
 async def _user(auth_db: AsyncSession, username: str = "alice") -> uuid.UUID:
     """在 auth realm 建一线用户，返回其 uuid 主键（业务 points 表以裸 uuid 引用）。"""
-    u = await auth_user_uid(
-        auth_db, username=username, email=f"{username}@e.com"
-    )
+    u = await auth_user_uid(auth_db, username=username, email=f"{username}@e.com")
     return u.id
 
 
@@ -69,7 +67,9 @@ async def _task(
 
 
 @pytest.mark.asyncio
-async def test_event_bumps_count_and_achievement(db: AsyncSession, auth_db: AsyncSession):
+async def test_event_bumps_count_and_achievement(
+    db: AsyncSession, auth_db: AsyncSession
+):
     uid = await _user(auth_db)
     await _achievement(db, "a1", "post_count", threshold=1)
     await apply_event_side_effects(db, uid, "post", "p100", today="2026-08-21")
@@ -201,7 +201,9 @@ async def test_unknown_event_is_noop(db: AsyncSession, auth_db: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_apply_side_effects_is_idempotent_per_ref(db: AsyncSession, auth_db: AsyncSession):
+async def test_apply_side_effects_is_idempotent_per_ref(
+    db: AsyncSession, auth_db: AsyncSession
+):
     """副作用以 (event, ref_id) 去重：重复投递不重复累计计数/进度/发分(重投语义)。"""
     uid = await _user(auth_db)
     await _achievement(db, "a2", "post_count", threshold=1)

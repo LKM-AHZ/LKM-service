@@ -63,7 +63,9 @@ def _jwks_for(private: rsa.RSAPrivateKey) -> dict[str, Any]:
     return {"keys": [jwk]}
 
 
-def _install_client(monkeypatch: pytest.MonkeyPatch, body: Any, status: int = 200) -> None:
+def _install_client(
+    monkeypatch: pytest.MonkeyPatch, body: Any, status: int = 200
+) -> None:
     """把 JWKS 出站换成 MockTransport（离线、无网络）。"""
 
     def handler(_request: httpx.Request) -> httpx.Response:

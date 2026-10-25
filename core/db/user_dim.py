@@ -29,14 +29,26 @@ class UserDim(Base):
 
     # PK 即源 user_id（宽表每用户恒一行，报表按 id 关联/过滤）。非自增——id 由 auth 源 ETL 显式给定
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    username: Mapped[str] = mapped_column(String(100), nullable=False)  # ← users.username
-    email: Mapped[str | None] = mapped_column(String(200), nullable=True)  # ← users.email
-    nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)  # ← profiles.nickname
-    role: Mapped[str | None] = mapped_column(String(20), nullable=True)  # ← profiles.role
-    account_level: Mapped[str] = mapped_column(String(10), nullable=False, default="local")  # ← users.account_level
+    username: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )  # ← users.username
+    email: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )  # ← users.email
+    nickname: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )  # ← profiles.nickname
+    role: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )  # ← profiles.role
+    account_level: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="local"
+    )  # ← users.account_level
     # banned 语义同在线缝 snapshot(banned=bool(User.is_locked))；is_locked 也传源镜像供对账
     is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # ← users.is_locked
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )  # ← users.is_locked
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )  # ← users.created_at

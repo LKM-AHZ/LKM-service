@@ -10,6 +10,7 @@
 
 HTTP 全部经 httpx.MockTransport 注入出站，hermetic 零真实网络。fixture/复位范式沿用仓库。
 """
+
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -52,7 +53,9 @@ def _inject_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
 
 # ---- 探子级：_probe_auth 语义 ----
 class TestProbeAuth:
-    async def test_disabled_when_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_disabled_when_flag_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """auth_http_url 空 → disabled（不参与降级）。"""
         _off(monkeypatch)
         deps = await health_mod._probe_auth()
@@ -72,7 +75,9 @@ class TestProbeAuth:
         assert deps.status == "up"
         assert captured and captured[0].url.path == "/liveness"
 
-    async def test_error_on_connect_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_error_on_connect_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """auth 不可达(网络错) → error 降级，不抛（绝不因 AUTH 抖动炸就绪面）。"""
         _on(monkeypatch)
 
@@ -84,7 +89,9 @@ class TestProbeAuth:
         assert deps.status == "error"
         assert deps.detail
 
-    async def test_error_on_non_ok_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_error_on_non_ok_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """AUTH /liveness 非 200(如 503) → error。"""
         _on(monkeypatch)
 
@@ -95,7 +102,9 @@ class TestProbeAuth:
         deps = await health_mod._probe_auth()
         assert deps.status == "error"
 
-    async def test_error_on_liveness_not_ok_body(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_error_on_liveness_not_ok_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """AUTH /liveness 200 但 body 非 {status:ok} → error(不把 200 一律当 up)。"""
         _on(monkeypatch)
 
@@ -130,7 +139,9 @@ class TestHealthAggregation:
         assert p["data"]["auth"]["status"] == "disabled"
         assert p["data"]["status"] == "ok"  # disabled 不参与 → db+redis up 即 ok
 
-    async def test_flag_on_auth_error_degrades(self, client, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_flag_on_auth_error_degrades(
+        self, client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """flag ON + auth 不可达 → /health degraded(即便 db/redis up)，就绪反映 auth。"""
         _on(monkeypatch)
 

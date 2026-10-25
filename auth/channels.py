@@ -38,7 +38,9 @@ class ContactChannel:
     username_from: Callable[[str], str]
     find_user: Callable[[AsyncSession, str], Awaitable[User | None]]
     # 返回 (code/txn 标识, 验证记录 id)：service_verify 的两个实现返回 tuple[str, UUID]
-    create_verification: Callable[[AsyncSession, str, str], Awaitable[tuple[str, uuid.UUID]]]
+    create_verification: Callable[
+        [AsyncSession, str, str], Awaitable[tuple[str, uuid.UUID]]
+    ]
     consume_code: Callable[[AsyncSession, str, str, str], Awaitable[bool]]
     send_code: Callable[[str, str], Awaitable[None]]
 

@@ -170,7 +170,7 @@ async def test_raw_nickname_blank_stays_none_while_display_falls_back(db: DB) ->
     uid = await _mk_user(db, "blanknick", nickname=None)
     single = await get_user_snapshot(db, user_id=uid)
     assert single is not None
-    assert single.nickname is None          # raw 原样空白，不合成 username
+    assert single.nickname is None  # raw 原样空白，不合成 username
     assert single.display_name == "blanknick"  # display 语义不变：回退 username
 
     batch_row = (await get_user_snapshot_batch(db, user_ids=[uid]))[uid]

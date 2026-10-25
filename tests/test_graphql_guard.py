@@ -45,9 +45,7 @@ _SHALLOW_QUERY = "query { boards { id slug title } }"
 
 def _rejected(reason: str) -> float:
     """读防护拒绝计数；从未出现过该 label 时视为 0。"""
-    val = REGISTRY.get_sample_value(
-        "graphql_query_rejected_total", {"reason": reason}
-    )
+    val = REGISTRY.get_sample_value("graphql_query_rejected_total", {"reason": reason})
     return val if val is not None else 0.0
 
 
@@ -116,7 +114,9 @@ def _cost_of(query: str, variables: dict | None = None) -> int:
 
 
 async def _post(client: Client, query: str, variables: dict | None = None) -> dict:
-    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
+    resp = await client.post(
+        "/graphql/v1", json={"query": query, "variables": variables}
+    )
     assert resp.status_code == 200, resp.text  # 防护拒绝是受控错误，不是 5xx
     return resp.json()
 

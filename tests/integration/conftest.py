@@ -106,9 +106,7 @@ def _integration_containers() -> Iterator[None]:
 
         def _pulsar_admin(*args: str) -> int:
             """在 Pulsar 容器内跑 pulsar-admin（走 docker-py 原生 exec，跨版本稳定）。"""
-            res = pulsar.get_wrapped_container().exec_run(
-                ["bin/pulsar-admin", *args]
-            )
+            res = pulsar.get_wrapped_container().exec_run(["bin/pulsar-admin", *args])
             return int(res.exit_code)
 
         # Pulsar standalone 就绪：轮询 healthcheck（首次启动通常 30~60s）

@@ -18,6 +18,7 @@ _CATEGORIES: list[dict[str, int | str]] = [
     {"slug": "engineering", "title": "工程", "sort": 3},
 ]
 
+
 class _LazyMarkdown:
     """惰性正文占位：seed 时才读盘。
 
@@ -134,7 +135,9 @@ async def seed_articles(db: AsyncSession) -> int:
             continue
         category_slug = data["category"]
         if not isinstance(category_slug, str):
-            raise TypeError(f"article category must be a slug string: {category_slug!r}")
+            raise TypeError(
+                f"article category must be a slug string: {category_slug!r}"
+            )
         fields = {k: v for k, v in data.items() if k != "category"}
         content = fields.get("content")
         if isinstance(content, _LazyMarkdown):  # 惰性正文：此时才读盘

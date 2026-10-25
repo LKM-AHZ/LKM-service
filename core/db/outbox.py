@@ -110,7 +110,9 @@ async def _legacy_event_exists(db: AsyncSession, event_id: str) -> bool:
     from core.db.outbox_archive import OutboxArchived
 
     for model in (OutboxMessage, OutboxArchived, EventFailure):
-        if await db.scalar(select(model.event_id).where(model.event_id == event_id).limit(1)):
+        if await db.scalar(
+            select(model.event_id).where(model.event_id == event_id).limit(1)
+        ):
             return True
     return False
 

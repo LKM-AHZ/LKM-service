@@ -11,6 +11,7 @@
 
 真双 PG（monolith=lkm / auth=lkm_auth）各建 schema 亦可跑。
 """
+
 import uuid
 
 from sqlalchemy import select
@@ -32,9 +33,13 @@ async def _assert_business_select_user_missing(db: AsyncSession) -> bool:
     return False
 
 
-async def test_business_realm_db_has_no_users_table(db: DB, auth_db: AsyncSession) -> None:
+async def test_business_realm_db_has_no_users_table(
+    db: DB, auth_db: AsyncSession
+) -> None:
     """证明业务 realm(Base) 真无 users：任何 select(User) 到业务会话必崩 → 业务只得走缝。"""
-    assert await _assert_business_select_user_missing(db)  # 业务 realm 无 users → ProgrammingError
+    assert await _assert_business_select_user_missing(
+        db
+    )  # 业务 realm 无 users → ProgrammingError
 
 
 async def test_authz_seam_resolves_current_user_from_auth_realm(
@@ -50,7 +55,11 @@ async def test_authz_seam_resolves_current_user_from_auth_realm(
     assert await _assert_business_select_user_missing(db)  # 前置：业务 realm 无 users
 
     au = await auth_user_uid(
-        auth_db, username="alice", nickname="爱丽丝", account_level="normal", role="member"
+        auth_db,
+        username="alice",
+        nickname="爱丽丝",
+        account_level="normal",
+        role="member",
     )
     token = create_access_token(
         user_id=au.id,
@@ -74,7 +83,11 @@ async def test_snapshot_batch_display_reads_from_auth_realm(
     assert await _assert_business_select_user_missing(db)
 
     au = await auth_user_uid(
-        auth_db, username="bob", nickname="狮子bob", account_level="normal", role="member"
+        auth_db,
+        username="bob",
+        nickname="狮子bob",
+        account_level="normal",
+        role="member",
     )
     missing_id = uuid.UUID("00000000-0000-7000-8000-000000000099")
     snaps = await get_user_snapshot_batch(db, user_ids=[au.id, missing_id])

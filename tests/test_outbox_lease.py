@@ -113,8 +113,12 @@ async def test_configured_redis_outage_does_not_poll(
 
     monkeypatch.setattr(outbox_relay.redis_client, "get_redis", _missing)
     monkeypatch.setattr(outbox_relay.redis_client, "is_enabled", lambda: primary)
-    monkeypatch.setattr(outbox_relay.redis_client, "is_secondary", lambda _key: secondary)
-    monkeypatch.setattr(outbox_relay.redis_client, "secondary_configured", lambda: secondary)
+    monkeypatch.setattr(
+        outbox_relay.redis_client, "is_secondary", lambda _key: secondary
+    )
+    monkeypatch.setattr(
+        outbox_relay.redis_client, "secondary_configured", lambda: secondary
+    )
     monkeypatch.setattr(outbox_relay, "relay_poll", _poll)
     task = asyncio.create_task(outbox_relay.run_outbox_loop())
     await asyncio.sleep(0.04)

@@ -66,21 +66,27 @@ class TestReward:
         assert second.delta == 50
         assert await get_balance(db, uid) == 50  # 未重复加分
 
-    async def test_reward_duplicate_delta_mismatch(self, db: AsyncSession, auth_db: AsyncSession):
+    async def test_reward_duplicate_delta_mismatch(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
         uid = await _user(auth_db)
         await reward(db, uid, 50, "test", "ref_t", "1")
         with pytest.raises(BizError) as e:
             await reward(db, uid, 80, "test", "ref_t", "1")
         assert e.value.errcode == PointsErr.DUPLICATE_REWARD
 
-    async def test_reward_negative_insufficient(self, db: AsyncSession, auth_db: AsyncSession):
+    async def test_reward_negative_insufficient(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
         uid = await _user(auth_db)
         await reward(db, uid, 30, "test", "a", "1")
         with pytest.raises(BizError) as e:
             await reward(db, uid, -50, "test", "b", "1")  # 30-50<0
         assert e.value.errcode == PointsErr.INSUFFICIENT_BALANCE
 
-    async def test_reward_negative_allowed(self, db: AsyncSession, auth_db: AsyncSession):
+    async def test_reward_negative_allowed(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
         uid = await _user(auth_db)
         await reward(db, uid, -10, "penalty", "c", "1", allow_negative=True)
         assert await get_balance(db, uid) == -10
@@ -102,7 +108,9 @@ class TestSpend:
 
 
 class TestTransfer:
-    async def test_transfer_moves_balances(self, db: AsyncSession, auth_db: AsyncSession):
+    async def test_transfer_moves_balances(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
         a = await _user(auth_db, "a")
         b = await _user(auth_db, "b")
         await reward(db, a, 100, "test", "z", "1")
@@ -137,7 +145,9 @@ class TestTransfer:
 
 
 class TestConcurrency:
-    async def test_concurrent_spend_no_overdraw(self, db: AsyncSession, auth_db: AsyncSession):
+    async def test_concurrent_spend_no_overdraw(
+        self, db: AsyncSession, auth_db: AsyncSession
+    ):
         """两个独立会话（各自事务）在真实 PG 上并发扣款 → 只有余额足够的那笔成功。
 
         目的：每个 spend 都跑在独立的 AsyncSession 上，让其在本进程的真实并发下
@@ -200,7 +210,9 @@ class TestConcurrency:
 
 
 class TestLeaderboard:
-    async def test_leaderboard_orders(self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None):
+    async def test_leaderboard_orders(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
         a = await _user(auth_db, "a", "甲")
         b = await _user(auth_db, "b", "乙")
         await reward(db, a, 50, "test", "l", "1")
@@ -211,7 +223,9 @@ class TestLeaderboard:
         assert items[0].display_name == "乙"
         assert items[1].user_id == a
 
-    async def test_leaderboard_tiebreak_by_display_name(self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None):
+    async def test_leaderboard_tiebreak_by_display_name(
+        self, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+    ):
         """余额相等时按 display_name（昵称）字典序升序排。"""
         a = await _user(auth_db, "aaa", "Zebra")
         b = await _user(auth_db, "bbb", "Apple")

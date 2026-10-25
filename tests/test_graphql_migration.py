@@ -13,7 +13,9 @@ _MISSING_ID = uuid.UUID("00000000-0000-7000-8000-000000000999")
 
 
 async def _run(client: AsyncClient, query: str, variables: dict[str, Any]) -> Any:
-    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
+    resp = await client.post(
+        "/graphql/v1", json={"query": query, "variables": variables}
+    )
     assert resp.status_code == 200
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")

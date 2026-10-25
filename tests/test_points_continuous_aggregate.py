@@ -91,7 +91,9 @@ async def test_points_continuous_aggregate_assembly_and_read(
         # 必须先提交：refresh 走**另一个连接**，看不见未提交行
         await db.commit()
 
-        async with engine.execution_options(isolation_level="AUTOCOMMIT").connect() as raw:
+        async with engine.execution_options(
+            isolation_level="AUTOCOMMIT"
+        ).connect() as raw:
             await raw.execute(
                 text(f"CALL refresh_continuous_aggregate('{_CAGG}', NULL, NULL)")
             )

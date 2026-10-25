@@ -64,7 +64,9 @@ def _enable_fake_redis(monkeypatch: pytest.MonkeyPatch) -> Any:
 class TestGate:
     """门禁：未预热一律不拦——这是「宁可漏拦、绝不误拒」的落点。"""
 
-    async def test_not_seeded_never_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_not_seeded_never_blocks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _enable_fake_redis(monkeypatch)
         await bloom.add(str(uuid.uuid4()))
         # 位图里没有 _NEVER_EXISTED、也没预热标记 → 不拦
@@ -95,7 +97,9 @@ class TestGate:
         await bloom.unmark_seeded()
         assert await bloom.definitely_absent(str(_NEVER_EXISTED)) is False
 
-    async def test_seeded_marker_carries_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_seeded_marker_carries_ttl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """标记必须带 TTL：预热任务长期停摆时自动退回「不拦」，而不是永远拿旧位图拒绝。"""
         fake = _enable_fake_redis(monkeypatch)
         await bloom.mark_seeded()
@@ -116,7 +120,9 @@ class TestGate:
         )
         assert got == {str(absent_a), str(absent_b)}
 
-    async def test_many_empty_input_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_many_empty_input_is_noop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _enable_fake_redis(monkeypatch)
         await bloom.mark_seeded()
         assert await bloom.definitely_absent_many([]) == set()
@@ -133,7 +139,9 @@ class TestGateFailOpen:
         assert await bloom.mark_seeded() is False
         assert await bloom.definitely_absent(str(_NEVER_EXISTED)) is False
 
-    async def test_redis_error_never_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_redis_error_never_blocks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         class _Broken:
             def pipeline(self, *_: Any, **__: Any) -> Any:
                 raise ConnectionError("redis down")
@@ -144,7 +152,9 @@ class TestGateFailOpen:
         monkeypatch.setattr(bloom.redis_client, "get_redis", _broken_redis)
         assert await bloom.definitely_absent(str(_NEVER_EXISTED)) is False
 
-    async def test_disabled_flag_never_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_disabled_flag_never_blocks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _enable_fake_redis(monkeypatch)
         monkeypatch.setattr(settings, "bloom_filter_enabled", False)
         assert await bloom.mark_seeded() is False

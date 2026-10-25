@@ -51,9 +51,7 @@ def _inject_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
 
 
 class TestAuditClient:
-    async def test_posts_all_fields(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_posts_all_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _enable_seam(monkeypatch)
         captured: list[httpx.Request] = []
 

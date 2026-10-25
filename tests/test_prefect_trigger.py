@@ -24,9 +24,7 @@ def _spy_direct(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
         calls["direct"] += 1
         return 0
 
-    monkeypatch.setattr(
-        user_dim_sync, "reconcile_user_dim_periodic", _fake_periodic
-    )
+    monkeypatch.setattr(user_dim_sync, "reconcile_user_dim_periodic", _fake_periodic)
     return calls
 
 

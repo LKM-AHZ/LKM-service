@@ -67,7 +67,9 @@ def _expired_lock(minutes: int = 5) -> dt.datetime:
 
 class TestLockSemantics:
     def test_flag_off_is_never_locked(self) -> None:
-        assert lock_is_active(User(is_locked=False, locked_until=_active_lock())) is False
+        assert (
+            lock_is_active(User(is_locked=False, locked_until=_active_lock())) is False
+        )
 
     def test_permanent_lock_is_active(self) -> None:
         assert lock_is_active(User(is_locked=True, locked_until=None)) is True
@@ -76,12 +78,12 @@ class TestLockSemantics:
         assert lock_is_active(User(is_locked=True, locked_until=_active_lock())) is True
 
     def test_expired_lock_is_inactive(self) -> None:
-        assert lock_is_active(User(is_locked=True, locked_until=_expired_lock())) is False
+        assert (
+            lock_is_active(User(is_locked=True, locked_until=_expired_lock())) is False
+        )
 
     def test_clear_expired_lock_keeps_permanent(self) -> None:
-        permanent = User(
-            is_locked=True, locked_until=None, failed_login_attempts=5
-        )
+        permanent = User(is_locked=True, locked_until=None, failed_login_attempts=5)
         clear_expired_lock(permanent)
         assert permanent.is_locked is True
         assert permanent.failed_login_attempts == 5

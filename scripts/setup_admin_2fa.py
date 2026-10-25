@@ -50,7 +50,9 @@ async def main() -> None:
         begin = await setup_2fa_begin(db, user.id)
         secret = begin.get("secret")
         if not isinstance(secret, str) or not secret:
-            raise SystemExit(f"[fail] setup_2fa_begin 未返回 secret（keys={sorted(begin)}）")
+            raise SystemExit(
+                f"[fail] setup_2fa_begin 未返回 secret（keys={sorted(begin)}）"
+            )
         code = current_code(secret)
         res = await setup_2fa_complete(db, user.id, code)
         recovery_codes = res.get("recovery_codes")
@@ -64,8 +66,7 @@ async def main() -> None:
 
         if settings.admin_2fa_dump != "1":
             print(
-                f"[ok] 已为 {username} 启用 2FA；凭据未输出"
-                f"（需导出请设 {_DUMP_ENV}=1）"
+                f"[ok] 已为 {username} 启用 2FA；凭据未输出（需导出请设 {_DUMP_ENV}=1）"
             )
             return
         fd = os.open(_DUMP_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -73,7 +74,9 @@ async def main() -> None:
             f.write(f"SECRET={secret}\n")
             f.write(f"CURRENT_CODE={code}\n")
             f.write(f"RECOVERY={','.join(recovery_codes)}\n")
-        print(f"[ok] 已为 {username} 启用 2FA；凭据写入 {_DUMP_PATH}（0600），用完请删除")
+        print(
+            f"[ok] 已为 {username} 启用 2FA；凭据写入 {_DUMP_PATH}（0600），用完请删除"
+        )
     finally:
         await db.close()
         await dispose_auth_engine()

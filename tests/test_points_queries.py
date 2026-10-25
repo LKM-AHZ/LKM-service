@@ -60,9 +60,7 @@ async def _create_user(
     return uid
 
 
-async def _mk_ledger(
-    db: AsyncSession, user_id: uuid.UUID, deltas: list[int]
-) -> None:
+async def _mk_ledger(db: AsyncSession, user_id: uuid.UUID, deltas: list[int]) -> None:
     for i, d in enumerate(deltas):
         db.add(
             PointsLedger(
@@ -100,7 +98,9 @@ async def test_seed_yields_nonempty_lists(db: AsyncSession) -> None:
     assert items[0].name_key.startswith("contributionData.exchangeItems.e")
 
 
-async def test_leaderboard_total_sort_and_title(db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_leaderboard_total_sort_and_title(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """total 按 UserBalance 余额降序，且每项带 title（默认 active）。"""
     await seed_achievements(db)
     await db.commit()
@@ -116,7 +116,9 @@ async def test_leaderboard_total_sort_and_title(db: AsyncSession, auth_db: Async
     assert all(entry.balance >= 0 for entry in rows)
 
 
-async def test_leaderboard_daily_weekly_aggregate(db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_leaderboard_daily_weekly_aggregate(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """daily 近 24h / weekly 近 7 天按 points_ledger.delta>0 汇总降序。"""
     a_id = await _create_user(db, auth_db, "agg_a", "A")
     b_id = await _create_user(db, auth_db, "agg_b", "B")
@@ -143,7 +145,9 @@ async def test_leaderboard_invalid_period(db: AsyncSession) -> None:
     assert exc.value.errcode == PointsErr.INVALID_PERIOD
 
 
-async def test_leaderboard_daily_filters_stale_ledger(db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_leaderboard_daily_filters_stale_ledger(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """超出 daily 窗口（长期无流水）的余额用户不进 daily 榜。"""
     old_id = await _create_user(db, auth_db, "old_user", "老")
     await _create_user(db, auth_db, "new_user", "新")
@@ -170,7 +174,9 @@ async def test_leaderboard_daily_filters_stale_ledger(db: AsyncSession, auth_db:
     assert all(r.user_id != old_id for r in weekly)
 
 
-async def test_leaderboard_title_hardcore(db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_leaderboard_title_hardcore(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """解锁 a7（accepted_answers）→ title hardcore。"""
     await seed_achievements(db)
     await db.commit()
@@ -191,7 +197,9 @@ async def test_leaderboard_title_hardcore(db: AsyncSession, auth_db: AsyncSessio
     assert entry.title == "hardcore"
 
 
-async def test_leaderboard_title_batch_priority(db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_leaderboard_title_batch_priority(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """批量 title：多用户各按已解锁成就合成，且同用户多成就按优先级取更高级。"""
     await seed_achievements(db)
     await db.commit()
@@ -298,7 +306,9 @@ async def test_endpoint_achievements_returns_progress_when_authed(
     assert all("progress" in it and "unlocked" in it for it in items)
 
 
-async def test_endpoint_leaderboard_period_param(client, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None) -> None:
+async def test_endpoint_leaderboard_period_param(
+    client, db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
     """leaderboard 支持 period 参数；非法 period 返 400。"""
     uid = await _create_user(db, auth_db, "lb_user", "榜")
     (await db.get(UserBalance, uid)).balance = 15

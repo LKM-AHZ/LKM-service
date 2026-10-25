@@ -33,9 +33,7 @@ _RENEW_LUA = (
 )
 
 
-async def _renew_loop(
-    client: Any, key: str, token: str, stop: asyncio.Event
-) -> None:
+async def _renew_loop(client: Any, key: str, token: str, stop: asyncio.Event) -> None:
     """按 TTL 的一半周期续期；只续自己的 token（compare-and-expire）。"""
     while not stop.is_set():
         try:

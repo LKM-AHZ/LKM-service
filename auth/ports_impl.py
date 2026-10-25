@@ -55,7 +55,9 @@ class _AuthzImpl:
     ) -> Any:
         from auth import seams as _seams
 
-        kwargs = {"selected_roles": selected_roles} if selected_roles is not None else {}
+        kwargs = (
+            {"selected_roles": selected_roles} if selected_roles is not None else {}
+        )
         return await _seams.resolve_via_seam(
             user_id,
             expect_token_version,
@@ -195,9 +197,7 @@ class _UsersImpl:
     ) -> dict[str, Any]:
         from auth import seams as _seams
 
-        return await _seams.mint_bot_sso_ticket(
-            user_id, account_level=account_level
-        )
+        return await _seams.mint_bot_sso_ticket(user_id, account_level=account_level)
 
     async def verify_password(
         self, db: Any, username: str, password: str

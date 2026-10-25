@@ -58,13 +58,19 @@ async def _article(db: AsyncSession, category_id: uuid.UUID, slug: str = "a1") -
     await create_article_ex(
         db,
         ArticleCreate(
-            title="原题", slug=slug, content="正文", category_id=category_id, status="draft"
+            title="原题",
+            slug=slug,
+            content="正文",
+            category_id=category_id,
+            status="draft",
         ),
     )
 
 
 async def _reload(db: AsyncSession, slug: str) -> Article:
-    return (await db.execute(select(Article).where(Article.slug == slug))).scalars().one()
+    return (
+        (await db.execute(select(Article).where(Article.slug == slug))).scalars().one()
+    )
 
 
 class TestArticleOptimisticLock:
@@ -102,10 +108,14 @@ class TestArticleOptimisticLock:
         row = await _reload(db, "a1")
         assert row.title == "第一次" and row.version == 2
 
-    async def test_without_version_is_backward_compatible(self, db: AsyncSession) -> None:
+    async def test_without_version_is_backward_compatible(
+        self, db: AsyncSession
+    ) -> None:
         """旧客户端不带 version：仍能改，且版本号照样递增（不校验≠不记账）。"""
         await _article(db, await _category(db))
-        out = await update_article_ex(db, "a1", ArticleUpdate(title="无版本"), is_super=True)
+        out = await update_article_ex(
+            db, "a1", ArticleUpdate(title="无版本"), is_super=True
+        )
         assert out.title == "无版本" and out.version == 2
 
     async def test_stale_write_after_versionless_write_conflicts(
@@ -136,7 +146,9 @@ class TestBoardOptimisticLock:
         assert out.title == "新板" and out.version == 2
 
         with pytest.raises(VersionConflictError) as e:
-            await update_board_ex(db, board.id, au.id, BoardUpdate(title="过期", version=1))
+            await update_board_ex(
+                db, board.id, au.id, BoardUpdate(title="过期", version=1)
+            )
         assert e.value.errcode == CommonErr.VERSION_CONFLICT
         assert e.value.current["version"] == 2
         assert e.value.current["slug"] == "olb"

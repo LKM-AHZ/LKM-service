@@ -42,12 +42,16 @@ def _guard_oauth_query(
             f"{error}: {error_description}".strip(": "),
         )
     if not code or not state:
-        raise BizError(AuthErr.OAUTH_PROVIDER_ERROR, "oauth callback missing code/state")
+        raise BizError(
+            AuthErr.OAUTH_PROVIDER_ERROR, "oauth callback missing code/state"
+        )
     return code, state
 
 
 @router.get("/github/login")
-async def github_login(db: AsyncSession = Depends(get_auth_session)) -> RedirectResponse:
+async def github_login(
+    db: AsyncSession = Depends(get_auth_session),
+) -> RedirectResponse:
     """将用户重定向到 Github OAuth 授权页面。"""
     url = await service_oauth.get_github_auth_url(db, purpose="login")
     return RedirectResponse(url=url)

@@ -57,6 +57,7 @@ async def _review_audit_seam(auth_seam_realm: None) -> None:
     直写本测 auth schema，业务 db 不再尝试 INSERT ``audit_logs``（那里没有这张表）。
     """
 
+
 # db 与 client fixture 均由 tests/conftest.py 提供（business realm schema + httpx.AsyncClient）
 # auth_db 亦为 conftest：各测试在自己的 auth schema 以 auth_user_uid 造真实 auth 用户。
 
@@ -180,7 +181,9 @@ class TestColumnApplications:
         self, db: AsyncSession, auth_db: AsyncSession
     ):
         user = await _au(auth_db)
-        reviewer = await _au(auth_db, username="cooldown_reviewer", account_level="admin")
+        reviewer = await _au(
+            auth_db, username="cooldown_reviewer", account_level="admin"
+        )
         application = await _application(db, user_id=user.id)
         await review_application(
             db,
@@ -257,9 +260,7 @@ class TestColumnReview:
         assert result["column"]["application_id"] == application.id
         audit = (
             await auth_db.execute(
-                select(AuditLog).where(
-                    AuditLog.action == "review_column_application"
-                )
+                select(AuditLog).where(AuditLog.action == "review_column_application")
             )
         ).scalar_one()
         assert audit.user_id == reviewer.id

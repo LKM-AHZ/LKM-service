@@ -81,8 +81,11 @@ class TestFollowService:
 
 class TestFollowHttp:
     async def test_status_anonymous_is_false(
-        self, db: AsyncSession, auth_db: AsyncSession,
-        auth_seam_realm: None, client: AsyncClient,
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        client: AsyncClient,
     ) -> None:
         target = await _user(auth_db, "target", "t@ex.com")
         resp = await client.get(f"/api/v1/users/{target.id}/follow/status")
@@ -90,8 +93,11 @@ class TestFollowHttp:
         assert resp.json()["data"]["is_following"] is False
 
     async def test_status_authenticated_reflects_follow(
-        self, db: AsyncSession, auth_db: AsyncSession,
-        auth_seam_realm: None, client: AsyncClient,
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        client: AsyncClient,
     ) -> None:
         me = await _user(auth_db, "me", "me@ex.com")
         target = await _user(auth_db, "target", "t2@ex.com")
@@ -103,8 +109,11 @@ class TestFollowHttp:
         assert resp.json()["data"]["is_following"] is True
 
     async def test_following_users_list(
-        self, db: AsyncSession, auth_db: AsyncSession,
-        auth_seam_realm: None, client: AsyncClient,
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        client: AsyncClient,
     ) -> None:
         me = await _user(auth_db, "me", "m1@ex.com")
         b1 = await _user(auth_db, "b1", "b1@ex.com")
@@ -117,8 +126,11 @@ class TestFollowHttp:
         assert ids == {str(b1.id), str(b2.id)}
 
     async def test_following_boards_list(
-        self, db: AsyncSession, auth_db: AsyncSession,
-        auth_seam_realm: None, client: AsyncClient,
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+        client: AsyncClient,
     ) -> None:
         me = await _user(auth_db, "me", "m2@ex.com")
         bid = await _board(db, "dev")
@@ -128,8 +140,6 @@ class TestFollowHttp:
         items = resp.json()["data"]["items"]
         assert items[0]["board_id"] == str(bid) and items[0]["title"] == "dev"
 
-    async def test_following_requires_login(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_following_requires_login(self, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/users/me/following")
         assert resp.status_code == 403

@@ -315,9 +315,7 @@ def test_auth_prefix_split() -> None:
 def test_graphql_websocket_enabled() -> None:
     routes = _rendered_routes()
     assert routes["graphql-prefix"]["enable_websocket"] is True
-    assert routes["graphql-prefix"]["upstream"]["service_name"].startswith(
-        "backend:"
-    )
+    assert routes["graphql-prefix"]["upstream"]["service_name"].startswith("backend:")
 
 
 def test_graphql_multi_endpoint_version_routing() -> None:
@@ -481,7 +479,9 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
     subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
     rendered = yaml.safe_load(out.read_text())
-    assert len(rendered["ssls"]) == 1  # 仅社群域（bot 走社群域子路径；官网域已迁出独立部署）
+    assert (
+        len(rendered["ssls"]) == 1
+    )  # 仅社群域（bot 走社群域子路径；官网域已迁出独立部署）
     for entry in rendered["ssls"]:
         assert "BEGIN CERTIFICATE" in entry["cert"]
         assert "BEGIN PRIVATE KEY" in entry["key"]
@@ -571,7 +571,9 @@ def test_apisix_mounts_rendered_config_not_repo_template() -> None:
         for m in services["apisix-render"]["volumes"]
         if str(m).endswith(":/out")
     ]
-    assert len(out_srcs) == 1, f"apisix-render 须有且仅有一个 /out 挂载，实得 {out_srcs}"
+    assert len(out_srcs) == 1, (
+        f"apisix-render 须有且仅有一个 /out 挂载，实得 {out_srcs}"
+    )
     for target in ("config.yaml", "apisix.yaml"):
         assert any(m.startswith(f"{out_srcs[0]}/{target}:") for m in as_str), (
             f"apisix 未从 render 产物目录挂载渲染后的 {target}"

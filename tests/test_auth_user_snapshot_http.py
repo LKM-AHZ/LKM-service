@@ -14,6 +14,7 @@
   确认 seam in 公共 blast 面不成立。HTTP 用 ``httpx.MockTransport`` 注入，别连真实网络。
 fixture 复用 repo fakeredis 范式（reset _core + settings.redis_url + Redis.from_url→fake）。
 """
+
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -148,8 +149,7 @@ class TestFlagOnUsesTransport:
     async def test_success_transport_returns_and_caches_wire_value(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """DB 也建同名用户，但 wire 给不同 display_name → 返回必须来自 wire（证真走 HTTP）。
-        """
+        """DB 也建同名用户，但 wire 给不同 display_name → 返回必须来自 wire（证真走 HTTP）。"""
         _enable_fake_redis(monkeypatch)
         _enable_seam(monkeypatch)
         uid = await _mk_user(db, "wirelocal", nickname="DB name must NOT win")
@@ -180,8 +180,7 @@ class TestFlagOnUsesTransport:
     async def test_connect_error_fails_open_to_db(
         self, db: DB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """transport 抛网络错/超时 → seam 回落本地 DB、返回 DB 值、不抛、不把失败当 None。
-        """
+        """transport 抛网络错/超时 → seam 回落本地 DB、返回 DB 值、不抛、不把失败当 None。"""
         _enable_fake_redis(monkeypatch)
         _enable_seam(monkeypatch)
         uid = await _mk_user(db, "failopen", nickname="From DB after AUTH down")

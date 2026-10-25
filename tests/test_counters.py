@@ -104,7 +104,9 @@ async def test_like_commits_with_detail_same_tx(db: AsyncSession) -> None:
 
     assert await _db_count(db, item_id, "like_count") == 1
     likes = await db.scalar(
-        select(func.count()).select_from(ContentLike).where(ContentLike.content_id == item_id)
+        select(func.count())
+        .select_from(ContentLike)
+        .where(ContentLike.content_id == item_id)
     )
     assert likes == 1
     assert await counters.pending_delta("like_count", item_id) == 0
@@ -122,7 +124,9 @@ async def test_rollback_reverts_detail_and_count(db: AsyncSession) -> None:
     await db.rollback()
     assert await _db_count(db, item_id, "like_count") == 0
     likes = await db.scalar(
-        select(func.count()).select_from(ContentLike).where(ContentLike.content_id == item_id)
+        select(func.count())
+        .select_from(ContentLike)
+        .where(ContentLike.content_id == item_id)
     )
     assert likes == 0
 

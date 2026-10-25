@@ -151,7 +151,9 @@ async def test_points_report_200_with_continuous_aggregate(
             )
         )
         await db.commit()
-        async with engine.execution_options(isolation_level="AUTOCOMMIT").connect() as raw:
+        async with engine.execution_options(
+            isolation_level="AUTOCOMMIT"
+        ).connect() as raw:
             await raw.execute(
                 text("CALL refresh_continuous_aggregate('points_daily', NULL, NULL)")
             )

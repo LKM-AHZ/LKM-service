@@ -49,7 +49,9 @@ async def _dim(db: AsyncSession, user_id: uuid.UUID) -> UserDim | None:
     ).scalar_one_or_none()
 
 
-async def test_sync_reads_auth_writes_business(auth_db: AsyncSession, db: AsyncSession) -> None:
+async def test_sync_reads_auth_writes_business(
+    auth_db: AsyncSession, db: AsyncSession
+) -> None:
     """源在 auth schema、dim 写在业务 schema——单会话跨库会炸，双会话方成。"""
     u = await _mk_user(auth_db, "realm1", nickname="R1", role="editor")
     await auth_db.commit()

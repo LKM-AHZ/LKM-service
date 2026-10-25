@@ -43,7 +43,9 @@ def _py_files() -> list[Path]:
 
 
 def _rel(path: Path) -> str:
-    return str(path.relative_to(Path(__file__).resolve().parent.parent)).replace("\\", "/")
+    return str(path.relative_to(Path(__file__).resolve().parent.parent)).replace(
+        "\\", "/"
+    )
 
 
 def test_no_os_getenv_outside_settings() -> None:

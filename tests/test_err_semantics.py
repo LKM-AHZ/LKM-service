@@ -113,17 +113,23 @@ class TestConstraintNameExtraction:
 
 class TestUniqueViolationErrcode:
     def should_map_email(self) -> None:
-        exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("_probe_uq_email_key")))
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("_probe_uq_email_key"))
+        )
         assert _is_unique_violation(exc) is True
         assert unique_violation_errcode(exc) == AuthErr.EMAIL_TAKEN
 
     def should_map_username(self) -> None:
-        exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_users_username")))
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_users_username"))
+        )
         assert unique_violation_errcode(exc) == AuthErr.USERNAME_TAKEN
 
     def should_map_like_by_substring(self) -> None:
         # content_likes 是复合主键，create_all 下隐式名形如 content_likes_pkey，含 "like"
-        exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("content_likes_pkey")))
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("content_likes_pkey"))
+        )
         assert unique_violation_errcode(exc) == InteractionErr.DUPLICATE_LIKE
 
     def should_map_slug(self) -> None:
@@ -157,7 +163,9 @@ class TestUniqueViolationErrcode:
 
     def should_fall_back_to_neutral_conflict(self) -> None:
         """未登记的业务约束回落**中性** 409，而不是 auth 域的「用户名或邮箱已注册」。"""
-        exc = _ie(_SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_unknown_thing")))
+        exc = _ie(
+            _SqlalchemyAsyncpgWrapper(_AsyncpgUniqueViolation("uq_unknown_thing"))
+        )
         assert unique_violation_errcode(exc) == CommonErr.CONFLICT
 
     def should_fall_back_when_name_missing(self) -> None:

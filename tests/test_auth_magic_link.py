@@ -239,9 +239,7 @@ class TestVerifyMagicLink:
 
 
 class TestMagicLinkLockGate:
-    async def should_block_session_issuance_for_locked_account(
-        self, db: AsyncSession
-    ):
+    async def should_block_session_issuance_for_locked_account(self, db: AsyncSession):
         """purpose=login 是登录入口：被锁（含永久锁）账号不得拿到会话令牌。"""
         user = await _create_user(db, email="locked@example.com")
         user.is_locked = True

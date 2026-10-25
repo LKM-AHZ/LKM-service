@@ -126,9 +126,7 @@ async def owner_update_board(
     )
     # 乐观锁冲突（蓝图 §6.1）：同 patch_article，转 (errcode, 当前值) 元组带出 409 + data。
     try:
-        return await update_board_ex(
-            db, board_id, cur.id, patch, is_admin=delegated
-        )
+        return await update_board_ex(db, board_id, cur.id, patch, is_admin=delegated)
     except VersionConflictError as exc:
         return (exc.errcode, exc.current)
 
@@ -163,7 +161,5 @@ async def unban(
         db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
     )
     board = await get_board_ex(db, board_id)
-    await unban_user(
-        db, board, cur.id, target_user_id, is_admin=delegated
-    )
+    await unban_user(db, board, cur.id, target_user_id, is_admin=delegated)
     return {"ok": True}

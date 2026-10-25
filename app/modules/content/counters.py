@@ -156,9 +156,7 @@ async def bump_comment_like_count(
     return int(row[0])
 
 
-async def _reconcile_comment_likes(
-    db: AsyncSession, item_ids: list[uuid.UUID]
-) -> int:
+async def _reconcile_comment_likes(db: AsyncSession, item_ids: list[uuid.UUID]) -> int:
     """把这批 item 下所有评论的 ``like_count`` 按明细重算，返回被修正的行数。
 
     单条 UPDATE + 相关子查询（不是逐行回写）：一页 500 条 item 下的评论可能上千，逐行发
@@ -328,13 +326,9 @@ async def reconcile_counts(
         # 顺带把这批 item 下评论的 like_count 按明细拉回真值（见 _reconcile_comment_likes）。
         # 刻意不计入 affected：affected 的语义是「需修正的 item 数」，且 _record_oscillation
         # 用 item id 判震荡，混入评论会污染该判定。
-        fixed_comments = await _reconcile_comment_likes(
-            db, [row[0] for row in rows]
-        )
+        fixed_comments = await _reconcile_comment_likes(db, [row[0] for row in rows])
         if fixed_comments:
-            logger.info(
-                "reconciled comment like counts: %d comments", fixed_comments
-            )
+            logger.info("reconciled comment like counts: %d comments", fixed_comments)
 
         for row in rows:
             item_id = row[0]

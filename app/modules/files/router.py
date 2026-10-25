@@ -252,9 +252,7 @@ async def review_files_batch(
             reviewed_status = str(info.status)
             await db.commit()
             results.append(
-                BatchReviewItemResult(
-                    file_id=file_id, ok=True, status=reviewed_status
-                )
+                BatchReviewItemResult(file_id=file_id, ok=True, status=reviewed_status)
             )
         except BizError as exc:
             await db.rollback()

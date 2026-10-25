@@ -43,7 +43,9 @@ async def _acquire(client: Any, lock_key: str, token: str, ttl: int) -> bool | N
         return None
 
 
-async def _wait_for_lock(client: Any, lock_key: str, token: str, ttl: int) -> bool | None:
+async def _wait_for_lock(
+    client: Any, lock_key: str, token: str, ttl: int
+) -> bool | None:
     """在 ``cache_lock_wait_ms`` 内轮询重试（等锁期间持锁者通常已完成回填）。"""
     deadline = time.monotonic() + max(0, settings.cache_lock_wait_ms) / 1000.0
     while (remaining := deadline - time.monotonic()) > 0:

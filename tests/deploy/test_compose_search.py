@@ -63,9 +63,7 @@ def test_engine_volume_is_declared(
 
 
 @pytest.mark.parametrize("name", _CONSUMERS)
-def test_consumers_declare_search_engine(
-    services: dict[str, Any], name: str
-) -> None:
+def test_consumers_declare_search_engine(services: dict[str, Any], name: str) -> None:
     env = services[name].get("environment") or {}
     assert "LKM_SEARCH_ENGINE" in env, (
         f"{name} 缺 LKM_SEARCH_ENGINE：读路径与索引同步必须同源配置，否则静默不一致"
@@ -79,14 +77,12 @@ def test_k8s_engines_are_optional_replicas() -> None:
     """k8s 用 replicas: 0 表「可选组件」——与 compose 的 profile 是同一语义的两种表达。"""
     path = _ROOT / "deploy" / "k8s" / "base" / "infra" / "search.yaml"
     docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8")) if d]
-    states = {
-        d["metadata"]["name"]: d
-        for d in docs
-        if d.get("kind") == "StatefulSet"
-    }
+    states = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "StatefulSet"}
     assert set(states) == set(_ENGINES), f"k8s 清单应含 {sorted(_ENGINES)} 两个引擎"
     for name, doc in states.items():
-        assert doc["spec"]["replicas"] == 0, f"{name} 应默认 replicas: 0（可选组件约定）"
+        assert doc["spec"]["replicas"] == 0, (
+            f"{name} 应默认 replicas: 0（可选组件约定）"
+        )
 
 
 def test_kustomization_includes_search_manifest() -> None:

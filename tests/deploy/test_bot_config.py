@@ -339,7 +339,7 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
     raw = (_APISIX_DIR / "apisix.yaml").read_text(encoding="utf-8")
     assert "__BOT_BASE_PATH__" in raw
     assert f"uri: {_BOT_PREFIX}/api/v1/auth/login*" not in raw
-    assert f'uri: {_BOT_PREFIX}/*' not in raw
+    assert f"uri: {_BOT_PREFIX}/*" not in raw
 
     # k8s：面板读的是 lkm-gateway-config 里**网关路由同一个键**（不是各自硬编码的副本）
     container = next(d for d in _k8s_lkmbot() if d["kind"] == "Deployment")["spec"][
@@ -356,7 +356,9 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
 
 def should_follow_bot_base_path_variable() -> None:
     """改前缀时 bot 三条路由整体跟随：uri 与剥前缀正则同源，且不波及其余路由。"""
-    routes = {r["id"]: r for r in _render_once({"APISIX_BOT_BASE_PATH": "/bot2"})["routes"]}
+    routes = {
+        r["id"]: r for r in _render_once({"APISIX_BOT_BASE_PATH": "/bot2"})["routes"]
+    }
     assert routes["bot-panel"]["uri"] == "/bot2/*"
     assert routes["bot-panel-root"]["uri"] == "/bot2"
     assert routes["bot-auth-login"]["uri"] == "/bot2/api/v1/auth/login*"
@@ -428,8 +430,12 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     # 签发侧 auth 与消费侧 lkmbot 经 YAML 合并键拿到**同一份**（yaml.safe_load 会展开 <<）
     for name in ("auth", "lkmbot"):
         env = _services()[name]["environment"]
-        assert env["LKM_BOT_SSO_AUDIENCE"] == f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}", name
-        assert env["LKM_BOT_SSO_ISSUER"] == f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}", name
+        assert (
+            env["LKM_BOT_SSO_AUDIENCE"] == f"${{LKM_BOT_SSO_AUDIENCE:-{BOT_SSO_AUD}}}"
+        ), name
+        assert (
+            env["LKM_BOT_SSO_ISSUER"] == f"${{LKM_BOT_SSO_ISSUER:-{BOT_SSO_ISSUER}}}"
+        ), name
         assert env["LKM_BOT_SSO_TYPE"] == f"${{LKM_BOT_SSO_TYPE:-{BOT_SSO_TYPE}}}", name
         assert (
             env["LKM_BOT_SSO_ACCOUNT_LEVEL"]
@@ -468,7 +474,9 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     assert "key: LKM_BOT_SSO_TTL_SECONDS" not in lkmbot_yaml
 
     # 消费侧（LKM-bot）代码默认值必须与签发侧逐字相同（只读源码比对，不 import）
-    sso_py = (_ROOT / "LKM-bot" / "astrbot" / "lkm" / "sso.py").read_text(encoding="utf-8")
+    sso_py = (_ROOT / "LKM-bot" / "astrbot" / "lkm" / "sso.py").read_text(
+        encoding="utf-8"
+    )
     for env_name, default in (
         ("LKM_BOT_SSO_AUDIENCE", BOT_SSO_AUD),
         ("LKM_BOT_SSO_TYPE", BOT_SSO_TYPE),

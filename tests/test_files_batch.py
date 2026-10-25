@@ -104,11 +104,7 @@ async def test_batch_approve_partial_success(db: DB, client: Client) -> None:
     assert first.status == "approved"
     assert second.status == "approved"
     audits = (
-        (
-            await db.execute(
-                select(AuditLog).where(AuditLog.action == "review_file")
-            )
-        )
+        (await db.execute(select(AuditLog).where(AuditLog.action == "review_file")))
         .scalars()
         .all()
     )

@@ -19,7 +19,9 @@ async def _echo_ip(request: Request) -> dict[str, str]:
     return {"ip": client_ip(request)}
 
 
-async def _call(headers: dict[str, str] | None = None, client: tuple | None = None) -> str:
+async def _call(
+    headers: dict[str, str] | None = None, client: tuple | None = None
+) -> str:
     transport = ASGITransport(app=_app, client=client)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await c.get("/ip", headers=headers or {})
@@ -40,7 +42,9 @@ async def test_falls_back_to_peer_when_header_absent() -> None:
 
 async def test_blank_header_falls_back_to_peer() -> None:
     """空/全空白头不算数（避免把 'ip:' 与空串混作一桶）。"""
-    assert await _call({"X-Real-IP": "   "}, client=("198.51.100.9", 1)) == "198.51.100.9"
+    assert (
+        await _call({"X-Real-IP": "   "}, client=("198.51.100.9", 1)) == "198.51.100.9"
+    )
 
 
 async def test_unknown_when_nothing_available() -> None:
@@ -48,7 +52,10 @@ async def test_unknown_when_nothing_available() -> None:
 
 
 async def test_header_value_is_stripped() -> None:
-    assert await _call({"X-Real-IP": " 203.0.113.7 "}, client=("1.2.3.4", 1)) == "203.0.113.7"
+    assert (
+        await _call({"X-Real-IP": " 203.0.113.7 "}, client=("1.2.3.4", 1))
+        == "203.0.113.7"
+    )
 
 
 async def test_does_not_read_forwarded_for_chain() -> None:

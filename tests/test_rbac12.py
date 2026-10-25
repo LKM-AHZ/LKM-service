@@ -311,9 +311,7 @@ async def test_refresh_preserves_selected_roles(monkeypatch) -> None:
     monkeypatch.setattr(
         "auth.service_auth.UserRepository.get_with_profile_or_raise",
         AsyncMock(
-            return_value=SimpleNamespace(
-                id=user_id, is_locked=False, locked_until=None
-            )
+            return_value=SimpleNamespace(id=user_id, is_locked=False, locked_until=None)
         ),
     )
     issue = AsyncMock(return_value=("new-access", "new-refresh"))

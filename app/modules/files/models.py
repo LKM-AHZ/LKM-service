@@ -81,9 +81,7 @@ class LibraryFile(UUIDPrimaryKeyMixin, Base):
         ),
     )
 
-    uploader_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False
-    )  # auth user_id
+    uploader_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # auth user_id
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     # 内容寻址哈希（SHA3-256，16 进制 64 字符）

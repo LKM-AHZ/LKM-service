@@ -25,7 +25,9 @@ async def test_auth_user_uid_mints_id_within_auth_realm(auth_db: AsyncSession) -
     # User + Profile 落 auth 库 schema，同会话可读回
     u = (await auth_db.execute(select(User).where(User.id == au.id))).scalar_one()
     assert u.username == "alice"
-    p = (await auth_db.execute(select(Profile).where(Profile.user_id == au.id))).scalar_one()
+    p = (
+        await auth_db.execute(select(Profile).where(Profile.user_id == au.id))
+    ).scalar_one()
     assert p.nickname == "Alice"
     assert u.account_level == "normal"
 

@@ -198,9 +198,7 @@ async def internal_admin_ids(
     rows = (
         (
             await db.execute(
-                select(User.id)
-                .where(User.account_level == "admin")
-                .order_by(User.id)
+                select(User.id).where(User.account_level == "admin").order_by(User.id)
             )
         )
         .scalars()
@@ -273,9 +271,7 @@ async def internal_dev_code(
         raise BizError(CommonErr.NOT_FOUND)
     # 与注册侧 _normalize_email 对齐（邮箱小写、去空白）；否则 pending.email 与验证记录
     # 大小写不一致，verify 时 hash 对不上。
-    normalized = (
-        contact.strip().lower() if channel == "email" else contact.strip()
-    )
+    normalized = contact.strip().lower() if channel == "email" else contact.strip()
     if channel == "email":
         code, _ = await create_email_verification(db, normalized, "register")
     else:

@@ -290,9 +290,7 @@ class TestRequireOwnerForPushViaSeam:
     """
 
     @pytest.fixture
-    async def db(
-        self, fused_db_session: AsyncSession, auth_seam_fused
-    ) -> AsyncSession:
+    async def db(self, fused_db_session: AsyncSession, auth_seam_fused) -> AsyncSession:
         return fused_db_session
 
     @pytest.fixture(autouse=True)
@@ -326,7 +324,9 @@ class TestRequireOwnerForPushViaSeam:
         await self._series(db, _users.id, "blog-seam-other")
         with pytest.raises(BizError) as ei:
             await _require_owner_for_push(
-                db, "blog-seam-other", _push_auth_request(_auth_header("seamother", "pw123456"))
+                db,
+                "blog-seam-other",
+                _push_auth_request(_auth_header("seamother", "pw123456")),
             )
         assert _status(ei.value) == 403
 
@@ -366,7 +366,9 @@ class TestMaybeBackfillAfterPush:
         async def _factory() -> AsyncSession:
             return db
 
-        monkeypatch.setattr("app.modules.content.blog.git_http._session_factory", _factory)
+        monkeypatch.setattr(
+            "app.modules.content.blog.git_http._session_factory", _factory
+        )
 
     async def _make_series(self, db, repo_name: str) -> uuid.UUID:
         # 先建真实 owner 取 uuid 再挂 series 属主（owner_id 现为 auth realm uuid）。

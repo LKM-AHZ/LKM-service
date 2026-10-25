@@ -46,7 +46,10 @@ def _ok_handler(request: httpx.Request) -> httpx.Response:
             200,
             json={
                 "secrets": [
-                    {"secretKey": "LKM_TOTP_ENCRYPTION_KEY", "secretValue": "real-totp"},
+                    {
+                        "secretKey": "LKM_TOTP_ENCRYPTION_KEY",
+                        "secretValue": "real-totp",
+                    },
                     {"secretKey": "LKM_DB_PASSWORD", "secretValue": "real-db"},
                     {"secretKey": "SOME_OTHER", "secretValue": "ignored"},
                 ]
@@ -164,7 +167,9 @@ def test_main_execs_command_with_injected_environment(monkeypatch: Any) -> None:
     for key, value in _BASE_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("LKM_TOTP_ENCRYPTION_KEY", raising=False)
-    monkeypatch.setattr(secrets_bootstrap, "_default_client_factory", _factory(_ok_handler))
+    monkeypatch.setattr(
+        secrets_bootstrap, "_default_client_factory", _factory(_ok_handler)
+    )
 
     def _exec(file: str, argv: list[str], env: dict[str, str]) -> None:
         seen.update(file=file, argv=argv, secret=env["LKM_TOTP_ENCRYPTION_KEY"])

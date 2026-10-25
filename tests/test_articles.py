@@ -15,7 +15,9 @@ async def _run_graphql(
     client: AsyncClient, query: str, variables: dict[str, Any]
 ) -> Any:
     """只读端点已下线，改由 GraphQL 承担读取。走 /graphql/v1 返回 data。"""
-    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
+    resp = await client.post(
+        "/graphql/v1", json={"query": query, "variables": variables}
+    )
     assert resp.status_code == 200
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")
@@ -216,9 +218,7 @@ async def test_comment_create_and_count(
     assert detail["article"]["comments"] == 1
 
 
-async def test_comment_reply(
-    db, client, auth_db: AsyncSession, auth_seam_realm: None
-):
+async def test_comment_reply(db, client, auth_db: AsyncSession, auth_seam_realm: None):
     await _make_article(db, "a-1", "news")
     h = _auth((await _make_au(auth_db)).token)
     parent = (

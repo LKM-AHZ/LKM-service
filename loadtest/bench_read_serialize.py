@@ -180,7 +180,9 @@ async def bench_l1() -> None:
         # 计时前先确认「写进去了、也读得到」：write_if_newer 被拒（sv 陈旧/epoch 变化）或
         # 条目缺失时，两组测的都是 miss 路径，打印出的加速比与「非劣化」结论毫无意义。
         assert written, "benchmark 需真正写入缓存（write_if_newer 被拒）"
-        assert await uc.read_snap(7) is not None, "benchmark 需命中缓存，否则测的是 miss 路径"
+        assert await uc.read_snap(7) is not None, (
+            "benchmark 需命中缓存，否则测的是 miss 路径"
+        )
         # warmup + 采样
         for _ in range(200):
             await one_read()

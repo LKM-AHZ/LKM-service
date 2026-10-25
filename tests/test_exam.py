@@ -94,16 +94,16 @@ async def _mk_au(
 
 async def _user_row(auth_db: AsyncSession, user_id: uuid.UUID) -> User:
     return (
-        await auth_db.execute(select(User).where(User.id == user_id))
-    ).scalars().one()
+        (await auth_db.execute(select(User).where(User.id == user_id))).scalars().one()
+    )
 
 
-async def _profile_row(
-    auth_db: AsyncSession, user_id: uuid.UUID
-) -> Profile | None:
+async def _profile_row(auth_db: AsyncSession, user_id: uuid.UUID) -> Profile | None:
     return (
-        await auth_db.execute(select(Profile).where(Profile.user_id == user_id))
-    ).scalars().first()
+        (await auth_db.execute(select(Profile).where(Profile.user_id == user_id)))
+        .scalars()
+        .first()
+    )
 
 
 async def _make_published_exam(db: AsyncSession) -> uuid.UUID:

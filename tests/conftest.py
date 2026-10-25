@@ -83,10 +83,14 @@ _RSA_PRIVATE_PEM = _RSA_KEY.private_bytes(
     format=serialization.PrivateFormat.PKCS8,
     encryption_algorithm=serialization.NoEncryption(),
 ).decode("ascii")
-_RSA_PUBLIC_PEM = _RSA_KEY.public_key().public_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-).decode("ascii")
+_RSA_PUBLIC_PEM = (
+    _RSA_KEY.public_key()
+    .public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    .decode("ascii")
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -754,9 +758,7 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         """审计写缝替身（等价 AUTH ``/auth/internal/audit``）：直写本测 auth realm。"""
         from auth.service_auth import log_audit as _log_audit
 
-        await _log_audit(
-            carrier, user_id, action, detail=detail, ip_address=ip_address
-        )
+        await _log_audit(carrier, user_id, action, detail=detail, ip_address=ip_address)
 
     async def _admin_ids() -> list[uuid.UUID]:
         """管理员名单替身（等价 AUTH ``/auth/internal/admin-ids``）：直查本测 auth realm。"""
@@ -765,12 +767,16 @@ def _install_user_seam(carrier: AsyncSession, monkeypatch: pytest.MonkeyPatch) -
         from auth.models import User
 
         rows = (
-            await carrier.execute(
-                select(User.id)
-                .where(User.account_level == "admin")
-                .order_by(User.id)
+            (
+                await carrier.execute(
+                    select(User.id)
+                    .where(User.account_level == "admin")
+                    .order_by(User.id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
 
     async def _admission_list(status: str) -> list[dict[str, object]]:

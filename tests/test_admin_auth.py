@@ -201,7 +201,9 @@ class TestAdminDangerContentDelete:
         await _grant_super_admin(db, "admin.content_review")
         # 造一「盖章在 >1h 前」的 step-up cookie → 过期
         old = int(
-            (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)).timestamp()
+            (
+                datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)
+            ).timestamp()
         )
         tok = create_admin_access_token(admin, mfa_verified=True, mfa_at=old)
         client.cookies.set(COOKIE_NAME, tok, path=COOKIE_PATH)

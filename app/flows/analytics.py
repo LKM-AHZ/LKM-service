@@ -26,6 +26,7 @@ from core.config import settings
 
 logger = logging.getLogger("lkm.flows.analytics")
 
+
 def _resolve_default_window() -> int:
     """导出窗口（行）：单一来源是 ``settings.clickhouse_export_window``。
 

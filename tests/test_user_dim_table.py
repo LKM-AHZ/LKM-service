@@ -78,7 +78,9 @@ async def test_user_dim_table_exists_with_full_column_set():
 
         def _assert_schema(sync_conn) -> None:
             insp = sa.inspect(sync_conn)
-            assert "user_dim" in insp.get_table_names(), "dev create_all 应建出 user_dim"
+            assert "user_dim" in insp.get_table_names(), (
+                "dev create_all 应建出 user_dim"
+            )
             cols = {c["name"] for c in insp.get_columns("user_dim")}
             assert expect.issubset(cols), f"user_dim 缺列: {expect - cols}"
 
@@ -126,7 +128,10 @@ def test_user_dim_migration_chained_to_single_head():
         if f.name.startswith(("_", ".")):
             continue
         module = _load_migration_module(f)
-        mods[module.revision] = {"module": module, "down_revision": module.down_revision}
+        mods[module.revision] = {
+            "module": module,
+            "down_revision": module.down_revision,
+        }
 
     # (b1) user_dim 的建表在迁移链里有落点。**迁移链已压平**（2026-09-18，见路线图 §8 #39）：
     # 18 条历史迁移 → 1 条 UUID baseline（`0001_uuid_baseline`），原独立迁移文件
@@ -147,10 +152,16 @@ def test_user_dim_migration_chained_to_single_head():
     #      一路回走，不遇分支/缺环/环，且恰好盖上全部 revision；root(down_revision=None) 有且仅一个。
     #      这样即便在 user_dim 之后再追加新迁移，也仍然把整条线性链走满、保证可逆。
     all_revs = set(mods)
-    child_of = {d for m in mods.values() for d in (
-        [m["down_revision"]] if not isinstance(m["down_revision"], (list, tuple))
-        else list(m["down_revision"])
-    ) if d is not None}
+    child_of = {
+        d
+        for m in mods.values()
+        for d in (
+            [m["down_revision"]]
+            if not isinstance(m["down_revision"], (list, tuple))
+            else list(m["down_revision"])
+        )
+        if d is not None
+    }
     head_revs = all_revs - child_of
     assert len(head_revs) == 1, f"迁移链应单头，实得 {sorted(head_revs)}"
     head = head_revs.pop()
@@ -165,7 +176,9 @@ def test_user_dim_migration_chained_to_single_head():
         assert node not in seen, f"迁移链出现环 at {node}"
         seen.add(node)
         nxt: str | None = mods[node]["down_revision"]
-        assert nxt is None or not isinstance(nxt, (list, tuple, set)), f"{node} 出现多父分支: {nxt}"
+        assert nxt is None or not isinstance(nxt, (list, tuple, set)), (
+            f"{node} 出现多父分支: {nxt}"
+        )
         reachable.add(node)
         node = nxt
     assert reachable == all_revs, (

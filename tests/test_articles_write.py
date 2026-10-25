@@ -110,7 +110,9 @@ class TestArticleWrite:
         with pytest.raises(BizError) as e:
             await create_article_ex(
                 db,
-                ArticleCreate(title="t", slug="x", content="c", category_id=_MISSING_ID),
+                ArticleCreate(
+                    title="t", slug="x", content="c", category_id=_MISSING_ID
+                ),
             )
         assert e.value.errcode == ArticleErr.CATEGORY_NOT_FOUND
 
@@ -291,9 +293,7 @@ class TestArticlePermission:
         role: str,
     ) -> None:
         """非 super_admin（普通用户或 admin 非 super_admin）调写端点 → 403。"""
-        au = await _au(
-            auth_db, username=f"u-{role}-{level}", level=level, role=role
-        )
+        au = await _au(auth_db, username=f"u-{role}-{level}", level=level, role=role)
         headers = {"Authorization": f"Bearer {au.token}"}
         resp = await client.post(
             "/api/v1/articles",

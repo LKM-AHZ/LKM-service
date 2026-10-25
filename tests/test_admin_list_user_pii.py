@@ -85,9 +85,7 @@ async def _grant_super_admin(db: AsyncSession) -> None:
         )
     )
     if exists is None:
-        db.add(
-            RolePermission(role_name="admin:super_admin", permission=PERM.value)
-        )
+        db.add(RolePermission(role_name="admin:super_admin", permission=PERM.value))
         await db.flush()
 
 
@@ -103,9 +101,7 @@ async def _login_admin(
     )
     from auth.models import User
 
-    u = (
-        await db.execute(select(User).where(User.username == username))
-    ).scalar_one()
+    u = (await db.execute(select(User).where(User.username == username))).scalar_one()
     tok = create_admin_access_token(u)
     client.cookies.set(COOKIE_NAME, tok, path=COOKIE_PATH)
 
@@ -207,16 +203,16 @@ async def test_list_endpoint_hides_pii_by_default(
     assert carol["created_at"] is not None
 
 
-async def test_list_endpoint_include_pii_true(db: AsyncSession, client: AsyncClient) -> None:
+async def test_list_endpoint_include_pii_true(
+    db: AsyncSession, client: AsyncClient
+) -> None:
     await _create_user(db, "root", account_level="admin")
     await _create_user(db, "dave", account_level="local", email="dave@priv.io")
     await _grant_super_admin(db)
     await _login_admin(db, client, "root")
     resp = await client.get("/api/v1/admin/users", params={"include_pii": "true"})
     assert resp.status_code == 200
-    dave = next(
-        i for i in resp.json()["data"]["items"] if i["username"] == "dave"
-    )
+    dave = next(i for i in resp.json()["data"]["items"] if i["username"] == "dave")
     assert dave["email"] == "dave@priv.io"
 
 

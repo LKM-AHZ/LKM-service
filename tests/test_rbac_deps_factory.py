@@ -63,4 +63,6 @@ async def test_ungranted_role_forbidden(db: DB) -> None:
 
 async def test_no_role_row_forbidden(db: DB) -> None:
     with pytest.raises(BizError):
-        await _check(db, _actor(uuid.uuid4(), "local", "member"), Permission.content_create)
+        await _check(
+            db, _actor(uuid.uuid4(), "local", "member"), Permission.content_create
+        )

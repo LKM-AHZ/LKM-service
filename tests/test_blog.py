@@ -110,7 +110,9 @@ async def _run_graphql(
     client: AsyncClient, query: str, variables: dict[str, Any]
 ) -> Any:
     """只读端点已下线，改由 GraphQL 承担读取。走 /graphql/v1 返回 data。"""
-    resp = await client.post("/graphql/v1", json={"query": query, "variables": variables})
+    resp = await client.post(
+        "/graphql/v1", json={"query": query, "variables": variables}
+    )
     assert resp.status_code == 200
     body: dict[str, Any] = resp.json()
     assert "errors" not in body, body.get("errors")
@@ -346,7 +348,7 @@ class TestBlogProfileInfoBlankPreservedFromSeam:
             db, series.id, commenter, BlogCommentCreate(content="Nice post!")
         )
         assert comment.profile is not None
-        assert comment.profile.nickname is None      # blank 保留，非 username 回退
+        assert comment.profile.nickname is None  # blank 保留，非 username 回退
         assert comment.user_id == commenter
 
     async def test_comment_profile_nickname_set_is_verbatim(
@@ -361,7 +363,7 @@ class TestBlogProfileInfoBlankPreservedFromSeam:
             db, series.id, commenter, BlogCommentCreate(content="Author post")
         )
         assert comment.profile is not None
-        assert comment.profile.nickname == "写手昵称"   # 设置即逐字照搬
+        assert comment.profile.nickname == "写手昵称"  # 设置即逐字照搬
         assert comment.profile.role == "member"  # profiles.role 是 String 列，非枚举
 
 
@@ -1180,9 +1182,7 @@ slug: {slug}
 class TestBlogContent:
     """DB 主存储下 blog_content 行的行为：upsert 幂等、版本递增、发布闭环。"""
 
-    async def _get_row(
-        self, db: AsyncSession, series_id: uuid.UUID, path: str
-    ) -> Any:
+    async def _get_row(self, db: AsyncSession, series_id: uuid.UUID, path: str) -> Any:
         from app.modules.content.blog.models import BlogContent
 
         return (

@@ -54,9 +54,7 @@ async def db_storage_paths() -> tuple[list[str], int]:
     """返回（去重后的 storage_path 列表, 表行数）。"""
     db = await new_session()
     try:
-        rows = (
-            (await db.execute(select(LibraryFile.storage_path))).scalars().all()
-        )
+        rows = (await db.execute(select(LibraryFile.storage_path))).scalars().all()
     finally:
         await db.close()
         await dispose_engine()
@@ -142,9 +140,7 @@ async def main() -> int:
             try:
                 removed = delete_objects(client, bucket, orphan)
             except Exception as exc:
-                print(
-                    f"✗ 删除孤儿对象失败（可能已有部分被删）：{exc}", file=sys.stderr
-                )
+                print(f"✗ 删除孤儿对象失败（可能已有部分被删）：{exc}", file=sys.stderr)
                 return 1
             print(f"  → 已删除 {removed} 个孤儿对象")
             if removed < len(orphan):

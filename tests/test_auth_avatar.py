@@ -79,9 +79,7 @@ async def _physical_exists(tmp_path: pathlib.Path, key: str) -> bool:
 
 async def _authed(auth_db: AsyncSession) -> tuple[uuid.UUID, str]:
     user_id = await _user(auth_db)
-    token = create_access_token(
-        user_id=user_id, account_level="normal", role="member"
-    )
+    token = create_access_token(user_id=user_id, account_level="normal", role="member")
     return user_id, token
 
 
@@ -217,9 +215,7 @@ class TestAvatarServe:
         assert resp.status_code == 404
         assert resp.json()["code"] == AuthErr.AVATAR_NOT_FOUND
 
-    async def test_serve_404_for_unknown_user(
-        self, auth_front_client: AsyncClient
-    ):
+    async def test_serve_404_for_unknown_user(self, auth_front_client: AsyncClient):
         resp = await auth_front_client.get(
             "/api/v1/auth/avatar/00000000-0000-7000-8000-000000000001"
         )

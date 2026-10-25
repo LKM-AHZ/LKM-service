@@ -67,7 +67,9 @@ async def db(fused_db_session):
 @pytest.fixture
 async def series(db):
     owner_id = await _owner_user(db)
-    s = BlogSeries(owner_id=owner_id, title="t", repo_name="repo-standard", description=None)
+    s = BlogSeries(
+        owner_id=owner_id, title="t", repo_name="repo-standard", description=None
+    )
     db.add(s)
     await db.flush()
     await db.refresh(s)

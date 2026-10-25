@@ -31,7 +31,9 @@ _MAX_CAS_RETRY = 8
 
 _NEG_SV = 0
 _NEG_TTL_S = 30  # 短 TTL：真实用户随后被创建时，最多 30s 后即可见（远短于正常快照 TTL）
-_L1_TTL_LOWER_ONLY = True  # L1 的 TTL 是「丢广播时的陈旧窗口上界」，只可向下扰动（见 jitter_ttl）
+_L1_TTL_LOWER_ONLY = (
+    True  # L1 的 TTL 是「丢广播时的陈旧窗口上界」，只可向下扰动（见 jitter_ttl）
+)
 
 
 def _snap_key(user_id: uuid.UUID) -> str:
@@ -214,7 +216,9 @@ async def read_snaps_state(
     out: dict[uuid.UUID, dict[str, Any]] = {}
     negative: set[uuid.UUID] = set()
     pending: list[uuid.UUID] = []
-    entries = local_cache.l1_multi_get([_snap_key(uid) for uid in user_ids]) if l1 else []
+    entries = (
+        local_cache.l1_multi_get([_snap_key(uid) for uid in user_ids]) if l1 else []
+    )
     for index, uid in enumerate(user_ids):
         if l1:
             entry = entries[index]

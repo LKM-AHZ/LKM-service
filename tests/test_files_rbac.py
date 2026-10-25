@@ -113,7 +113,12 @@ async def test_upload_without_auth_is_403(db: DB, client: Client) -> None:
 
 
 async def test_member_without_upload_perm_is_403(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
@@ -126,7 +131,12 @@ async def test_member_without_upload_perm_is_403(
 
 
 async def test_member_with_upload_perm_can_upload(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
@@ -142,13 +152,20 @@ async def test_member_with_upload_perm_can_upload(
 
 
 async def test_download_without_perm_is_403(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     uploader = await _mk_au(auth_db, "dl_owner", level="normal", role="member")
-    fid = await _mk_file(db, client, auth_db, tmp_path, monkeypatch, uploader, approved=True)
+    fid = await _mk_file(
+        db, client, auth_db, tmp_path, monkeypatch, uploader, approved=True
+    )
     # 下载者未授 files.download（不设权限 / 只授 upload）
     actor = await _mk_au(auth_db, "dl_noperm", level="normal", role="member")
     r = await client.post(f"/api/v1/files/{fid}/download", headers=_h(actor))
@@ -156,13 +173,20 @@ async def test_download_without_perm_is_403(
 
 
 async def test_download_with_perm_is_200(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
     monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
     uploader = await _mk_au(auth_db, "dl2_owner", level="normal", role="member")
-    fid = await _mk_file(db, client, auth_db, tmp_path, monkeypatch, uploader, approved=True)
+    fid = await _mk_file(
+        db, client, auth_db, tmp_path, monkeypatch, uploader, approved=True
+    )
     await _grant(db, "normal:member", "files.download")
     actor = await _mk_au(auth_db, "dl2_ok", level="normal", role="member")
     r = await client.post(f"/api/v1/files/{fid}/download", headers=_h(actor))
@@ -173,7 +197,12 @@ async def test_download_with_perm_is_200(
 
 
 async def test_delete_others_file_is_403(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
@@ -186,7 +215,12 @@ async def test_delete_others_file_is_403(
 
 
 async def test_delete_own_file_is_200(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 
@@ -199,7 +233,12 @@ async def test_delete_own_file_is_200(
 
 
 async def test_super_admin_can_delete_others_file(
-    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None, tmp_path, monkeypatch
+    db: DB,
+    client: Client,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     from core.config import settings
 

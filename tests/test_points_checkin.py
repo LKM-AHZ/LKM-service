@@ -62,7 +62,9 @@ async def _task(
 
 
 @pytest.mark.asyncio
-async def test_first_checkin_earns_reward_and_streak(db: AsyncSession, auth_db: AsyncSession):
+async def test_first_checkin_earns_reward_and_streak(
+    db: AsyncSession, auth_db: AsyncSession
+):
     """首次打卡：earned=5, streak=1，且写入 last_checkin_date。"""
     uid = await _user(auth_db)
     r = await do_checkin(db, uid)
@@ -181,7 +183,9 @@ async def test_checkin_fail_open_when_redis_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_checkin_idempotent_streak_not_double_incremented(db: AsyncSession, auth_db: AsyncSession):
+async def test_checkin_idempotent_streak_not_double_incremented(
+    db: AsyncSession, auth_db: AsyncSession
+):
     """同日二次调用返回 0 且 streak 保持 1（幂等返回语义，防 streak 重入重复 +1）。"""
     uid = await _user(auth_db)
     r1 = await do_checkin(db, uid)

@@ -118,9 +118,7 @@ class TestConnectionManagerFanout:
 
         assert good.sent == ["payload"]  # 好连接仍收到
         async with m._lock:
-            live = list(
-                m._connections.get(_UID3, {}).get(ws_broker.CHANNEL_UPLOAD, ())
-            )
+            live = list(m._connections.get(_UID3, {}).get(ws_broker.CHANNEL_UPLOAD, ()))
         assert bad not in live  # 坏连接被清理
         assert good in live
         await m.close()

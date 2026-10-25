@@ -101,9 +101,7 @@ class TestBoardService:
         await update_board_ex(db, b.id, owner, BoardUpdate(title="新标题"))
         assert (await get_board_ex(db, b.id)).title == "新标题"
 
-    async def test_list_my_applications(
-        self, db: AsyncSession, auth_db: AsyncSession
-    ):
+    async def test_list_my_applications(self, db: AsyncSession, auth_db: AsyncSession):
         mine = (await _au(auth_db, "mine")).id
         other = (await _au(auth_db, "other")).id
         first = await submit_application(
@@ -262,9 +260,7 @@ class TestBoardService:
         assert board.owner_id == applicant.id
         audit = (
             await auth_db.execute(
-                select(AuditLog).where(
-                    AuditLog.action == "review_board_application"
-                )
+                select(AuditLog).where(AuditLog.action == "review_board_application")
             )
         ).scalar_one()
         assert audit.user_id == reviewer
@@ -274,9 +270,7 @@ class TestBoardService:
         assert payload["decision"] == "approved"
         assert payload["reason"] == "通过"
 
-    async def test_review_twice_rejected(
-        self, db: AsyncSession, auth_db: AsyncSession
-    ):
+    async def test_review_twice_rejected(self, db: AsyncSession, auth_db: AsyncSession):
         applicant = (await _au(auth_db)).id
         reviewer = (await _au(auth_db, "rv", account_level="admin")).id
         app = await submit_application(
@@ -293,9 +287,7 @@ class TestBoardService:
             )
         assert e.value.errcode == BoardErr.APPLICATION_ALREADY_REVIEWED
 
-    async def test_ban_and_is_banned(
-        self, db: AsyncSession, auth_db: AsyncSession
-    ):
+    async def test_ban_and_is_banned(self, db: AsyncSession, auth_db: AsyncSession):
         owner = (await _au(auth_db, "o")).id
         target = (await _au(auth_db, "t")).id
         b = await create_board_ex(db, BoardCreate(slug="x", title="X"), owner)

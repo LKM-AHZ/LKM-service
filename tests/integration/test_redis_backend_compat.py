@@ -199,7 +199,9 @@ class TestLua:
 
     async def should_run_time_in_lua(self, real_redis: Redis) -> None:
         # 限流脚本以 Redis 服务端 TIME 为窗口起点（各实例本机时钟不可信）
-        res = await real_redis.eval("local t = redis.call('TIME'); return tonumber(t[1])", 0)
+        res = await real_redis.eval(
+            "local t = redis.call('TIME'); return tonumber(t[1])", 0
+        )
         assert int(res) > 1_600_000_000
 
     async def should_evalsha_and_recover_from_noscript(self, real_redis: Redis) -> None:

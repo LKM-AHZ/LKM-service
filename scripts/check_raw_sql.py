@@ -132,7 +132,9 @@ def _scan(tree: ast.AST) -> list[tuple[int, str]]:
 
 def main() -> int:
     errors: list[str] = []  # 裸 SQL 命中
-    scan_errors: list[str] = []  # 门禁自身故障（读不了文件/语法错/扫描根缺失/allowlist 失效）
+    scan_errors: list[
+        str
+    ] = []  # 门禁自身故障（读不了文件/语法错/扫描根缺失/allowlist 失效）
     scanned: set[str] = set()
     for scan_root in SCAN_ROOTS:
         if not scan_root.is_dir():

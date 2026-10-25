@@ -100,9 +100,13 @@ def test_clamav_found_response_rejects_upload(monkeypatch: pytest.MonkeyPatch) -
 
     fake = FakeSocket()
     monkeypatch.setattr(settings, "files_clamav_address", "scanner:3310")
-    monkeypatch.setattr(processing.socket, "create_connection", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(
+        processing.socket, "create_connection", lambda *_args, **_kwargs: fake
+    )
     with pytest.raises(BizError) as exc:
-        process_upload(io.BytesIO(b"payload"), original_name="a.bin", description="", size=7)
+        process_upload(
+            io.BytesIO(b"payload"), original_name="a.bin", description="", size=7
+        )
     assert exc.value.errcode == FileErr.UNSAFE_CONTENT
     assert fake.sent[0] == b"zINSTREAM\0"
 
@@ -133,7 +137,7 @@ def test_word_document_generates_pdf_and_search_text(
         package.writestr(
             "word/document.xml",
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            '<w:body><w:p><w:r><w:t>Quantum Word Preview</w:t></w:r></w:p>'
+            "<w:body><w:p><w:r><w:t>Quantum Word Preview</w:t></w:r></w:p>"
             "<w:sectPr/></w:body></w:document>",
         )
     raw = document.read_bytes()

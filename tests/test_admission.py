@@ -100,10 +100,14 @@ async def test_reject_blocks_login_and_revokes_sessions(
     await auth_db.refresh(user)
     assert user.token_version == version_before + 1
     stored = (
-        await auth_db.execute(
-            select(RefreshToken).where(RefreshToken.token_hash.is_not(None))
+        (
+            await auth_db.execute(
+                select(RefreshToken).where(RefreshToken.token_hash.is_not(None))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert stored and all(token.revoked_at is not None for token in stored)
 
     with pytest.raises(BizError) as exc:
@@ -214,9 +218,7 @@ async def test_pending_normal_registration_carries_reason(
         apply_reason="数学爱好者",
     )
 
-    result = await consume_pending_normal_registration(
-        auth_db, txn, email_code=code
-    )
+    result = await consume_pending_normal_registration(auth_db, txn, email_code=code)
 
     assert result["admission_status"] == PENDING
     user = (

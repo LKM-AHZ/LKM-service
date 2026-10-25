@@ -72,7 +72,9 @@ async def reconcile_content_counts_full() -> None:
         scanned, affected = await reconcile_counts(db, only_unconverged=False)
         await db.commit()
         logger.info(
-            "reconciled content counts (full): scanned=%d affected=%d", scanned, affected
+            "reconciled content counts (full): scanned=%d affected=%d",
+            scanned,
+            affected,
         )
     except Exception:
         await db.rollback()

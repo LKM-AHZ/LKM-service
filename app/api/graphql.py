@@ -72,6 +72,7 @@ def _observe_depths(depths: dict[str, int]) -> None:
     for value in depths.values():
         graphql_query_depth.observe(value)
 
+
 # ---- 成本模型常数 ----
 # 每个被选中字段的基础分。
 _COST_PER_FIELD = 1
@@ -203,7 +204,9 @@ def _selection_cost(
                     budget,
                 )
         elif isinstance(sel, InlineFragmentNode):
-            inner = _named_type(sel.type_condition) if sel.type_condition else parent_type
+            inner = (
+                _named_type(sel.type_condition) if sel.type_condition else parent_type
+            )
             total += _selection_cost(
                 inner or parent_type,
                 sel.selection_set.selections,
@@ -300,7 +303,12 @@ class GraphQLGuard(SchemaExtension):
             graphql_query_duration_seconds.observe(time.perf_counter() - started)
 
     async def _serialized_root(
-        self, _next: Any, root: Any, info: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+        self,
+        _next: Any,
+        root: Any,
+        info: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> Any:
         """在请求级锁内解析一个顶级字段（见类 docstring 的缺陷说明）。
 

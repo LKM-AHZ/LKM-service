@@ -151,7 +151,9 @@ async def ws_events(websocket: WebSocket) -> None:
                     await websocket.send_text(json.dumps({"type": "ping"}))
                 except Exception:
                     # 心跳失败即断连：不留痕的话，「socket 反复关闭」类问题无法定位
-                    logger.debug("ws heartbeat ping failed, closing %s", user_id, exc_info=True)
+                    logger.debug(
+                        "ws heartbeat ping failed, closing %s", user_id, exc_info=True
+                    )
                     break
                 continue
             # 收到任意文本本身就刷新了活跃窗口；这里再按控制消息细化处理

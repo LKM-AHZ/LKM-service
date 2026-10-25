@@ -76,9 +76,7 @@ async def replay_failure(
     body = dict(row.payload_json) if payload is None else dict(payload)
     if messaging.permanent_failure_reason(rk, {**body, "event_id": row.event_id}):
         return False
-    queued = await enqueue_outbox(
-        db, rk, body, event_id=row.event_id, replay=True
-    )
+    queued = await enqueue_outbox(db, rk, body, event_id=row.event_id, replay=True)
     if not queued:
         # 活跃 outbox 行已在途，重复归档可安全摘除；其它情况保留审计副本。
         active = await db.scalar(

@@ -124,9 +124,7 @@ async def _load_source_rows(
     return rows
 
 
-async def _upsert_dim_rows(
-    target_db: AsyncSession, rows: list[dict[str, Any]]
-) -> int:
+async def _upsert_dim_rows(target_db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     """把反范式行批量 upsert 进 **业务库** user_dim（单条 ``ON CONFLICT DO UPDATE``）。
 
     宽表行 = PK user_id，upsert 把整行重写为最新源，使离线字节副本逐字段对齐源。返回行数。
@@ -210,20 +208,17 @@ async def reconcile_user_dim_incremental(
     if not src:
         return 0
     dim_rows = (await target_db.execute(select(UserDim.user_id, UserDim.sync_ts))).all()
-    dim_sync: dict[uuid.UUID, datetime.datetime] = {
-        uid: ts for uid, ts in dim_rows
-    }
+    dim_sync: dict[uuid.UUID, datetime.datetime] = {uid: ts for uid, ts in dim_rows}
     stale = [
         uid
         for uid, updated_at in src
-        if uid not in dim_sync or (updated_at is not None and updated_at > dim_sync[uid])
+        if uid not in dim_sync
+        or (updated_at is not None and updated_at > dim_sync[uid])
     ]
     ids = stale[:window]
     if not ids:
         return 0
     return await sync_dim_for_ids(source_db, target_db, ids)
-
-
 
 
 async def _open_session_pair() -> SessionPair:

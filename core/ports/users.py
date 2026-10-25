@@ -50,9 +50,7 @@ async def mint_bot_sso_ticket(
     user_id: Any, account_level: str = "admin"
 ) -> dict[str, Any]:
     """铸一次性 bot 面板 SSO 票据（fail-closed：不可达即抛 BizError(UNAVAILABLE)）。"""
-    return await get("users").mint_bot_sso_ticket(
-        user_id, account_level=account_level
-    )
+    return await get("users").mint_bot_sso_ticket(user_id, account_level=account_level)
 
 
 async def verify_password(

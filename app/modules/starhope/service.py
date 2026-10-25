@@ -103,9 +103,7 @@ async def pull_entity(
         for rid, deleted_at in await repo.list_tombstones(user_id=user_id, since=since)
     ]
 
-    return StarHopePullData[Any](
-        items=items, tombstones=tombstones, server_time=cursor
-    )
+    return StarHopePullData[Any](items=items, tombstones=tombstones, server_time=cursor)
 
 
 async def push_entity(

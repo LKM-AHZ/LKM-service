@@ -356,7 +356,9 @@ def test_permanent_failure_reason_flags_contract_violation() -> None:
     )
 
 
-async def test_worker_dead_letters_violating_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_dead_letters_violating_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """消费期：违约消息负确认并进入死信，保留人工修复机会。"""
     captured: dict[str, Any] = {}
     called: list[Any] = []

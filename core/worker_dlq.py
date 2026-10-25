@@ -37,7 +37,9 @@ def _make_model(
 ) -> DlqMessage:
     """把一条死信消息映射为 DlqMessage。"""
     if not routing_key:
-        logger.warning("死信缺少 routing_key property topic=%s（标记为不可重投）", topic)
+        logger.warning(
+            "死信缺少 routing_key property topic=%s（标记为不可重投）", topic
+        )
     return DlqMessage(
         routing_key=routing_key or "unknown",
         payload_json={"payload": payload},
@@ -59,11 +61,15 @@ async def _persist(model: DlqMessage) -> None:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        if model.source_message_id is None or await db.scalar(
-            select(DlqMessage.id).where(
-                DlqMessage.source_message_id == model.source_message_id
+        if (
+            model.source_message_id is None
+            or await db.scalar(
+                select(DlqMessage.id).where(
+                    DlqMessage.source_message_id == model.source_message_id
+                )
             )
-        ) is None:
+            is None
+        ):
             raise
     except Exception:
         await db.rollback()
@@ -99,9 +105,7 @@ async def requeue(
     event_id = parsed.get("event_id")
     if not isinstance(event_id, str) or not event_id:
         event_id = m.id.hex
-    queued = await enqueue_outbox(
-        db, rk, parsed, event_id=event_id, replay=True
-    )
+    queued = await enqueue_outbox(db, rk, parsed, event_id=event_id, replay=True)
     if not queued:
         active = await db.scalar(
             select(OutboxMessage.id).where(
@@ -133,7 +137,9 @@ async def _on_dlq(payload: dict[str, Any], meta: messaging.MessageMeta) -> None:
         source_message_id=meta.message_id,
     )
     await _persist(model)
-    logger.info("死信落库 routing_key=%s attempts=%s", model.routing_key, model.attempts)
+    logger.info(
+        "死信落库 routing_key=%s attempts=%s", model.routing_key, model.attempts
+    )
 
 
 async def consume_dlq() -> None:

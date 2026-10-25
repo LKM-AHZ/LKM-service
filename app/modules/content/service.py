@@ -631,8 +631,7 @@ async def list_comments(
     names = await _author_map(db, [c.user_id for c in comments])
     liked = await _liked_comment_ids(db, comments, viewer_id)
     items = [
-        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked)
-        for c in comments
+        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked) for c in comments
     ]
     return PageData(
         items=items,
@@ -651,8 +650,7 @@ async def list_all_comments(
     names = await _author_map(db, [c.user_id for c in comments])
     liked = await _liked_comment_ids(db, comments, viewer_id)
     return [
-        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked)
-        for c in comments
+        _comment_to_schema(c, names.get(c.user_id, ""), c.id in liked) for c in comments
     ]
 
 
@@ -808,9 +806,7 @@ async def create_application(
         raise BizError(ColumnErr.APPLICATION_PENDING_EXISTS)
     latest = await repo.latest_rejected(user_id)
     if latest is not None:
-        _assert_reapply_allowed(
-            latest.reviewed_at, ColumnErr.APPLICATION_COOLDOWN, now
-        )
+        _assert_reapply_allowed(latest.reviewed_at, ColumnErr.APPLICATION_COOLDOWN, now)
     try:
         # 唯一索引兜底并发双提交：只回滚这一条插入，不污染调用方事务。
         async with db.begin_nested():

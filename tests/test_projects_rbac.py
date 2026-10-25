@@ -63,9 +63,7 @@ async def _set_admin_mfa_cookie(
     client.cookies.set(COOKIE_NAME, tok, path=COOKIE_PATH)
 
 
-async def _make_pending_application(
-    db: DB, applicant_id: int
-) -> ProjectApplication:
+async def _make_pending_application(db: DB, applicant_id: int) -> ProjectApplication:
     app = ProjectApplication(
         applicant_id=applicant_id,
         title="t",
@@ -125,7 +123,9 @@ class TestReviewAppPermission:
     ) -> None:
         # org_member 未授 projects_application_review → 越 2FA 门槛后 403
         await _seed_perm(db, "admin:org_member", "projects.application_create")
-        reviewer = await _mk_au(auth_db, "org0", account_level="admin", role="org_member")
+        reviewer = await _mk_au(
+            auth_db, "org0", account_level="admin", role="org_member"
+        )
         applicant = await _mk_au(auth_db, "org_app0", account_level="normal")
         app = await _make_pending_application(db, applicant.id)
         await _set_admin_mfa_cookie(client, auth_db, reviewer.id)

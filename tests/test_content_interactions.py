@@ -85,7 +85,9 @@ async def _make_item(db: AsyncSession, uid: uuid.UUID, slug: str = "b") -> uuid.
 async def _make_comment(
     db: AsyncSession, item_id: uuid.UUID, uid: uuid.UUID, text: str = "一楼"
 ) -> uuid.UUID:
-    return (await create_comment(db, item_id, uid, ContentCommentCreate(content=text))).id
+    return (
+        await create_comment(db, item_id, uid, ContentCommentCreate(content=text))
+    ).id
 
 
 async def test_comment_like_idempotent_and_unlike(
@@ -206,16 +208,17 @@ async def test_reconcile_repairs_comment_like_count(
     await like_comment(db, item_id, cid, uid)
 
     await db.execute(
-        sa_update(ContentComment)
-        .where(ContentComment.id == cid)
-        .values(like_count=99)
+        sa_update(ContentComment).where(ContentComment.id == cid).values(like_count=99)
     )
     reset_reconcile_oscillation_state()
     await reconcile_counts(db, only_unconverged=False)
 
-    assert await db.scalar(
-        select(ContentComment.like_count).where(ContentComment.id == cid)
-    ) == 1
+    assert (
+        await db.scalar(
+            select(ContentComment.like_count).where(ContentComment.id == cid)
+        )
+        == 1
+    )
 
 
 async def test_viewer_state_anonymous_returns_counts_only(
@@ -226,9 +229,12 @@ async def test_viewer_state_anonymous_returns_counts_only(
     item_id = await _make_item(db, uid)
     await like_item(db, item_id, uid)
 
-    liked, favorited, like_count, bookmark_count = (
-        await interaction_service.get_content_viewer_state(db, None, item_id)
-    )
+    (
+        liked,
+        favorited,
+        like_count,
+        bookmark_count,
+    ) = await interaction_service.get_content_viewer_state(db, None, item_id)
 
     assert (liked, favorited) == (False, False)
     assert like_count == 1 and bookmark_count == 0
@@ -308,7 +314,11 @@ async def test_report_post_fills_title_from_row_and_dedupes(
     await report_content(db, uid, "post", item_id, "垃圾广告")
 
     rows = (
-        (await db.execute(select(AdminReport).where(AdminReport.target_id == str(item_id))))
+        (
+            await db.execute(
+                select(AdminReport).where(AdminReport.target_id == str(item_id))
+            )
+        )
         .scalars()
         .all()
     )

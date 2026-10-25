@@ -23,10 +23,13 @@ async def _add_failure(db: AsyncSession, **kw: Any) -> EventFailure:
     row = EventFailure(
         event_id=str(kw.get("event_id", "eid-1")),
         routing_key=str(kw.get("routing_key", "event.apply_point")),
-        payload_json=kw.get("payload_json", {
-            "fn": "apply_point_event",
-            "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
-        }),
+        payload_json=kw.get(
+            "payload_json",
+            {
+                "fn": "apply_point_event",
+                "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
+            },
+        ),
         attempt_count=int(kw.get("attempt_count", 5)),
         reason=str(kw.get("reason", "relay exhausted: max tries reached")),
     )
@@ -50,7 +53,12 @@ class TestReplayFailure:
             replay: bool = False,
         ) -> bool:
             calls.append(
-                {"routing_key": routing_key, "payload": payload, "event_id": event_id, "replay": replay}
+                {
+                    "routing_key": routing_key,
+                    "payload": payload,
+                    "event_id": event_id,
+                    "replay": replay,
+                }
             )
             session.add(
                 OutboxMessage(
@@ -75,7 +83,9 @@ class TestReplayFailure:
         assert calls[0]["routing_key"] == "event.apply_point"
         assert calls[0]["payload"] == row.payload_json
         # 原失败记录保留，重复重放被拒绝。
-        saved = await db.scalar(select(EventFailure).where(EventFailure.id == failure_id))
+        saved = await db.scalar(
+            select(EventFailure).where(EventFailure.id == failure_id)
+        )
         assert saved is not None and saved.replayed_at is not None
         assert await replay_failure(db, failure_id) is False
 
@@ -87,7 +97,10 @@ class TestReplayFailure:
         row = await _add_failure(db, event_id="eid-2")
         assert await replay_failure(db, row.id) is False
         # 投不出去时绝不能删掉唯一的审计副本
-        assert await db.scalar(select(EventFailure).where(EventFailure.id == row.id)) is not None
+        assert (
+            await db.scalar(select(EventFailure).where(EventFailure.id == row.id))
+            is not None
+        )
 
     async def should_return_false_for_unknown_id(
         self, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -107,9 +120,12 @@ class TestReplayFailure:
             "fn": "apply_point_event",
             "args": ["01890000-0000-7000-8000-000000000001", "post", "item:9"],
         }
-        assert await replay_failure(
-            db, row.id, routing_key="event.apply_point", payload=corrected
-        ) is True
+        assert (
+            await replay_failure(
+                db, row.id, routing_key="event.apply_point", payload=corrected
+            )
+            is True
+        )
         await db.flush()
         queued = await db.scalar(
             select(OutboxMessage).where(OutboxMessage.event_id == row.event_id)

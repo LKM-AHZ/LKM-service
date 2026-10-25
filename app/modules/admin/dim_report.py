@@ -79,9 +79,7 @@ async def list_user_dim(
     offset = max(0, offset)
     limit = max(1, min(limit, _MAX_LIMIT))
     count_q = select(func.count(UserDim.user_id))
-    cond = (
-        UserDim.username.ilike(_like_pattern(q), escape=_LIKE_ESCAPE) if q else None
-    )
+    cond = UserDim.username.ilike(_like_pattern(q), escape=_LIKE_ESCAPE) if q else None
     if cond is not None:
         count_q = count_q.where(cond)
     total = int((await db.execute(count_q)).scalar_one() or 0)
@@ -90,7 +88,9 @@ async def list_user_dim(
     if cond is not None:
         stmt = stmt.where(cond)
     rows = (
-        await db.execute(stmt.order_by(UserDim.user_id.desc()).offset(offset).limit(limit))
+        await db.execute(
+            stmt.order_by(UserDim.user_id.desc()).offset(offset).limit(limit)
+        )
     ).scalars()
 
     items = [

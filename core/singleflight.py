@@ -60,11 +60,7 @@ async def run[T](
     finally:
         async with _guard:
             flight.refs -= 1
-            if (
-                flight.refs <= 0
-                and flight.task.done()
-                and _flights.get(key) is flight
-            ):
+            if flight.refs <= 0 and flight.task.done() and _flights.get(key) is flight:
                 _flights.pop(key, None)
 
 

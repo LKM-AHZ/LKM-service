@@ -69,9 +69,7 @@ async def _fav_count(db: AsyncSession, item_id: uuid.UUID) -> int:
     )
 
 
-async def _view_rows(
-    db: AsyncSession, user_id: uuid.UUID, item_id: uuid.UUID
-) -> list:
+async def _view_rows(db: AsyncSession, user_id: uuid.UUID, item_id: uuid.UUID) -> list:
     return list(
         (
             await db.execute(

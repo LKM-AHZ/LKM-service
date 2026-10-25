@@ -53,7 +53,9 @@ async def _seed(db: AsyncSession, auth_db: AsyncSession, count: int) -> uuid.UUI
         auth_db, username="n1_author", email="n1@example.com", account_level="normal"
     )
     board = (
-        await create_board_ex(db, BoardCreate(slug="n1", title="n1", description="d"), None)
+        await create_board_ex(
+            db, BoardCreate(slug="n1", title="n1", description="d"), None
+        )
     ).id
     col = Column(
         owner_id=author.id, title="专栏", description="d", slug="n1-col", board_id=board

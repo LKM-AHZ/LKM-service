@@ -30,7 +30,9 @@ def _webp(raw: bytes) -> bytes:
                 raise ValueError("Image dimensions exceed limit")
             converted = ImageOps.exif_transpose(original)
             if converted.mode not in ("RGB", "RGBA"):
-                converted = converted.convert("RGBA" if "A" in converted.getbands() else "RGB")
+                converted = converted.convert(
+                    "RGBA" if "A" in converted.getbands() else "RGB"
+                )
             converted.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
             output = io.BytesIO()
             converted.save(output, format="WEBP", quality=82, method=4)
@@ -38,8 +40,15 @@ def _webp(raw: bytes) -> bytes:
             if len(data) > MAX_WEBP_BYTES:
                 raise ValueError("Converted image exceeds limit")
             return data
-    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError) as exc:
-        raise BizError(CommonErr.INVALID_INPUT, detail="Invalid or oversized image") from exc
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise BizError(
+            CommonErr.INVALID_INPUT, detail="Invalid or oversized image"
+        ) from exc
 
 
 def _image_key(question_id: uuid.UUID, image_id: uuid.UUID) -> str:

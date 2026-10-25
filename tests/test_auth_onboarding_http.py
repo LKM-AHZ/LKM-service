@@ -55,9 +55,7 @@ class TestOnboardingHTTP:
         token = await _token(user.id)
 
         # default
-        r = await auth_front_client.get(
-            "/api/v1/auth/onboarding", headers=_auth(token)
-        )
+        r = await auth_front_client.get("/api/v1/auth/onboarding", headers=_auth(token))
         assert r.status_code == 200
         assert r.json()["data"] == {"step": 1, "completed": False, "data": None}
 
@@ -71,9 +69,7 @@ class TestOnboardingHTTP:
         assert r.json()["data"]["data"] == {"1": {"grade": "math"}}
 
         # read back
-        r = await auth_front_client.get(
-            "/api/v1/auth/onboarding", headers=_auth(token)
-        )
+        r = await auth_front_client.get("/api/v1/auth/onboarding", headers=_auth(token))
         assert r.json()["data"]["step"] == 1
 
     async def test_skip_marks_completed(
@@ -94,9 +90,7 @@ class TestOnboardingHTTP:
 
 
 class TestByUsernameHTTP:
-    async def test_public_lookup(
-        self, auth_front_client: Any, auth_db: AsyncSession
-    ):
+    async def test_public_lookup(self, auth_front_client: Any, auth_db: AsyncSession):
         await _create_user(auth_db, "alice_pub")
         # no Authorization header → public access
         r = await auth_front_client.get("/api/v1/auth/user/by-username/alice_pub")
@@ -105,7 +99,5 @@ class TestByUsernameHTTP:
 
     async def test_unknown_user_errors(self, auth_front_client: Any):
         # USER_NOT_FOUND 按项目错误表映射为 401（前端任一错误即回退默认卡）
-        r = await auth_front_client.get(
-            "/api/v1/auth/user/by-username/does_not_exist"
-        )
+        r = await auth_front_client.get("/api/v1/auth/user/by-username/does_not_exist")
         assert r.status_code == 401

@@ -120,12 +120,12 @@ async def test_preferences_roundtrip(
 
     assert before.status_code == 200
     assert all(i["enabled"] for i in before.json()["data"]["items"])
-    assert {
-        i["type"]: i["enabled"] for i in updated.json()["data"]["items"]
-    }[NotificationType.CONTENT_LIKED] is False
-    assert {
-        i["type"]: i["enabled"] for i in after.json()["data"]["items"]
-    }[NotificationType.CONTENT_LIKED] is False
+    assert {i["type"]: i["enabled"] for i in updated.json()["data"]["items"]}[
+        NotificationType.CONTENT_LIKED
+    ] is False
+    assert {i["type"]: i["enabled"] for i in after.json()["data"]["items"]}[
+        NotificationType.CONTENT_LIKED
+    ] is False
 
 
 async def test_unknown_preference_type_rejected(

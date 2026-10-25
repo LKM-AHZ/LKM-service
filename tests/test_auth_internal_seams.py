@@ -128,9 +128,7 @@ async def test_internal_admin_ids_lists_only_admins(
     await _mk_user(db, "plain_user", account_level="normal")
     admin_id = await _mk_user(db, "digest_admin", account_level="admin")
 
-    resp = await client.get(
-        "/api/v1/auth/internal/admin-ids", headers=_auth_headers()
-    )
+    resp = await client.get("/api/v1/auth/internal/admin-ids", headers=_auth_headers())
 
     assert resp.status_code == 200
     assert resp.json() == {"ids": [str(admin_id)]}
@@ -183,9 +181,7 @@ async def test_internal_admission_list_and_decide(
     assert resp.status_code == 200
     assert resp.json()["admission_status"] == "active"
     await db.commit()
-    row = (
-        await db.execute(select(User).where(User.id == pending.id))
-    ).scalar_one()
+    row = (await db.execute(select(User).where(User.id == pending.id))).scalar_one()
     assert row.admission_status == "active"
 
     # 再决策一次：已非 pending → 409

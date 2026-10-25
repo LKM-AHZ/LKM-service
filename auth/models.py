@@ -389,7 +389,11 @@ class User(UUIDPrimaryKeyMixin, AuthBase):
     # 准入状态：active=可登录；pending=待管理员审批；rejected=已拒绝。
     # 与 is_locked 分离：is_locked 是失败次数/封禁语义，admission_status 只表达「准不准进」。
     admission_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="active", server_default="active", index=True
+        String(20),
+        nullable=False,
+        default="active",
+        server_default="active",
+        index=True,
     )
     apply_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     applied_at: Mapped[datetime.datetime | None] = mapped_column(

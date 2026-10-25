@@ -95,7 +95,9 @@ async def isolated_update(db: AsyncSession, stmt: Update) -> None:
     except IntegrityError:
         # 静默吞是为可预期的去重冲突（唯一约束撞车），但同一异常也可能是 FK/NOT NULL/CHECK
         # 等真约束问题——那意味着本次计数/核销静默丢了。留 debug 痕迹以便区分两种情况。
-        logger.debug("isolated_update IntegrityError swallowed (treated as dedup): %s", stmt)
+        logger.debug(
+            "isolated_update IntegrityError swallowed (treated as dedup): %s", stmt
+        )
         await _safe_rollback(sp)
     except OperationalError:
         await _safe_rollback(sp)

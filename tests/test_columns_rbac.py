@@ -117,7 +117,9 @@ async def test_super_admin_can_review_application(
     from app.modules.content.models import ColumnApplication
 
     # 申请人普通，super_admin 审核（2FA 门槛 + columns.application_review 权限点）。
-    applicant = await _mk_au(auth_db, "app_owner", account_level="normal", role="member")
+    applicant = await _mk_au(
+        auth_db, "app_owner", account_level="normal", role="member"
+    )
     await _grant(db, "admin:super_admin", "columns.application_review")
     sa = await _mk_super_admin(auth_db, "cap_member")
     app = ColumnApplication(
@@ -127,9 +129,7 @@ async def test_super_admin_can_review_application(
     await db.flush()
     _set_admin_mfa_cookie(
         client,
-        (
-            await auth_db.execute(select(User).where(User.id == sa.id))
-        ).scalar_one(),
+        (await auth_db.execute(select(User).where(User.id == sa.id))).scalar_one(),
     )
     r = await client.post(
         f"/api/v1/content/columns/applications/{app.id}/review",

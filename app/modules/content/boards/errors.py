@@ -44,6 +44,4 @@ register(
 )
 
 # 部分唯一索引（同 slug 仅一条 pending/approved）：被拒申请释放标识。
-register_unique_constraint(
-    "uq_board_applications_slug_active", BoardErr.SLUG_CONFLICT
-)
+register_unique_constraint("uq_board_applications_slug_active", BoardErr.SLUG_CONFLICT)

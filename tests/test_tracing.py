@@ -123,7 +123,9 @@ def test_unreachable_exporter_does_not_block(monkeypatch: pytest.MonkeyPatch) ->
     """collector 不可达：setup 不抛、shutdown 限时 flush 快速返回（fail-open）。"""
     monkeypatch.setattr(settings, "otel_enabled", True)
     monkeypatch.setattr(settings, "otel_sample_ratio", 1.0)
-    monkeypatch.setattr(settings, "otel_exporter_otlp_endpoint", "http://127.0.0.1:9/v1/traces")
+    monkeypatch.setattr(
+        settings, "otel_exporter_otlp_endpoint", "http://127.0.0.1:9/v1/traces"
+    )
     monkeypatch.setattr(settings, "otel_exporter_timeout_s", 1.0)
 
     tracing.setup_tracing(_fresh_app())

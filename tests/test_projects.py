@@ -61,14 +61,18 @@ async def _user_level(auth_db: AsyncSession, user_id: uuid.UUID) -> str:
 
 async def _profile_role(auth_db: AsyncSession, user_id: uuid.UUID) -> str | None:
     return (
-        await auth_db.execute(select(Profile.role).where(Profile.user_id == user_id))
-    ).scalars().first()
+        (await auth_db.execute(select(Profile.role).where(Profile.user_id == user_id)))
+        .scalars()
+        .first()
+    )
 
 
 async def _token_version(auth_db: AsyncSession, user_id: uuid.UUID) -> int:
     v = (
-        await auth_db.execute(select(User.token_version).where(User.id == user_id))
-    ).scalars().first()
+        (await auth_db.execute(select(User.token_version).where(User.id == user_id)))
+        .scalars()
+        .first()
+    )
     return int(v or 0)
 
 
@@ -236,9 +240,7 @@ class TestProjectApplicationService:
 
         audit = (
             await auth_db.execute(
-                select(AuditLog).where(
-                    AuditLog.action == "review_project_application"
-                )
+                select(AuditLog).where(AuditLog.action == "review_project_application")
             )
         ).scalar_one()
         assert audit.user_id == reviewer

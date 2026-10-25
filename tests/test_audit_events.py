@@ -65,7 +65,9 @@ def _enable_bus(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "pulsar_url", "pulsar://localhost:6650")
 
 
-async def _mk_user(db: AsyncSession, username: str, *, password: str = "secret12345!") -> uuid.UUID:
+async def _mk_user(
+    db: AsyncSession, username: str, *, password: str = "secret12345!"
+) -> uuid.UUID:
     user = User(
         username=username,
         email=f"{username}@example.com",
@@ -97,7 +99,9 @@ async def test_failed_login_emits_audit_event_that_survives_rollback(
 
     with pytest.raises(BizError):
         await login_password(
-            db, UserLoginPassword(account="audit_fail", password="wrong-password"), "1.2.3.4"
+            db,
+            UserLoginPassword(account="audit_fail", password="wrong-password"),
+            "1.2.3.4",
         )
     # 请求以回滚收场（get_session 在抛错时的真实行为）
     await db.rollback()
@@ -153,13 +157,18 @@ async def test_consumer_records_metric_and_ignores_unknown_action() -> None:
     """消费侧：已知 action 递增指标；未知 action 直接忽略（避免无界 label）。"""
     before = _audit_value(RKEY_AUDIT_LOGIN_FAIL)
 
-    await record_audit_event(str(uuid.uuid4()), RKEY_AUDIT_LOGIN_FAIL, "password_mismatch")
+    await record_audit_event(
+        str(uuid.uuid4()), RKEY_AUDIT_LOGIN_FAIL, "password_mismatch"
+    )
     await record_audit_event(None, RKEY_AUDIT_PERMISSION_CHANGE, "grant_exam_unlock")
     await record_audit_event(None, "audit.not_a_thing", "whatever")
 
     assert _audit_value(RKEY_AUDIT_LOGIN_FAIL) == before + 1
     assert _audit_value(RKEY_AUDIT_PERMISSION_CHANGE) >= 1
-    assert REGISTRY.get_sample_value("audit_events_total", {"action": "audit.not_a_thing"}) is None
+    assert (
+        REGISTRY.get_sample_value("audit_events_total", {"action": "audit.not_a_thing"})
+        is None
+    )
 
 
 async def test_wiring_topics_and_handler_registered() -> None:

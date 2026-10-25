@@ -20,9 +20,7 @@ from auth.models import User
 from tests.conftest import auth_user_uid  # type: ignore[attr-defined]
 
 
-async def _mk_admin(
-    auth_db: AsyncSession, username: str = "root"
-) -> User:
+async def _mk_admin(auth_db: AsyncSession, username: str = "root") -> User:
     au = await auth_user_uid(
         auth_db,
         username=username,
@@ -33,9 +31,7 @@ async def _mk_admin(
     return (await auth_db.execute(select(User).where(User.id == au.id))).scalar_one()
 
 
-async def _mk_member(
-    auth_db: AsyncSession, username: str
-) -> User:
+async def _mk_member(auth_db: AsyncSession, username: str) -> User:
     au = await auth_user_uid(
         auth_db, username=username, account_level="normal", with_token=False
     )

@@ -138,10 +138,9 @@ metrics_relay_up = Gauge(
 # ---- 连接池水位 ----
 class DBPoolCollector(Collector):
     """把两个 asyncpg 连接池的水位暴露为 ``db_pool_connections{pool,state}``。"""
+
     _METRIC = "db_pool_connections"
-    _HELP = (
-        "数据库连接池水位（pool=web|worker，state=size|checked_out|overflow|checked_in）"
-    )
+    _HELP = "数据库连接池水位（pool=web|worker，state=size|checked_out|overflow|checked_in）"
 
     def describe(self) -> Iterable[GaugeMetricFamily]:
         # 显式给名字：注册期 REGISTRY 会调 describe() 取指标名，若省掉这步它会用

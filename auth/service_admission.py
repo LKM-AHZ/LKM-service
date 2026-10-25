@@ -88,9 +88,7 @@ async def decide_admission(
     reason: str | None = None,
 ) -> dict[str, Any]:
     """审核一个 pending 申请；非 pending 一律 409（防状态翻转/重复审批）。"""
-    user = (
-        await db.execute(select(User).where(User.id == user_id))
-    ).scalars().first()
+    user = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
     if user is None:
         raise BizError(AuthErr.USER_NOT_FOUND)
     if str(user.admission_status or ACTIVE) != PENDING:

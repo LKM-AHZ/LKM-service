@@ -449,7 +449,9 @@ class TestFilesRoutes:
     ):
         monkeypatch.setattr(settings, "files_store_dir", str(tmp_path))
         uploader = await self._mk_user(db, auth_db, upload=True)
-        created = (await self._upload(client, uploader, original_name="公开资料.zip")).json()
+        created = (
+            await self._upload(client, uploader, original_name="公开资料.zip")
+        ).json()
         await self._approve(db, created["data"]["id"])
 
         resp = await client.get("/api/v1/files")

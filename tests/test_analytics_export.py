@@ -124,7 +124,9 @@ async def should_export_audit_logs_with_empty_text_columns(
     assert data[0][cols.index("ip_address")] == ""
     # uuid 主键/用户列以字符串形式落 CH String 列（uuid 对象不能直接进 String 列）
     assert data[0][cols.index("id")] == str(min(logs, key=lambda r: r.id).id)
-    assert data[0][cols.index("user_id")] is None  # 未关联用户 → Nullable(String) 落 NULL
+    assert (
+        data[0][cols.index("user_id")] is None
+    )  # 未关联用户 → Nullable(String) 落 NULL
     # 水位推进到本批最大 id（字符串形式，CH 侧 max(id) 下一次读回同值）
     assert client.watermarks[AUDITS_TABLE] == str(max(logs, key=lambda r: r.id).id)
 

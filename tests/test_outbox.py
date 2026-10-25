@@ -175,7 +175,9 @@ async def test_enqueue_rejects_legacy_id_without_key_row(fact) -> None:
     """迁移前的 outbox 行未回填键表，显式重复 ID 仍须跳过。"""
     db = await fact()
     try:
-        db.add(OutboxMessage(event_id="legacy-id", routing_key=_RK, payload_json=_PAYLOAD))
+        db.add(
+            OutboxMessage(event_id="legacy-id", routing_key=_RK, payload_json=_PAYLOAD)
+        )
         await db.commit()
         assert await enqueue_outbox(db, _RK, _PAYLOAD, event_id="legacy-id") is False
         await db.commit()

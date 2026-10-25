@@ -116,7 +116,9 @@ def get_channel(channel_key: str) -> Any:
     try:
         return CHANNELS[channel_key]
     except KeyError:
-        raise BizError(CommonErr.INVALID_INPUT, f"unknown channel: {channel_key}") from None
+        raise BizError(
+            CommonErr.INVALID_INPUT, f"unknown channel: {channel_key}"
+        ) from None
 
 
 async def open_session_pair() -> Any:
@@ -167,9 +169,13 @@ async def mint_bot_sso_ticket(
     try:
         return await _mint(user_id=user_id, account_level=account_level)
     except UserHttpUnavailable as exc:
-        raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from None
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}"
+        ) from None
     except Exception as exc:
-        raise BizError(CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}") from exc
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Bot SSO ticket unavailable: {exc}"
+        ) from exc
 
 
 async def verify_password_via_seam(
@@ -230,9 +236,7 @@ async def list_admin_ids(db: Any) -> list[uuid.UUID]:
     rows = (
         (
             await db.execute(
-                select(User.id)
-                .where(User.account_level == "admin")
-                .order_by(User.id)
+                select(User.id).where(User.account_level == "admin").order_by(User.id)
             )
         )
         .scalars()

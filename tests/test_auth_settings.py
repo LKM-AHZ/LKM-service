@@ -60,7 +60,9 @@ async def _get_user(auth_db: AsyncSession, user_id: int) -> User:
     # 测试均为“先建后查”，必然命中，返回类型直接按 User 处理
     return cast(
         User,
-        (await auth_db.execute(select(User).where(User.id == user_id))).scalars().first(),
+        (await auth_db.execute(select(User).where(User.id == user_id)))
+        .scalars()
+        .first(),
     )
 
 
@@ -78,7 +80,9 @@ def _service():
 class TestBindEmail:
     """Bind email request + verify, covering auto-upgrade local->normal."""
 
-    async def should_bind_email_and_upgrade_local_to_normal(self, auth_db: AsyncSession):
+    async def should_bind_email_and_upgrade_local_to_normal(
+        self, auth_db: AsyncSession
+    ):
         """Full happy path: request code, verify, email bound, account upgraded."""
         # Arrange: create a local user
         reg_result = await _reg_local(auth_db, username="alice")
@@ -156,7 +160,9 @@ class TestBindEmail:
 class TestBindPhone:
     """Bind phone request + verify."""
 
-    async def should_bind_phone_and_upgrade_local_to_normal(self, auth_db: AsyncSession):
+    async def should_bind_phone_and_upgrade_local_to_normal(
+        self, auth_db: AsyncSession
+    ):
         """Full happy path: request code, verify, phone bound, account upgraded."""
         reg = await _reg_local(auth_db, username="alice")
         user_id = reg["user_id"]
@@ -237,7 +243,9 @@ class TestBindEmailUpgrade:
 
         from auth.service_verify import create_email_verification
 
-        code, _ = await create_email_verification(auth_db, "upgrade@example.com", "bind")
+        code, _ = await create_email_verification(
+            auth_db, "upgrade@example.com", "bind"
+        )
 
         from auth.router_settings import bind_email_verify
 
@@ -271,7 +279,9 @@ class TestBindEmailUpgrade:
         # Bind a different email (the user already has one, but we're binding another)
         from auth.service_verify import create_email_verification
 
-        code, _ = await create_email_verification(auth_db, "another@example.com", "bind")
+        code, _ = await create_email_verification(
+            auth_db, "another@example.com", "bind"
+        )
 
         from auth.router_settings import bind_email_verify
 
@@ -362,7 +372,9 @@ class TestUnbind:
         )
         assert data["data"]["message"] == "email unbound"
         # 直接用标量列查询，避免命中身份映射中已过期的 User 对象触发惰性加载
-        assert await auth_db.scalar(select(User.email).where(User.id == user.id)) is None
+        assert (
+            await auth_db.scalar(select(User.email).where(User.id == user.id)) is None
+        )
 
     async def should_reject_unbind_when_only_one_way_left(self, auth_db: AsyncSession):
         # 只有 phone，没有 email/github → 解绑 email 会触发“保留一种”守卫（虽然 email 本来就空，走 phone 侧测试更贴）
@@ -449,7 +461,9 @@ class TestUnbind:
         assert data["data"]["message"] == "github unbound"
         # 用标量列查询判定行已删除，绕过过期身份映射对象
         assert (
-            await auth_db.execute(select(UserOAuth.id).where(UserOAuth.user_id == user.id))
+            await auth_db.execute(
+                select(UserOAuth.id).where(UserOAuth.user_id == user.id)
+            )
         ).scalars().first() is None
 
     async def should_require_2fa_for_github_unbind(self, auth_db: AsyncSession):
@@ -506,7 +520,9 @@ class TestUnbind:
         )
         assert data["data"]["message"] == "github unbound"
         assert (
-            await auth_db.execute(select(UserOAuth.id).where(UserOAuth.user_id == user.id))
+            await auth_db.execute(
+                select(UserOAuth.id).where(UserOAuth.user_id == user.id)
+            )
         ).scalars().first() is None
 
     async def should_reject_invalid_type(self, auth_db: AsyncSession):

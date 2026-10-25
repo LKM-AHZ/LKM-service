@@ -39,9 +39,7 @@ def main() -> None:
     spec = app.openapi()
 
     args.json.parent.mkdir(parents=True, exist_ok=True)
-    _write_text_atomic(
-        args.json, json.dumps(spec, indent=2, ensure_ascii=False)
-    )
+    _write_text_atomic(args.json, json.dumps(spec, indent=2, ensure_ascii=False))
     print(f"OK: 已导出 {len(spec.get('paths', {}))} 个路径 -> {args.json}")
 
     if args.yaml:
