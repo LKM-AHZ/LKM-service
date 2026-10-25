@@ -122,6 +122,11 @@ quote-style = "double"
 [tool.ty.environment]
 python-version = "3.13"
 
+[tool.ty.src]
+# 测试大量使用 monkeypatch 与 ASGI 桩，ty 无法可靠推断其动态类型；
+# 业务源码、压测与运维脚本仍全部纳入检查。
+exclude = ["tests"]
+
 # 架构边界门禁。
 # 允许：app → core、auth → core、boot → {app, auth, core}；
 # 禁止：core → {app, auth, boot}；app 与 auth 之间任何方向的直接 import。
@@ -178,6 +183,10 @@ ignore_imports = [
     "app.modules.admin.content_router -> app.modules.content.articles.service",
     "app.modules.admin.content_router -> app.modules.content.blog.service",
     "app.modules.admin.content_router -> app.modules.content.schemas",
+    "app.modules.admin.review_service -> app.modules.content.models",  # 审核队列只读板块/专栏申请
+    "app.modules.admin.review_service -> app.modules.files.models",  # 审核队列只读待审文件
+    "app.modules.admin.review_service -> app.modules.projects.models",  # 审核队列只读项目申请
+    "app.modules.admin.review_digest -> app.modules.notification.service",  # 每日摘要写站内信
     "app.modules.admin.content_router -> app.modules.content.service",
     "app.modules.admin.users_router -> app.modules.content.models",
     "app.modules.admin.users_router -> app.modules.files.models",

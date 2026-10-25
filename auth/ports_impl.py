@@ -254,7 +254,9 @@ class _UsersImpl:
 
         return await _seams.reconcile_user_dim_incremental(src, tgt, window=window)
 
-    async def sync_dim_for_ids(self, src: Any, tgt: Any, user_ids: list[int]) -> int:
+    async def sync_dim_for_ids(
+        self, src: Any, tgt: Any, user_ids: list[uuid.UUID]
+    ) -> int:
         from auth import seams as _seams
 
         return await _seams.sync_dim_for_ids(src, tgt, user_ids)

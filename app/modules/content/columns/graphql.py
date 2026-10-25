@@ -1,5 +1,7 @@
 """columns(专栏) 只读 GraphQL。复用 service;作者/专栏名由 service 已填充,不另起批量。"""
 
+import uuid
+
 import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
@@ -103,9 +105,11 @@ def _bounded_page_size(page_size: int | None) -> int:
 
 def _map_col(c: ColumnInfo) -> GraphColumn:
     return GraphColumn(
-        id=c.id,
-        ownerId=c.owner_id,
-        applicationId=c.application_id,
+        id=strawberry.ID(str(c.id)),
+        ownerId=strawberry.ID(str(c.owner_id)),
+        applicationId=strawberry.ID(str(c.application_id))
+        if c.application_id is not None
+        else None,
         title=c.title,
         description=c.description,
         slug=c.slug,
@@ -121,16 +125,16 @@ def _map_col(c: ColumnInfo) -> GraphColumn:
         articleCount=c.article_count,
         tags=c.tags,
         badges=c.badges,
-        boardId=c.board_id,
+        boardId=strawberry.ID(str(c.board_id)) if c.board_id is not None else None,
         status=_s(c.status),
     )
 
 
 def _map_post(p: ColumnPostInfo) -> GraphColumnPost:
     return GraphColumnPost(
-        id=p.id,
-        columnId=p.column_id,
-        authorId=p.author_id,
+        id=strawberry.ID(str(p.id)),
+        columnId=strawberry.ID(str(p.column_id)),
+        authorId=strawberry.ID(str(p.author_id)),
         title=p.title,
         summary=p.summary,
         content=p.content,
@@ -169,7 +173,7 @@ class ColumnsQuery:
     async def column(self, info: Info, id: strawberry.ID) -> GraphColumn | None:
         db = _get_db(info)
         try:
-            c = await get_column(db, id)
+            c = await get_column(db, uuid.UUID(str(id)))
         except BizError as e:
             if e.errcode != ColumnErr.NOT_FOUND:
                 raise
@@ -202,7 +206,10 @@ class ColumnsQuery:
         db = _get_db(info)
         try:
             page_data = await list_posts(
-                db, columnId, page=page, limit=_bounded_page_size(pageSize)
+                db,
+                uuid.UUID(str(columnId)),
+                page=page,
+                limit=_bounded_page_size(pageSize),
             )
         except BizError as e:
             if e.errcode != ColumnErr.NOT_FOUND:

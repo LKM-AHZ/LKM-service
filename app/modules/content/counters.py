@@ -37,10 +37,13 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any, cast
 
 import sqlalchemy as sa
 from sqlalchemy import func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import (
@@ -58,14 +61,14 @@ from core.metrics import counts_reconcile_repeated_total
 logger = logging.getLogger(__name__)
 
 # 计数列白名单：字段名 → ORM 列（同时用于 UPDATE 表达式构造）
-_COLUMNS: dict[str, sa.Column[int]] = {
+_COLUMNS: dict[str, InstrumentedAttribute[int]] = {
     "like_count": ContentItem.like_count,
     "comment_count": ContentItem.comment_count,
     "bookmark_count": ContentItem.bookmark_count,
 }
 
 # 真相源：字段名 → 明细表的 content_id 列
-_DETAIL_SOURCES: dict[str, sa.Column[uuid.UUID]] = {
+_DETAIL_SOURCES: dict[str, InstrumentedAttribute[uuid.UUID]] = {
     "like_count": ContentLike.content_id,
     "comment_count": ContentComment.content_id,
     "bookmark_count": InteractionFavorite.content_id,
@@ -171,14 +174,17 @@ async def _reconcile_comment_likes(db: AsyncSession, item_ids: list[uuid.UUID]) 
         .where(ContentCommentLike.comment_id == ContentComment.id)
         .scalar_subquery()
     )
-    result = await db.execute(
-        sa.update(ContentComment)
-        .where(
-            ContentComment.content_id.in_(item_ids),
-            ContentComment.like_count != real_like,
-        )
-        .values(like_count=real_like)
-        .execution_options(synchronize_session=False)
+    result = cast(
+        CursorResult[Any],
+        await db.execute(
+            sa.update(ContentComment)
+            .where(
+                ContentComment.content_id.in_(item_ids),
+                ContentComment.like_count != real_like,
+            )
+            .values(like_count=real_like)
+            .execution_options(synchronize_session=False)
+        ),
     )
     return int(result.rowcount or 0)
 
@@ -198,10 +204,13 @@ async def flush_counters(db: AsyncSession) -> int:
         if field not in _COLUMNS or not delta:
             continue
         col = _COLUMNS[field]
-        result = await db.execute(
-            sa.update(ContentItem)
-            .where(ContentItem.id == item_id)
-            .values(**{field: func.greatest(col + delta, 0)})
+        result = cast(
+            CursorResult[Any],
+            await db.execute(
+                sa.update(ContentItem)
+                .where(ContentItem.id == item_id)
+                .values(**{field: func.greatest(col + delta, 0)})
+            ),
         )
         affected = int(result.rowcount or 0)
         if affected == 0:

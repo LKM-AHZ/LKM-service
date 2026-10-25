@@ -93,7 +93,7 @@ def get_async_engine() -> AsyncEngine:
         # 双检锁：sync 依赖可能跑在 FastAPI 的线程池里，「先查后建」非原子会让两个线程各建
         # 一个引擎——败者被覆盖后永不 dispose，其连接池就这么泄漏（dispose_engine 只能清最后一个）
         with _engine_lock:
-            _ensure_engine_locked()
+            return _ensure_engine_locked()
     return _async_engine
 
 
@@ -193,7 +193,7 @@ def get_worker_engine() -> AsyncEngine:
     if _worker_engine is None:
         # 双检锁同 get_async_engine：sync 依赖可能来自线程池
         with _engine_lock:
-            _ensure_worker_engine_locked()
+            return _ensure_worker_engine_locked()
     return _worker_engine
 
 

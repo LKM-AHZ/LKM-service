@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from auth.errors import AuthErr
 from auth.models import EmailVerification, PhoneVerification
@@ -116,14 +116,14 @@ async def _consume(db: DbSession, record: Any, code: str) -> bool:
         record.code_hash,
         hash_code(code, record.purpose, contact=contact, nonce=record.nonce),
     ):
-        record_cls = cast(type[Any], type(record))
+        record_cls = type(record)
         await isolated_update(
             db, VerificationRepository(db, record_cls).failed_stmt(record.id)
         )
         await db.refresh(record)
         raise BizError(AuthErr.VERIFICATION_CODE_INVALID)
 
-    record_cls = cast(type[Any], type(record))
+    record_cls = type(record)
     if not await consume_once(
         db,
         record_cls,

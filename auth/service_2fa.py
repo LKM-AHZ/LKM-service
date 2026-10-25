@@ -69,9 +69,7 @@ async def _reset_totp_failures(db: DbSession, totp_record: TOTP | None) -> None:
         await TOTPRepository(db).update(totp_record, failed_attempts=0)
 
 
-async def _verify_totp_guarded(
-    db: DbSession, totp_record: TOTP, code: str
-) -> int | None:
+async def _verify_totp_guarded(db: DbSession, totp_record: TOTP, code: str) -> int:
     """校验 TOTP 并管理失败计数。
 
     失败次数超限抛 TOTP_CODE_INVALID；校验失败记录一次并抛 TOTP_CODE_INVALID；

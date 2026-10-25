@@ -21,7 +21,9 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
+
+from pydantic import SecretStr
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -69,12 +71,12 @@ def _baseline_bytes(resp: FeedResponse) -> bytes:
     msgspec 侧 ``msgspec_ok`` 建的是完整 Response，两边必须对称。
     """
     content = ApiResp(code=0, message="OK", data=resp).model_dump(mode="json")
-    return JSONResponse(content=content).body
+    return bytes(JSONResponse(content=content).body)
 
 
 def _msgspec_bytes(resp: FeedResponse) -> bytes:
     """msgspec 路径：校验后镜像 + 预编码 Response 的 body。"""
-    return msgspec_ok(to_wire(resp)).body
+    return bytes(msgspec_ok(to_wire(resp)).body)
 
 
 def measure(fn: Callable[[], Any], min_seconds: float = _N) -> tuple[float, float]:
@@ -140,14 +142,14 @@ async def _enable_fake_redis() -> tuple[Any, Callable[[], None]]:
     def _from_url(cls: Any, url: str, **kwargs: Any) -> Any:
         return fake
 
-    settings.redis_url = "redis://localhost:6379/0"
-    redis_mod.Redis.from_url = classmethod(_from_url)  # type: ignore[method-assign]
+    settings.redis_url = SecretStr("redis://localhost:6379/0")
+    cast(Any, redis_mod.Redis).from_url = classmethod(_from_url)
     redis_mod._client = None
     redis_mod._client_pool = None
 
     def restore() -> None:
         settings.redis_url = prev_url
-        redis_mod.Redis.from_url = prev_from_url
+        cast(Any, redis_mod.Redis).from_url = prev_from_url
         redis_mod._client = prev_client
         redis_mod._client_pool = prev_pool
 
@@ -160,8 +162,9 @@ async def bench_l1() -> None:
 
     fake, restore = await _enable_fake_redis()
     prev_l1 = settings.user_snap_l1_enabled
+    uid = uuid.UUID(int=7)
     snap = {
-        "user_id": 7,
+        "user_id": uid,
         "username": "bob",
         "display_name": "Bob",
         "avatar": None,
@@ -172,15 +175,15 @@ async def bench_l1() -> None:
     }
 
     async def one_read() -> None:
-        await uc.read_snap(7)
+        await uc.read_snap(uid)
 
     async def run_with(l1: bool) -> tuple[float, float]:
         settings.user_snap_l1_enabled = l1
-        written = await uc.write_if_newer(7, snap, source_version=1, expected_epoch=0)
+        written = await uc.write_if_newer(uid, snap, source_version=1, expected_epoch=0)
         # 计时前先确认「写进去了、也读得到」：write_if_newer 被拒（sv 陈旧/epoch 变化）或
         # 条目缺失时，两组测的都是 miss 路径，打印出的加速比与「非劣化」结论毫无意义。
         assert written, "benchmark 需真正写入缓存（write_if_newer 被拒）"
-        assert await uc.read_snap(7) is not None, (
+        assert await uc.read_snap(uid) is not None, (
             "benchmark 需命中缓存，否则测的是 miss 路径"
         )
         # warmup + 采样

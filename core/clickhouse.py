@@ -32,16 +32,17 @@ class ClickHouseUnavailableError(RuntimeError):
 class ClickHouseClient(Protocol):
     """导出/查询所需的最小客户端契约（官方 client 与测试 fake 共同满足）。"""
 
-    async def query(self, sql: str, parameters: Any = None) -> Any: ...
+    async def query(self, query: str, parameters: Any = None, /) -> Any: ...
 
     async def insert(
         self,
         table: str,
         data: Sequence[Sequence[Any]],
         column_names: Sequence[str],
+        /,
     ) -> Any: ...
 
-    async def command(self, sql: str) -> Any: ...
+    async def command(self, cmd: str, /) -> Any: ...
 
 
 # 测试 seam：注入 fake 客户端工厂（同步或 async 返回均可）

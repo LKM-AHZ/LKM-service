@@ -47,10 +47,13 @@ def _run(ini: str, *args: str) -> subprocess.CompletedProcess[str]:
             timeout=_RUN_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode()
         return subprocess.CompletedProcess(
             exc.cmd,
             124,
-            exc.stdout or "",
+            stdout or "",
             f"timeout after {exc.timeout}s",
         )
 

@@ -61,7 +61,9 @@ class FollowQuery:
             return []
         rows = await interaction_service.list_following_users(db, user_id)
         return [
-            GraphFollowUser(userId=uid, displayName=name, avatar=avatar)
+            GraphFollowUser(
+                userId=strawberry.ID(str(uid)), displayName=name, avatar=avatar
+            )
             for uid, name, avatar in rows
         ]
 
@@ -72,7 +74,10 @@ class FollowQuery:
         if user_id is None:
             return []
         rows = await interaction_service.list_followed_boards(db, user_id)
-        return [GraphFollowBoard(boardId=bid, title=title) for bid, title in rows]
+        return [
+            GraphFollowBoard(boardId=strawberry.ID(str(bid)), title=title)
+            for bid, title in rows
+        ]
 
 
 @strawberry.type

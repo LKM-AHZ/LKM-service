@@ -41,9 +41,9 @@ class GraphProjectList:
 
 def _map_member(m: ProjectMemberOut) -> GraphProjectMember:
     return GraphProjectMember(
-        id=m.id,
-        projectId=m.project_id,
-        userId=m.user_id,
+        id=strawberry.ID(str(m.id)),
+        projectId=strawberry.ID(str(m.project_id)),
+        userId=strawberry.ID(str(m.user_id)) if m.user_id is not None else None,
         displayName=m.display_name,
         roleInProject=m.role_in_project,
         sortOrder=m.sort_order,
@@ -52,11 +52,11 @@ def _map_member(m: ProjectMemberOut) -> GraphProjectMember:
 
 def _map_project(p: ProjectOut) -> GraphProject:
     return GraphProject(
-        id=p.id,
+        id=strawberry.ID(str(p.id)),
         title=p.title,
         summary=p.summary,
         description=p.description,
-        applicantId=p.applicant_id,
+        applicantId=strawberry.ID(str(p.applicant_id)),
         isIncubated=p.is_incubated,
         status=p.status,
         members=[_map_member(m) for m in p.members],

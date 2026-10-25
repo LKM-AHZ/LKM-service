@@ -65,13 +65,17 @@ class TimelineQuery:
             items=[
                 GraphFeedItem(
                     itemType=it.item_type,
-                    id=it.id,
-                    authorId=it.author_id,
+                    id=strawberry.ID(str(it.id)),
+                    authorId=strawberry.ID(str(it.author_id))
+                    if it.author_id is not None
+                    else None,
                     authorName=it.author_name,
                     title=it.title,
                     contentPreview=it.content_preview,
                     createdAt=it.created_at.isoformat(),
-                    boardId=it.board_id,
+                    boardId=strawberry.ID(str(it.board_id))
+                    if it.board_id is not None
+                    else None,
                     url=it.url,
                 )
                 for it in feed.items

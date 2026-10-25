@@ -12,11 +12,12 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import ColumnElement, Result, Select, delete, func, select
+from sqlalchemy import ColumnElement, Select, delete, func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -251,8 +252,11 @@ class AsyncRepository[ModelT]:
             raise ValueError("update_where 至少需要一个条件，禁止无谓词全表更新")
         if not values:
             raise ValueError("update_where 的 values 不能为空，否则生成非法 SQL")
-        result: Result[Any] = await self.db.execute(
-            sa_update(self.model).where(*conditions).values(**values)
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(
+                sa_update(self.model).where(*conditions).values(**values)
+            ),
         )
         await self.db.flush()
         return result.rowcount or 0
@@ -284,7 +288,7 @@ class AsyncRepository[ModelT]:
         )
         if expected_version is not None:
             stmt = stmt.where(self.version_column == expected_version)
-        result: Result[Any] = await self.db.execute(stmt)
+        result = cast(CursorResult[Any], await self.db.execute(stmt))
         await self.db.flush()
         if (result.rowcount or 0) == 0:
             raise VersionConflictError(await self._version_snapshot(pk))
@@ -333,8 +337,9 @@ class AsyncRepository[ModelT]:
         """按条件批量硬删，返回受影响行数。"""
         if not conditions:
             raise ValueError("hard_delete_where 至少需要一个条件，禁止无谓词全表删除")
-        result: Result[Any] = await self.db.execute(
-            delete(self.model).where(*conditions)
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(delete(self.model).where(*conditions)),
         )
         await self.db.flush()
         return result.rowcount or 0
@@ -357,14 +362,14 @@ class AsyncRepository[ModelT]:
             )
             await self.delete(obj)
             return
-        obj.deleted_at = at or _utcnow()  # type: ignore[attr-defined]
+        cast(Any, obj).deleted_at = at or _utcnow()
         await self.db.flush()
 
     async def restore(self, obj: ModelT) -> None:
         """撤销软删（``deleted_at`` 置空）并 flush；模型无该列时是空操作。"""
         if self.soft_delete_column is None:
             return
-        obj.deleted_at = None  # type: ignore[attr-defined]
+        cast(Any, obj).deleted_at = None
         await self.db.flush()
 
     async def soft_delete_where(
@@ -377,10 +382,13 @@ class AsyncRepository[ModelT]:
         column = self.soft_delete_column
         if column is None:
             return await self.hard_delete_where(*conditions)
-        result: Result[Any] = await self.db.execute(
-            sa_update(self.model)
-            .where(*conditions, column.is_(None))
-            .values(deleted_at=at or _utcnow())
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(
+                sa_update(self.model)
+                .where(*conditions, column.is_(None))
+                .values(deleted_at=at or _utcnow())
+            ),
         )
         await self.db.flush()
         return result.rowcount or 0

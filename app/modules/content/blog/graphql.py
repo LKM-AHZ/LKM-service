@@ -1,5 +1,6 @@
 """blog(博客 Series/Git 文件) 只读 GraphQL。复用 service;首版不引入用户态,is_starred 走 None。"""
 
+import uuid
 from typing import Any
 
 import strawberry
@@ -99,8 +100,8 @@ class GraphFileContent:
 
 def _map_series(s: BlogSeriesInfo | BlogSeriesDetail) -> GraphBlogSeries:
     return GraphBlogSeries(
-        id=s.id,
-        ownerId=s.owner_id,
+        id=strawberry.ID(str(s.id)),
+        ownerId=strawberry.ID(str(s.owner_id)),
         title=s.title,
         description=s.description,
         coverUrl=s.cover_url,
@@ -135,7 +136,7 @@ def _comment_author(c: BlogCommentInfo) -> GraphSeriesCommentAuthor:
     """
     p: ProfileInfo | None = c.profile
     name = p.nickname if (p and p.nickname) else ""
-    return GraphSeriesCommentAuthor(id=c.user_id, name=name or None)
+    return GraphSeriesCommentAuthor(id=strawberry.ID(str(c.user_id)), name=name or None)
 
 
 def _map_comment(c: BlogCommentInfo, *, depth: int = 0) -> GraphSeriesComment:
@@ -145,11 +146,11 @@ def _map_comment(c: BlogCommentInfo, *, depth: int = 0) -> GraphSeriesComment:
         else []
     )
     return GraphSeriesComment(
-        id=c.id,
-        userId=c.user_id,
-        seriesId=c.series_id,
+        id=strawberry.ID(str(c.id)),
+        userId=strawberry.ID(str(c.user_id)),
+        seriesId=strawberry.ID(str(c.series_id)),
         content=c.content,
-        parentId=c.parent_id,
+        parentId=strawberry.ID(str(c.parent_id)) if c.parent_id is not None else None,
         createdAt=c.created_at.isoformat(),
         author=_comment_author(c),
         replies=replies,
@@ -182,7 +183,7 @@ class BlogQuery:
     ) -> GraphBlogSeriesDetail | None:
         db = _get_db(info)
         try:
-            s = await get_series(db, seriesId, current_user_id=None)
+            s = await get_series(db, uuid.UUID(str(seriesId)), current_user_id=None)
         except BizError as e:
             if e.errcode != BlogErr.SERIES_NOT_FOUND:
                 raise
@@ -210,7 +211,7 @@ class BlogQuery:
     ) -> list[GraphSeriesComment]:
         db = _get_db(info)
         try:
-            comments = await list_comments(db, seriesId)
+            comments = await list_comments(db, uuid.UUID(str(seriesId)))
         except BizError as e:
             if e.errcode != BlogErr.SERIES_NOT_FOUND:
                 raise
@@ -224,7 +225,7 @@ class BlogQuery:
     ) -> GraphFileContent | None:
         db = _get_db(info)
         try:
-            d = await get_file_content(db, seriesId, filepath)
+            d = await get_file_content(db, uuid.UUID(str(seriesId)), filepath)
         except BizError as e:
             if e.errcode != BlogErr.SERIES_NOT_FOUND:
                 raise

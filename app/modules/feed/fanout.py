@@ -18,10 +18,12 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
+from typing import Any, cast
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.feed import feed as feed_src
@@ -292,7 +294,10 @@ async def remove_author_items(
             FeedItemMaterialized.board_id.is_(None)
             | FeedItemMaterialized.board_id.notin_(keep_boards)
         )
-    result = await db.execute(sa_delete(FeedItemMaterialized).where(*conds))
+    result = cast(
+        CursorResult[Any],
+        await db.execute(sa_delete(FeedItemMaterialized).where(*conds)),
+    )
     await db.flush()
     return int(result.rowcount or 0)
 
@@ -317,7 +322,10 @@ async def remove_board_items(
             FeedItemMaterialized.author_id.is_(None)
             | FeedItemMaterialized.author_id.notin_(keep_authors)
         )
-    result = await db.execute(sa_delete(FeedItemMaterialized).where(*conds))
+    result = cast(
+        CursorResult[Any],
+        await db.execute(sa_delete(FeedItemMaterialized).where(*conds)),
+    )
     await db.flush()
     return int(result.rowcount or 0)
 
@@ -328,10 +336,13 @@ async def remove_source_item(db: AsyncSession, source_id: uuid.UUID) -> int:
     内容软删（批 4）后必须调用：物化表存的是**写入时快照**，不会随源行软删自动消失，
     否则关注者时间线仍能看到已删内容。``content_items`` 软删是它当前的唯一调用方。
     """
-    result = await db.execute(
-        sa_delete(FeedItemMaterialized).where(
-            FeedItemMaterialized.source_id == source_id
-        )
+    result = cast(
+        CursorResult[Any],
+        await db.execute(
+            sa_delete(FeedItemMaterialized).where(
+                FeedItemMaterialized.source_id == source_id
+            )
+        ),
     )
     await db.flush()
     return int(result.rowcount or 0)

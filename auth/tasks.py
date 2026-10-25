@@ -21,7 +21,9 @@ worker.py 不再手写 handler 表。
   （DAG/重试/回填，``app/flows/user_dim.py``）；触发失败 **fail-open 回落直调**，保证对账不漏跑。
 """
 
+import inspect
 import logging
+import uuid
 from typing import Any
 
 from core.messaging import (
@@ -57,7 +59,7 @@ async def send_magic_link(email: str, link: str) -> None:
     await _deps.get_email_provider().send_magic_link(email, link)
 
 
-async def invalidate_user_snap(user_id: int) -> None:
+async def invalidate_user_snap(user_id: uuid.UUID) -> None:
     """任务：失效单用户快照（A7/A6 调用口）——del snap + epoch bump，反陈旧复活。
 
     handler 签名 = 事件 payload["args"] 的命名形参（worker 按名/位置展开调用）。天然幂等：
@@ -147,7 +149,9 @@ async def _trigger_prefect_flow(deployment: str, parameters: dict[str, Any]) -> 
         tracing.inject_context(carrier)
         params = dict(parameters)
         params.setdefault("traceparent", carrier.get("traceparent", ""))
-        await run_deployment(deployment, parameters=params, timeout=0)
+        flow_run = run_deployment(deployment, parameters=params, timeout=0)
+        if inspect.isawaitable(flow_run):
+            await flow_run
         return True
     except Exception:
         logger.exception("Prefect flow 触发失败 deployment=%s, 回落直调", deployment)

@@ -37,7 +37,7 @@ class StarHopeRepository(AsyncRepository[Any]):
 
     async def list_tombstones(
         self, *, user_id: uuid.UUID, since: datetime.datetime | None
-    ) -> list[tuple[str, datetime.datetime | None]]:
+    ) -> list[tuple[str, datetime.datetime]]:
         """已软删实体的 ``(id, deleted_at)``；``since`` 非空时只取此后的墓碑。"""
         stmt = select(self.model.id, self.model.deleted_at).where(
             self.model.user_id == user_id,
@@ -45,7 +45,11 @@ class StarHopeRepository(AsyncRepository[Any]):
         )
         if since is not None:
             stmt = stmt.where(self.model.deleted_at > since)
-        return list((await self.db.execute(stmt)).all())
+        return [
+            (entity_id, deleted_at)
+            for entity_id, deleted_at in (await self.db.execute(stmt)).all()
+            if deleted_at is not None
+        ]
 
     async def push(
         self,

@@ -92,7 +92,7 @@ async def reconcile_user_dim_incremental(src: Any, tgt: Any, *, window: int) -> 
     return await get("users").reconcile_user_dim_incremental(src, tgt, window=window)
 
 
-async def sync_dim_for_ids(src: Any, tgt: Any, user_ids: list[int]) -> int:
+async def sync_dim_for_ids(src: Any, tgt: Any, user_ids: list[uuid.UUID]) -> int:
     """显式 id 批量回填 user_dim。"""
     return await get("users").sync_dim_for_ids(src, tgt, user_ids)
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -93,7 +94,7 @@ async def _incremental(*, window: int) -> int:
     )
 
 
-async def _sync_ids(*, user_ids: list[int]) -> int:
+async def _sync_ids(*, user_ids: list[uuid.UUID]) -> int:
     """显式 id 批量回填：复用 sync_dim_for_ids（命令数恒 2），空列表 no-op。"""
     from core.ports.users import sync_dim_for_ids
 
@@ -111,7 +112,7 @@ async def incremental_task(*, window: int) -> int:
 
 
 @task(name="user-dim-sync-ids", retries=3, retry_delay_seconds=30)
-async def sync_ids_task(*, user_ids: list[int]) -> int:
+async def sync_ids_task(*, user_ids: list[uuid.UUID]) -> int:
     return await _sync_ids(user_ids=user_ids)
 
 
@@ -119,7 +120,7 @@ async def orchestrate_user_dim(
     *,
     mode: str,
     window: int,
-    user_ids: list[int] | None,
+    user_ids: list[uuid.UUID] | None,
     max_rounds: int,
     reconcile_once: Callable[..., Awaitable[int]],
     incremental: Callable[..., Awaitable[int]],
@@ -155,7 +156,7 @@ async def user_dim_reconcile_flow(
     *,
     mode: str = "reconcile",
     window: int = _DEFAULT_WINDOW,
-    user_ids: list[int] | None = None,
+    user_ids: list[uuid.UUID] | None = None,
     traceparent: str = "",
     max_rounds: int = _DEFAULT_MAX_ROUNDS,
 ) -> dict[str, Any]:
@@ -177,18 +178,18 @@ async def user_dim_reconcile_flow(
         )
 
 
-def _parse_ids(raw: str) -> list[int]:
+def _parse_ids(raw: str) -> list[uuid.UUID]:
     """解析 ``--ids`` 逗号分隔的 user id；非法 token 由 argparse 报用法错误。
 
     原先裸 ``int()`` 对 ``--ids 1,abc`` 抛未捕获的 ValueError + 裸栈，
     运维分不清是参数写错还是回填本身失败。
     """
-    ids: list[int] = []
+    ids: list[uuid.UUID] = []
     for token in raw.replace(" ", "").split(","):
         if not token:
             continue
         try:
-            ids.append(int(token))
+            ids.append(uuid.UUID(token))
         except ValueError as exc:
             raise argparse.ArgumentTypeError(f"invalid user id: {token!r}") from exc
     return ids

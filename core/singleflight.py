@@ -45,7 +45,7 @@ async def run[T](
         flight = _flights.get(key)
         is_leader = flight is None
         if flight is None:
-            task: asyncio.Task[Any] = asyncio.create_task(loader())
+            task: asyncio.Task[Any] = asyncio.ensure_future(loader())
             flight = _Flight(refs=0, task=task)
             task.add_done_callback(partial(_on_task_done, key, flight))
             _flights[key] = flight

@@ -187,13 +187,14 @@ def log_exceptions[**P, R](
         fn: Callable[P, R] | Callable[P, Awaitable[R]],
     ) -> Callable[P, Any]:
         lg = logger_ or logging.getLogger(fn.__module__)
-        label = message or f"{fn.__qualname__} 抛出异常"
+        fn_name = getattr(fn, "__qualname__", type(fn).__name__)
+        label = message or f"{fn_name} 抛出异常"
 
         def _record(exc: BaseException) -> None:
             lg.error(
                 label,
                 exc_info=exc,
-                extra={"extra_fields": {"boundary": fn.__qualname__}},
+                extra={"extra_fields": {"boundary": fn_name}},
             )
 
         if inspect.iscoroutinefunction(fn):

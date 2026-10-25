@@ -119,16 +119,24 @@ class GraphBoard:
 
 def _map_item(item: ContentItemInfo) -> GraphContentItem:
     return GraphContentItem(
-        id=item.id,
+        id=strawberry.ID(str(item.id)),
         contentType=item.content_type,
-        boardId=item.board_id,
-        authorId=item.author_id,
+        boardId=strawberry.ID(str(item.board_id)),
+        authorId=strawberry.ID(str(item.author_id))
+        if item.author_id is not None
+        else None,
         authorName=item.author_name,
         publisher=item.publisher,
         department=item.department,
-        columnId=item.column_id,
+        columnId=strawberry.ID(str(item.column_id))
+        if item.column_id is not None
+        else None,
         columnTitle=item.column_title,
-        qaQuestionId=item.qa_question_id,
+        qaQuestionId=(
+            strawberry.ID(str(item.qa_question_id))
+            if item.qa_question_id is not None
+            else None
+        ),
         slug=item.slug,
         title=item.title,
         excerpt=item.excerpt,
@@ -154,13 +162,13 @@ def _map_item(item: ContentItemInfo) -> GraphContentItem:
 
 def _map_comment(c: ContentCommentInfo) -> GraphContentComment:
     return GraphContentComment(
-        id=c.id,
-        contentId=c.content_id,
-        authorId=c.author_id,
+        id=strawberry.ID(str(c.id)),
+        contentId=strawberry.ID(str(c.content_id)),
+        authorId=strawberry.ID(str(c.author_id)),
         authorName=c.author_name,
         content=c.content,
         floorNumber=c.floor_number,
-        parentId=c.parent_id,
+        parentId=strawberry.ID(str(c.parent_id)) if c.parent_id is not None else None,
         likeCount=c.like_count,
         liked=c.liked,
         createdAt=c.created_at.isoformat(),
@@ -264,12 +272,16 @@ class ContentQuery:
         board_outs = await list_boards(db)
         return [
             GraphBoard(
-                id=b.id,
+                id=strawberry.ID(str(b.id)),
                 slug=b.slug,
                 title=b.title,
                 description=b.description,
-                parentId=b.parent_id,
-                ownerId=b.owner_id,
+                parentId=strawberry.ID(str(b.parent_id))
+                if b.parent_id is not None
+                else None,
+                ownerId=strawberry.ID(str(b.owner_id))
+                if b.owner_id is not None
+                else None,
                 status=b.status,
                 requireCertified=b.require_certified,
                 dailyPostLimit=b.daily_post_limit,
@@ -286,12 +298,14 @@ class ContentQuery:
         """某内容的完整评论树（根为 parent_id is None 的楼层评论）。"""
         db = _get_db(info)
         try:
-            comments = await list_all_comments(db, itemId, info.context.user_id)
+            comments = await list_all_comments(
+                db, uuid.UUID(str(itemId)), info.context.user_id
+            )
         except BizError as e:
             if e.errcode != ContentErr.CONTENT_NOT_FOUND:
                 raise
             return []
-        by_parent: dict[int | None, list[ContentCommentInfo]] = {}
+        by_parent: dict[uuid.UUID | None, list[ContentCommentInfo]] = {}
         for c in comments:
             by_parent.setdefault(c.parent_id, []).append(c)
         return [_map_comment_tree(c, by_parent) for c in by_parent.get(None, [])]
@@ -299,7 +313,7 @@ class ContentQuery:
 
 def _map_comment_tree(
     c: ContentCommentInfo,
-    by_parent: dict[int | None, list[ContentCommentInfo]],
+    by_parent: dict[uuid.UUID | None, list[ContentCommentInfo]],
 ) -> GraphContentComment:
     """递归组装评论节点（当前评论 + 其子树）。"""
     node = _map_comment(c)
