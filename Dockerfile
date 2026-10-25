@@ -1,5 +1,5 @@
 # ---- 构建阶段:用 uv 安装依赖 ----
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.12.12 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
 # ---- 运行阶段 ----
-FROM python:3.13-slim-bookworm
+FROM python:3.15-slim-bookworm
 WORKDIR /app
 
 RUN apt-get update \
