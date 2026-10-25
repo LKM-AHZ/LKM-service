@@ -26,7 +26,24 @@ _SYSTEMD_DIR = _ROOT / "deploy" / "systemd"
 _SERVICE = _SYSTEMD_DIR / "lkm-backup.service"
 _TIMER = _SYSTEMD_DIR / "lkm-backup.timer"
 _BACKUP_PY = _ROOT / "tools" / "backup.py"
-_DEPLOYMENT_MD = _ROOT / "DEPLOYMENT.md"
+#: 部署文档可能在根目录，也可能在 docs/（仓库正在把根文档收进 docs/）。
+#: 两处都认，避免文档位置调整把「备份演练有没有写」这条断言变成环境问题。
+_DEPLOYMENT_MD_CANDIDATES = (
+    _ROOT / "docs" / "DEPLOYMENT.md",
+    _ROOT / "DEPLOYMENT.md",
+)
+
+
+def _deployment_md() -> Path:
+    for candidate in _DEPLOYMENT_MD_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    raise AssertionError(
+        "找不到部署文档（试过 docs/DEPLOYMENT.md 与根目录 DEPLOYMENT.md）："
+        "备份恢复步骤与演练记录必须有据可循"
+    )
+
+
 _GITIGNORE = _ROOT / ".gitignore"
 
 
@@ -131,6 +148,6 @@ def test_backup_artifacts_are_gitignored() -> None:
 
 def test_deployment_doc_records_the_restore_drill() -> None:
     """恢复演练必须在文档里有据可循——没演练过的备份只是「一堆文件」。"""
-    text = _DEPLOYMENT_MD.read_text(encoding="utf-8")
+    text = _deployment_md().read_text(encoding="utf-8")
     assert "tools/backup.py restore" in text, "DEPLOYMENT.md 没有恢复步骤"
     assert "恢复演练" in text, "DEPLOYMENT.md 没有恢复演练章节"

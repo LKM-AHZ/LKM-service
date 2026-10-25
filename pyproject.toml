@@ -44,6 +44,10 @@ python_functions = ["test_*", "should_*"]
 asyncio_mode = "auto"
 markers = [
     "integration: 需真实 Redis 的集成测试，默认排除，用 `uv run pytest -m integration` 显式运行",
+    # tests/deploy 的前提声明（判定逻辑见 tests/deploy/conftest.py）：缺哪项跳哪项，
+    # 而不是"要么全跑要么全跳"。未标注的用例默认 requires_root。
+    "requires_root: tests/deploy 用例需要根仓库（docker-compose.yml + deploy/）",
+    "requires_bot: 额外需要 LKM-bot 子模块源码（如逐字比对 bot SSO 字面量）",
 ]
 addopts = ["-m", "not integration"]
 filterwarnings = [

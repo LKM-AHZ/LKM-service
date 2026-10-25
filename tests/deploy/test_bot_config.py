@@ -24,7 +24,12 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+import pytest
 import yaml
+
+# 本文件**逐字比对** LKM-bot 的源码与 compose 锚点（见下方 SSO 段），故额外要求 bot 子模块；
+# 其余 tests/deploy 用例只需要根仓库。粒度声明见 tests/deploy/conftest.py。
+pytestmark = pytest.mark.requires_bot
 
 _ROOT = Path(__file__).resolve().parents[3]  # LKM-Website
 _COMPOSE = _ROOT / "docker-compose.yml"

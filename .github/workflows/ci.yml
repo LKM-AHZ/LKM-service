@@ -49,7 +49,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ty check app auth
+      # 扫描面刻意包含 core/boot/scripts：它们是 0 诊断的，纳入不增加负担。
+      # **tests/ 不纳入**：当前有 472 条存量诊断，一次性塞进门禁会把 CI 直接变红；
+      # 那是独立的清理任务（清理完成后再加进来，而不是靠 continue-on-error 绕过）。
+      - run: uv run ty check app auth core boot scripts
 
   migrations:
     name: migrations（逐 revision 双向离线 SQL）
