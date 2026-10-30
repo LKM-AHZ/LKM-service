@@ -118,7 +118,7 @@ extend-immutable-calls = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ANN"]  # 测试函数不强制返回类型标注
-"main.py" = ["F401"]       # from app.main import app 是 uvicorn 入口
+"main.py" = ["F401"]       # from boot.backend import app 是 uvicorn 入口
 
 [tool.ruff.format]
 quote-style = "double"
@@ -159,14 +159,15 @@ source_modules = ["auth"]
 forbidden_modules = ["app", "boot"]
 allow_indirect_imports = "false"
 
-# 注：app.modules.rbac / app.modules.storage 之中，rbac 仍是全模块共享的鉴权原语；
+# rbac 是业务侧共享鉴权原语；对象存储抽象位于 core.storage。
 [[tool.importlinter.contracts]]
 name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
-source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
-forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope"]
+source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
+forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
+    "app.modules.treehole.services.reports -> app.modules.admin.models",  # 匿名举报进入后台审核队列
     "app.modules.content.boards.router -> app.modules.admin.deps",
     "app.modules.content.columns.router -> app.modules.admin.deps",
     "app.modules.files.router -> app.modules.admin.deps",

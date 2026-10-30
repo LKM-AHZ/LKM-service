@@ -4,7 +4,7 @@
   业务侧只认 routing_key（send_code / notify_upload / apply_point / user.* / cron.*），
   不感知命名空间与 topic 名。
 - ``SUBSCRIPTIONS``：订阅清单（订阅名 → topic + 关注 routing_key 列表）。订阅名同时是
-  消费幂等 scope（见 ``app/db/event_processed.py``）与故障隔离单元。
+  消费幂等 scope（见 ``core/db/event_processed.py``）与故障隔离单元。
 - JSON Schema：每个 topic 挂同一 envelope JSON Schema，经 Pulsar 自带 schema registry 校验；
   envelope 为 ``{"fn": str, "args": list, "event_id"?: str}``，故用自定义 ``Schema`` 子类承载
   裸 JSON Schema（Pulsar ``JsonSchema`` 强制 avro ``Record`` dataclass，无法表达混合类型 args）。

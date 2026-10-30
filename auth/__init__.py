@@ -1,8 +1,8 @@
 """认证与用户档案包：登录/OAuth/2FA/passkey/恢复/引导/设置。
 
-对 app 侧的公共 API——跨包 import 的唯一合法入口（另有 ``auth.deps``/``auth.schemas``/
-``auth.snapshot``/``auth.seams``/``auth.entities`` 五个公开面模块）。所有 router 均惰性
-import，保证 `import auth` 绝对轻量且零循环。
+本包向 ``auth.bootstrap`` 提供路由与注册钩子，并保留惰性导出。
+业务包 app 通过 ``core.ports`` 与共享契约协作，不直接 import auth；
+两侧注册项由 ``boot.assemble`` 汇总。router 惰性导入，避免包初始化时加载完整路由树。
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def __getattr__(name: str) -> Any:
         if _exported_graphql is None:
             _exported_graphql = []
         return _exported_graphql
-    # 注册钩子（app 侧基础设施枢纽调用）：惰性转发，保持 `import auth` 零副作用。
+    # 注册钩子由 auth.bootstrap 调用；惰性转发避免包导入时加载实现。
     if name in ("register_models", "register_tasks", "register_errors"):
         from auth import register as _register
 

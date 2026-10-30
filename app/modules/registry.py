@@ -1,10 +1,10 @@
 """模块注册表（§7）：业务模块的单一事实源与聚合入口。
 
-新增业务域 = 在这里的 ``MODULES`` 加一行 + 建模块目录；REST/GraphQL/错误码/任务
-聚合均由本表驱动，框架文件（api/router、api/graphql、main）零改动。
+新增业务域在 ``MODULES`` 登记 REST/GraphQL 出口；错误码由 ``_ERROR_MODULES`` 汇总。
+模型与任务须另在 ``app.bootstrap`` 登记，不能只修改本表。
 表的范围是 ``app/modules/`` 下的**业务域**；auth 已独立成顶层包（``auth/``），
-不在此表内——其 REST 面由 ``api/router.py`` 显式挂载，错误码经 ``auth.register_errors()``
-注册，模型/任务经 ``auth.register_models()`` / ``auth.register_tasks()`` 注册。
+不在此表内。``boot.assemble`` 调用两侧 bootstrap 完成装配；auth 路由经
+``core.route_registry`` 提供给 ``api/router.py``，app 不直接 import auth。
 
 跨模块 import 走各模块 ``__init__.py`` 的公共 API；本表用 ``import_module`` 延迟
 加载（字符串导入），不产生 ``main`` 命名空间对 ``app`` 包名的绑定冲突（见 §7）。

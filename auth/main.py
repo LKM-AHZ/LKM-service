@@ -1,24 +1,12 @@
-"""B1.1 AUTH 独立 ASGI 进程入口：auth 域自有、与单体并行的读/认证面。
+"""AUTH 独立 ASGI 进程：认证、用户资料、内部身份读面、JWKS 与健康检查。
 
-背景（M3 B1）：A1-A7 已把 auth 身份读面收敛进 monolith 内的 ``auth.snapshot`` 读缝
-并给出 ``user:snap`` 缓存；B1 把该 AUTH 读对外化为独立进程的第一步 —— 先给一个
-**可独立运行的 auth-only ASGI 应用** + 它**专属的 liveness/readiness 健康缝** + compose
-同镜像异 command 的 ``auth`` 服务。纯增量，不改单体 ``app.main`` 任何行为。
-B1.2 在同进程再挂 internal 读缝 router（``auth.router_read``，/auth/internal，B1.2 seam），
-令 AUTH 进程本身也能 serve 该读端点供消费进程经 HTTP 跨缝（APISIX 路由 B1.3 接）。
+通过 ``uvicorn auth.main:app`` 或 ``python -m auth.main`` 启动。路由由本模块显式
+聚合，不加载业务 REST、GraphQL 或 WebSocket。业务与认证组合部署的装配入口另见
+``boot.backend``；app/auth 的跨包调用通过 core 端口绑定。
 
-装配口径：此进程只 mount ``auth`` 自己的 router（登录/档案/2FA/oauth/
-passkey/recovery/settings/admin/内部读面/JWKS）**plus** 本进程自己的 auth-health router；不引业务域
-（content/feed/points/projects 等）、不起 GraphQL/WebSocket、不做制品迁移 —— auth 是
-owner-leaf，其 router 只依赖 core + db.session + auth 内部，故可干净独立装配。
-进程内 HTTP 面对外暴露（APISIX 路由 / B1.3 复合就绪合并）属后续 leg，此处仅就绪
-一个可被 compose/后续编排单独探活的自足进程。
-
-同名但独立：DB 引擎/Redis client 由本进程内 realm 各自 lazy 自持（同库同数据源，
-进程隔离）。lifespan 负责**本进程自持的 auth 独立库 schema 初始化**（``init_auth_db``：
-非 alembic 走 AuthBase.create_all，alembic 走 ``alembic_auth`` 第二链）——auth 表已物理迁出
-单体 ``Base.metadata``，单体不再建它们，故由 auth 进程按「进程=库边界」自建，不再是「与单体
-并发迁移」（业务库迁移仍归 backend 进程）。
+本进程拥有独立 auth 数据库及其生命周期：后台执行 ``init_auth_db``（开发建表或
+``alembic_auth`` 迁移），初始化成功后预热用户位图；探针以 schema 就绪状态决定
+readiness。Passkey 挑战清理由本进程负责，停机时释放自持后台任务与连接。
 """
 
 from __future__ import annotations
