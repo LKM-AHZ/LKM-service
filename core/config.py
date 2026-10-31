@@ -279,6 +279,14 @@ class Settings(BaseSettings):
     bot_push_api_key: SecretStr = SecretStr("")
     bot_push_umo: str = ""
 
+    # 后台原生「机器人」页面读取 bot 面板数据用（BFF）：LKM-bot OpenAPI v1 的根地址
+    # （如 http://lkmbot:6185/api/v1）与一把服务侧 API Key。Key 需要读取所用端点的 scope
+    # （overview 需要 system/bot/provider/plugin）。未配置时原生页面降级为「未接入」，
+    # 不影响 `/admin/bot/sso-ticket` 与 iframe 兜底。
+    bot_api_base_url: str = ""
+    bot_admin_api_key: SecretStr = SecretStr("")
+    bot_admin_timeout_s: float = 8.0
+
     # 仅 dev/local/test：允许 ``/auth/internal/dev-code`` 为 register 用途铸造验证码并回明文。
     # 供金路径脚本走真实验证码注册；生产（非宽松环境）启动即拒绝。默认关闭。
     dev_code_sink: bool = False

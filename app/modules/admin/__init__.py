@@ -23,6 +23,9 @@ def __getattr__(name: str) -> Any:
             )
             from app.modules.admin.analytics_router import router as router_analytics
             from app.modules.admin.auth_router import router
+            from app.modules.admin.bot_admin_router import (
+                router as router_bot_admin,
+            )
             from app.modules.admin.bot_router import router as router_bot
             from app.modules.admin.content_router import router as router_content
             from app.modules.admin.dim_report_router import router as router_dim_report
@@ -53,6 +56,7 @@ def __getattr__(name: str) -> Any:
                 router_moderation,
                 router_analytics,
                 router_bot,
+                router_bot_admin,
                 router_points_report,
             ]
         # 返回浅拷贝：直接给缓存列表的话，任何调用方 append/remove 都会污染

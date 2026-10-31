@@ -1,6 +1,6 @@
 import datetime
 import uuid
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -177,3 +177,105 @@ class PointsReportOut(BaseModel):
     series: list[PointsReportPoint]
     total_delta: int
     total_entries: int
+
+
+class AdminBotOverview(BaseModel):
+    """后台「机器人」原生页面概览（服务侧 BFF 聚合 LKM-bot 面板数据）。
+
+    ``configured`` = 服务端是否配置了 bot 地址与服务密钥；``available`` = 本次取数是否成功。
+    两者都为 False 时页面降级为「面板未接入」，不抛 500——监控数据不可用不该拖垮后台。
+    """
+
+    configured: bool
+    available: bool
+    reason: str | None = None
+    version: str | None = None
+    dashboard_version: str | None = None
+    platform_count: int | None = None
+    provider_count: int | None = None
+    plugin_count: int | None = None
+    message_count: int | None = None
+    cpu_percent: float | None = None
+    memory_process_mb: int | None = None
+    memory_system_mb: int | None = None
+    thread_count: int | None = None
+    running: dict[str, Any] | None = None
+
+
+class AdminBotLogHistory(BaseModel):
+    """后台日志页的历史回填（BFF 代理 bot 的 `/logs/history`）。
+
+    与概览一致：未配置/不可达时用 ``configured`` / ``available`` 表达，不抛 5xx。
+    """
+
+    configured: bool
+    available: bool
+    reason: str | None = None
+    logs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AdminBotPipInstallRequest(BaseModel):
+    """后台日志页的 pip 安装请求（与 bot `PipInstallRequest` 同形）。"""
+
+    package: str | None = None
+    mirror: str | None = None
+
+
+class AdminBotPlatformItem(BaseModel):
+    """机器人平台实例（面板 `/bots` 的最小投影）。"""
+
+    id: str
+    type: str | None = None
+    display_name: str | None = None
+    enabled: bool = False
+
+
+class AdminBotPlatforms(BaseModel):
+    """后台「机器人平台」页数据（配置/可用标记 + 平台列表）。"""
+
+    configured: bool
+    available: bool
+    reason: str | None = None
+    items: list[AdminBotPlatformItem] = Field(default_factory=list)
+
+
+class AdminBotProviderItem(BaseModel):
+    """模型提供商（面板 `/providers` 的最小投影）。"""
+
+    id: str
+    type: str | None = None
+    model: str | None = None
+    enabled: bool = False
+
+
+class AdminBotProviders(BaseModel):
+    """后台「模型提供商」页数据。"""
+
+    configured: bool
+    available: bool
+    reason: str | None = None
+    items: list[AdminBotProviderItem] = Field(default_factory=list)
+
+
+class AdminBotEnabledPatch(BaseModel):
+    """启用/停用补丁（与面板 `EnabledPatch` 同形）。"""
+
+    enabled: bool
+
+
+class AdminBotListItem(BaseModel):
+    """通用列表项：插件/知识库等页面共用的最小投影。"""
+
+    id: str
+    name: str
+    subtitle: str | None = None
+    enabled: bool | None = None
+
+
+class AdminBotList(BaseModel):
+    """通用资源列表（configured/available 降级 + items）。"""
+
+    configured: bool
+    available: bool
+    reason: str | None = None
+    items: list[AdminBotListItem] = Field(default_factory=list)
