@@ -139,10 +139,10 @@ def should_bind_bot_data_to_host_path() -> None:
 
 
 def should_pin_dashboard_host_and_data_root() -> None:
-    """DASHBOARD_HOST 必须 0.0.0.0（绑回环会让面板「默认密码免校验」判定成立且网关连不上）；
+    """ASTRBOT_DASHBOARD_HOST 必须 0.0.0.0（绑回环会让面板「默认密码免校验」判定成立且网关连不上）；
     ASTRBOT_ROOT 显式固定 data 路径（默认取 cwd，入口一改就漂移）。"""
     env = _services()["lkmbot"]["environment"]
-    assert env["DASHBOARD_HOST"] == "0.0.0.0"
+    assert env["ASTRBOT_DASHBOARD_HOST"] == "0.0.0.0"
     assert env["ASTRBOT_ROOT"] == "/LKMBot"
 
 
@@ -185,38 +185,47 @@ def should_pass_ship_data_dir_as_host_absolute_path() -> None:
 
 
 def should_route_bot_by_subpath() -> None:
-    """面板挂在社群域子路径 /bot/*：同 host 下靠剥前缀避开与 backend 的 /api/v1/* 冲突。"""
-    route = _routes()["bot-panel"]
-    assert route["hosts"] == _COMMUNITY_HOSTS
-    assert route["uri"] == f"{_BOT_PREFIX}/*"
-    assert route["upstream"]["service_name"].startswith("lkmbot:")
-    assert route["upstream"]["pass_host"] == "pass"
-    # priority 必须高过 community-catchall(10)，否则面板流量被 Astro 接走
-    assert route["priority"] > _routes()["community-catchall"]["priority"]
+    """面板挂在社群域子路径 /bot/*：静态页交给 astro，API 交给 lkmbot。
+
+    同 host 下靠路径前缀区分，避免与 backend 的 /api/v1/* 冲突。
+    """
+    routes = _routes()
+    panel = routes["bot-panel"]
+    assert panel["hosts"] == _COMMUNITY_HOSTS
+    assert panel["uri"] == f"{_BOT_PREFIX}/*"
+    assert panel["upstream"]["service_name"].startswith("astro:")
+    assert panel["upstream"]["pass_host"] == "pass"
+    # priority 必须高过 community-catchall(10)，否则面板流量被 Astro 的兜底路由接走
+    assert panel["priority"] > routes["community-catchall"]["priority"]
+
+    api = routes["bot-api"]
+    assert api["uri"] == f"{_BOT_PREFIX}/api/*"
+    assert api["upstream"]["service_name"].startswith("lkmbot:")
+    assert routes["bot-panel-root"]["upstream"]["service_name"].startswith("astro:")
 
 
 def should_rewrite_bot_prefix_off() -> None:
-    """网关剥掉 /bot 前缀：面板进程仍以根路径服务其静态资源与 /api/v1/*（零应用侧改动）。"""
+    """网关剥掉 /bot 前缀：面板 API 进程仍以根路径服务其 /api/v1/*（零应用侧改动）。"""
     routes = _routes()
-    for route_id in ("bot-panel", "bot-auth-login"):
+    for route_id in ("bot-api", "bot-auth-login"):
         rewrite = routes[route_id]["plugins"]["proxy-rewrite"]
         assert rewrite["regex_uri"] == [f"^{_BOT_PREFIX}/(.*)", "/$1"], route_id
-    # 无尾斜杠的 /bot 由独立精确路由兜住（`/bot/*` 不匹配它）
+    # 无尾斜杠的 /bot 由独立精确路由重写到官网 SPA 入口（`/bot/*` 不匹配它）
     root = routes["bot-panel-root"]
     assert root["uri"] == _BOT_PREFIX
-    assert root["plugins"]["proxy-rewrite"]["uri"] == "/"
+    assert root["plugins"]["proxy-rewrite"]["uri"] == f"{_BOT_PREFIX}/index.html"
     assert root["hosts"] == _COMMUNITY_HOSTS
 
 
 def should_enable_websocket_on_bot_route() -> None:
-    """面板实时通道（/api/v1/live-chat/ws 等）都落在 catchall，不开 upgrade 会被剥掉。"""
-    assert _routes()["bot-panel"]["enable_websocket"] is True
+    """面板实时通道（/api/v1/live-chat/ws 等）落在 /bot/api/*，不开 upgrade 会被剥掉。"""
+    assert _routes()["bot-api"]["enable_websocket"] is True
 
 
 def should_not_reuse_community_body_limit_for_bot() -> None:
     """bot 单文件上限 512MB，复用社群站的 100MB 会把 bot 上传静默打死。"""
     routes = _routes()
-    bot_limit = routes["bot-panel"]["plugins"]["client-control"]["max_body_size"]
+    bot_limit = routes["bot-api"]["plugins"]["client-control"]["max_body_size"]
     assert bot_limit == _BOT_BODY_LIMIT
     assert bot_limit != _COMMUNITY_BODY_LIMIT
     # 社群站各路由仍必须是 100MB（防「改共用变量」把社群站上限一起抬高）
@@ -336,8 +345,11 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
     svc = _services()["lkmbot"]
     # 运行期 base：无尾斜杠形态
     assert svc["environment"]["ASTRBOT_DASHBOARD_BASE_PATH"] == prefix
-    # 前端构建期 base：必须同一值（镜像内构建 dist），且**带尾斜杠**（vite base 语义）
-    assert svc["build"]["args"]["VITE_BASE_PATH"] == f"{prefix}/"
+    # 前端构建期 base：面板已迁入官网仓库，构建期 base 在官网镜像里固定为 /bot/（vite 语义）
+    website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert f"VITE_BASE_PATH={_BOT_PREFIX}/ " in website_dockerfile
     # 网关渲染侧同一来源（路由 uri 与剥前缀正则由它展开）
     assert _services()["apisix-render"]["environment"]["APISIX_BOT_BASE_PATH"] == prefix
     # 模板里只放占位：前缀不得硬编码进路由
@@ -366,8 +378,9 @@ def should_follow_bot_base_path_variable() -> None:
     }
     assert routes["bot-panel"]["uri"] == "/bot2/*"
     assert routes["bot-panel-root"]["uri"] == "/bot2"
+    assert routes["bot-api"]["uri"] == "/bot2/api/*"
     assert routes["bot-auth-login"]["uri"] == "/bot2/api/v1/auth/login*"
-    for rid in ("bot-panel", "bot-auth-login"):
+    for rid in ("bot-api", "bot-auth-login"):
         assert routes[rid]["plugins"]["proxy-rewrite"]["regex_uri"] == [
             "^/bot2/(.*)",
             "/$1",
@@ -495,14 +508,17 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     assert "LKM_BOT_SSO_TTL_SECONDS" not in sso_py
 
 
-def should_ship_bundled_dashboard_dist_in_image() -> None:
-    """dist 由镜像内构建并落到 bundled 位置：面板前端必须带 /bot base，不能靠运行期下载。"""
-    dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
-    assert "pnpm build:subpath" in dockerfile
-    assert "COPY --from=dashboard /dashboard/dist /LKMBot/astrbot/dashboard/dist" in (
-        dockerfile
+def should_ship_panel_from_website_image_only() -> None:
+    """面板前端随官网镜像构建（带 /bot base）；bot 镜像不再内置 dist 或下载它。"""
+    bot_dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
+    assert "pnpm" not in bot_dockerfile
+    assert "astrbot/dashboard/dist" not in bot_dockerfile
+
+    website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
+        encoding="utf-8"
     )
-    # 上游默认排除 dashboard/ 目录；构建既然要它，.dockerignore 必须放开源码（只排产物）
-    dockerignore = (_ROOT / "LKM-bot" / ".dockerignore").read_text(encoding="utf-8")
-    assert "dashboard/node_modules" in dockerignore
-    assert re.search(r"^dashboard/$", dockerignore, flags=re.MULTILINE) is None
+    assert "COPY bot-panel/ ./" in website_dockerfile
+    assert "COPY --from=bot-panel /public/bot ./public/bot" in website_dockerfile
+    # 上游默认排除 dashboard/ 目录；bot 侧不再需要放开它
+    bot_dockerignore = (_ROOT / "LKM-bot" / ".dockerignore").read_text(encoding="utf-8")
+    assert "dashboard/node_modules" not in bot_dockerignore
