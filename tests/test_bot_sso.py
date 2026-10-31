@@ -6,8 +6,9 @@
 - **auth 内部端点**（``/api/v1/auth/internal/bot-ticket``）：未配内部 token → 401（不成公网面）；
   配齐后 admin → 200 且票据可验；非 admin → 403（跨进程边界独立复核，不信任上游断言）。
 - **业务端点**（``/api/v1/admin/bot/sso-ticket``）：无 admin cookie → 403；seam 未启用 → 403
-  （后台 fail-closed 语义）；seam 开 + admin cookie → 200，票据 aud/type 正确且能被验签；
-  seam 故障（内部读缝不可用）→ 503，绝不返回空票让前端以为「已免登」。
+  （后台 fail-closed 语义）；seam 开 + admin cookie 但**缺 ``admin.bot_panel`` 能力点** → 403
+  （评审阻断项 R3：admin 会话 ≠ Bot 控制面授权）；有该能力点 → 200，票据 aud/type 正确且能被
+  验签；seam 故障（内部读缝不可用）→ 503，绝不返回空票让前端以为「已免登」。
 """
 
 import contextlib
@@ -54,10 +55,28 @@ def _decode_ticket(ticket: str, *, audience: str = BOT_SSO_AUD) -> dict[str, obj
     )
 
 
-async def _mk_admin(auth_db: AsyncSession, uname: str) -> User:
-    """在 auth realm 造一个 account_level=admin 账号，返回 ORM 行（供铸造后台 cookie）。"""
-    au = await auth_user_uid(auth_db, username=uname, account_level="admin")
+async def _mk_admin(
+    auth_db: AsyncSession, uname: str, *, role: str = "super_admin"
+) -> User:
+    """在 auth realm 造一个 account_level=admin 账号，返回 ORM 行（供铸造后台 cookie）。
+
+    默认角色取 ``super_admin``：``admin.bot_panel`` 默认只授予该复合角色。需要验证
+    「无能力点即拒」时传 ``role="member"``（复合角色 ``admin:member`` 没有任何默认授权）。
+    """
+    au = await auth_user_uid(auth_db, username=uname, account_level="admin", role=role)
     return (await auth_db.execute(select(User).where(User.id == au.id))).scalar_one()
+
+
+async def _grant_bot_panel(db: DB) -> None:
+    """给 ``admin:super_admin`` 授予 bot 面板能力点。
+
+    生产由启动期 ``seed_rbac`` 写入 ``DEFAULT_GRANTS``；测试库是每测克隆的模板库，未跑 seed，
+    故显式补一行——顺带证明这条授权**真的来自 role_permissions 表**，而不是代码里的等级判断。
+    """
+    from app.modules.admin.models import RolePermission
+
+    db.add(RolePermission(role_name="admin:super_admin", permission="admin.bot_panel"))
+    await db.commit()
 
 
 def _set_admin_cookie(client: Client, user: User) -> None:
@@ -268,6 +287,7 @@ async def test_admin_endpoint_issues_ticket_for_admin(
 ) -> None:
     """seam 开 + admin cookie → 200，票据 aud/type/sub 正确（可直接喂给 bot 面板）。"""
     admin = await _mk_admin(auth_db, "bot_ticket_admin")
+    await _grant_bot_panel(db)
     _set_admin_cookie(client, admin)
 
     resp = await client.post(_ADMIN_PATH)
@@ -295,7 +315,25 @@ async def test_admin_endpoint_reports_unavailable_on_seam_failure(
         raise user_http.UserHttpUnavailable("auth down")
 
     monkeypatch.setattr(user_http, "mint_bot_sso_ticket", _boom)
+    await _grant_bot_panel(db)
     _set_admin_cookie(client, await _mk_admin(auth_db, "bot_ticket_broken"))
 
     resp = await client.post(_ADMIN_PATH)
     assert resp.status_code == 503
+
+
+async def test_admin_endpoint_rejects_admin_without_bot_panel_permission(
+    db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    """有合法 admin 会话、但**没有** ``admin.bot_panel`` → 403（评审阻断项 R3）。
+
+    这条是 R3 的核心断言：票据换的是 Bot 面板会话（插件/宿主编排的控制面），
+    所以「是社区 admin」不足以放行——授权来自 ``role_permissions`` 的独立能力点。
+    """
+    _set_admin_cookie(
+        client, await _mk_admin(auth_db, "bot_member_admin", role="member")
+    )
+
+    resp = await client.post(_ADMIN_PATH)
+    assert resp.status_code == 403
+    assert "admin.bot_panel" in resp.json()["message"]

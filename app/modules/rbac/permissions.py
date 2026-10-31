@@ -58,6 +58,11 @@ class Permission(StrEnum):
     admin_moderation_manage = "admin.moderation_manage"
     admin_analytics_view = "admin.analytics_view"
     admin_events_manage = "admin.events_manage"
+    # bot 面板集成：**独立能力点**，不是「account_level == admin」的同义词。
+    # 换来的票据直接换 bot 面板会话，而面板侧即 Bot 控制面（插件/宿主编排），
+    # 所以社区 admin 会话被盗不应自动等于面板全权——撤销这一条即可断掉整条链，
+    # 不必连带停用账号（停用会把内容管理一起带走）。
+    admin_bot_panel = "admin.bot_panel"
     # 对象级权限点（配 require_owner 依赖内查属主）
     article_owner_publish = "article.owner_publish"
     article_owner_comment_delete = "article.owner_comment_delete"
@@ -215,6 +220,7 @@ DEFAULT_GRANTS: dict[str, tuple[Grant, ...]] = {
         Grant(Permission.admin_moderation_manage),
         Grant(Permission.admin_analytics_view),
         Grant(Permission.admin_events_manage),
+        Grant(Permission.admin_bot_panel),
         Grant(Permission.board_owner_manage),
         Grant(Permission.article_owner_publish),
         Grant(Permission.article_owner_comment_delete),

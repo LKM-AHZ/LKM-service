@@ -312,6 +312,31 @@ def test_auth_prefix_split() -> None:
     assert routes["auth-prefix"]["upstream"]["service_name"].startswith("auth:")
 
 
+def test_auth_prefix_blocks_internal_seam() -> None:
+    """网关必须拒掉 `/api/v1/auth/internal/*`（评审阻断项 R2 的回归锁）。
+
+    内部缝（升权、审计、验密、bot 票据）本该只经容器网络打 `auth:8001`。`auth-prefix` 把
+    `/api/v1/auth/*` 整体暴露给公网，若不在这里拦截，唯一保护就只剩共享令牌
+    `LKM_AUTH_HTTP_TOKEN`——而运维照抄模板时它曾是 `change-me`，等于默认口令。
+
+    断言落在**渲染产物**上（与其它路由测试同一口径）：模板里的占位替换失败会让整条路由
+    校验不过而不加载，此时插件消失、`apisix.yaml` 静默少一条拦截规则，属于最难发现的一类失效。
+    """
+    route = _rendered_routes()["auth-prefix"]
+    blocker = (route.get("plugins") or {}).get("uri-blocker")
+    assert blocker, (
+        "auth-prefix 必须挂 uri-blocker，把 /api/v1/auth/internal/* 拒在网关"
+    )
+    rules = blocker.get("block_rules") or []
+    assert any(re.match(rule, "/api/v1/auth/internal/health") for rule in rules), (
+        f"block_rules 里没有能匹配 /api/v1/auth/internal/* 的规则：{rules}"
+    )
+    # 也不能顺手把整个认证前缀拦掉（登录/注册/OAuth 都在这条路由上）。
+    assert not any(re.match(rule, "/api/v1/auth/login") for rule in rules), (
+        f"block_rules 误伤了公开认证面：{rules}"
+    )
+
+
 def test_graphql_websocket_enabled() -> None:
     routes = _rendered_routes()
     assert routes["graphql-prefix"]["enable_websocket"] is True

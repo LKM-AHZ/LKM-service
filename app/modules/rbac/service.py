@@ -45,6 +45,20 @@ async def user_has_permission(
     )
 
 
+async def user_permissions(db: DbSession, cur: CurrentUser) -> tuple[str, ...]:
+    """当前会话（激活角色）持有的启用权限点，供 ``/admin/auth/me`` 交给前端做菜单收口。
+
+    **不是鉴权**：每个端点仍各自 ``require_permission`` 判定；这里只回答「有哪些」，
+    把前端的菜单可见性与后端判定对齐，避免出现「菜单能点、接口 403」的半截体验。
+    """
+    roles = cur.active_roles
+    if roles is None:
+        roles = (composite_role(cur.account_level, cur.role),)
+    prefix = f"{cur.account_level}:"
+    valid_roles = tuple(role for role in role_closure(roles) if role.startswith(prefix))
+    return await RolePermissionRepository(db).permissions_of(valid_roles)
+
+
 async def set_role_permission(
     db: DbSession, role_name: str, permission: Permission, *, enabled: bool
 ) -> bool:

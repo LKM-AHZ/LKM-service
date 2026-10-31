@@ -146,3 +146,84 @@ def test_named_volumes_are_declared() -> None:
     assert referenced - declared == set(), (
         f"这些命名卷被引用但未在顶层 volumes 声明：{sorted(referenced - declared)}"
     )
+
+
+def _clamav_dependents() -> dict[str, str]:
+    """所有把 clamav 写进 depends_on 的服务 → 其依赖条件。"""
+    deps: dict[str, str] = {}
+    for name, service in _compose()["services"].items():
+        depends = service.get("depends_on") or {}
+        if isinstance(
+            depends, list
+        ):  # 短语法 `depends_on: [a, b]` 等价 service_started
+            if "clamav" in depends:
+                deps[name] = "service_started"
+            continue
+        for dep, spec in depends.items():
+            if dep == "clamav":
+                deps[name] = (spec or {}).get("condition", "")
+    return deps
+
+
+def test_clamav_dependency_is_not_gated_on_unverifiable_probe() -> None:
+    """clamav 的依赖条件必须是 `service_started`，且它自己声明了 healthcheck。
+
+    这是评审阻断项 R1 的回归锁，两侧都说清楚为什么要这样组合：
+
+    - **没有 healthcheck 的服务不能被 `service_healthy` 依赖**：Compose v2 在**装配期**直接
+      失败（`dependency failed to start: ... has no healthcheck configured`），整栈起不来，
+      而报错文本与「病毒扫描」业务毫无关联，排查成本极高。
+    - **反过来，也不拿探针当启动闸门**：镜像 `clamav/clamav:stable` 是浮动 tag，探针二进制
+      在仓库内无法锁定；一旦上游镜像改名/挪路径，「整栈能不能起来」就取决于一个外部文件。
+      扫描未就绪由应用层 fail-closed 兜底（上传返回 `FileErr.SCAN_UNAVAILABLE`）。
+    - 但探针本身要**声明**：`docker compose ps` / 监控靠它区分「进程还在」与「clamd 真在应答」。
+
+    想收紧成 `service_healthy` 时，请先在目标机确认 `docker compose ps clamav` 达到 healthy，
+    再连同本测试一起改——否则等于把一条未验证的外部假设写进启动路径。
+    """
+    services = _compose()["services"]
+    assert "healthcheck" in services["clamav"], (
+        "clamav 必须显式声明 healthcheck：其它服务若用 service_healthy 依赖它，"
+        "没有 healthcheck 会在装配期直接失败"
+    )
+    dependents = _clamav_dependents()
+    assert dependents, "没有任何服务依赖 clamav？上传路径的扫描依赖应当是真实存在的"
+    gated = {
+        name: cond for name, cond in dependents.items() if cond != "service_started"
+    }
+    assert not gated, (
+        "这些服务把 clamav 当启动闸门，但探针路径在仓库内未锁定（闭包 R1）："
+        f"{gated}；请改为 service_started，扫描不可用交给应用层 fail-closed"
+    )
+
+
+def test_minio_init_creates_the_configured_bucket() -> None:
+    """全新主机首启必须自动建桶（R6）：MinIO 不自建桶，后端也没有建桶逻辑。
+
+    缺桶时文件库与所有头像 404，而 DEPLOYMENT 把「手工 mc mb」写成「必做」，说明真踩过。
+    `minio-init` 是**一次性 job**（`restart: 'no'`），用 `mc mb --ignore-existing` 做幂等，
+    桶名与 backend 的 `LKM_S3_BUCKET` 同源——两处各自写字面量就会再次漂移。
+    """
+    services = _compose()["services"]
+    assert "minio-init" in services, (
+        "缺少 minio-init 一次性服务：新部署首启时桶不存在，上传与头像会全部 404"
+    )
+    job = services["minio-init"]
+    assert str(job.get("restart")) == "no", (
+        "minio-init 是一次性 job，restart 必须是 'no'"
+    )
+    assert (job.get("depends_on") or {}).get("minio", {}).get("condition") == (
+        "service_healthy"
+    ), "minio-init 必须等 minio 健康后再建桶（否则连接被拒、退出码非 0）"
+
+    script = "\n".join(str(part) for part in job.get("entrypoint", []))
+    assert "mc mb" in script and "--ignore-existing" in script, (
+        "minio-init 必须用 `mc mb --ignore-existing` 幂等建桶，重复运行不能失败"
+    )
+
+    job_bucket = (job.get("environment") or {}).get("LKM_S3_BUCKET")
+    backend_bucket = (services["backend"].get("environment") or {}).get("LKM_S3_BUCKET")
+    assert job_bucket == backend_bucket, (
+        "minio-init 与 backend 的桶名必须同源（同一个 ${LKM_S3_BUCKET:-...} 表达式），"
+        f"当前 job={job_bucket!r} backend={backend_bucket!r}"
+    )

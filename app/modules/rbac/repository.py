@@ -40,6 +40,18 @@ class RolePermissionRepository(AsyncRepository[RolePermission]):
             RolePermission.enabled.is_(True),
         )
 
+    async def permissions_of(self, role_names: tuple[str, ...]) -> tuple[str, ...]:
+        """激活角色的**启用**授权并集，按值排序（前端菜单收口用，勿用于鉴权判定）。"""
+        if not role_names:
+            return ()
+        rows = await self.db.execute(
+            select(RolePermission.permission).where(
+                RolePermission.role_name.in_(role_names),
+                RolePermission.enabled.is_(True),
+            )
+        )
+        return tuple(sorted(set(rows.scalars())))
+
     async def set_permission(
         self, role_name: str, permission: str, *, enabled: bool
     ) -> bool:

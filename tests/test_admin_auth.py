@@ -109,6 +109,10 @@ class TestAdminMe:
         assert body["data"]["account_level"] == "admin"
         assert body["data"]["role"] == "super_admin"
         assert body["data"]["id"] == str(admin.id)
+        # 权限点清单供前端收口菜单（如没有 admin.bot_panel 就不渲染「机器人」分组）：
+        # 后端认什么就返回什么，前端不另抄一份映射表。
+        assert "admin.dashboard" in body["data"]["permissions"]
+        assert body["data"]["permissions"] == sorted(body["data"]["permissions"])
 
     async def should_fail_closed_when_seam_verdict_revoked(
         self,
