@@ -18,10 +18,10 @@ from sqlalchemy.orm import aliased
 
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FileStatus, LibraryFile, UploadSession
-from app.modules.projects.models import ProjectMember
 from core.contracts import CurrentUser
 from core.db.repository import AsyncRepository
 from core.err import BizError
+from core.ports import projects as projects_port
 
 
 class UploadSessionRepository(AsyncRepository[UploadSession]):
@@ -178,13 +178,8 @@ class LibraryFileRepository(AsyncRepository[LibraryFile]):
                     LibraryFile.status == FileStatus.APPROVED,
                     LibraryFile.classification == "internal",
                 )
-                member = (
-                    select(ProjectMember.id)
-                    .where(
-                        ProjectMember.project_id == LibraryFile.project_id,
-                        ProjectMember.user_id == viewer.id,
-                    )
-                    .exists()
+                member = projects_port.member_exists_clause(
+                    viewer.id, outer_column=LibraryFile.project_id
                 )
                 project_file = and_(
                     LibraryFile.status == FileStatus.APPROVED,

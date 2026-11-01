@@ -13,7 +13,6 @@ from typing import IO, Any, Literal, NoReturn
 from urllib.parse import quote
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_, select
 
 from app.modules.files.errors import FileErr
 from app.modules.files.models import FILES_TABLE_PLAN, FileStatus, LibraryFile
@@ -34,7 +33,6 @@ from app.modules.files.schemas import (
     FileInfo,
     UploadInitResp,
 )
-from app.modules.projects.models import Project, ProjectMember
 from core.common import PageData, paginate_offset, paginate_pages, parse_tags
 from core.config import settings
 from core.contracts import CurrentUser
@@ -44,6 +42,7 @@ from core.db.repository import DbSession
 from core.err import BizError
 from core.messaging import RKEY_FILE_CHANGED
 from core.ports import points as points_port
+from core.ports import projects as projects_port
 from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _uploader_map
 from core.storage.base import Readable, StorageBackend
@@ -81,19 +80,7 @@ def _file_to_schema(f: LibraryFile, uploader_name: str) -> FileInfo:
 
 
 async def upload_projects(db: DbSession, user_id: uuid.UUID) -> list[dict[str, str]]:
-    member = (
-        select(ProjectMember.id)
-        .where(ProjectMember.project_id == Project.id, ProjectMember.user_id == user_id)
-        .exists()
-    )
-    rows = (
-        await db.execute(
-            select(Project.id, Project.title)
-            .where(or_(Project.applicant_id == user_id, member))
-            .order_by(Project.created_at.desc())
-        )
-    ).all()
-    return [{"id": str(row.id), "title": row.title} for row in rows]
+    return await projects_port.list_uploadable_projects(db, user_id)
 
 
 async def list_files(
@@ -282,16 +269,10 @@ async def _identity_for_upload(
             parent.classification,
             parent.project_id,
         )
-    if info.project_id is not None:
-        project = await db.scalar(select(Project).where(Project.id == info.project_id))
-        member = await db.scalar(
-            select(ProjectMember.id).where(
-                ProjectMember.project_id == info.project_id,
-                ProjectMember.user_id == uploader_id,
-            )
-        )
-        if project is None or (project.applicant_id != uploader_id and member is None):
-            raise BizError(FileErr.INVALID_PROJECT)
+    if info.project_id is not None and not await projects_port.can_upload_to_project(
+        db, info.project_id, uploader_id
+    ):
+        raise BizError(FileErr.INVALID_PROJECT)
     code = await repo.next_document_code(datetime.now(UTC).year)
     return code, 1, None, info.classification, info.project_id
 
@@ -415,12 +396,7 @@ async def _require_visible(
         raise BizError(FileErr.NOT_FOUND)
     if f.classification == "internal":
         return
-    if f.project_id and await db.scalar(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id == f.project_id,
-            ProjectMember.user_id == viewer.id,
-        )
-    ):
+    if f.project_id and await projects_port.is_member(db, f.project_id, viewer.id):
         return
     raise BizError(FileErr.NOT_FOUND)
 

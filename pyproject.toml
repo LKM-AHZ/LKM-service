@@ -172,9 +172,6 @@ ignore_imports = [
     "app.modules.files.router -> app.modules.admin.deps",
     "app.modules.projects.router -> app.modules.admin.deps",
     "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
-    "app.modules.files.service -> app.modules.projects.models",  # 校验项目归属与成员
-    "app.modules.files.repository -> app.modules.projects.models",  # 密件列表按项目成员过滤
-    "app.modules.content.repository -> app.modules.exam.models",  # 发帖认证判定读考试证书表
     "app.modules.content.service -> app.modules.feed.fanout",  # 内容软删时清物化 feed 残留(批 4)
     "app.modules.interaction.service -> app.modules.feed.fanout",  # 关注/取关驱动物化 feed 回填与清理
     "app.modules.feed.service -> app.modules.interaction.service",  # 时间线读关注集合用于过滤

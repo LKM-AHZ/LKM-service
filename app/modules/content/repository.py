@@ -34,9 +34,9 @@ from app.modules.content.models import (
     QAQuestion,
     QAQuestionImage,
 )
-from app.modules.exam.models import Exam, ExamCertificate
 from core.db.repository import AsyncRepository
 from core.err import BizError
+from core.ports import exam as exam_port
 
 
 class ContentItemRepository(AsyncRepository[ContentItem]):
@@ -341,18 +341,7 @@ class BoardRepository(AsyncRepository[Board]):
 
         证书表属 exam 域，content 侧只读判定（跨模块读缝已在 import-linter 豁免）。
         """
-        stmt = (
-            select(ExamCertificate.id)
-            .join(Exam, Exam.id == ExamCertificate.exam_id)
-            .where(
-                ExamCertificate.user_id == user_id,
-                ExamCertificate.passed.is_(True),
-                Exam.type == "exam",
-                Exam.unlock_level == "normal",
-            )
-            .limit(1)
-        )
-        return (await self.db.scalar(stmt)) is not None
+        return await exam_port.has_normal_certification(self.db, user_id)
 
 
 class BoardApplicationRepository(AsyncRepository[BoardApplication]):

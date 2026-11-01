@@ -149,6 +149,47 @@ class _ModerationEngineImpl:
         return evaluate(text, rules)
 
 
+class _ProjectsReadImpl:
+    """``core.ports.projects`` 的实现：转发到 projects 域的只读 API。"""
+
+    async def list_uploadable_projects(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[dict[str, str]]:
+        from app.modules.projects.read_api import list_uploadable_projects
+
+        return await list_uploadable_projects(db, user_id)
+
+    def member_exists_clause(self, user_id: uuid.UUID, *, outer_column: Any) -> Any:
+        from app.modules.projects.read_api import member_exists_clause
+
+        return member_exists_clause(user_id, outer_column=outer_column)
+
+    async def can_upload_to_project(
+        self, db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        from app.modules.projects.read_api import can_upload_to_project
+
+        return await can_upload_to_project(db, project_id, user_id)
+
+    async def is_member(
+        self, db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        from app.modules.projects.read_api import is_member
+
+        return await is_member(db, project_id, user_id)
+
+
+class _ExamReadImpl:
+    """``core.ports.exam`` 的实现：转发到 exam 域的只读判定。"""
+
+    async def has_normal_certification(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> bool:
+        from app.modules.exam.read_api import has_normal_certification
+
+        return await has_normal_certification(db, user_id)
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -177,6 +218,8 @@ def register() -> None:
     ports.install("reports_writer", _ReportsWriterImpl())
     ports.install("notification_writer", _NotificationWriterImpl())
     ports.install("moderation_engine", _ModerationEngineImpl())
+    ports.install("projects_read", _ProjectsReadImpl())
+    ports.install("exam_read", _ExamReadImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True
