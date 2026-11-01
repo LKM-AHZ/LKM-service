@@ -11,26 +11,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.articles.service import (
-    delete_article_comment as delete_article_comment_svc,
-)
-from app.modules.content.blog.service import (
-    delete_comment as delete_blog_comment_svc,
-)
-from app.modules.content.blog.service import (
-    delete_series as delete_blog_series_svc,
-)
-from app.modules.content.schemas import ContentItemInfo
-from app.modules.content.service import (
-    delete_item as delete_content_item_svc,
-)
-from app.modules.content.service import list_items as list_content_items_svc
+from app.contracts.content import ContentItemInfo
 from app.modules.rbac.permissions import Permission
 from core.client_ip import client_ip
 from core.common import ApiResp, PageData, PaginateDep, PaginateParams
 from core.contracts import CurrentUser
 from core.db.session import get_session
 from core.err import respond
+from core.ports import content_admin as content_port
 from core.ports.audit import record_audit
 
 from .deps import require_admin, require_admin_2fa
@@ -53,7 +41,7 @@ async def admin_list_content_items(
     （discussion/article/column_post/blog_post/qa），供后台帖子/内容管理页使用。
     """
     await require_permission(db, _cur, Permission.admin_content_review)
-    return await list_content_items_svc(
+    return await content_port.list_items(
         db, page=pag.page, limit=pag.limit, content_type=content_type
     )
 
@@ -90,7 +78,7 @@ async def admin_delete_content_item(
 ) -> dict[str, Any]:
     """管理员删除统一内容项（讨论帖/官方文章/专栏连载/博客发布产物）。"""
     await require_permission(db, cur, Permission.admin_content_review)
-    author_id = await delete_content_item_svc(db, item_id, cur.id, as_admin=True)
+    author_id = await content_port.delete_item(db, item_id, cur.id, as_admin=True)
     await _audit_admin_delete(
         db,
         request,
@@ -112,7 +100,7 @@ async def admin_delete_series(
 ) -> dict[str, Any]:
     """管理员删除用户专栏系列。"""
     await require_permission(db, cur, Permission.admin_content_review)
-    owner_id = await delete_blog_series_svc(db, series_id, cur.id, as_admin=True)
+    owner_id = await content_port.delete_series(db, series_id, cur.id, as_admin=True)
     await _audit_admin_delete(
         db,
         request,
@@ -138,7 +126,7 @@ async def admin_delete_blog_comment(
 ) -> dict[str, Any]:
     """管理员删除用户博客系列评论。"""
     await require_permission(db, cur, Permission.admin_content_review)
-    author_id = await delete_blog_comment_svc(
+    author_id = await content_port.delete_blog_comment(
         db, series_id, comment_id, cur.id, as_admin=True
     )
     await _audit_admin_delete(
@@ -162,7 +150,9 @@ async def admin_delete_article_comment(
 ) -> dict[str, Any]:
     """管理员删除用户文章评论。"""
     await require_permission(db, cur, Permission.admin_content_review)
-    author_id = await delete_article_comment_svc(db, comment_id, cur.id, as_admin=True)
+    author_id = await content_port.delete_article_comment(
+        db, comment_id, cur.id, as_admin=True
+    )
     await _audit_admin_delete(
         db,
         request,

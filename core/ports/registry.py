@@ -27,6 +27,7 @@ REQUIRED_PORTS: tuple[str, ...] = (
     "moderation_engine",
     "projects_read",
     "exam_read",
+    "content_admin",
 )
 
 _impls: dict[str, Any] = {}

@@ -190,6 +190,68 @@ class _ExamReadImpl:
         return await has_normal_certification(db, user_id)
 
 
+class _ContentAdminImpl:
+    """``core.ports.content_admin`` 的实现：转发到 content 域的后台操作。"""
+
+    async def list_items(
+        self, db: AsyncSession, *, page: int, limit: int, content_type: str | None
+    ) -> Any:
+        from app.modules.content.admin_api import list_items
+
+        return await list_items(db, page=page, limit=limit, content_type=content_type)
+
+    async def delete_item(
+        self,
+        db: AsyncSession,
+        item_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.content.admin_api import delete_item
+
+        return await delete_item(db, item_id, actor_id, as_admin=as_admin)
+
+    async def delete_series(
+        self,
+        db: AsyncSession,
+        series_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.content.admin_api import delete_series
+
+        return await delete_series(db, series_id, actor_id, as_admin=as_admin)
+
+    async def delete_blog_comment(
+        self,
+        db: AsyncSession,
+        series_id: uuid.UUID,
+        comment_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.content.admin_api import delete_blog_comment
+
+        return await delete_blog_comment(
+            db, series_id, comment_id, actor_id, as_admin=as_admin
+        )
+
+    async def delete_article_comment(
+        self,
+        db: AsyncSession,
+        comment_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.content.admin_api import delete_article_comment
+
+        return await delete_article_comment(db, comment_id, actor_id, as_admin=as_admin)
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -220,6 +282,7 @@ def register() -> None:
     ports.install("moderation_engine", _ModerationEngineImpl())
     ports.install("projects_read", _ProjectsReadImpl())
     ports.install("exam_read", _ExamReadImpl())
+    ports.install("content_admin", _ContentAdminImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True
