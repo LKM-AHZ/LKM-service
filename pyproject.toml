@@ -168,7 +168,6 @@ source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
     "app.modules.admin.review_service -> app.modules.content.models",  # 审核队列只读板块/专栏申请
     "app.modules.admin.review_service -> app.modules.files.models",  # 审核队列只读待审文件
     "app.modules.admin.review_service -> app.modules.projects.models",  # 审核队列只读项目申请
@@ -177,6 +176,7 @@ ignore_imports = [
     "app.modules.feed.feed -> app.modules.content.articles.models",
     "app.modules.feed.feed -> app.modules.content.models",
     "app.modules.feed.feed -> app.modules.projects.models",
+    "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
     "app.modules.interaction.models -> app.modules.content.models",  # BoardFollow.board 关系目标(TYPE_CHECKING)
     "app.modules.interaction.repository -> app.modules.content.models",  # 收藏计数/摘要 + 板块只读缝
     "app.modules.notification.tasks -> app.modules.content.models",  # 事件解析目标内容/评论作者
@@ -186,5 +186,4 @@ ignore_imports = [
     "app.modules.search.repository -> app.modules.files.models",  # 公开文件全文检索
     "app.modules.search.documents -> app.modules.files.models",  # 文件行 → 索引文档
     "app.modules.search.sync -> app.modules.files.models",  # 文件审核变更同步索引
-    "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
 ]

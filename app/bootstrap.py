@@ -319,6 +319,11 @@ class _InteractionReadImpl:
 
         return await list_board_follower_ids(db, board_id, limit=limit)
 
+    def favorite_count_subquery(self, outer_column: Any) -> Any:
+        from app.modules.interaction.read_api import favorite_count_subquery
+
+        return favorite_count_subquery(outer_column)
+
 
 
 def register() -> None:

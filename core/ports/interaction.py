@@ -8,6 +8,7 @@ feed ↔ interaction 本就是双向依赖，走端口后双方都只依赖 core
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,3 +46,8 @@ async def list_board_follower_ids(
 ) -> list[uuid.UUID]:
     """某版块的关注者 id（最多 ``limit`` 条）。"""
     return await get("interaction_read").list_board_follower_ids(db, board_id, limit=limit)
+
+
+def favorite_count_subquery(outer_column: Any) -> Any:
+    """「该内容被收藏次数」的标量子查询（``outer_column`` 为调用方的关联列）。"""
+    return get("interaction_read").favorite_count_subquery(outer_column)

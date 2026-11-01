@@ -52,11 +52,11 @@ from app.modules.content.models import (
     ContentItem,
     ContentLike,
 )
-from app.modules.interaction.models import InteractionFavorite
 from core import counters
 from core.config import settings
 from core.err import BizError
 from core.metrics import counts_reconcile_repeated_total
+from core.ports import interaction as interaction_port
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +68,6 @@ _COLUMNS: dict[str, InstrumentedAttribute[int]] = {
 }
 
 # 真相源：字段名 → 明细表的 content_id 列
-_DETAIL_SOURCES: dict[str, InstrumentedAttribute[uuid.UUID]] = {
-    "like_count": ContentLike.content_id,
-    "comment_count": ContentComment.content_id,
-    "bookmark_count": InteractionFavorite.content_id,
-}
-
-
 async def write_through_bump(
     db: AsyncSession, item_id: uuid.UUID, field: str, delta: int
 ) -> int:
@@ -306,11 +299,9 @@ async def reconcile_counts(
             )
             .scalar_subquery()
             .label("real_comment"),
-            select(func.count())
-            .select_from(InteractionFavorite)
-            .where(InteractionFavorite.content_id == ContentItem.id)
-            .scalar_subquery()
-            .label("real_bookmark"),
+            interaction_port.favorite_count_subquery(ContentItem.id).label(
+                "real_bookmark"
+            ),
         ]
         where_conds = [ContentItem.id > last_id]
         if only_unconverged:
