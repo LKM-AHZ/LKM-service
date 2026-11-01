@@ -384,6 +384,7 @@ class _ContentReadImpl:
 
 
 
+
 class _FilesReadImpl:
     """``core.ports.files`` 的实现：转发到 files 域的只读聚合。"""
 

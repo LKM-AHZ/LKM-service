@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.models import (
@@ -19,6 +20,7 @@ from app.modules.content.models import (
     ColumnApplication,
     ContentComment,
     ContentItem,
+    ContentLike,
     ContentType,
     QAAnswer,
     QAQuestion,
@@ -168,3 +170,69 @@ async def pending_column_applications(
 ) -> tuple[int, datetime.datetime | None]:
     """待审专栏申请：``(数量, 最早提交时间)``。"""
     return await _pending(db, ColumnApplication)
+
+
+async def bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> int | None:
+    """当前收藏计数；内容行不存在（含软删）返回 None。"""
+    value = await db.scalar(
+        select(ContentItem.bookmark_count).where(
+            ContentItem.id == content_id,
+            ContentItem.deleted_at.is_(None),
+        )
+    )
+    return None if value is None else int(value)
+
+
+async def bump_bookmark_count(
+    db: AsyncSession, content_id: uuid.UUID, delta: int
+) -> int | None:
+    """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 None。"""
+    result = await db.execute(
+        sa_update(ContentItem)
+        .where(
+            ContentItem.id == content_id,
+            ContentItem.deleted_at.is_(None),
+        )
+        .values(bookmark_count=func.greatest(ContentItem.bookmark_count + delta, 0))
+        .returning(ContentItem.bookmark_count)
+    )
+    row = result.first()
+    return None if row is None else int(row[0])
+
+
+async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
+    """内容行是否存在（浏览上报的 404 前置判定）。"""
+    return (
+        await db.scalar(select(ContentItem.id).where(ContentItem.id == content_id))
+    ) is not None
+
+
+async def item_counts(
+    db: AsyncSession, content_id: uuid.UUID
+) -> tuple[int, int] | None:
+    """``(like_count, bookmark_count)``；内容行不存在（含软删）返回 None。"""
+    row = (
+        await db.execute(
+            select(ContentItem.like_count, ContentItem.bookmark_count).where(
+                ContentItem.id == content_id,
+                ContentItem.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    return int(row[0]), int(row[1])
+
+
+async def liked_by(
+    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """该用户是否点赞过该内容。"""
+    return (
+        await db.scalar(
+            select(ContentLike.content_id).where(
+                ContentLike.content_id == content_id,
+                ContentLike.user_id == user_id,
+            )
+        )
+    ) is not None
