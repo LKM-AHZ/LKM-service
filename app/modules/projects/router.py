@@ -4,7 +4,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.deps import require_admin_2fa
 from app.modules.projects.schemas import (
     ProjectApplicationCreate,
     ProjectApplicationOut,
@@ -25,6 +24,7 @@ from core.common import ApiResp, ModuleStatus
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
+from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import get_current_user
 
 
@@ -93,7 +93,7 @@ async def submit_app(
 async def review_app(
     app_id: uuid.UUID,
     body: ReviewProjectApplicationRequest,
-    _cur: Annotated[CurrentUser, require_admin_2fa],
+    _cur: Annotated[CurrentUser, admin_guard_port.require_admin_2fa()],
     db: AsyncSession = Depends(get_session),
 ) -> ProjectApplicationOut:
     if not await user_has_permission(db, _cur, Permission.projects_application_review):

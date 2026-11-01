@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from app.modules.admin.deps import require_admin_2fa
 from app.modules.files.models import FileClassification, FileStatus, LibraryFile
 from app.modules.files.schemas import (
     BatchReviewIn,
@@ -52,6 +51,7 @@ from core.config import settings
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
+from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import get_current_user, get_optional_user
 from core.wire import msgspec_ok
 
@@ -219,7 +219,7 @@ async def download_file(
 @respond
 async def review_files_batch(
     body: BatchReviewIn,
-    _cur: Annotated[CurrentUser, require_admin_2fa],
+    _cur: Annotated[CurrentUser, admin_guard_port.require_admin_2fa()],
     db: AsyncSession = Depends(get_session),
 ) -> BatchReviewResult:
     """批量审核文件（仅此低风险同质队列）：限 50 条、逐条独立事务、允许部分成功。
@@ -276,7 +276,7 @@ async def review_files_batch(
 @respond
 async def review_uploaded_file(
     file_id: uuid.UUID,
-    _cur: Annotated[CurrentUser, require_admin_2fa],
+    _cur: Annotated[CurrentUser, admin_guard_port.require_admin_2fa()],
     status: FileStatus = Form(...),
     review_comment: str | None = Form(default=None),
     db: AsyncSession = Depends(get_session),

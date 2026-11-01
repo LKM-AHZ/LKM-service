@@ -4,7 +4,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.deps import require_admin_2fa
 from app.modules.content.columns.schemas import (
     ColumnApplicationCreate,
     ColumnApplicationInfo,
@@ -38,6 +37,7 @@ from core.common import (
 from core.contracts import CurrentUser
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, respond
+from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import RequireLevel, get_current_user
 
 router = APIRouter(prefix="/columns", tags=["content", "columns"])
@@ -128,7 +128,7 @@ async def get_application_detail(
 async def review_column_application(
     application_id: uuid.UUID,
     info: ColumnApplicationReview,
-    cur: CurrentUser = require_admin_2fa,
+    cur: CurrentUser = admin_guard_port.require_admin_2fa(),
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     if not await user_has_permission(db, cur, Permission.columns_application_review):

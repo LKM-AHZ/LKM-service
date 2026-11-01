@@ -4,7 +4,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.deps import require_admin_2fa
 from app.modules.content.boards.errors import (
     BoardErr,  # noqa: F401  (副作用注册已由 main 统一)
 )
@@ -36,12 +35,13 @@ from core.contracts import CurrentUser
 from core.db.repository import VersionConflictError
 from core.db.session import get_read_session, get_session
 from core.err import BizError, CommonErr, ErrCode, respond
+from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import get_current_user
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 # 危险操作（审核通过/驳回等破坏性写操作）：需已通过 2FA 且信任未过期（1 小时）；
 # 2FA 之上再叠加 boards_review_application 权限点（handler 内判定）。
-Admin2FADep = Annotated[CurrentUser, require_admin_2fa]
+Admin2FADep = Annotated[CurrentUser, admin_guard_port.require_admin_2fa()]
 
 
 def _status() -> ModuleStatus:

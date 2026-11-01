@@ -112,6 +112,7 @@ extend-immutable-calls = [
     "fastapi.Query", "fastapi.Path", "fastapi.Header",
     "fastapi.Cookie", "fastapi.Body", "fastapi.Form", "fastapi.File",
     "core.ports.authz.RequireLevel",
+    "core.ports.admin_guard.require_admin_2fa",
     "app.modules.rbac.deps.RequirePermission",
     "core.common.PaginateDep",
 ]
@@ -167,10 +168,6 @@ source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.content.boards.router -> app.modules.admin.deps",
-    "app.modules.content.columns.router -> app.modules.admin.deps",
-    "app.modules.files.router -> app.modules.admin.deps",
-    "app.modules.projects.router -> app.modules.admin.deps",
     "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
     "app.modules.content.service -> app.modules.feed.fanout",  # 内容软删时清物化 feed 残留(批 4)
     "app.modules.interaction.service -> app.modules.feed.fanout",  # 关注/取关驱动物化 feed 回填与清理

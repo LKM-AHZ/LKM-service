@@ -252,6 +252,16 @@ class _ContentAdminImpl:
         return await delete_article_comment(db, comment_id, actor_id, as_admin=as_admin)
 
 
+class _AdminGuardImpl:
+    """``core.ports.admin_guard`` 的实现：绑定后台 2FA 依赖对象。"""
+
+    def __init__(self) -> None:
+        from app.modules.admin.deps import require_admin_2fa
+
+        self.require_admin_2fa = require_admin_2fa
+
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -283,6 +293,7 @@ def register() -> None:
     ports.install("projects_read", _ProjectsReadImpl())
     ports.install("exam_read", _ExamReadImpl())
     ports.install("content_admin", _ContentAdminImpl())
+    ports.install("admin_guard", _AdminGuardImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True
