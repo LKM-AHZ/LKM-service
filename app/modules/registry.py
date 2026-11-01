@@ -1,7 +1,8 @@
-"""模块注册表（§7）：业务模块的单一事实源与聚合入口。
+"""模块注册表（§7）：业务模块的聚合入口。
 
-新增业务域在 ``MODULES`` 登记 REST/GraphQL 出口；错误码由 ``_ERROR_MODULES`` 汇总。
-模型与任务须另在 ``app.bootstrap`` 登记，不能只修改本表。
+**注册项的唯一事实源是** :mod:`app.modules.spec`——本模块只负责按清单派生出的路径做
+延迟导入与聚合，不再各自维护 ``MODULES`` / ``_ERROR_MODULES`` 两份字面量。
+
 表的范围是 ``app/modules/`` 下的**业务域**；auth 已独立成顶层包（``auth/``），
 不在此表内。``boot.assemble`` 调用两侧 bootstrap 完成装配；auth 路由经
 ``core.route_registry`` 提供给 ``api/router.py``，app 不直接 import auth。
@@ -15,38 +16,16 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-MODULES: tuple[str, ...] = (
-    "admin",
-    "content",
-    "exam",
-    "feed",
-    "files",
-    "health",
-    "interaction",
-    "notification",
-    "points",
-    "projects",
-    "search",
-    "starhope",
-    "treehole",
-    # rbac 无 REST/GraphQL 导出，但承载跨模块权限框架，无需在此列表聚合路由；
-    # 若其注册了错误码/依赖副作用需要随应用加载，可加入并自行判定 hasattr。
-)
+from app.modules.spec import ERROR_MODULES, MODULES
 
-# 不做顶层 errors.py 的模块：admin 的错误码在子包 admin.moderation 下；health 无错误码；
-# feed 的错误码（FollowErr）随关注关系迁入 interaction 后已无自有错误码。
-_NO_TOP_ERRORS: frozenset[str] = frozenset({"admin", "feed", "health", "treehole"})
-
-_ERROR_MODULES: list[str] = [
-    *(m for m in MODULES if m not in _NO_TOP_ERRORS),
-    "admin.moderation",  # ModerationErr（子包路径，非 app.modules.admin.errors）
-    "content.articles",  # ArticleErr：并入 content 后不再由 MODULES 派生，须单列
-    "content.blog",  # BlogErr：同上
-    "content.boards",  # BoardErr
-    "content.columns",  # ColumnErr
-    "content.qa",  # QaErr
-    # 注：StorageErr 随存储抽象下沉 core.storage，不在业务错误码清单内——
-    # 其注册由 core.storage.errors 自身在导入期完成（见 load_errors）。
+__all__ = [
+    "ERROR_MODULES",
+    "MODULES",
+    "each_module",
+    "graphql_of",
+    "load_all",
+    "load_errors",
+    "routers_of",
 ]
 
 
@@ -66,9 +45,9 @@ def graphql_of(name: str) -> list[Any]:
 
 
 def load_errors() -> None:
-    """导入各模块 ``errors`` 模块触发错误码 register() 副作用（幂等）。"""
-    for name in _ERROR_MODULES:
-        import_module(f"app.modules.{name}.errors")
+    """导入各模块错误码模块触发 ``register()`` 副作用（幂等）。"""
+    for path in ERROR_MODULES:
+        import_module(path)
     # 存储抽象已下沉 core（auth 与 files 共用），其错误码不属任何业务模块
     import_module("core.storage.errors")
 

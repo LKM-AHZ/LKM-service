@@ -2,39 +2,13 @@
 
 装配根 ``boot.assemble`` 调用 :func:`register`。core 因而不知道任何业务模块名，
 app 也不需要 import auth。
+
+模型与任务清单来自 :mod:`app.modules.spec`（单一事实源），本模块不再维护第二份字面量。
 """
 
 from __future__ import annotations
 
-#: 需在装配期导入的 ORM 模型模块（全量 metadata → relationship 字符串解析）。
-APP_MODEL_MODULES: tuple[str, ...] = (
-    "app.modules.admin.models",
-    "app.modules.content.articles.models",
-    "app.modules.content.blog.models",
-    "app.modules.content.models",
-    "app.modules.exam.models",
-    "app.modules.feed.models",
-    "app.modules.files.models",
-    "app.modules.interaction.models",
-    "app.modules.notification.models",
-    "app.modules.points.models",
-    "app.modules.projects.models",
-    "app.modules.starhope.models",
-    "app.modules.treehole.models",
-)
-
-#: 需在装配期导入的 Pulsar 任务模块（导入即副作用注册 handler / cron）。
-APP_TASK_MODULES: tuple[str, ...] = (
-    "app.modules.admin.tasks",
-    "app.modules.content.blog.tasks",
-    "app.modules.content.tasks",
-    "app.modules.feed.tasks",
-    "app.modules.files.tasks",
-    "app.modules.interaction.tasks",
-    "app.modules.notification.tasks",
-    "app.modules.points.tasks",
-    "app.modules.search.tasks",
-)
+from app.modules.spec import APP_MODEL_MODULES, APP_TASK_MODULES
 
 _registered = False
 

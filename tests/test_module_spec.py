@@ -1,0 +1,128 @@
+"""模块清单（``app.modules.spec``）的等价性与结构约束。
+
+这四张派生表拆分前是分别手写的字面量（``registry.MODULES``、``registry._ERROR_MODULES``、
+``app.bootstrap.APP_MODEL_MODULES``、``app/bootstrap.APP_TASK_MODULES``）。派生规则一旦写错，
+表现是**运行时 404 或缺错误码**——进程照常启动，所以这里把旧值逐项钉死。
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+
+import pytest
+
+from app.modules import registry, spec
+
+# ── 拆分前的字面量（顺序即语义：路由注册顺序 / 错误码导入顺序）─────────────
+_LEGACY_MODULES = (
+    "admin",
+    "content",
+    "exam",
+    "feed",
+    "files",
+    "health",
+    "interaction",
+    "notification",
+    "points",
+    "projects",
+    "search",
+    "starhope",
+    "treehole",
+)
+
+_LEGACY_ERROR_MODULES = (
+    "app.modules.content.errors",
+    "app.modules.exam.errors",
+    "app.modules.files.errors",
+    "app.modules.interaction.errors",
+    "app.modules.notification.errors",
+    "app.modules.points.errors",
+    "app.modules.projects.errors",
+    "app.modules.search.errors",
+    "app.modules.starhope.errors",
+    "app.modules.admin.moderation",
+    "app.modules.content.articles",
+    "app.modules.content.blog",
+    "app.modules.content.boards",
+    "app.modules.content.columns",
+    "app.modules.content.qa",
+)
+
+_LEGACY_MODEL_MODULES = (
+    "app.modules.admin.models",
+    "app.modules.content.articles.models",
+    "app.modules.content.blog.models",
+    "app.modules.content.models",
+    "app.modules.exam.models",
+    "app.modules.feed.models",
+    "app.modules.files.models",
+    "app.modules.interaction.models",
+    "app.modules.notification.models",
+    "app.modules.points.models",
+    "app.modules.projects.models",
+    "app.modules.starhope.models",
+    "app.modules.treehole.models",
+)
+
+_LEGACY_TASK_MODULES = (
+    "app.modules.admin.tasks",
+    "app.modules.content.blog.tasks",
+    "app.modules.content.tasks",
+    "app.modules.feed.tasks",
+    "app.modules.files.tasks",
+    "app.modules.interaction.tasks",
+    "app.modules.notification.tasks",
+    "app.modules.points.tasks",
+    "app.modules.search.tasks",
+)
+
+
+def test_modules_matches_legacy_literal() -> None:
+    assert spec.MODULES == _LEGACY_MODULES
+
+
+def test_error_modules_match_legacy_literal() -> None:
+    assert spec.ERROR_MODULES == _LEGACY_ERROR_MODULES
+
+
+def test_model_modules_match_legacy_literal() -> None:
+    assert spec.APP_MODEL_MODULES == _LEGACY_MODEL_MODULES
+
+
+def test_task_modules_match_legacy_literal() -> None:
+    assert spec.APP_TASK_MODULES == _LEGACY_TASK_MODULES
+
+
+def test_registry_reexports_the_same_tables() -> None:
+    """registry 只是 spec 的门面：两边必须是同一对象，避免又长出第二份副本。"""
+    assert registry.MODULES is spec.MODULES
+    assert registry.ERROR_MODULES is spec.ERROR_MODULES
+
+
+def test_rbac_is_loaded_but_not_aggregated() -> None:
+    """rbac 承载跨模块权限原语，但没有 REST/GraphQL 出口，不应进 MODULES。"""
+    names = {s.name for s in spec.SPECS}
+    assert "rbac" in names
+    assert "rbac" not in spec.MODULES
+
+
+@pytest.mark.parametrize("name", [s.name for s in spec.SPECS])
+def test_every_spec_has_importable_package(name: str) -> None:
+    """清单里的模块必须真实存在——写错名字不该等到 404 才被发现。"""
+    module = import_module(f"app.modules.{name}")
+    assert module is not None
+
+
+@pytest.mark.parametrize("name", spec.MODULES)
+def test_aggregated_module_exposes_public_api(name: str) -> None:
+    """聚合模块须在 __init__.py 暴露 ROUTERS 或 GRAPHQL（否则聚合到的是空集）。"""
+    module = import_module(f"app.modules.{name}")
+    assert hasattr(module, "ROUTERS") or hasattr(module, "GRAPHQL"), name
+
+
+def test_generated_paths_are_unique() -> None:
+    """重复路径意味着两处声明打架：模型/任务重复导入、错误码重复 register。"""
+    assert len(set(spec.MODULES)) == len(spec.MODULES)
+    assert len(set(spec.ERROR_MODULES)) == len(spec.ERROR_MODULES)
+    assert len(set(spec.APP_MODEL_MODULES)) == len(spec.APP_MODEL_MODULES)
+    assert len(set(spec.APP_TASK_MODULES)) == len(spec.APP_TASK_MODULES)
