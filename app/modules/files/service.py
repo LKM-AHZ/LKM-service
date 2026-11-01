@@ -495,7 +495,9 @@ async def review_file(
             )
             if settings.files_backup_dir:
                 f.backed_up_at = datetime.now(UTC)
-        await points_port.enqueue_event(db, f.uploader_id, "file_approved", f"file:{f.id}")
+        await points_port.enqueue_event(
+            db, f.uploader_id, "file_approved", f"file:{f.id}"
+        )
         await _enqueue_file_change(db, f.id)
         if f.document_code:
             for older in await repo.versions(f.document_code):

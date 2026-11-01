@@ -167,7 +167,6 @@ source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.treehole.services.reports -> app.modules.admin.models",  # 匿名举报进入后台审核队列
     "app.modules.content.boards.router -> app.modules.admin.deps",
     "app.modules.content.columns.router -> app.modules.admin.deps",
     "app.modules.files.router -> app.modules.admin.deps",
@@ -186,14 +185,12 @@ ignore_imports = [
     "app.modules.admin.review_service -> app.modules.content.models",  # 审核队列只读板块/专栏申请
     "app.modules.admin.review_service -> app.modules.files.models",  # 审核队列只读待审文件
     "app.modules.admin.review_service -> app.modules.projects.models",  # 审核队列只读项目申请
-    "app.modules.admin.review_digest -> app.modules.notification.service",  # 每日摘要写站内信
     "app.modules.admin.content_router -> app.modules.content.service",
     "app.modules.admin.users_router -> app.modules.content.models",
     "app.modules.admin.users_router -> app.modules.files.models",
     "app.modules.feed.feed -> app.modules.content.articles.models",
     "app.modules.feed.feed -> app.modules.content.models",
     "app.modules.feed.feed -> app.modules.projects.models",
-    "app.modules.feed.service -> app.modules.admin.moderation.engine",
     "app.modules.interaction.models -> app.modules.content.models",  # BoardFollow.board 关系目标(TYPE_CHECKING)
     "app.modules.interaction.repository -> app.modules.content.models",  # 收藏计数/摘要 + 板块只读缝
     "app.modules.notification.tasks -> app.modules.content.models",  # 事件解析目标内容/评论作者
@@ -204,5 +201,4 @@ ignore_imports = [
     "app.modules.search.documents -> app.modules.files.models",  # 文件行 → 索引文档
     "app.modules.search.sync -> app.modules.files.models",  # 文件审核变更同步索引
     "app.modules.content.counters -> app.modules.interaction.models",  # bookmark 计数对账真相源
-    "app.modules.content.service -> app.modules.admin.models",  # 用户举报写入 reports 表（后台举报队列）
 ]

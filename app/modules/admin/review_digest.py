@@ -15,9 +15,9 @@ import logging
 import httpx
 
 from app.modules.admin.review_service import build_review_summary, queue_labels
-from app.modules.notification.service import NotificationType, create_notification
 from core.config import settings
 from core.db.session import new_worker_session as new_session
+from core.ports import notification as notification_port
 from core.ports.users import list_admin_ids
 from core.secrets import reveal
 
@@ -84,10 +84,10 @@ async def send_daily_digest() -> int:
         }
 
         for admin_id in admin_ids:
-            await create_notification(
+            await notification_port.create(
                 db,
                 user_id=admin_id,
-                type=NotificationType.REVIEW_DIGEST.value,
+                type=notification_port.type_value("REVIEW_DIGEST"),
                 payload=payload,
             )
         await db.commit()

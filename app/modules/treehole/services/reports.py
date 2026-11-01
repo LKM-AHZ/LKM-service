@@ -7,7 +7,6 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.admin.models import Report as AdminReport
 from app.modules.treehole.models import (
     Bottle,
     Letter,
@@ -17,6 +16,7 @@ from app.modules.treehole.models import (
 from app.modules.treehole.schemas import ReportInput
 from core.db.base import now_iso
 from core.err import BizError, CommonErr
+from core.ports import reports as reports_port
 
 
 async def report(body: ReportInput, owner: str, db: AsyncSession) -> dict:
@@ -43,19 +43,19 @@ async def report(body: ReportInput, owner: str, db: AsyncSession) -> dict:
                 created_at=now_iso(),
             )
         )
-        db.add(
-            AdminReport(
-                id=uuid.uuid4(),
-                type=f"treehole_{body.targetType}",
-                target_id=body.targetId,
-                target_title=target.content[:200]
+        await reports_port.create_if_absent(
+            db,
+            type=f"treehole_{body.targetType}",
+            target_id=body.targetId,
+            target_title=(
+                target.content[:200]
                 if isinstance(target, Letter)
-                else target.text[:200],
-                reporter_id=None,
-                reporter_name="树洞匿名访客",
-                reason=f"{body.reason}: {body.detail}"[:500],
-                status="pending",
-                created_at=now_iso(),
-            )
+                else target.text[:200]
+            ),
+            reporter_id=None,
+            reporter_name="树洞匿名访客",
+            reason=f"{body.reason}: {body.detail}"[:500],
+            created_at=now_iso(),
+            explicit_id=uuid.uuid4(),
         )
     return {"reported": True}

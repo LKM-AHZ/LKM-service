@@ -5,10 +5,8 @@ import re
 import uuid
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.modules.admin.models import Report as AdminReport
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.boards.schemas import (
     BanRequest,
@@ -100,6 +98,7 @@ from core.db.repository import DbSession
 from core.err import BizError, ErrCode
 from core.metrics import post_created_total
 from core.ports import points as points_port
+from core.ports import reports as reports_port
 from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _author_map
 from core.ports.snapshot import get_user_snapshot
@@ -525,30 +524,16 @@ async def report_content(
     else:
         raise BizError(ContentErr.UNSUPPORTED_TYPE)
 
-    already = await db.scalar(
-        select(AdminReport.id).where(
-            AdminReport.reporter_id == user_id,
-            AdminReport.type == target_type,
-            AdminReport.target_id == str(target_id),
-            AdminReport.status == "pending",
-        )
-    )
-    if already is not None:
-        return
-
     names = await _author_map(db, [user_id])
-    db.add(
-        AdminReport(
-            type=target_type,
-            target_id=str(target_id),
-            target_title=title[:200],
-            reporter_id=user_id,
-            reporter_name=names.get(user_id, ""),
-            reason=reason[:500],
-            status="pending",
-        )
+    await reports_port.create_if_absent(
+        db,
+        type=target_type,
+        target_id=str(target_id),
+        target_title=title[:200],
+        reporter_id=user_id,
+        reporter_name=names.get(user_id, ""),
+        reason=reason[:500],
     )
-    await db.flush()
 
 
 async def forward_item(db: DbSession, item_id: uuid.UUID) -> int:
@@ -1299,7 +1284,9 @@ async def create_question(
     await repo.add(q)
     if total > 0:
         # spend 锁定（余额不足抛 INSUFFICIENT_BALANCE，同事务回滚）
-        await points_port.spend(db, author_id, total, "qa_escrow", "qa_question", str(q.id))
+        await points_port.spend(
+            db, author_id, total, "qa_escrow", "qa_question", str(q.id)
+        )
     await _sync_question_content_item(db, author_id, q)
     await db.flush()
     await bump_collection_version("qa")
@@ -1483,8 +1470,12 @@ async def accept_answer(
     q.accepted_answer_id = a.id
     await a_repo.flush()
     # 采纳回答事件入队（仅计数，QA 已按悬赏派发，不加分）
-    await points_port.enqueue_event(db, a.author_id, "answer_accepted", f"answer:{a.id}")
-    await points_port.enqueue_event(db, q.author_id, "qa_accept_notice", f"answer:{a.id}")
+    await points_port.enqueue_event(
+        db, a.author_id, "answer_accepted", f"answer:{a.id}"
+    )
+    await points_port.enqueue_event(
+        db, q.author_id, "qa_accept_notice", f"answer:{a.id}"
+    )
     await bump_collection_version("qa")
     return AnswerOut.model_validate(a)
 
@@ -1519,7 +1510,9 @@ async def _settle_question(db: DbSession, q: QAQuestion) -> None:
     """退还尚未派发的托管积分；由问题行锁保护重复结算。"""
     refund = q.bounty_total - q.bounty_distributed
     if refund > 0:
-        await points_port.reward(db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id))
+        await points_port.reward(
+            db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id)
+        )
     q.status = "accepted" if q.accepted_answer_id is not None else "closed"
 
 

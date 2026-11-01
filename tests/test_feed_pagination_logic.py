@@ -10,6 +10,7 @@ from app.modules.admin.moderation.engine import Rule
 from app.modules.feed import feed as feed_src
 from app.modules.feed import service
 from app.modules.feed.schemas import FeedItem
+from core.ports import moderation as moderation_port
 
 
 def _item(n: int, *, item_type: str = "discussion", title: str = "visible") -> FeedItem:
@@ -99,7 +100,7 @@ async def test_materialized_hidden_only_does_not_fall_back(monkeypatch) -> None:
     monkeypatch.setattr(service, "get_followed_board_ids", AsyncMock(return_value=[]))
     monkeypatch.setattr(service.fanout, "bigv_authors", AsyncMock(return_value=set()))
     monkeypatch.setattr(
-        service,
+        moderation_port,
         "load_active_rules",
         AsyncMock(return_value=[Rule(pattern="hide", action="hide")]),
     )
@@ -124,7 +125,7 @@ async def test_materialized_page_reads_current_rows_each_time(monkeypatch) -> No
     )
     monkeypatch.setattr(service, "get_followed_board_ids", AsyncMock(return_value=[]))
     monkeypatch.setattr(service.fanout, "bigv_authors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(service, "load_active_rules", AsyncMock(return_value=[]))
+    monkeypatch.setattr(moderation_port, "load_active_rules", AsyncMock(return_value=[]))
     rows = [_item(2)]
 
     async def load_page(_db, _user_id, before_time, _before_id, _size):

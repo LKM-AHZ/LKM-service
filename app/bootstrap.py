@@ -74,6 +74,81 @@ class _PointsWriterImpl:
         return await spend(db, user_id, amount, reason, ref_type, ref_id)
 
 
+class _ReportsWriterImpl:
+    """``core.ports.reports`` 的实现：转发到 admin 域的写入口径。"""
+
+    async def create_if_absent(
+        self,
+        db: AsyncSession,
+        *,
+        type: str,
+        target_id: str,
+        target_title: str,
+        reporter_id: uuid.UUID | None,
+        reporter_name: str,
+        reason: str,
+        created_at: str | None = None,
+        explicit_id: uuid.UUID | None = None,
+    ) -> bool:
+        from app.modules.admin.reports_writer import create_if_absent
+
+        return await create_if_absent(
+            db,
+            type=type,
+            target_id=target_id,
+            target_title=target_title,
+            reporter_id=reporter_id,
+            reporter_name=reporter_name,
+            reason=reason,
+            created_at=created_at,
+            explicit_id=explicit_id,
+        )
+
+
+class _NotificationWriterImpl:
+    """``core.ports.notification`` 的实现：转发到 notification 域。"""
+
+    def type_value(self, name: str) -> str:
+        from app.modules.notification.service import NotificationType
+
+        return NotificationType[name].value
+
+    async def create(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: uuid.UUID,
+        type: str,
+        payload: dict[str, Any] | None = None,
+        actor_id: uuid.UUID | None = None,
+        target_id: uuid.UUID | None = None,
+    ) -> Any:
+        from app.modules.notification.service import create_notification
+
+        return await create_notification(
+            db,
+            user_id=user_id,
+            type=type,
+            payload=payload,
+            actor_id=actor_id,
+            target_id=target_id,
+        )
+
+
+class _ModerationEngineImpl:
+    """``core.ports.moderation`` 的实现：转发到 admin 域的规则引擎。"""
+
+    async def load_active_rules(self, db: AsyncSession) -> list[Any]:
+        from app.modules.admin.moderation.engine import load_active_rules
+
+        return await load_active_rules(db)
+
+    def evaluate(self, text: str, rules: list[Any]) -> Any:
+        from app.modules.admin.moderation.engine import evaluate
+
+        return evaluate(text, rules)
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -99,6 +174,9 @@ def register() -> None:
     init_db.register_seed_step(seed_rbac)  # type: ignore[arg-type]
 
     ports.install("content_stats", _ContentStatsImpl())
+    ports.install("reports_writer", _ReportsWriterImpl())
+    ports.install("notification_writer", _NotificationWriterImpl())
+    ports.install("moderation_engine", _ModerationEngineImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True

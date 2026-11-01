@@ -19,11 +19,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.modules.admin.moderation.engine import (
-    ModerationResult,
-    evaluate,
-    load_active_rules,
-)
 from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.repository import FeedItemMaterializedRepository
@@ -33,6 +28,8 @@ from app.modules.interaction.service import (
     get_following_ids,
 )
 from core.db.repository import DbSession
+from core.ports import moderation as moderation_port
+from core.ports.moderation import ModerationResult
 from core.ports.snapshot import get_user_display_names
 
 
@@ -85,7 +82,7 @@ def _filter_hidden(
     kept: list[FeedItem] = []
     mods: dict[tuple[str, uuid.UUID], ModerationResult] = {}
     for it in items:
-        mod = evaluate(f"{it.title} {it.content_preview}", rules)
+        mod = moderation_port.evaluate(f"{it.title} {it.content_preview}", rules)
         mods[(it.item_type, it.id)] = mod
         if not mod.should_hide:
             kept.append(it)
@@ -234,7 +231,7 @@ async def _materialized_timeline(
         return FeedResponse(items=[], next_cursor=None)
 
     bigv = (await fanout.bigv_authors(db)) & following_ids
-    rules = await load_active_rules(db)
+    rules = await moderation_port.load_active_rules(db)
 
     async def _fetch(
         scan_time: datetime.datetime | None, scan_id: uuid.UUID | None, size: int
@@ -357,7 +354,7 @@ async def _realtime_timeline(
             items.extend(await fetch(db, a_ids, b_ids, scan_time, scan_id, size))
         return items
 
-    rules = await load_active_rules(db)
+    rules = await moderation_port.load_active_rules(db)
     visible, mods, _, continuation = await _collect_page(
         _fetch,
         before_time=before_time,

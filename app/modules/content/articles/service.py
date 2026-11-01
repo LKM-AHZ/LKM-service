@@ -229,7 +229,9 @@ async def toggle_article_like(
         if await repo.claim_like(article_id=article.id, user_id=user_id):
             await ArticleRepository(db).bump_count(article.id, "likes", 1)
             # 仅新增点赞路径入队（取消点赞不重复计分）
-            await points_port.enqueue_event(db, user_id, "like", f"article:{article.id}")
+            await points_port.enqueue_event(
+                db, user_id, "like", f"article:{article.id}"
+            )
         liked = True
     # 计数列已变，而详情/列表缓存里内嵌了 likes/comments：不失效会让详情页在 TTL（300s）
     # 内一直显示旧点赞数（点赞瞬间数字跳回去）。两条路径（点赞/取消）都要失效。

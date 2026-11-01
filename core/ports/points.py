@@ -58,4 +58,6 @@ async def spend(
     ref_id: str,
 ) -> Any:
     """消费积分（余额不足拒）；返回本次流水。"""
-    return await get("points_writer").spend(db, user_id, amount, reason, ref_type, ref_id)
+    return await get("points_writer").spend(
+        db, user_id, amount, reason, ref_type, ref_id
+    )
