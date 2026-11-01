@@ -1,15 +1,17 @@
-"""测试替身：内存消息总线 transport 等。
+"""测试替身：ClickHouse、检索与内存消息总线 transport。
 
-默认测试套件不依赖真实 Pulsar。经 ``messaging.set_transport(InMemoryTransport())`` 注入后，
-``messaging.publish`` 走内存记录而非 broker，可直接断言发布的 topic/属性/负载。
+``InMemoryTransport`` 已移入生产包 ``core.bus.transports.inmemory``——它是 ``set_transport``
+的公开 seam，测试与插件离线自检共用同一实现。此处保留导入名，历史
+``from tests.fakes import InMemoryTransport`` 无需改动。
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from core.bus.transports.inmemory import InMemoryTransport
 
 #: 水位查询里的表名只接受「裸标识符」或「`库.表`」两种形式（生产常量就是库限定形式，
 #: 如 ``CH_TABLE = "lkm.event_failures"``——显式绑定库，免得随连接默认库漂移）。
@@ -179,37 +181,10 @@ class FakeSearchEngine:
         return hits[offset : offset + limit], len(hits)
 
 
-class InMemoryTransport:
-    """记录发布的内存 transport（结构匹配 messaging.Transport 协议）。
-
-    ``fail=True`` 时 ``publish`` 抛错，用于验证 fail-open 与失败计数。
-    """
-
-    def __init__(self, *, fail: bool = False) -> None:
-        self.published: list[tuple[str, bytes, dict[str, str]]] = []
-        self.fail = fail
-
-    async def publish(self, topic: str, data: bytes, props: dict[str, str]) -> None:
-        if self.fail:
-            raise RuntimeError("in-memory transport failure")
-        self.published.append((topic, data, props))
-
-    def payloads(self) -> list[dict[str, Any]]:
-        """已发布消息的 JSON 负载列表。
-
-        空/非 JSON 负载通常说明该用例在验证裸传输契约（或发布方写坏了）：给出带 topic 与
-        原始字节的明确断言信息，而不是从 json.loads 冒一个无上下文的 JSONDecodeError。
-        """
-        out: list[dict[str, Any]] = []
-        for topic, data, _ in self.published:
-            try:
-                out.append(json.loads(data))
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise AssertionError(
-                    f"topic={topic!r} 的已发布负载不是合法 JSON"
-                    f"（{len(data)}B）：{data[:80]!r}"
-                ) from exc
-        return out
-
-    def clear(self) -> None:
-        self.published.clear()
+# 内存 transport 的实现见 core.bus.transports.inmemory；此处只经 __all__ 转出。
+__all__ = [
+    "FakeClickHouseClient",
+    "FakeSearchEngine",
+    "InMemoryTransport",
+    "QueryResult",
+]

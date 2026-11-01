@@ -1,4 +1,4 @@
-"""RabbitMQ implementation of the existing messaging topic/subscription contract."""
+"""RabbitMQ 实现：复用 ``core.bus.topics`` 的 topic/订阅清单与 handler 契约。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from core.config import settings
 from core.secrets import reveal
 
 if TYPE_CHECKING:
-    from core.messaging import MessageHandler, Subscription
+    from core.bus.runtime import MessageHandler
+    from core.bus.topics import Subscription
 
 logger = logging.getLogger("lkm.rabbitmq")
 
@@ -36,7 +37,7 @@ def _queue_name(subscription: str) -> str:
 
 async def _topology(channel: Any, topic: str) -> Any:
     """Declare every queue before publishing, including fanout subscribers not yet running."""
-    from core.messaging import SUB_DLQ, SUBSCRIPTIONS, TOPIC_DLQ
+    from core.bus.topics import SUB_DLQ, SUBSCRIPTIONS, TOPIC_DLQ
 
     dlx = await channel.declare_exchange(
         _exchange_name(TOPIC_DLQ), aio_pika.ExchangeType.FANOUT, durable=True
@@ -104,13 +105,9 @@ async def publish(topic: str, data: bytes, props: dict[str, str]) -> None:
 async def _consume_message(
     message: Any, sub: Subscription, handler: MessageHandler
 ) -> None:
-    from core.messaging import (
-        JOB_TIMEOUT_S,
-        RAW_MESSAGE_KEY,
-        SUB_DLQ,
-        MessageMeta,
-        _run_handler,
-    )
+    from core.bus.consumer import _run_handler
+    from core.bus.runtime import JOB_TIMEOUT_S, RAW_MESSAGE_KEY, MessageMeta
+    from core.bus.topics import SUB_DLQ
 
     try:
         payload = json.loads(message.body)
@@ -185,7 +182,7 @@ async def probe_health(timeout_s: float) -> tuple[str, str | None]:
 
 async def collect_backlog() -> dict[str, int]:
     """Passive queue declarations return broker message counts without changing topology."""
-    from core.messaging import SUBSCRIPTIONS
+    from core.bus.topics import SUBSCRIPTIONS
 
     connection = await aio_pika.connect(reveal(settings.rabbitmq_url))
     try:

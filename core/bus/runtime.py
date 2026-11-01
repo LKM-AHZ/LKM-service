@@ -8,7 +8,7 @@
 
 传输选择（本层是唯一选点）：
 1. 测试注入的 ``_transport``（``set_transport``）优先；
-2. ``settings.message_bus == "rabbitmq"`` → ``core.rabbitmq``；
+2. ``settings.message_bus == "rabbitmq"`` → ``core.bus.transports.rabbitmq``；
 3. 否则 Pulsar：producer 懒建缓存，``producer.send`` 经 ``asyncio.to_thread``
    （官方 Python 客户端是同步阻塞 API）。
 
@@ -25,12 +25,13 @@ import threading
 from collections.abc import Callable, Coroutine, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from core import tracing
 from core.bus.contracts import _contract_violations, _record_violation
 from core.bus.schema import _encode_event, make_event_schema
 from core.bus.topics import ROUTING_KEY_TOPICS
+from core.bus.transports.base import Transport
 from core.config import settings
 from core.metrics import notify_failed_total
 
@@ -61,12 +62,6 @@ MessageHandler = Callable[[dict[str, Any], MessageMeta], Coroutine[Any, Any, Non
 # DLQ 无二次死信策略；无法解成对象的原始消息用 base64 包装后交给 DLQ handler
 # 持久化，避免在源订阅直接 ack 丢弃，或在 DLQ 上无限负确认。
 RAW_MESSAGE_KEY = "_raw_message_base64"
-
-
-class Transport(Protocol):
-    """发布 transport 测试 seam：内存替身经 ``set_transport`` 注入。"""
-
-    async def publish(self, topic: str, data: bytes, props: dict[str, str]) -> None: ...
 
 
 _transport: Transport | None = None
@@ -200,7 +195,7 @@ async def publish(routing_key: str, payload: Mapping[str, Any]) -> bool:
             return False
         try:
             if settings.message_bus == "rabbitmq":
-                from core import rabbitmq
+                from core.bus.transports import rabbitmq
 
                 await rabbitmq.publish(topic, data, props)
                 return True
@@ -222,7 +217,7 @@ async def _release_resources() -> None:
     释放 producer 缓存与 client，并复位 transport（不置终态标记）。
     """
     global _client, _transport
-    from core import rabbitmq
+    from core.bus.transports import rabbitmq
 
     await rabbitmq.close()
     _transport = None

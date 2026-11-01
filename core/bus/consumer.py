@@ -204,7 +204,7 @@ async def run_subscription(
         logger.error("未知订阅名 %s", name)
         return
     if settings.message_bus == "rabbitmq":
-        from core import rabbitmq
+        from core.bus.transports import rabbitmq
 
         await rabbitmq.run_subscription(sub, handler)
         return

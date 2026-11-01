@@ -72,7 +72,7 @@ async def _run() -> None:
     while True:
         try:
             if settings.message_bus == "rabbitmq":
-                from core import rabbitmq
+                from core.bus.transports import rabbitmq
 
                 counts = await rabbitmq.collect_backlog()
                 for name, count in counts.items():
@@ -127,7 +127,7 @@ async def probe_health(timeout_s: float | None = None) -> tuple[str, str | None]
     if not settings.message_bus_enabled:
         return "disabled", f"{settings.message_bus} 未配置"
     if settings.message_bus == "rabbitmq":
-        from core import rabbitmq
+        from core.bus.transports import rabbitmq
 
         return await rabbitmq.probe_health(
             timeout_s if timeout_s is not None else settings.pulsar_probe_timeout_s

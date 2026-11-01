@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core import messaging, pulsar_lag, rabbitmq
+from core import messaging, pulsar_lag
+from core.bus.transports import rabbitmq
 from core.config import settings
 
 
