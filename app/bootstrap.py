@@ -326,6 +326,31 @@ class _InteractionReadImpl:
 
 
 
+class _ContentReadImpl:
+    """``core.ports.content`` 的实现：转发到 content 域的只读摘要。"""
+
+    async def item_brief(self, db: AsyncSession, item_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import item_brief
+
+        return await item_brief(db, item_id)
+
+    async def comment_brief(self, db: AsyncSession, comment_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import comment_brief
+
+        return await comment_brief(db, comment_id)
+
+    async def qa_answer_brief(self, db: AsyncSession, answer_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import qa_answer_brief
+
+        return await qa_answer_brief(db, answer_id)
+
+    async def qa_question_brief(self, db: AsyncSession, question_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import qa_question_brief
+
+        return await qa_question_brief(db, question_id)
+
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -360,6 +385,7 @@ def register() -> None:
     ports.install("admin_guard", _AdminGuardImpl())
     ports.install("feed_fanout", _FeedFanoutImpl())
     ports.install("interaction_read", _InteractionReadImpl())
+    ports.install("content_read", _ContentReadImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True

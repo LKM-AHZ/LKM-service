@@ -22,10 +22,8 @@ import logging
 import uuid
 from typing import Any, NamedTuple
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.models import ContentComment, ContentItem, QAAnswer, QAQuestion
 from app.modules.notification.service import (
     NotificationType,
     create_notification,
@@ -35,6 +33,7 @@ from app.ws.broker import publish_notification
 from core.config import settings
 from core.db.session import new_worker_session as new_session
 from core.messaging import SUB_NOTIFICATION
+from core.ports import content as content_port
 from core.ports.snapshot import get_user_snapshot
 from core.task_registry import register_task
 
@@ -69,11 +68,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
     prefix, ref = parsed
 
     if event == "like" and prefix == "item":
-        item = await db.scalar(
-            select(ContentItem).where(
-                ContentItem.id == ref, ContentItem.deleted_at.is_(None)
-            )
-        )
+        item = await content_port.item_brief(db, ref)
         if item is None or item.author_id is None:
             return []
         return [
@@ -89,19 +84,10 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         ]
 
     if event == "comment" and prefix == "comment":
-        comment = await db.scalar(
-            select(ContentComment).where(
-                ContentComment.id == ref, ContentComment.deleted_at.is_(None)
-            )
-        )
+        comment = await content_port.comment_brief(db, ref)
         if comment is None:
             return []
-        item = await db.scalar(
-            select(ContentItem).where(
-                ContentItem.id == comment.content_id,
-                ContentItem.deleted_at.is_(None),
-            )
-        )
+        item = await content_port.item_brief(db, comment.content_id)
         if item is None:
             return []
         base: dict[str, Any] = {
@@ -120,12 +106,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
                 )
             )
         if comment.parent_id is not None:
-            parent = await db.scalar(
-                select(ContentComment).where(
-                    ContentComment.id == comment.parent_id,
-                    ContentComment.deleted_at.is_(None),
-                )
-            )
+            parent = await content_port.comment_brief(db, comment.parent_id)
             if parent is not None:
                 targets.append(
                     _Target(
@@ -138,12 +119,10 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         return targets
 
     if event == "qa_accept_notice" and prefix == "answer":
-        answer = await db.scalar(select(QAAnswer).where(QAAnswer.id == ref))
+        answer = await content_port.qa_answer_brief(db, ref)
         if answer is None:
             return []
-        question = await db.scalar(
-            select(QAQuestion).where(QAQuestion.id == answer.question_id)
-        )
+        question = await content_port.qa_question_brief(db, answer.question_id)
         if question is None:
             return []
         return [
