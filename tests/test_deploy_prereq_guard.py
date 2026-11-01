@@ -35,8 +35,8 @@ def _make_root(tmp_path: Path, *, root_assets: bool, bot: bool) -> Path:
         (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
         (tmp_path / "deploy").mkdir()
     if bot:
-        (tmp_path / "LKM-bot" / "astrbot" / "lkm").mkdir(parents=True)
-        (tmp_path / "LKM-bot" / "astrbot" / "lkm" / "sso.py").write_text(
+        (tmp_path / "LKM-bot" / "bot" / "lkm").mkdir(parents=True)
+        (tmp_path / "LKM-bot" / "bot" / "lkm" / "sso.py").write_text(
             "", encoding="utf-8"
         )
     return tmp_path

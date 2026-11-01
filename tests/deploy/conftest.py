@@ -10,7 +10,7 @@
 粒度：按 marker 声明，而不是「全有或全无」
     - 未标注的用例默认只要 `requires_root`（`docker-compose.yml` + `deploy/`）。
     - 需要 bot 源码的（目前只有 `test_bot_config.py`：它逐字比对
-      `LKM-bot/astrbot/lkm/sso.py` 与 compose 锚点）额外标 `pytest.mark.requires_bot`。
+      `LKM-bot/bot/lkm/sso.py` 与 compose 锚点）额外标 `pytest.mark.requires_bot`。
     这样「只缺 bot 子模块」时，其余 11 个文件的契约仍会被验证——粗粒度会让一个
     未检出的子模块把整批跨仓验收一起废掉。
 
@@ -36,7 +36,7 @@ import pytest
 _ROOT_REPO = Path(__file__).resolve().parents[3]
 
 #: 子模块 bot 里被逐字比对的那个文件（test_bot_config 的 `requires_bot` 判据）
-_BOT_SRC = "LKM-bot/astrbot/lkm/sso.py"
+_BOT_SRC = "LKM-bot/bot/lkm/sso.py"
 
 #: 置为 "1" 时，前提缺失视为**失败**（根仓库 contracts 工作流使用）。
 REQUIRE_ENV = "LKM_REQUIRE_MONOREPO"

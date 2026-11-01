@@ -118,7 +118,7 @@ def test_protocol_defaults_are_pinned() -> None:
     """默认值即两侧（auth 签发 / bot 消费）与部署层（compose 锚点、.env.example）共用的值。
 
     跨仓/跨部署单元无法共享 import，故默认值只能靠**双方断言**锁死；改这里必须同步
-    LKM-bot ``astrbot/lkm/sso.py`` 与 ``.env.example``（后者另有测试锁部署层）。
+    LKM-bot ``bot/lkm/sso.py`` 与 ``.env.example``（后者另有测试锁部署层）。
     """
     assert BOT_SSO_AUD == "lkm:bot"
     assert BOT_SSO_TYPE == "bot_sso"

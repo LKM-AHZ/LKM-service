@@ -19,7 +19,7 @@ bot 用**公钥**验签后自建面板会话。
   编入反而给出「已复核」的假象。
 
 协议常量（audience/type/issuer/ttl/account_level）是**签发侧唯一副本**，消费侧（LKM-bot 的
-``astrbot/lkm/sso.py``）同名同默认值，两侧用注释互指。跨部署单元无法共享 import，故真正的
+``bot/lkm/sso.py``）同名同默认值，两侧用注释互指。跨部署单元无法共享 import，故真正的
 单一来源落在**部署层**：``.env``/``docker-compose.yml`` 的 ``LKM_BOT_SSO_*`` 只写一次默认值，
 经 YAML 锚点同时注入 auth 与 lkmbot 两个服务（两侧读同名变量）。**进程内**这些值的唯一读点
 是 ``Settings``（§6.5.1「不散落 os.getenv」）——env 名与下发方式不变，本模块只做模块级别名。

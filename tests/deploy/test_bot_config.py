@@ -139,11 +139,11 @@ def should_bind_bot_data_to_host_path() -> None:
 
 
 def should_pin_dashboard_host_and_data_root() -> None:
-    """ASTRBOT_DASHBOARD_HOST 必须 0.0.0.0（绑回环会让面板「默认密码免校验」判定成立且网关连不上）；
-    ASTRBOT_ROOT 显式固定 data 路径（默认取 cwd，入口一改就漂移）。"""
+    """BOT_DASHBOARD_HOST 必须 0.0.0.0（绑回环会让面板「默认密码免校验」判定成立且网关连不上）；
+    BOT_ROOT 显式固定 data 路径（默认取 cwd，入口一改就漂移）。"""
     env = _services()["lkmbot"]["environment"]
-    assert env["ASTRBOT_DASHBOARD_HOST"] == "0.0.0.0"
-    assert env["ASTRBOT_ROOT"] == "/LKMBot"
+    assert env["BOT_DASHBOARD_HOST"] == "0.0.0.0"
+    assert env["BOT_ROOT"] == "/LKMBot"
 
 
 # ── compose：沙箱网络隔离 ────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
     prefix = f"${{LKM_BOT_BASE_PATH:-{_BOT_PREFIX}}}"
     svc = _services()["lkmbot"]
     # 运行期 base：无尾斜杠形态
-    assert svc["environment"]["ASTRBOT_DASHBOARD_BASE_PATH"] == prefix
+    assert svc["environment"]["BOT_DASHBOARD_BASE_PATH"] == prefix
     # 前端构建期 base：面板已迁入官网仓库，构建期 base 在官网镜像里固定为 /bot/（vite 语义）
     website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
         encoding="utf-8"
@@ -363,7 +363,7 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
         "template"
     ]["spec"]["containers"][0]
     env = {item["name"]: item for item in container["env"]}
-    assert env["ASTRBOT_DASHBOARD_BASE_PATH"]["valueFrom"]["configMapKeyRef"] == {
+    assert env["BOT_DASHBOARD_BASE_PATH"]["valueFrom"]["configMapKeyRef"] == {
         "name": "lkm-gateway-config",
         "key": "LKM_BOT_BASE_PATH",
     }
@@ -492,7 +492,7 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     assert "key: LKM_BOT_SSO_TTL_SECONDS" not in lkmbot_yaml
 
     # 消费侧（LKM-bot）代码默认值必须与签发侧逐字相同（只读源码比对，不 import）
-    sso_py = (_ROOT / "LKM-bot" / "astrbot" / "lkm" / "sso.py").read_text(
+    sso_py = (_ROOT / "LKM-bot" / "bot" / "lkm" / "sso.py").read_text(
         encoding="utf-8"
     )
     for env_name, default in (
@@ -512,7 +512,7 @@ def should_ship_panel_from_website_image_only() -> None:
     """面板前端随官网镜像构建（带 /bot base）；bot 镜像不再内置 dist 或下载它。"""
     bot_dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
     assert "pnpm" not in bot_dockerfile
-    assert "astrbot/dashboard/dist" not in bot_dockerfile
+    assert "bot/dashboard/dist" not in bot_dockerfile
 
     website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
         encoding="utf-8"
