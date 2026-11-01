@@ -23,6 +23,7 @@ MANIFEST_FILENAME = "manifest.toml"
 _KNOWN_FIELDS = frozenset(
     {
         "name",
+        "module",
         "routers",
         "graphql",
         "errors",
@@ -45,6 +46,8 @@ class Manifest:
 
     name: str
     source: Path
+    #: 包导入路径。内置模块留空（默认 ``app.modules.<name>``）；外部插件必须显式声明。
+    module: str | None = None
     routers: str | None = None
     graphql: str | None = None
     errors: tuple[str, ...] = ()
@@ -91,6 +94,7 @@ def load_manifest(path: Path) -> Manifest:
     return Manifest(
         name=name,
         source=path,
+        module=_opt_str(raw, "module", where=path),
         routers=_opt_str(raw, "routers", where=path),
         graphql=_opt_str(raw, "graphql", where=path),
         errors=_str_tuple(raw, "errors", where=path),

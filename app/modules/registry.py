@@ -16,11 +16,12 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from app.modules.spec import ERROR_MODULES, MODULES
+from app.modules.spec import ERROR_MODULES, MODULE_PATHS, MODULES
 
 __all__ = [
     "ERROR_MODULES",
     "MODULES",
+    "MODULE_PATHS",
     "each_module",
     "graphql_of",
     "load_all",
@@ -30,8 +31,15 @@ __all__ = [
 
 
 def each_module(name: str) -> Any:
-    """延迟 import 并返回模块对象（用字符串导入避免 ``app`` 包名绑定）。"""
-    return import_module(f"app.modules.{name}")
+    """延迟 import 并返回模块对象（用字符串导入避免 ``app`` 包名绑定）。
+
+    导入路径取自清单：内置模块是 ``app.modules.<name>``，外部插件是发行版声明的路径。
+    """
+    try:
+        path = MODULE_PATHS[name]
+    except KeyError:
+        raise ValueError(f"未登记的模块 {name!r}（不在 manifest 清单内）") from None
+    return import_module(path)
 
 
 def routers_of(name: str) -> list[Any]:

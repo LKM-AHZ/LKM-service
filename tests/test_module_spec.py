@@ -152,4 +152,4 @@ def test_spec_name_must_match_directory(tmp_path: Path) -> None:
         name="wrong", source=tmp_path / "alpha" / "manifest.toml", aggregate=True
     )
     with pytest.raises(ManifestError, match="与目录名"):
-        spec._to_spec(manifest)
+        spec._to_spec(manifest, builtin=True)
