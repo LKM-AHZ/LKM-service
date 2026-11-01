@@ -10,6 +10,7 @@ from app.modules.admin.moderation.engine import Rule
 from app.modules.feed import feed as feed_src
 from app.modules.feed import service
 from app.modules.feed.schemas import FeedItem
+from core.ports import interaction as interaction_port
 from core.ports import moderation as moderation_port
 
 
@@ -95,9 +96,9 @@ async def test_hidden_backlog_has_bounded_scan_and_continuation() -> None:
 async def test_materialized_hidden_only_does_not_fall_back(monkeypatch) -> None:
     user_id = uuid.UUID(int=1)
     monkeypatch.setattr(
-        service, "get_following_ids", AsyncMock(return_value=[uuid.UUID(int=100)])
+        interaction_port, "get_following_ids", AsyncMock(return_value=[uuid.UUID(int=100)])
     )
-    monkeypatch.setattr(service, "get_followed_board_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr(interaction_port, "get_followed_board_ids", AsyncMock(return_value=[]))
     monkeypatch.setattr(service.fanout, "bigv_authors", AsyncMock(return_value=set()))
     monkeypatch.setattr(
         moderation_port,
@@ -121,9 +122,9 @@ async def test_materialized_hidden_only_does_not_fall_back(monkeypatch) -> None:
 async def test_materialized_page_reads_current_rows_each_time(monkeypatch) -> None:
     user_id = uuid.UUID(int=1)
     monkeypatch.setattr(
-        service, "get_following_ids", AsyncMock(return_value=[uuid.UUID(int=100)])
+        interaction_port, "get_following_ids", AsyncMock(return_value=[uuid.UUID(int=100)])
     )
-    monkeypatch.setattr(service, "get_followed_board_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr(interaction_port, "get_followed_board_ids", AsyncMock(return_value=[]))
     monkeypatch.setattr(service.fanout, "bigv_authors", AsyncMock(return_value=set()))
     monkeypatch.setattr(moderation_port, "load_active_rules", AsyncMock(return_value=[]))
     rows = [_item(2)]

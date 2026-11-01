@@ -97,6 +97,7 @@ from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError, ErrCode
 from core.metrics import post_created_total
+from core.ports import feed as feed_port
 from core.ports import points as points_port
 from core.ports import reports as reports_port
 from core.ports.audit import record_audit
@@ -444,10 +445,7 @@ async def delete_item(
     # 帖详情缓存失效（§5.6「事件刷新」）：软删后详情不得再从缓存命中旧快照
     await clear_item_detail_cache(item_id)
     await enqueue_content_event(db, item, CONTENT_ACTION_DELETED)
-    # 懒 import：feed 域反向依赖 content.models（既有读缝），模块级导入会绕成环
-    from app.modules.feed.fanout import remove_source_item
-
-    await remove_source_item(db, item_id)
+    await feed_port.remove_source_item(db, item_id)
     await bump_collection_version("content")
     return author_id
 

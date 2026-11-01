@@ -262,6 +262,65 @@ class _AdminGuardImpl:
 
 
 
+class _FeedFanoutImpl:
+    """``core.ports.feed`` 的实现：转发到 feed 域的物化写入口。"""
+
+    async def backfill_author(self, db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, limit: int) -> int:
+        from app.modules.feed.fanout import backfill_author
+
+        return await backfill_author(db, follower_id, author_id, limit)
+
+    async def backfill_board(self, db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, limit: int) -> int:
+        from app.modules.feed.fanout import backfill_board
+
+        return await backfill_board(db, follower_id, board_id, limit)
+
+    async def remove_author_items(self, db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, keep_boards: set[uuid.UUID]) -> int:
+        from app.modules.feed.fanout import remove_author_items
+
+        return await remove_author_items(db, follower_id, author_id, keep_boards)
+
+    async def remove_board_items(self, db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, keep_authors: set[uuid.UUID]) -> int:
+        from app.modules.feed.fanout import remove_board_items
+
+        return await remove_board_items(db, follower_id, board_id, keep_authors)
+
+    async def remove_source_item(self, db: AsyncSession, source_id: uuid.UUID) -> int:
+        from app.modules.feed.fanout import remove_source_item
+
+        return await remove_source_item(db, source_id)
+
+
+class _InteractionReadImpl:
+    """``core.ports.interaction`` 的实现：转发到 interaction 域的读口。"""
+
+    async def get_following_ids(self, db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+        from app.modules.interaction.service import get_following_ids
+
+        return await get_following_ids(db, user_id)
+
+    async def get_followed_board_ids(self, db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+        from app.modules.interaction.service import get_followed_board_ids
+
+        return await get_followed_board_ids(db, user_id)
+
+    async def list_bigv_author_ids(self, db: AsyncSession, *, threshold: int) -> list[uuid.UUID]:
+        from app.modules.interaction.service import list_bigv_author_ids
+
+        return await list_bigv_author_ids(db, threshold=threshold)
+
+    async def list_follower_ids(self, db: AsyncSession, author_id: uuid.UUID, *, limit: int) -> list[uuid.UUID]:
+        from app.modules.interaction.service import list_follower_ids
+
+        return await list_follower_ids(db, author_id, limit=limit)
+
+    async def list_board_follower_ids(self, db: AsyncSession, board_id: uuid.UUID, *, limit: int) -> list[uuid.UUID]:
+        from app.modules.interaction.service import list_board_follower_ids
+
+        return await list_board_follower_ids(db, board_id, limit=limit)
+
+
+
 def register() -> None:
     """幂等注册：业务模型/任务、错误码、seed 步骤与自有端口实现。"""
     global _registered
@@ -294,6 +353,8 @@ def register() -> None:
     ports.install("exam_read", _ExamReadImpl())
     ports.install("content_admin", _ContentAdminImpl())
     ports.install("admin_guard", _AdminGuardImpl())
+    ports.install("feed_fanout", _FeedFanoutImpl())
+    ports.install("interaction_read", _InteractionReadImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True

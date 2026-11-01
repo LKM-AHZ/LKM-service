@@ -169,10 +169,6 @@ forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam
 allow_indirect_imports = "true"
 ignore_imports = [
     "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
-    "app.modules.content.service -> app.modules.feed.fanout",  # 内容软删时清物化 feed 残留(批 4)
-    "app.modules.interaction.service -> app.modules.feed.fanout",  # 关注/取关驱动物化 feed 回填与清理
-    "app.modules.feed.service -> app.modules.interaction.service",  # 时间线读关注集合用于过滤
-    "app.modules.feed.fanout -> app.modules.interaction.service",  # 受众面读关注关系（懒 import）
     "app.modules.admin.review_service -> app.modules.content.models",  # 审核队列只读板块/专栏申请
     "app.modules.admin.review_service -> app.modules.files.models",  # 审核队列只读待审文件
     "app.modules.admin.review_service -> app.modules.projects.models",  # 审核队列只读项目申请

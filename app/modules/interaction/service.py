@@ -21,7 +21,6 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from app.modules.feed import fanout
 from app.modules.interaction.errors import FollowErr, InteractionErr
 from app.modules.interaction.repository import (
     BoardFollowRepository,
@@ -48,6 +47,7 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.config import settings
 from core.db.repository import DbSession
 from core.err import BizError
+from core.ports import feed as feed_port
 from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 
@@ -263,7 +263,7 @@ async def follow_user(
 
     created = await UserFollowRepository(db).follow(follower_id, following_id)
     if created and settings.feed_backfill_limit > 0:
-        await fanout.backfill_author(
+        await feed_port.backfill_author(
             db, follower_id, following_id, settings.feed_backfill_limit
         )
     await _invalidate_follow_cache(follower_id)
@@ -278,7 +278,7 @@ async def unfollow_user(
     changed = await UserFollowRepository(db).unfollow(follower_id, following_id)
     if changed:
         keep = set(await get_followed_board_ids(db, follower_id))
-        await fanout.remove_author_items(db, follower_id, following_id, keep)
+        await feed_port.remove_author_items(db, follower_id, following_id, keep)
         await _invalidate_follow_cache(follower_id)
 
 
@@ -292,7 +292,7 @@ async def follow_board(
 
     created = await BoardFollowRepository(db).follow(follower_id, board_id)
     if created and settings.feed_backfill_limit > 0:
-        await fanout.backfill_board(
+        await feed_port.backfill_board(
             db, follower_id, board_id, settings.feed_backfill_limit
         )
     await _invalidate_follow_cache(follower_id)
@@ -305,7 +305,7 @@ async def unfollow_board(
     changed = await BoardFollowRepository(db).unfollow(follower_id, board_id)
     if changed:
         keep = set(await get_following_ids(db, follower_id))
-        await fanout.remove_board_items(db, follower_id, board_id, keep)
+        await feed_port.remove_board_items(db, follower_id, board_id, keep)
         await _invalidate_follow_cache(follower_id)
 
 

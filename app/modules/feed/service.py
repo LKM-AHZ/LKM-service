@@ -23,11 +23,8 @@ from app.modules.feed import fanout
 from app.modules.feed import feed as feed_src
 from app.modules.feed.repository import FeedItemMaterializedRepository
 from app.modules.feed.schemas import FeedItem, FeedResponse
-from app.modules.interaction.service import (
-    get_followed_board_ids,
-    get_following_ids,
-)
 from core.db.repository import DbSession
+from core.ports import interaction as interaction_port
 from core.ports import moderation as moderation_port
 from core.ports.moderation import ModerationResult
 from core.ports.snapshot import get_user_display_names
@@ -225,8 +222,8 @@ async def _materialized_timeline(
 ) -> FeedResponse | None:
     """物化行与实时补拉合并；首页无候选时返回 ``None`` 以回退。"""
     before_time, before_id = _decode_cursor(cursor)
-    following_ids = set(await get_following_ids(db, user_id))
-    board_ids = set(await get_followed_board_ids(db, user_id))
+    following_ids = set(await interaction_port.get_following_ids(db, user_id))
+    board_ids = set(await interaction_port.get_followed_board_ids(db, user_id))
     if not following_ids and not board_ids:
         return FeedResponse(items=[], next_cursor=None)
 
@@ -333,8 +330,8 @@ async def _realtime_timeline(
         if user_id is None:
             mode = "hot"  # 匿名只能看全站热门
         else:
-            following_ids = set(await get_following_ids(db, user_id))
-            board_ids = set(await get_followed_board_ids(db, user_id))
+            following_ids = set(await interaction_port.get_following_ids(db, user_id))
+            board_ids = set(await interaction_port.get_followed_board_ids(db, user_id))
             # 空关注 → 返回空流
             if not following_ids and not board_ids:
                 return FeedResponse(items=[], next_cursor=None)

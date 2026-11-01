@@ -31,6 +31,7 @@ from app.modules.feed.models import FeedFanoutState, FeedItemMaterialized
 from app.modules.feed.schemas import FeedItem
 from core.cache import cache_get, cache_set, make_key
 from core.config import settings
+from core.ports import interaction as interaction_port
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,8 @@ async def bigv_authors(db: AsyncSession) -> set[uuid.UUID]:
                 continue
         return out
 
-    # 惰性 import 破环（同 _audience：interaction.service 在模块级引用本模块）
-    from app.modules.interaction import service as interaction_service
-
     ids = set(
-        await interaction_service.list_bigv_author_ids(
+        await interaction_port.list_bigv_author_ids(
             db, threshold=settings.feed_fanout_max_followers
         )
     )
@@ -85,20 +83,16 @@ async def _audience(
     **读者归属**：``user_follows``/``board_follows`` 属 interaction 域（蓝图 §7.2），
     故这里经其 service 公开读口取，不直查那两张表。
     """
-    # 惰性 import 破环：interaction.service 在模块级引用本模块（回填/清理入口），
-    # 顶层互相 import 会在任一侧先加载时构成循环。
-    from app.modules.interaction import service as interaction_service
-
     limit = settings.feed_fanout_max_followers + 1
     authors: set[uuid.UUID] = set()
     boards: set[uuid.UUID] = set()
     if author_id is not None:
         authors |= set(
-            await interaction_service.list_follower_ids(db, author_id, limit=limit)
+            await interaction_port.list_follower_ids(db, author_id, limit=limit)
         )
     if board_id is not None:
         boards |= set(
-            await interaction_service.list_board_follower_ids(db, board_id, limit=limit)
+            await interaction_port.list_board_follower_ids(db, board_id, limit=limit)
         )
     return authors, boards
 
