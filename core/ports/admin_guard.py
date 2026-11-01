@@ -14,9 +14,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.ports.registry import get
+from fastapi import Depends
+
+from core.ports.registry import PortNotBound, get, is_bound
+
+
+async def _unbound() -> Any:
+    """未装配时的占位依赖：**请求期**才失败，绝不静默放行。"""
+    raise PortNotBound(
+        "端口 'admin_guard' 未绑定：后台端点须先经 boot.assemble() 装配"
+    )
 
 
 def require_admin_2fa() -> Any:
-    """返回后台危险操作的依赖对象（FastAPI ``Depends`` 实例）。"""
-    return get("admin_guard").require_admin_2fa
+    """返回后台危险操作的依赖对象（FastAPI ``Depends`` 实例）。
+
+    装配完成后返回 admin 域的真实依赖；**未装配时**返回一个请求期才失败的占位依赖。
+    这样 ``import app.main`` 本身不会因端口未绑定而崩溃——装配时序由
+    ``tests/test_boot_assembly_order.py`` 单独守护，本端口不该改变那条既有不变量。
+    占位依赖一旦被真正调用就 500（fail-closed），不会退化成匿名可达。
+    """
+    if is_bound("admin_guard"):
+        return get("admin_guard").require_admin_2fa
+    return Depends(_unbound)
