@@ -202,11 +202,11 @@ def _reset_message_bus_shutdown() -> Iterator[None]:
     ``shutdown()``/``_release_resources()`` 已经把 client、producer 缓存与 transport 全部释放，
     故这里只需复位标记：模块回到「未初始化、首次使用时惰性重建」的状态。
     """
-    from core import messaging
+    from core.bus import runtime
 
-    messaging._closed = False
+    runtime._closed = False
     yield
-    messaging._closed = False
+    runtime._closed = False
 
 
 # ───────────────────────────────────────────────────────────────────────

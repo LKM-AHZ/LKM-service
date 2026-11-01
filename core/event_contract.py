@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from core.messaging import (
+from core.bus.topics import (
     RKEY_ANALYTICS,
     RKEY_AUDIT_LOGIN_FAIL,
     RKEY_AUDIT_PERMISSION_CHANGE,

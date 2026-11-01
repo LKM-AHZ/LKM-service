@@ -13,6 +13,11 @@ import pytest
 from prometheus_client import REGISTRY
 
 from core import messaging, worker_dlq
+from core.bus import consumer as bus_consumer
+from core.bus import runtime as bus_runtime
+from core.bus import schema as bus_schema
+from core.bus import topics as bus_topics
+from core.config import settings
 from tests.fakes import InMemoryTransport
 
 
@@ -62,7 +67,7 @@ def test_receive_loop_retries_when_consumer_creation_fails(
     """建消费者失败须退避重试而非放弃（原实现一次失败即在该进程内永久失去订阅）。"""
     import pulsar
 
-    monkeypatch.setattr(messaging, "_CONSUMER_RETRY_S", 0.01)
+    monkeypatch.setattr(bus_consumer, "_CONSUMER_RETRY_S", 0.01)
     stop = threading.Event()
     attempts = {"n": 0}
 
@@ -79,9 +84,9 @@ def test_receive_loop_retries_when_consumer_creation_fails(
             raise RuntimeError("IncompatibleSchema")
         return _FakeConsumer()
 
-    monkeypatch.setattr(messaging, "_create_consumer_sync", _create)
+    monkeypatch.setattr(bus_consumer, "_create_consumer_sync", _create)
 
-    messaging._receive_loop(
+    bus_consumer._receive_loop(
         messaging.SUB_POINTS_STATS,
         lambda *_: None,
         None,
@@ -94,7 +99,7 @@ def test_receive_loop_retries_when_consumer_creation_fails(
 def test_receive_loop_rebuilds_broken_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(messaging, "_CONSUMER_RETRY_S", 0.001)
+    monkeypatch.setattr(bus_consumer, "_CONSUMER_RETRY_S", 0.001)
     stop = threading.Event()
     consumers: list[object] = []
     closed: list[int] = []
@@ -117,10 +122,10 @@ def test_receive_loop_rebuilds_broken_consumer(
         consumers.append(consumer)
         return consumer
 
-    monkeypatch.setattr(messaging, "_create_consumer_sync", _create)
-    monkeypatch.setattr(messaging, "_handle_message", lambda *_args: None)
+    monkeypatch.setattr(bus_consumer, "_create_consumer_sync", _create)
+    monkeypatch.setattr(bus_consumer, "_handle_message", lambda *_args: None)
 
-    messaging._receive_loop(
+    bus_consumer._receive_loop(
         messaging.SUB_POINTS_STATS,
         lambda *_: None,
         None,
@@ -163,7 +168,7 @@ async def test_publish_transport_failure_is_fail_open() -> None:
 async def test_publish_unconfigured_returns_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(messaging.settings, "pulsar_url", "")
+    monkeypatch.setattr(settings, "pulsar_url", "")
     before = _failed_count()
     ok = await messaging.publish(
         messaging.RKEY_NOTIFY, {"fn": "notify_upload", "args": ["up-1"]}
@@ -184,7 +189,7 @@ async def test_publish_uses_pulsar_producer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """未注入 transport 且已配置时，走 Pulsar producer 且 send 带 routing_key 属性。"""
-    monkeypatch.setattr(messaging.settings, "pulsar_url", "pulsar://h:6650")
+    monkeypatch.setattr(settings, "pulsar_url", "pulsar://h:6650")
     sent: list[tuple] = []
 
     class _FakeProducer:
@@ -201,10 +206,10 @@ async def test_publish_uses_pulsar_producer(
         sent.append(("thread", fn.__name__))
         return fn(*args, **kwargs)
 
-    monkeypatch.setattr(messaging, "_get_producer", _fake_get_producer)
+    monkeypatch.setattr(bus_runtime, "_get_producer", _fake_get_producer)
     # Keep this transport unit test independent of executor shutdown while
     # still asserting that publish crosses the to_thread boundary.
-    monkeypatch.setattr(messaging.asyncio, "to_thread", _inline_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
     payload = {"fn": "send_code", "args": ["email", "a@b.c", "1234"]}
     ok = await messaging.publish(messaging.RKEY_SEND_CODE, payload)
     assert ok is True
@@ -217,7 +222,7 @@ async def test_publish_uses_pulsar_producer(
 
 
 def test_event_schema_roundtrip() -> None:
-    schema = messaging.make_event_schema(messaging.TOPIC_POINTS)
+    schema = bus_schema.make_event_schema(messaging.TOPIC_POINTS)
     payload = {"fn": "apply_point_event", "args": [7, "post", "p1"], "event_id": "e1"}
     assert schema.decode(schema.encode(payload)) == payload
 
@@ -247,9 +252,9 @@ def _client_kwargs_with_timeout(
     monkeypatch.setitem(
         sys.modules, "pulsar", types.SimpleNamespace(Client=_FakeClient)
     )
-    monkeypatch.setattr(messaging, "_client", None)
-    monkeypatch.setattr(messaging.settings, "pulsar_operation_timeout_s", timeout)
-    messaging._client_locked()
+    monkeypatch.setattr(bus_runtime, "_client", None)
+    monkeypatch.setattr(settings, "pulsar_operation_timeout_s", timeout)
+    bus_runtime._client_locked()
     return captured
 
 
@@ -287,20 +292,20 @@ def test_shutdown_discards_producer_created_in_flight(monkeypatch) -> None:
         return producer
 
     client.create_producer.side_effect = create_producer
-    monkeypatch.setattr(messaging, "_client", client)
-    monkeypatch.setattr(messaging, "_producers", {})
-    monkeypatch.setattr(messaging, "_closed", False)
-    monkeypatch.setattr(messaging, "make_event_schema", lambda _: object())
+    monkeypatch.setattr(bus_runtime, "_client", client)
+    monkeypatch.setattr(bus_runtime, "_producers", {})
+    monkeypatch.setattr(bus_runtime, "_closed", False)
+    monkeypatch.setattr(bus_runtime, "make_event_schema", lambda _: object())
 
     async def _inline_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
-    monkeypatch.setattr(messaging.asyncio, "to_thread", _inline_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
     errors: list[Exception] = []
 
     def create_in_thread() -> None:
         try:
-            messaging._create_producer_cached(messaging.TOPIC_NOTIFY)
+            bus_runtime._create_producer_cached(messaging.TOPIC_NOTIFY)
         except Exception as exc:
             errors.append(exc)
 
@@ -315,11 +320,11 @@ def test_shutdown_discards_producer_created_in_flight(monkeypatch) -> None:
 
     assert not thread.is_alive()
     assert len(errors) == 1 and isinstance(errors[0], RuntimeError)
-    assert messaging._producers == {}
+    assert bus_runtime._producers == {}
     producer.close.assert_called_once_with()
     client.close.assert_called_once_with()
     with pytest.raises(RuntimeError, match="shut down"):
-        messaging._get_client_sync()
+        bus_runtime._get_client_sync()
 
 
 def test_shutdown_discards_consumer_created_in_flight(monkeypatch) -> None:
@@ -327,16 +332,16 @@ def test_shutdown_discards_consumer_created_in_flight(monkeypatch) -> None:
     client = Mock()
 
     def subscribe(*_args, **_kwargs):
-        messaging._closed = True
+        bus_runtime._closed = True
         return consumer
 
     client.subscribe.side_effect = subscribe
-    monkeypatch.setattr(messaging, "_client", client)
-    monkeypatch.setattr(messaging, "_closed", False)
-    monkeypatch.setattr(messaging, "make_event_schema", lambda _: object())
+    monkeypatch.setattr(bus_runtime, "_client", client)
+    monkeypatch.setattr(bus_runtime, "_closed", False)
+    monkeypatch.setattr(bus_runtime, "make_event_schema", lambda _: object())
 
     with pytest.raises(RuntimeError, match="closed while creating consumer"):
-        messaging._create_consumer_sync(messaging.SUB_DLQ)
+        bus_consumer._create_consumer_sync(messaging.SUB_DLQ)
     consumer.close.assert_called_once_with()
 
 
@@ -364,11 +369,11 @@ def test_receive_timeout_is_not_logged_as_exception(
         def close(self) -> None: ...
 
     monkeypatch.setattr(
-        messaging, "_create_consumer_sync", lambda _sub: _FakeConsumer()
+        bus_consumer, "_create_consumer_sync", lambda _sub: _FakeConsumer()
     )
 
     with caplog.at_level(logging.ERROR, logger="lkm.messaging"):
-        messaging._receive_loop(
+        bus_consumer._receive_loop(
             messaging.SUB_POINTS_STATS,
             lambda *_: None,
             None,
@@ -386,7 +391,7 @@ def test_namespace_isolation_is_enforced_at_assembly() -> None:
     """
     # ① 命名空间白名单：拼错的命名空间在 _topic 就被拒（不静默建新命名空间）
     with pytest.raises(ValueError, match="unknown pulsar namespace"):
-        messaging._topic("bizz", "x")
+        bus_topics._topic("bizz", "x")
 
     # ② 每个逻辑键都落在一个已知命名空间，且 namespace_of 能正确切段
     for routing_key, topic in messaging.ROUTING_KEY_TOPICS.items():
@@ -408,7 +413,7 @@ def test_namespace_isolation_validation_rejects_cross_namespace() -> None:
     messaging.SUBSCRIPTIONS[bogus.name] = bogus
     try:
         with pytest.raises(ValueError, match="跨命名空间"):
-            messaging._validate_namespace_isolation()
+            bus_topics._validate_namespace_isolation()
     finally:
         del messaging.SUBSCRIPTIONS[bogus.name]
 
@@ -420,7 +425,7 @@ def test_subscription_validation_rejects_wrong_topic_in_same_namespace() -> None
     messaging.SUBSCRIPTIONS[bogus.name] = bogus
     try:
         with pytest.raises(ValueError, match="topic 不匹配"):
-            messaging._validate_namespace_isolation()
+            bus_topics._validate_namespace_isolation()
     finally:
         del messaging.SUBSCRIPTIONS[bogus.name]
 
@@ -430,7 +435,7 @@ def test_invalid_envelope_is_negative_acked_for_dead_letter() -> None:
     msg = Mock()
     msg.data.return_value = b"not-json"
 
-    messaging._handle_message(
+    bus_consumer._handle_message(
         consumer, msg, AsyncMock(), None, messaging.SUB_NOTIFY.name
     )
 
@@ -454,9 +459,9 @@ def test_dlq_persists_invalid_envelope_as_base64(monkeypatch) -> None:
         future.result.return_value = None
         return future
 
-    monkeypatch.setattr(messaging.asyncio, "run_coroutine_threadsafe", run_handler)
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", run_handler)
 
-    messaging._handle_message(
+    bus_consumer._handle_message(
         consumer,
         msg,
         worker_dlq._on_dlq,
