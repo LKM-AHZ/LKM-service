@@ -16,44 +16,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.models import Report
 from app.modules.admin.schemas import AdminReviewQueueItem, AdminReviewSummary
-from app.modules.content.models import BoardApplication, ColumnApplication
-from app.modules.files.models import FileStatus, LibraryFile
-from app.modules.projects.models import ProjectApplication
+from core.ports import content as content_port
+from core.ports import files as files_port
+from core.ports import projects as projects_port
 from core.ports.users import count_admission_users
 
 logger = logging.getLogger(__name__)
 
-# (key, model, status 列, 待办状态, 后台深链)；暂无审核页的队列 href=None。
-_QUEUES: tuple[tuple[str, Any, Any, str, str | None], ...] = (
-    (
-        "files",
-        LibraryFile,
-        LibraryFile.status,
-        FileStatus.PENDING.value,
-        "/admin/files",
-    ),
-    ("reports", Report, Report.status, "pending", "/admin/reports"),
-    (
-        "board_applications",
-        BoardApplication,
-        BoardApplication.status,
-        "pending",
-        None,
-    ),
-    (
-        "column_applications",
-        ColumnApplication,
-        ColumnApplication.status,
-        "pending",
-        None,
-    ),
-    (
-        "project_applications",
-        ProjectApplication,
-        ProjectApplication.status,
-        "pending",
-        None,
-    ),
+async def _pending_reports(db: AsyncSession) -> tuple[int, Any]:
+    """举报待审：本域自有模型，直接聚合。"""
+    row = (
+        await db.execute(
+            select(func.count(Report.id), func.min(Report.created_at)).where(
+                Report.status == "pending"
+            )
+        )
+    ).one()
+    return int(row[0]), row[1]
+
+
+# (队列 key, 后台深链, 待办聚合)；跨域队列一律经端口，admin 不 import 对方模型。
+_QUEUES: tuple[tuple[str, str | None, Any], ...] = (
+    ("files", "/admin/files", files_port.pending_files),
+    ("reports", "/admin/reports", _pending_reports),
+    ("board_applications", None, content_port.pending_board_applications),
+    ("column_applications", None, content_port.pending_column_applications),
+    ("project_applications", None, projects_port.pending_project_applications),
 )
 
 
@@ -61,14 +49,8 @@ async def build_review_summary(db: AsyncSession) -> AdminReviewSummary:
     """聚合待办队列（只读）；待审账号计数不可用时该队列缺省，不影响其余队列。"""
     now = datetime.now(UTC)
     queues: list[AdminReviewQueueItem] = []
-    for key, model, status_col, pending, href in _QUEUES:
-        count, oldest = (
-            await db.execute(
-                select(func.count(model.id), func.min(model.created_at)).where(
-                    status_col == pending
-                )
-            )
-        ).one()
+    for key, href, loader in _QUEUES:
+        count, oldest = await loader(db)
         waiting = (
             max(0, int((now - oldest).total_seconds())) if oldest is not None else None
         )

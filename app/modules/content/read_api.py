@@ -6,15 +6,20 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.models import (
+    BoardApplication,
+    ColumnApplication,
     ContentComment,
     ContentItem,
+    ContentType,
     QAAnswer,
     QAQuestion,
 )
@@ -97,3 +102,69 @@ async def qa_question_brief(
     return QaQuestionBrief(
         id=row.id, title=row.title, bounty_per_person=row.bounty_per_person
     )
+
+
+async def count_discussions(db: AsyncSession) -> int:
+    """讨论帖总数（不含软删）。"""
+    value = await db.scalar(
+        select(func.count(ContentItem.id)).where(
+            ContentItem.content_type == ContentType.DISCUSSION,
+            ContentItem.deleted_at.is_(None),
+        )
+    )
+    return int(value or 0)
+
+
+async def daily_discussion_counts(
+    db: AsyncSession, start: datetime.date, days: int
+) -> dict[datetime.date, int]:
+    """讨论帖按日增量（UTC 日期分桶）。查询失败返回空 dict（后台统计 fail-open）。"""
+    out: dict[datetime.date, int] = {}
+    try:
+        day_expr = func.date(func.timezone("UTC", ContentItem.created_at))
+        start_dt = datetime.datetime.combine(
+            start, datetime.datetime.min.time(), tzinfo=datetime.UTC
+        )
+        end_dt = start_dt + datetime.timedelta(days=days)
+        stmt = select(day_expr.label("d"), func.count()).where(
+            ContentItem.created_at >= start_dt,
+            ContentItem.created_at < end_dt,
+            ContentItem.content_type == ContentType.DISCUSSION,
+            ContentItem.deleted_at.is_(None),
+        )
+        rows = (await db.execute(stmt.group_by("d"))).all()
+    except Exception:
+        return out
+    for row in rows:
+        raw = row[0]
+        if raw is None:
+            continue
+        out[datetime.date.fromisoformat(str(raw))] = int(row[1])
+    return out
+
+
+async def _pending(
+    db: AsyncSession, model: Any
+) -> tuple[int, datetime.datetime | None]:
+    row = (
+        await db.execute(
+            select(func.count(model.id), func.min(model.created_at)).where(
+                model.status == "pending"
+            )
+        )
+    ).one()
+    return int(row[0]), row[1]
+
+
+async def pending_board_applications(
+    db: AsyncSession,
+) -> tuple[int, datetime.datetime | None]:
+    """待审版块申请：``(数量, 最早提交时间)``。"""
+    return await _pending(db, BoardApplication)
+
+
+async def pending_column_applications(
+    db: AsyncSession,
+) -> tuple[int, datetime.datetime | None]:
+    """待审专栏申请：``(数量, 最早提交时间)``。"""
+    return await _pending(db, ColumnApplication)

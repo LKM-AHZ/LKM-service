@@ -33,3 +33,29 @@ async def qa_answer_brief(db: AsyncSession, answer_id: uuid.UUID) -> Any:
 async def qa_question_brief(db: AsyncSession, question_id: uuid.UUID) -> Any:
     """问答问题摘要（``id`` / ``title`` / ``bounty_per_person``）。"""
     return await get("content_read").qa_question_brief(db, question_id)
+
+
+async def count_discussions(db: AsyncSession) -> int:
+    """讨论帖总数（不含软删）。"""
+    return await get("content_read").count_discussions(db)
+
+
+async def daily_discussion_counts(
+    db: AsyncSession, start: Any, days: int
+) -> dict[Any, int]:
+    """讨论帖按日增量（UTC 日期分桶）。"""
+    return await get("content_read").daily_discussion_counts(db, start, days)
+
+
+async def pending_board_applications(
+    db: AsyncSession,
+) -> tuple[int, Any]:
+    """待审版块申请：``(数量, 最早提交时间)``。"""
+    return await get("content_read").pending_board_applications(db)
+
+
+async def pending_column_applications(
+    db: AsyncSession,
+) -> tuple[int, Any]:
+    """待审专栏申请：``(数量, 最早提交时间)``。"""
+    return await get("content_read").pending_column_applications(db)

@@ -178,6 +178,13 @@ class _ProjectsReadImpl:
 
         return await is_member(db, project_id, user_id)
 
+    async def pending_project_applications(
+        self, db: AsyncSession
+    ) -> tuple[int, Any]:
+        from app.modules.projects.read_api import pending_project_applications
+
+        return await pending_project_applications(db)
+
 
 class _ExamReadImpl:
     """``core.ports.exam`` 的实现：转发到 exam 域的只读判定。"""
@@ -349,6 +356,47 @@ class _ContentReadImpl:
 
         return await qa_question_brief(db, question_id)
 
+    async def count_discussions(self, db: AsyncSession) -> int:
+        from app.modules.content.read_api import count_discussions
+
+        return await count_discussions(db)
+
+    async def daily_discussion_counts(
+        self, db: AsyncSession, start: Any, days: int
+    ) -> dict[Any, int]:
+        from app.modules.content.read_api import daily_discussion_counts
+
+        return await daily_discussion_counts(db, start, days)
+
+    async def pending_board_applications(
+        self, db: AsyncSession
+    ) -> tuple[int, Any]:
+        from app.modules.content.read_api import pending_board_applications
+
+        return await pending_board_applications(db)
+
+    async def pending_column_applications(
+        self, db: AsyncSession
+    ) -> tuple[int, Any]:
+        from app.modules.content.read_api import pending_column_applications
+
+        return await pending_column_applications(db)
+
+
+
+class _FilesReadImpl:
+    """``core.ports.files`` 的实现：转发到 files 域的只读聚合。"""
+
+    async def count_files(self, db: AsyncSession, status: str | None = None) -> int:
+        from app.modules.files.read_api import count_files
+
+        return await count_files(db, status)
+
+    async def pending_files(self, db: AsyncSession) -> tuple[int, Any]:
+        from app.modules.files.read_api import pending_files
+
+        return await pending_files(db)
+
 
 
 def register() -> None:
@@ -386,6 +434,7 @@ def register() -> None:
     ports.install("feed_fanout", _FeedFanoutImpl())
     ports.install("interaction_read", _InteractionReadImpl())
     ports.install("content_read", _ContentReadImpl())
+    ports.install("files_read", _FilesReadImpl())
     ports.install("points_writer", _PointsWriterImpl())
 
     _registered = True

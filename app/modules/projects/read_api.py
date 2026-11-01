@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.projects.models import Project, ProjectMember
+from app.modules.projects.models import Project, ProjectApplication, ProjectMember
 
 
 async def list_uploadable_projects(
@@ -72,3 +73,17 @@ async def is_member(
         )
     )
     return row is not None
+
+
+async def pending_project_applications(
+    db: AsyncSession,
+) -> tuple[int, datetime.datetime | None]:
+    """待审项目申请：``(数量, 最早提交时间)``。"""
+    row = (
+        await db.execute(
+            select(func.count(ProjectApplication.id), func.min(ProjectApplication.created_at)).where(
+                ProjectApplication.status == "pending"
+            )
+        )
+    ).one()
+    return int(row[0]), row[1]

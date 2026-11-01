@@ -168,11 +168,6 @@ source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.admin.review_service -> app.modules.content.models",  # 审核队列只读板块/专栏申请
-    "app.modules.admin.review_service -> app.modules.files.models",  # 审核队列只读待审文件
-    "app.modules.admin.review_service -> app.modules.projects.models",  # 审核队列只读项目申请
-    "app.modules.admin.users_router -> app.modules.content.models",
-    "app.modules.admin.users_router -> app.modules.files.models",
     "app.modules.feed.feed -> app.modules.content.articles.models",
     "app.modules.feed.feed -> app.modules.content.models",
     "app.modules.feed.feed -> app.modules.projects.models",

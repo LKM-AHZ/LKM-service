@@ -12,15 +12,12 @@ biz Base）；ROLE 权限栅 RolePermission 仍在 **biz 库**。故每个数据
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.models import ContentItem, ContentType
-from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.rbac.permissions import Permission
 from core.common import (
     ApiResp,
@@ -33,6 +30,8 @@ from core.common import (
 from core.contracts import CurrentUser
 from core.db.session import get_read_session
 from core.err import respond
+from core.ports import content as content_port
+from core.ports import files as files_port
 from core.ports.audit import new_auth_session as _new_auth_session_raw
 from core.ports.snapshot import (
     count_active_users,
@@ -104,18 +103,18 @@ async def admin_list_users(
     )
 
 
-async def _safe_count(db: AsyncSession, stmt: Any) -> int:
-    """单计数器容错：某模块表缺失/不可用时不拖垮整页统计（对聚合类后台端点友好）。
+async def _safe_call(fn: Any, *args: Any) -> int:
+    """单个聚合调用容错：某模块读取失败时不拖垮整页统计（对聚合类后台端点友好）。
 
     必须记日志并 rollback：静默 return 0 让真实故障与「本来就是 0」不可区分；而 PG 事务
     一旦出错即进入 aborted 状态，不 rollback 会让本请求后续所有计数器也连带归零。
     """
     try:
-        return (await db.execute(stmt)).scalar() or 0
+        return int(await fn(*args))
     except Exception:
         logger.exception("admin stats counter failed; reporting 0")
         with contextlib.suppress(Exception):
-            await db.rollback()
+            await args[0].rollback()
         return 0
 
 
@@ -134,20 +133,9 @@ async def admin_stats(
     """
     await require_permission(db, _cur, Permission.admin_dashboard)
     user_count = await count_active_users(auth)
-    post_count = await _safe_count(
-        db,
-        select(func.count(ContentItem.id)).where(
-            ContentItem.content_type == ContentType.DISCUSSION,
-            ContentItem.deleted_at.is_(None),  # 软删（批 4）不计入帖子数
-        ),
-    )
-    file_count = await _safe_count(db, select(func.count(LibraryFile.id)))
-    file_pending = await _safe_count(
-        db,
-        select(func.count(LibraryFile.id)).where(
-            LibraryFile.status == FileStatus.PENDING
-        ),
-    )
+    post_count = await _safe_call(content_port.count_discussions, db)
+    file_count = await _safe_call(files_port.count_files, db)
+    file_pending = await _safe_call(files_port.count_files, db, "pending")
     return AdminStats(
         user_count=user_count,
         post_count=post_count,
@@ -169,51 +157,18 @@ async def admin_trend(
     S5-A2 Step2 拆分数据源：
     - **user 增量**真值只在 auth 库 → 经 ``auth.snapshot.user_count_by_day(auth, ...)`` 走
       **auth authoritative**（不再以 biz db 跨库 ``func.date(User.created_at)``）。
-    - **帖子增量**(content_items)仍在 biz ``db``；``_biz_deltas`` 只对 biz 表执行。
+    - **帖子增量**(content_items) 仍查 biz ``db``，但经 content 只读端口（口径归 content）。
     - RBAC role 判定仍在 biz ``db``。
     """
 
     await require_permission(db, _cur, Permission.admin_dashboard)
-
-    async def _biz_deltas(col: Any, extra_where: Any | None = None) -> dict[date, int]:
-        """按某 biz 时间列分组统计每日增量；单表异常返回空 dict（_safe_count 同款容错）。
-        extra_where 可选附加过滤（如 content_type == discussion）。
-        func.date 返回日期文本，统一转 date 作 key。本处的语义约束：
-        消费方是 biz 表（posts 等仍在 biz realm），不做跨库假设。"""
-        out: dict[date, int] = {}
-        try:
-            day_expr = func.date(func.timezone("UTC", col))
-            start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
-            # 与 auth 侧 user_count_by_day 同口径：闭开区间 [start, start+days)，
-            # 少了右界会把未来 created_at（时钟偏移/导入数据）也扫进来并产出区间外的 key
-            end_dt = start_dt + timedelta(days=days)
-            stmt = select(day_expr.label("d"), func.count()).where(
-                col >= start_dt, col < end_dt
-            )
-            if extra_where is not None:
-                stmt = stmt.where(extra_where)
-            rows = (await db.execute(stmt.group_by("d"))).all()
-        except Exception:
-            return out
-        for r in rows:
-            raw = r[0]
-            if raw is None:
-                continue
-            r0: str = raw if isinstance(raw, str) else str(raw)
-            with contextlib.suppress(ValueError):
-                out[date.fromisoformat(r0[:10])] = int(r[1] or 0)
-        return out
 
     start = datetime.now(UTC).date() - timedelta(days=days - 1)
     # user 增量：auth authoritative（auth.snapshot 的 UTC 分桶，.where created_at >= start
     # 且 < start+days 只覆盖窗口；窗口内缺日由下方循环补 0）
     user_d = await user_count_by_day(auth, start=start, days=days)
     # 帖子统计改走统一写源 content_items（content_type == discussion ⇔ 原 forum_posts）biz
-    post_d = await _biz_deltas(
-        ContentItem.created_at,
-        extra_where=(ContentItem.content_type == ContentType.DISCUSSION)
-        & (ContentItem.deleted_at.is_(None)),  # 软删（批 4）不计入趋势
-    )
+    post_d = await content_port.daily_discussion_counts(db, start, days)
 
     items: list[AdminTrendItem] = []
     for i in range(days):

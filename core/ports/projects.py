@@ -41,3 +41,8 @@ async def is_member(
 ) -> bool:
     """用户是否为该项目成员。"""
     return await get("projects_read").is_member(db, project_id, user_id)
+
+
+async def pending_project_applications(db: AsyncSession) -> tuple[int, Any]:
+    """待审项目申请：``(数量, 最早提交时间)``。"""
+    return await get("projects_read").pending_project_applications(db)

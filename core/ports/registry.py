@@ -32,6 +32,7 @@ REQUIRED_PORTS: tuple[str, ...] = (
     "feed_fanout",
     "interaction_read",
     "content_read",
+    "files_read",
 )
 
 _impls: dict[str, Any] = {}
