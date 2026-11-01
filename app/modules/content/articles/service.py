@@ -27,7 +27,6 @@ from app.modules.content.articles.schemas import (
     CategoryCreate,
     CategoryOut,
 )
-from app.modules.points.rules import enqueue_points_event
 from core.cache import (
     TTL_ITEM_S,
     TTL_LIST_S,
@@ -43,6 +42,7 @@ from core.db.base import now_iso
 from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
+from core.ports import points as points_port
 from core.ports.snapshot import get_user_snapshot_batch
 
 # 默认阅读速度：中文约 300 字/分钟
@@ -229,7 +229,7 @@ async def toggle_article_like(
         if await repo.claim_like(article_id=article.id, user_id=user_id):
             await ArticleRepository(db).bump_count(article.id, "likes", 1)
             # 仅新增点赞路径入队（取消点赞不重复计分）
-            await enqueue_points_event(db, user_id, "like", f"article:{article.id}")
+            await points_port.enqueue_event(db, user_id, "like", f"article:{article.id}")
         liked = True
     # 计数列已变，而详情/列表缓存里内嵌了 likes/comments：不失效会让详情页在 TTL（300s）
     # 内一直显示旧点赞数（点赞瞬间数字跳回去）。两条路径（点赞/取消）都要失效。

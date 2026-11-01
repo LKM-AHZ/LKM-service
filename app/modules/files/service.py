@@ -34,7 +34,6 @@ from app.modules.files.schemas import (
     FileInfo,
     UploadInitResp,
 )
-from app.modules.points.rules import enqueue_points_event
 from app.modules.projects.models import Project, ProjectMember
 from core.common import PageData, paginate_offset, paginate_pages, parse_tags
 from core.config import settings
@@ -44,6 +43,7 @@ from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
 from core.messaging import RKEY_FILE_CHANGED
+from core.ports import points as points_port
 from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _uploader_map
 from core.storage.base import Readable, StorageBackend
@@ -495,7 +495,7 @@ async def review_file(
             )
             if settings.files_backup_dir:
                 f.backed_up_at = datetime.now(UTC)
-        await enqueue_points_event(db, f.uploader_id, "file_approved", f"file:{f.id}")
+        await points_port.enqueue_event(db, f.uploader_id, "file_approved", f"file:{f.id}")
         await _enqueue_file_change(db, f.id)
         if f.document_code:
             for older in await repo.versions(f.document_code):

@@ -27,10 +27,10 @@ from app.modules.exam.schemas import (
     SubmitAnswersRequest,
     SubmitResult,
 )
-from app.modules.points.rules import enqueue_points_event
 from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
+from core.ports import points as points_port
 from core.ports.snapshot import get_user_snapshot_batch
 
 
@@ -247,7 +247,7 @@ async def submit_attempt(
         certificate_id = cert.id
         await _apply_unlock(db, exam, user_id)
         # 认证通过事件入队（竞赛计分）
-        await enqueue_points_event(db, user_id, "competition", f"cert:{certificate_id}")
+        await points_port.enqueue_event(db, user_id, "competition", f"cert:{certificate_id}")
 
     return SubmitResult(
         attempt_id=attempt.id,

@@ -26,7 +26,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.admin.models import Report as AdminReport
 from app.modules.admin.models import RolePermission
 from app.modules.content import graphql as content_graphql
-from app.modules.content import service as content_service
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import (
@@ -54,6 +53,7 @@ from app.modules.interaction import service as interaction_service
 from app.modules.interaction.errors import InteractionErr
 from core.common import PageData
 from core.err import BizError
+from core.ports import points as points_port
 from tests.conftest import DB, AuthUser, Client, auth_user_uid
 
 
@@ -274,7 +274,7 @@ async def test_comment_like_emits_points_event(
         seen.append((u, event, ref_id))
 
     # 桩必须装在造数**之后**：建帖/发评论本身也会发积分事件，装早了会把它们一起收进来
-    monkeypatch.setattr(content_service, "enqueue_points_event", spy)
+    monkeypatch.setattr(points_port, "enqueue_event", spy)
 
     await like_comment(db, item_id, cid, uid)
     # 幂等路径不得重复发分（否则反复赞/取消就能刷分）

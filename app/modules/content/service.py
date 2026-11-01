@@ -84,8 +84,6 @@ from app.modules.content.schemas import (
     ContentItemCreate,
     ContentItemInfo,
 )
-from app.modules.points.rules import enqueue_points_event
-from app.modules.points.service import reward, spend
 from core.cache import (
     TTL_ITEM_S,
     TTL_LIST_S,
@@ -101,6 +99,7 @@ from core.db.base import now_iso
 from core.db.repository import DbSession
 from core.err import BizError, ErrCode
 from core.metrics import post_created_total
+from core.ports import points as points_port
 from core.ports.audit import record_audit
 from core.ports.snapshot import get_user_display_names as _author_map
 from core.ports.snapshot import get_user_snapshot
@@ -416,7 +415,7 @@ async def create_item(
     await enqueue_content_event(db, item)
 
     # 积分事件（异步计分，不阻塞 200）
-    await enqueue_points_event(db, author_id, "post", f"item:{item.id}")
+    await points_port.enqueue_event(db, author_id, "post", f"item:{item.id}")
     await bump_collection_version("content")
 
     # M0.5.2 业务指标：本方法统一写 content_items（discussion/column_post/
@@ -468,7 +467,7 @@ async def like_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> in
         return await read_count(db, item_id, "like_count")
 
     await ContentLikeRepository(db).create(content_id=item_id, user_id=user_id)
-    await enqueue_points_event(db, user_id, "like", f"item:{item_id}")
+    await points_port.enqueue_event(db, user_id, "like", f"item:{item_id}")
     return await bump_content_counter(db, item_id, "like_count", 1)
 
 
@@ -581,7 +580,7 @@ async def like_comment(
         return comment.like_count
 
     await repo.create(comment_id=comment_id, user_id=user_id)
-    await enqueue_points_event(db, user_id, "like", f"comment:{comment_id}")
+    await points_port.enqueue_event(db, user_id, "like", f"comment:{comment_id}")
     return await bump_comment_like_count(db, comment_id, 1)
 
 
@@ -683,7 +682,7 @@ async def create_comment(
         )
     )
     await bump_content_counter(db, item_id, "comment_count", 1)
-    await enqueue_points_event(db, user_id, "comment", f"comment:{comment.id}")
+    await points_port.enqueue_event(db, user_id, "comment", f"comment:{comment.id}")
 
     names = await _author_map(db, [comment.user_id])
     return _comment_to_schema(comment, names.get(comment.user_id, ""))
@@ -747,7 +746,7 @@ async def publish_blog_item(
     await enqueue_content_event(db, item)
     # M0.5.2：仅“新建”分支记入博客发布产出；同 slug 重发（上面 existing 更新早退）不复计。
     post_created_total.labels(ContentType.BLOG_POST).inc()
-    await enqueue_points_event(db, owner_id, "post", f"item:{item.id}")
+    await points_port.enqueue_event(db, owner_id, "post", f"item:{item.id}")
     await bump_collection_version("content")
     return item.id
 
@@ -1300,7 +1299,7 @@ async def create_question(
     await repo.add(q)
     if total > 0:
         # spend 锁定（余额不足抛 INSUFFICIENT_BALANCE，同事务回滚）
-        await spend(db, author_id, total, "qa_escrow", "qa_question", str(q.id))
+        await points_port.spend(db, author_id, total, "qa_escrow", "qa_question", str(q.id))
     await _sync_question_content_item(db, author_id, q)
     await db.flush()
     await bump_collection_version("qa")
@@ -1471,7 +1470,7 @@ async def accept_answer(
     if accepted_count >= q.bounty_people:
         raise BizError(QaErr.BOUNTY_EXHAUSTED)
     if q.bounty_per_person > 0:
-        await reward(
+        await points_port.reward(
             db,
             a.author_id,
             q.bounty_per_person,
@@ -1484,8 +1483,8 @@ async def accept_answer(
     q.accepted_answer_id = a.id
     await a_repo.flush()
     # 采纳回答事件入队（仅计数，QA 已按悬赏派发，不加分）
-    await enqueue_points_event(db, a.author_id, "answer_accepted", f"answer:{a.id}")
-    await enqueue_points_event(db, q.author_id, "qa_accept_notice", f"answer:{a.id}")
+    await points_port.enqueue_event(db, a.author_id, "answer_accepted", f"answer:{a.id}")
+    await points_port.enqueue_event(db, q.author_id, "qa_accept_notice", f"answer:{a.id}")
     await bump_collection_version("qa")
     return AnswerOut.model_validate(a)
 
@@ -1520,7 +1519,7 @@ async def _settle_question(db: DbSession, q: QAQuestion) -> None:
     """退还尚未派发的托管积分；由问题行锁保护重复结算。"""
     refund = q.bounty_total - q.bounty_distributed
     if refund > 0:
-        await reward(db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id))
+        await points_port.reward(db, q.author_id, refund, "qa_refund", "qa_refund", str(q.id))
     q.status = "accepted" if q.accepted_answer_id is not None else "closed"
 
 
