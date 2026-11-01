@@ -25,6 +25,7 @@ from auth import (
     router_2fa,
     router_authz,
     router_bot_sso,
+    router_internal_verify,
     router_jwks,
     router_oauth,
     router_onboarding,
@@ -104,6 +105,8 @@ _AUTH_ROUTERS = [
     # bot-ticket 内部端点：业务进程的 user_http.mint_bot_sso_ticket 打的就是
     # {auth_http_url}{api_prefix}/auth/internal/bot-ticket，漏挂会让拆库部署恒 404。
     router_bot_sso.router,
+    # bot 面板统一登录（代验密码）：bot 侧 login 直接打本端点，拆库部署漏挂会恒 404。
+    router_internal_verify.router,
     router_oauth.router,
     router_onboarding.router,
     router_passkey.router,

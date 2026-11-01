@@ -158,3 +158,58 @@ class UploadSession(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
+
+
+class BotMediaSource(StrEnum):
+    """bot 产出媒体的来源分类（仅作统计/清理粒度，不参与权限判定）。"""
+
+    TTS = "tts"
+    T2I = "t2i"
+    ATTACHMENT = "attachment"
+    OTHER = "other"
+
+
+class BotMediaObject(UUIDPrimaryKeyMixin, Base):
+    """LKM-bot 产出媒体的对象登记表（bot → backend 写入面）。
+
+    为什么不复用 ``library_files``：那张表的核心语义是「社区文件库条目」——有人类上传者
+    （``uploader_id`` 指向 auth realm）、有 document_code 版本链、有审阅状态机、有公开可见性。
+    bot 媒体三样都没有：它没有社区用户身份、不需要版本链、也不应出现在文件库里被检索。混进去
+    会让「文件库」的查询全部要加 ``uploader 非空`` 过滤，且 ``ref_count``/清理策略互相污染。
+
+    去重仍走内容寻址：``sha3_hash`` 唯一，同内容复用同一物理对象并递增 ``ref_count``；
+    删除时归零才删 blob。``expires_at`` 为空表示不自动过期。
+    """
+
+    __tablename__: str = "bot_media_objects"
+    __table_args__: tuple[Any, ...] = (
+        UniqueConstraint("sha3_hash", name="uq_bot_media_sha3_hash"),
+        Index("ix_bot_media_expires", "expires_at"),
+    )
+
+    sha3_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 逻辑对象 key：``bot-media/<hash[:2]>/<hash>``（Local/S3 同形，与 library_files 前缀隔离）
+    bucket_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    original_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    mime_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="application/octet-stream"
+    )
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=BotMediaSource.OTHER,
+        server_default="other",
+    )
+    # 引用计数：同内容被多次写入（同一张图发给多个会话）时共享物理对象
+    ref_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    extracted_text: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )

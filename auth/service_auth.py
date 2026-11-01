@@ -584,6 +584,65 @@ async def login_password(
     return await finalize_auth_response(db, user)
 
 
+async def verify_credentials(
+    db: DbSession, account: str, password: str, ip_address: str = ""
+) -> User:
+    """校验「账号 + 密码」但不签发任何会话语义，供内部调用方代为登录。
+
+    使用方是 LKM-bot 面板：它把登录表单的账号密码转给 AUTH 校验，成功后由**自己**建面板
+    会话。因此本函数不发访问/刷新令牌，也不改 ``last_login_at`` 之外的会话状态。
+
+    失败记账与 ``login_password`` 完全共用（``_record_failed_attempt`` 计数、锁定、
+    审计与封禁事件），否则这条内部缝会变成绕过锁定策略的撞库通道。
+
+    Args:
+        db: 认证库会话。
+        account: 用户名、邮箱或手机号。
+        password: 明文密码（由调用方经内网传输）。
+        ip_address: 真实客户端 IP，用于登录失败审计。
+
+    Returns:
+        校验通过的用户 ORM 对象（含 ``account_level``）。
+
+    Raises:
+        BizError: 凭据错误、账号锁定或准入未通过。
+    """
+    normalized = account.strip()
+    user = await UserRepository(db).find_by_identity(
+        username=normalized, email=normalized, phone=normalized
+    )
+    if not user:
+        # 与 login_password 同款：等成本虚拟哈希，避免用响应时间枚举账号是否存在
+        await dummy_verify()
+        raise BizError(AuthErr.INVALID_CREDENTIALS)
+
+    await _check_account_locked(user)
+
+    try:
+        ok = await verifypwd(password, str(user.hashed_password))
+    except Exception:
+        logger.exception(
+            "verifypwd raised exception for user_id=%s (possible corrupted hash)",
+            user.id,
+        )
+        ok = False
+    if not ok:
+        locked = await _record_failed_attempt(db, user)
+        if locked:
+            await log_audit(db, user.id, "account_locked", "5 failed login attempts")
+            await events.notify_user_banned(user.id)
+        await events.notify_audit_login_fail(user.id, "password_mismatch", ip_address)
+        raise BizError(AuthErr.INVALID_CREDENTIALS)
+
+    # 准入在验密成功后判：pending/rejected 给出明确原因，且不在验密前泄露账号状态
+    assert_admission_allowed(user)
+
+    await isolated_update(db, UserRepository(db).reset_login_failures_stmt(user.id))
+    await db.refresh(user)
+    await log_audit(db, user.id, "login_password_delegated", "success")
+    return user
+
+
 async def login_code(db: DbSession, contact: str, code: str) -> dict[str, Any]:
     """使用有时效性的验证码进行认证。"""
     channel = channel_for(contact)

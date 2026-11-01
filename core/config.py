@@ -287,6 +287,19 @@ class Settings(BaseSettings):
     bot_admin_api_key: SecretStr = SecretStr("")
     bot_admin_timeout_s: float = 8.0
 
+    # bot → backend 的服务身份（与上面 ``bot_admin_api_key`` 方向相反：那把是「后端以服务身份
+    # 调 bot 面板」，这把是「bot 以服务身份调后端内部文件面」）。两把密钥独立、不共用：复用会让
+    # 一次泄漏同时打穿「读面板」与「写存储」两侧。
+    # 未配置 → ``/api/v1/internal/*`` 全部 fail-closed 401，该面不会退化成公网可写存储桶。
+    bot_internal_token: SecretStr = SecretStr("")
+    # bot 产出媒体的入库约束：单对象上限与保留期（小时，0 = 不自动过期）。
+    # 保留期到点后由清理任务删除；对象本身仍受 ``storage`` 后端（Local/S3）生命周期约束。
+    bot_media_max_bytes: int = 32 * 1024 * 1024
+    bot_media_ttl_hours: int = 168
+    # 公开媒体 URL（``/api/v1/media/<id>?exp=&sig=``）的有效秒数：IM 平台收到消息后数秒内拉取，
+    # 900s 足够且限制链接泄漏窗口。
+    bot_media_url_ttl_s: int = 900
+
     # 仅 dev/local/test：允许 ``/auth/internal/dev-code`` 为 register 用途铸造验证码并回明文。
     # 供金路径脚本走真实验证码注册；生产（非宽松环境）启动即拒绝。默认关闭。
     dev_code_sink: bool = False
@@ -386,6 +399,11 @@ class Settings(BaseSettings):
                     insecure.append(name)
         if self.auth_http_url and _bad(reveal(self.auth_http_token)):
             insecure.append("auth_http_token(missing while auth_http_url set)")
+        # bot 服务令牌是可写存储面的唯一门禁：留空=关闭（合法），但只要启用就必须足够强，
+        # 弱令牌等于把 ``/internal/files`` 变成公开上传口。
+        bot_token = reveal(self.bot_internal_token)
+        if bot_token and (len(bot_token) < 32 or _bad(bot_token)):
+            insecure.append("bot_internal_token(too short or placeholder)")
         if self.prefect_enabled and (
             not self.prefect_api_url or not self.prefect_deployment
         ):
