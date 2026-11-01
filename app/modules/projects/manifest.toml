@@ -1,0 +1,9 @@
+# projects 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+# 新增/调整模型、任务、错误码、路由聚合只改本文件，不再改 app/bootstrap.py。
+name = "projects"
+errors = [
+    "app.modules.projects.errors",
+]
+models = [
+    "app.modules.projects.models",
+]

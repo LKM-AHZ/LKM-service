@@ -1,16 +1,18 @@
 """
 业务模块清单：模块注册的**单一事实源**（蓝图 §7）。
 
-新增一个业务域只需在此表加一条 :class:`ModuleSpec`；REST/GraphQL 聚合、错误码导入、
-ORM 模型导入与任务注册四项都由本表派生。拆分前它们分散在 ``registry.MODULES``、
-``registry._ERROR_MODULES`` 与 ``app.bootstrap`` 的两个元组里，改漏一处的表现是运行时
-404 或缺错误码，而不是启动失败。
+事实源现在是各模块自己的 ``manifest.toml``（``app/modules/<name>/manifest.toml``），
+本模块只做两件事：把清单翻译成 :class:`ModuleSpec`，再派生四张注册表。
 
-派生规则（刻意与拆分前的导入顺序逐项一致，见 ``tests/test_module_spec.py``）：
+新增一个业务域 = 新建目录 + 写一份 manifest，**不再改** ``registry.py`` 或
+``app/bootstrap.py``。拆分前这四项是分散在两个文件里的手写字面量，改漏一处的表现是
+运行时 404 或缺错误码，而不是启动失败——所以 ``tests/test_module_spec.py`` 把旧值逐项钉死。
 
-- ``MODULES``：``aggregate=True`` 的模块，按表序——顺序决定路由注册顺序；
-- ``ERROR_MODULES``：先各模块顶层 ``errors.py``，再各模块声明的子包错误码模块；
-- ``APP_MODEL_MODULES`` / ``APP_TASK_MODULES``：按表序展平。
+派生规则（刻意与拆分前的导入顺序逐项一致）：
+
+- ``MODULES``：``aggregate`` 模块，按清单顺序（目录名排序）——顺序决定路由注册顺序；
+- ``ERROR_MODULES``：先各模块的顶层 ``app.modules.<name>.errors``，再其声明的子包错误码模块；
+- ``APP_MODEL_MODULES`` / ``APP_TASK_MODULES``：按清单顺序展平。
 
 auth 不在本表内：它已独立成顶层包，模型/错误码/任务由 ``auth.bootstrap`` 自行注册。
 """
@@ -18,22 +20,20 @@ auth 不在本表内：它已独立成顶层包，模型/错误码/任务由 ``a
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+from core.plugins.manifest import Manifest, ManifestError, load_manifests
+
+_MODULES_DIR = Path(__file__).parent
 
 
 @dataclass(frozen=True)
 class ModuleSpec:
-    """一个业务域在装配期的全部注册项。
-
-    字段全部是「导入即产生副作用」的模块路径；``__init__.py`` 的公共 API
-    （``ROUTERS`` / ``GRAPHQL``）不在此声明，由 ``registry`` 按名读取。
-    """
+    """一个业务域在装配期的全部注册项（由 manifest.toml 翻译而来）。"""
 
     name: str
-    #: 是否存在顶层 ``app.modules.<name>.errors``。admin 的错误码在
-    #: ``admin.moderation`` 子包下；feed/treehole 的错误码已随功能迁移，health 无错误码。
-    top_errors: bool = True
-    #: 额外的错误码模块（子包路径），按表序展平在顶层错误码之后。
-    extra_errors: tuple[str, ...] = ()
+    #: 错误码模块的完整路径（导入即 ``register()`` 副作用）；含顶层与子包两类。
+    errors: tuple[str, ...] = ()
     #: ORM 模型模块（全量 metadata → relationship 字符串解析）。
     models: tuple[str, ...] = ()
     #: Pulsar 任务模块（导入即副作用注册 handler / cron）。
@@ -41,102 +41,43 @@ class ModuleSpec:
     #: 是否参与 REST/GraphQL 聚合。rbac 只提供跨模块权限原语，不导出路由/字段。
     aggregate: bool = True
 
+    @property
+    def top_errors_module(self) -> str:
+        """该模块的顶层错误码模块路径（不存在时也返回路径，由 ``errors`` 决定是否导入）。"""
+        return f"app.modules.{self.name}.errors"
 
-SPECS: tuple[ModuleSpec, ...] = (
-    ModuleSpec(
-        name="admin",
-        top_errors=False,
-        extra_errors=(
-            # ModerationErr：错误码在子包下，非 app.modules.admin.errors
-            "app.modules.admin.moderation",
-        ),
-        models=("app.modules.admin.models",),
-        tasks=("app.modules.admin.tasks",),
-    ),
-    ModuleSpec(
-        name="content",
-        extra_errors=(
-            # 内容子域各自的错误码（并入 content 后不再由 MODULES 派生，须单列）
-            "app.modules.content.articles",
-            "app.modules.content.blog",
-            "app.modules.content.boards",
-            "app.modules.content.columns",
-            "app.modules.content.qa",
-        ),
-        models=(
-            "app.modules.content.articles.models",
-            "app.modules.content.blog.models",
-            "app.modules.content.models",
-        ),
-        tasks=(
-            "app.modules.content.blog.tasks",
-            "app.modules.content.tasks",
-        ),
-    ),
-    ModuleSpec(
-        name="exam",
-        models=("app.modules.exam.models",),
-    ),
-    ModuleSpec(
-        name="feed",
-        top_errors=False,
-        models=("app.modules.feed.models",),
-        tasks=("app.modules.feed.tasks",),
-    ),
-    ModuleSpec(
-        name="files",
-        models=("app.modules.files.models",),
-        tasks=("app.modules.files.tasks",),
-    ),
-    ModuleSpec(
-        name="health",
-        top_errors=False,
-    ),
-    ModuleSpec(
-        name="interaction",
-        models=("app.modules.interaction.models",),
-        tasks=("app.modules.interaction.tasks",),
-    ),
-    ModuleSpec(
-        name="notification",
-        models=("app.modules.notification.models",),
-        tasks=("app.modules.notification.tasks",),
-    ),
-    ModuleSpec(
-        name="points",
-        models=("app.modules.points.models",),
-        tasks=("app.modules.points.tasks",),
-    ),
-    ModuleSpec(
-        name="projects",
-        models=("app.modules.projects.models",),
-    ),
-    ModuleSpec(
-        name="search",
-        tasks=("app.modules.search.tasks",),
-    ),
-    ModuleSpec(
-        name="starhope",
-        models=("app.modules.starhope.models",),
-    ),
-    ModuleSpec(
-        name="treehole",
-        top_errors=False,
-        models=("app.modules.treehole.models",),
-    ),
-    ModuleSpec(
-        name="rbac",
-        aggregate=False,
-    ),
-)
 
-#: 参与 REST/GraphQL 聚合的模块名，按表序（顺序即路由注册顺序）。
+def _to_spec(manifest: Manifest) -> ModuleSpec:
+    """清单 → 规格。目录名与 ``name`` 必须一致，否则装配出来的模块名与目录对不上。"""
+    directory = manifest.source.parent.name
+    if manifest.name != directory:
+        raise ManifestError(
+            f"{manifest.source}: name={manifest.name!r} 与目录名 {directory!r} 不一致"
+        )
+    return ModuleSpec(
+        name=manifest.name,
+        errors=manifest.errors,
+        models=manifest.models,
+        tasks=manifest.tasks,
+        aggregate=manifest.aggregate,
+    )
+
+
+SPECS: tuple[ModuleSpec, ...] = tuple(_to_spec(m) for m in load_manifests(_MODULES_DIR))
+
+#: 参与 REST/GraphQL 聚合的模块名，按清单顺序（顺序即路由注册顺序）。
 MODULES: tuple[str, ...] = tuple(s.name for s in SPECS if s.aggregate)
 
-#: 需在装配期导入以触发 ``register()`` 的错误码模块，按表序。
+#: 需在装配期导入以触发 ``register()`` 的错误码模块，按清单顺序。
+#: 先顶层再子包，保持拆分前的导入顺序（重复码由 ``core.err.register`` 拒收，顺序不影响判定，
+#: 但保持稳定可让「和旧值逐项相等」的等价性测试有意义）。
 ERROR_MODULES: tuple[str, ...] = (
-    *(f"app.modules.{s.name}.errors" for s in SPECS if s.aggregate and s.top_errors),
-    *(m for s in SPECS if s.aggregate for m in s.extra_errors),
+    *(
+        s.top_errors_module
+        for s in SPECS
+        if s.aggregate and s.top_errors_module in s.errors
+    ),
+    *(e for s in SPECS if s.aggregate for e in s.errors if e != s.top_errors_module),
 )
 
 #: 需在装配期导入的 ORM 模型模块（全量 metadata）。

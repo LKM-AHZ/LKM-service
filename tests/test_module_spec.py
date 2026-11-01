@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 
 import pytest
 
 from app.modules import registry, spec
+from core.plugins.manifest import ManifestError
 
 # ── 拆分前的字面量（顺序即语义：路由注册顺序 / 错误码导入顺序）─────────────
 _LEGACY_MODULES = (
@@ -126,3 +128,28 @@ def test_generated_paths_are_unique() -> None:
     assert len(set(spec.ERROR_MODULES)) == len(spec.ERROR_MODULES)
     assert len(set(spec.APP_MODEL_MODULES)) == len(spec.APP_MODEL_MODULES)
     assert len(set(spec.APP_TASK_MODULES)) == len(spec.APP_TASK_MODULES)
+
+
+def test_every_module_package_has_a_manifest() -> None:
+    """新增 ``app/modules/<x>/`` 却忘了写清单 → 该模块从此不被装配。
+
+    这是清单化后新的失效模式（旧的失效模式是「忘记改 registry 元组」），必须挡在 CI。
+    """
+    root = Path(spec.__file__).parent
+    packages = {
+        child.name
+        for child in root.iterdir()
+        if child.is_dir() and (child / "__init__.py").is_file()
+    }
+    assert packages == {s.name for s in spec.SPECS}
+
+
+def test_spec_name_must_match_directory(tmp_path: Path) -> None:
+    """清单 name 与目录名不一致时装配名会对不上，须在加载期拒绝。"""
+    from core.plugins.manifest import Manifest
+
+    manifest = Manifest(
+        name="wrong", source=tmp_path / "alpha" / "manifest.toml", aggregate=True
+    )
+    with pytest.raises(ManifestError, match="与目录名"):
+        spec._to_spec(manifest)
