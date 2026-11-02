@@ -174,10 +174,4 @@ ignore_imports = [
     "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
     "app.modules.interaction.models -> app.modules.content.models",  # BoardFollow.board 关系目标(TYPE_CHECKING)
     "app.modules.interaction.repository -> app.modules.content.models",  # 收藏计数/摘要 + 板块只读缝
-    "app.modules.search.repository -> app.modules.content.models",  # 检索只读内容表
-    "app.modules.search.documents -> app.modules.content.models",  # 内容行 → 索引文档（B2）
-    "app.modules.search.sync -> app.modules.content.models",  # content.* 事件回查行决定 upsert/delete（B2）
-    "app.modules.search.repository -> app.modules.files.models",  # 公开文件全文检索
-    "app.modules.search.documents -> app.modules.files.models",  # 文件行 → 索引文档
-    "app.modules.search.sync -> app.modules.files.models",  # 文件审核变更同步索引
 ]

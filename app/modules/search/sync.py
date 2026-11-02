@@ -12,17 +12,14 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.models import ContentStatus
-from app.modules.files.models import FileStatus, LibraryFile
-from app.modules.search.documents import build_doc, build_file_doc
 from app.modules.search.engines.base import SearchEngine
 from app.modules.search.engines.factory import get_engine
-from app.modules.search.repository import SearchRepository
 from core.config import settings
 from core.db.session import new_worker_session as new_session
+from core.ports import content as content_port
+from core.ports import files as files_port
 from core.ports.snapshot import get_user_snapshot_batch
 
 logger = logging.getLogger(__name__)
@@ -38,40 +35,20 @@ async def _author_name(db: AsyncSession, author_id: uuid.UUID | None) -> str:
 
 async def sync_item(db: AsyncSession, engine: SearchEngine, item_id: uuid.UUID) -> str:
     """把一条内容行同步到引擎，返回实际动作（``upsert`` / ``delete``）。"""
-    item = await SearchRepository(db).get(item_id, include_deleted=True)
-    if (
-        item is None
-        or item.deleted_at is not None
-        or item.status != ContentStatus.PUBLISHED
-    ):
+    doc = await content_port.index_doc(db, item_id)
+    if doc is None:
         await engine.delete([str(item_id)])
         return "delete"
-    await engine.upsert([build_doc(item, await _author_name(db, item.author_id))])
+    await engine.upsert([doc])
     return "upsert"
 
 
 async def sync_file(db: AsyncSession, engine: SearchEngine, file_id: uuid.UUID) -> str:
-    row = await db.get(LibraryFile, file_id)
-    if (
-        row is None
-        or row.status != FileStatus.APPROVED
-        or row.classification != "public"
-    ):
+    doc = await files_port.index_doc(db, file_id)
+    if doc is None:
         await engine.delete([str(file_id)])
         return "delete"
-    newer = await db.scalar(
-        select(LibraryFile.id)
-        .where(
-            LibraryFile.document_code == row.document_code,
-            LibraryFile.version > row.version,
-            LibraryFile.status == FileStatus.APPROVED,
-        )
-        .limit(1)
-    )
-    if newer is not None:
-        await engine.delete([str(file_id)])
-        return "delete"
-    await engine.upsert([build_file_doc(row, await _author_name(db, row.uploader_id))])
+    await engine.upsert([doc])
     return "upsert"
 
 

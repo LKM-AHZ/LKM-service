@@ -11,11 +11,11 @@ content 模型，import-linter 已豁免 search 只读内容表），故本层�
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 
 # 索引文档：字段集对齐蓝图 §6.5.3（id/title/excerpt/content/tags/author/published_at/board）
-IndexDoc = Mapping[str, Any]
+from app.contracts.search import IndexDoc as IndexDoc
 
 
 @runtime_checkable

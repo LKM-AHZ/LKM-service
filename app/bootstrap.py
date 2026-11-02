@@ -382,6 +382,42 @@ class _ContentReadImpl:
 
         return await pending_column_applications(db)
 
+    def search_select(self, term: str, content_type: str | None) -> Any:
+        from app.modules.content.search_api import search_select
+
+        return search_select(term, content_type)
+
+    async def search_count(
+        self, db: AsyncSession, term: str, content_type: str | None
+    ) -> int:
+        from app.modules.content.search_api import count_matching
+
+        return await count_matching(db, term=term, content_type=content_type)
+
+    def select_matching(
+        self, term: str, content_type: str | None, *, offset: int, limit: int
+    ) -> Any:
+        from app.modules.content.search_api import select_matching
+
+        return select_matching(term, content_type, offset=offset, limit=limit)
+
+    def select_published_by_ids(self, ids: list[uuid.UUID]) -> Any:
+        from app.modules.content.search_api import select_published_by_ids
+
+        return select_published_by_ids(ids)
+
+    async def index_doc(self, db: AsyncSession, item_id: uuid.UUID) -> Any:
+        from app.modules.content.search_api import index_doc
+
+        return await index_doc(db, item_id)
+
+    async def index_docs_batch(
+        self, db: AsyncSession, *, after_id: uuid.UUID, limit: int
+    ) -> Any:
+        from app.modules.content.search_api import index_docs_batch
+
+        return await index_docs_batch(db, after_id=after_id, limit=limit)
+
 
 
 
@@ -397,6 +433,28 @@ class _FilesReadImpl:
         from app.modules.files.read_api import pending_files
 
         return await pending_files(db)
+
+    def search_select(self, term: str) -> Any:
+        from app.modules.files.search_api import search_select
+
+        return search_select(term)
+
+    def select_public_by_ids(self, ids: list[Any]) -> Any:
+        from app.modules.files.search_api import select_public_by_ids
+
+        return select_public_by_ids(ids)
+
+    async def index_doc(self, db: AsyncSession, file_id: Any) -> Any:
+        from app.modules.files.search_api import index_doc
+
+        return await index_doc(db, file_id)
+
+    async def index_docs_batch(
+        self, db: AsyncSession, *, after_id: Any, limit: int
+    ) -> Any:
+        from app.modules.files.search_api import index_docs_batch
+
+        return await index_docs_batch(db, after_id=after_id, limit=limit)
 
 
 

@@ -17,12 +17,11 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from app.modules.search.documents import build_doc, build_file_doc
 from app.modules.search.engines.factory import get_engine
-from app.modules.search.repository import SearchRepository
 from core.config import settings
 from core.db.session import new_worker_session as new_session
-from core.ports.snapshot import get_user_display_names
+from core.ports import content as content_port
+from core.ports import files as files_port
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,38 +55,22 @@ async def rebuild_index(
     session = db if db is not None else await new_session()
     indexed = 0
     try:
-        repo = SearchRepository(session)
         last_id = uuid.UUID(int=0)
         while True:
-            rows = await repo.list_published_batch(after_id=last_id, limit=size)
-            if not rows:
+            docs, last_id = await content_port.index_docs_batch(
+                session, after_id=last_id, limit=size
+            )
+            if not docs:
                 break
-            author_ids = {r.author_id for r in rows if r.author_id}
-            names = await get_user_display_names(session, author_ids)
-            docs = [
-                build_doc(r, names.get(r.author_id, "") if r.author_id else "")
-                for r in rows
-            ]
             indexed += await engine.upsert(docs)
-            last_id = rows[-1].id
         last_file_id = uuid.UUID(int=0)
         while True:
-            files = await repo.public_files_batch(after_id=last_file_id, limit=size)
-            if not files:
+            file_docs, last_file_id = await files_port.index_docs_batch(
+                session, after_id=last_file_id, limit=size
+            )
+            if not file_docs:
                 break
-            names = await get_user_display_names(
-                session, (row.uploader_id for row in files)
-            )
-            indexed += await engine.upsert(
-                [
-                    build_file_doc(
-                        row,
-                        names.get(row.uploader_id, ""),
-                    )
-                    for row in files
-                ]
-            )
-            last_file_id = files[-1].id
+            indexed += await engine.upsert(file_docs)
     finally:
         if owned:
             await session.close()

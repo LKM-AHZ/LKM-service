@@ -17,8 +17,8 @@ from app.modules.files.models import FileClassification, FileStatus
 from app.modules.files.processing import process_upload
 from app.modules.files.repository import LibraryFileRepository
 from app.modules.files.retention import archive_file, backup_file, delete_archive
+from app.modules.files.search_api import build_file_doc
 from app.modules.files.service import _require_visible
-from app.modules.search.documents import build_file_doc
 from core.config import settings
 from core.contracts import CurrentUser
 from core.err import BizError

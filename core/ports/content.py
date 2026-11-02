@@ -59,3 +59,43 @@ async def pending_column_applications(
 ) -> tuple[int, Any]:
     """待审专栏申请：``(数量, 最早提交时间)``。"""
     return await get("content_read").pending_column_applications(db)
+
+
+def search_select(term: str, content_type: str | None) -> Any:
+    """内容侧检索分支：``(id, source, rank, created_at)``，供 search 做 UNION。"""
+    return get("content_read").search_select(term, content_type)
+
+
+async def search_count(
+    db: AsyncSession, term: str, content_type: str | None
+) -> int:
+    """内容命中数（PG 路径分页总数）。"""
+    return await get("content_read").search_count(db, term, content_type)
+
+
+def select_matching(
+    term: str, content_type: str | None, *, offset: int, limit: int
+) -> Any:
+    """PG 路径的命中行（未执行）。"""
+    return get("content_read").select_matching(
+        term, content_type, offset=offset, limit=limit
+    )
+
+
+def select_published_by_ids(ids: list[uuid.UUID]) -> Any:
+    """按 id 批量取已发布行（未执行）。"""
+    return get("content_read").select_published_by_ids(ids)
+
+
+async def index_doc(db: AsyncSession, item_id: uuid.UUID) -> Any:
+    """可索引则返回索引文档，否则 None。"""
+    return await get("content_read").index_doc(db, item_id)
+
+
+async def index_docs_batch(
+    db: AsyncSession, *, after_id: uuid.UUID, limit: int
+) -> Any:
+    """按 id 升序取一窗已发布文档（全量重建索引）。"""
+    return await get("content_read").index_docs_batch(
+        db, after_id=after_id, limit=limit
+    )
