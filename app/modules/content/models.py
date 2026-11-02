@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import uuid
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -32,10 +32,6 @@ from core.db.base import (  # 注意是 db.base 不是 db.models
     UUIDPrimaryKeyMixin,
     now_iso,
 )
-
-if TYPE_CHECKING:
-    # 跨模块字符串 relationship 目标类型（运行时由 registry 解析，仅类型注解用）
-    from app.modules.interaction.models import BoardFollow
 
 
 class ColumnApplication(UUIDPrimaryKeyMixin, Base):
@@ -508,11 +504,6 @@ class Board(UUIDPrimaryKeyMixin, Base):
     )
     children: Mapped[list[Board]] = relationship(
         back_populates="parent", cascade="all, delete-orphan"
-    )
-    followers: Mapped[list[BoardFollow]] = relationship(
-        back_populates="board",
-        foreign_keys="BoardFollow.board_id",
-        cascade="all, delete-orphan",
     )
 
 

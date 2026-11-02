@@ -64,6 +64,8 @@ _LEGACY_MODEL_MODULES = (
     "app.modules.projects.models",
     "app.modules.starhope.models",
     "app.modules.treehole.models",
+    # 步骤 7：RolePermission 从 admin.models 迁入 rbac 域（表名不变，无需迁移）
+    "app.modules.rbac.models",
 )
 
 _LEGACY_TASK_MODULES = (

@@ -9,11 +9,11 @@ from sqlalchemy import (
     Float,
     Index,
     String,
-    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.modules.rbac.models import RolePermission as RolePermission
 from core.db.base import (  # 注意 db.base 而非 db.models
     Base,
     UTCDateTime,
@@ -43,22 +43,6 @@ class Report(UUIDPrimaryKeyMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     handled_at: Mapped[datetime.datetime | None] = mapped_column(
         UTCDateTime, nullable=True
-    )
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-
-
-class RolePermission(UUIDPrimaryKeyMixin, Base):
-    """RBAC：复合角色→权限点映射；禁用行保留显式撤销状态。"""
-
-    __tablename__ = "role_permissions"
-    __table_args__ = (UniqueConstraint("role_name", "permission"),)
-
-    role_name: Mapped[str] = mapped_column(String(40), nullable=False)
-    permission: Mapped[str] = mapped_column(String(80), nullable=False)
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

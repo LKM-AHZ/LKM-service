@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, Uuid
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from core.db.base import (
     Base,
@@ -31,9 +31,6 @@ from core.db.base import (
     UUIDPrimaryKeyMixin,
     now_iso,
 )
-
-if TYPE_CHECKING:
-    from app.modules.content.models import Board
 
 
 class InteractionFavorite(Base):
@@ -126,4 +123,3 @@ class BoardFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
         UTCDateTime, nullable=False, default=now_iso
     )
 
-    board: Mapped[Board] = relationship(back_populates="followers")

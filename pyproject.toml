@@ -166,8 +166,6 @@ name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
 source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
-allow_indirect_imports = "true"
+allow_indirect_imports = "false"
 ignore_imports = [
-    "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
-    "app.modules.interaction.models -> app.modules.content.models",  # BoardFollow.board 关系目标(TYPE_CHECKING)
 ]

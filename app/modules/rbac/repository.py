@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.modules.admin.models import RolePermission
+from app.modules.rbac.models import RolePermission
 from core.db.repository import AsyncRepository, DbSession
 
 
