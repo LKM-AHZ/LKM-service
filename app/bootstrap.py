@@ -368,11 +368,6 @@ class _ContentReadImpl:
 
         return await item_brief(db, item_id)
 
-    async def comment_brief(self, db: AsyncSession, comment_id: uuid.UUID) -> Any:
-        from app.modules.content.read_api import comment_brief
-
-        return await comment_brief(db, comment_id)
-
     async def count_discussions(self, db: AsyncSession) -> int:
         from app.modules.content.read_api import count_discussions
 
@@ -502,6 +497,61 @@ class _ContentWriteImpl:
             excerpt=excerpt,
         )
 
+    async def require_content_item(self, db: AsyncSession, item_id: uuid.UUID) -> None:
+        from app.modules.content.write_api import require_content_item
+
+        await require_content_item(db, item_id)
+
+    async def lock_content_item(self, db: AsyncSession, item_id: uuid.UUID) -> None:
+        from app.modules.content.write_api import lock_content_item
+
+        await lock_content_item(db, item_id)
+
+    async def bump_comment_count(
+        self, db: AsyncSession, item_id: uuid.UUID, delta: int
+    ) -> int:
+        from app.modules.content.write_api import bump_comment_count
+
+        return await bump_comment_count(db, item_id, delta)
+
+
+class _CommentApiImpl:
+    """``core.ports.comment`` 的实现：转发到 comment 域的读口与计数对账。"""
+
+    async def comment_brief(self, db: AsyncSession, comment_id: uuid.UUID) -> Any:
+        from app.modules.comment.read_api import comment_brief
+
+        return await comment_brief(db, comment_id)
+
+    async def comment_body(self, db: AsyncSession, comment_id: uuid.UUID) -> str:
+        from app.modules.comment.read_api import comment_body
+
+        return await comment_body(db, comment_id)
+
+    def comment_count_subquery(self, outer_column: Any) -> Any:
+        from app.modules.comment.read_api import comment_count_subquery
+
+        return comment_count_subquery(outer_column)
+
+    async def reconcile_comment_likes(
+        self, db: AsyncSession, item_ids: list[uuid.UUID]
+    ) -> int:
+        from app.modules.comment.counters import reconcile_comment_likes
+
+        return await reconcile_comment_likes(db, item_ids)
+
+    async def list_comments(self, db: AsyncSession, item_id: uuid.UUID, **kw: Any) -> Any:
+        from app.modules.comment.service import list_comments
+
+        return await list_comments(db, item_id, **kw)
+
+    async def list_all_comments(
+        self, db: AsyncSession, item_id: uuid.UUID, viewer_id: uuid.UUID | None
+    ) -> Any:
+        from app.modules.comment.service import list_all_comments
+
+        return await list_all_comments(db, item_id, viewer_id)
+
 
 class _QaReadImpl:
     """``core.ports.qa`` 的实现：转发到 qa 域的只读口与时间线源。"""
@@ -594,6 +644,7 @@ def register() -> None:
     ports.install("interaction_read", _InteractionReadImpl())
     ports.install("content_read", _ContentReadImpl())
     ports.install("content_write", _ContentWriteImpl())
+    ports.install("comment_api", _CommentApiImpl())
     ports.install("qa_read", _QaReadImpl())
     ports.install("files_read", _FilesReadImpl())
     ports.install("points_writer", _PointsWriterImpl())

@@ -19,7 +19,6 @@ from app.modules.content.models import (
     Board,
     BoardApplication,
     ColumnApplication,
-    ContentComment,
     ContentItem,
     ContentLike,
     ContentType,
@@ -33,14 +32,6 @@ class ItemBrief:
     author_id: uuid.UUID | None
 
 
-@dataclass(frozen=True)
-class CommentBrief:
-    id: uuid.UUID
-    content_id: uuid.UUID
-    user_id: uuid.UUID
-    parent_id: uuid.UUID | None
-
-
 async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
     """未软删的内容项摘要。"""
     row = await db.scalar(
@@ -51,23 +42,6 @@ async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
     if row is None:
         return None
     return ItemBrief(id=row.id, title=row.title, author_id=row.author_id)
-
-
-async def comment_brief(db: AsyncSession, comment_id: uuid.UUID) -> CommentBrief | None:
-    """未软删的评论摘要。"""
-    row = await db.scalar(
-        select(ContentComment).where(
-            ContentComment.id == comment_id, ContentComment.deleted_at.is_(None)
-        )
-    )
-    if row is None:
-        return None
-    return CommentBrief(
-        id=row.id,
-        content_id=row.content_id,
-        user_id=row.user_id,
-        parent_id=row.parent_id,
-    )
 
 
 async def count_discussions(db: AsyncSession) -> int:

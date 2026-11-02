@@ -1,6 +1,6 @@
 """content 域端口：内容摘要（读）与问答条目落库（写）。
 
-notification 解析行为事件时要回查内容/评论的标题与作者，原先直接读 ``content.models``。
+notification 解析行为事件时要回查内容的标题与作者，原先直接读 ``content.models``。
 摘要形态由 content 域定义（``read_api`` 的数据类），调用方只读字段，不持有 ORM 实例。
 
 ``publish_qa_item`` 是唯一一项写入：步骤 9 把问答拆成独立域后，「提问同步为论坛可见条目」
@@ -20,11 +20,6 @@ from core.ports.registry import get
 async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> Any:
     """未软删的内容项摘要（``id`` / ``title`` / ``author_id``）；不存在返回 None。"""
     return await get("content_read").item_brief(db, item_id)
-
-
-async def comment_brief(db: AsyncSession, comment_id: uuid.UUID) -> Any:
-    """未软删的评论摘要（``id`` / ``content_id`` / ``user_id`` / ``parent_id``）。"""
-    return await get("content_read").comment_brief(db, comment_id)
 
 
 async def qa_answer_brief(db: AsyncSession, answer_id: uuid.UUID) -> Any:
@@ -180,3 +175,18 @@ async def publish_qa_item(
         content=content,
         excerpt=excerpt,
     )
+
+
+async def require_content_item(db: AsyncSession, item_id: uuid.UUID) -> Any:
+    """断言内容项存在且未软删（不存在抛 content 域的 CONTENT_NOT_FOUND）。"""
+    return await get("content_write").require_content_item(db, item_id)
+
+
+async def lock_content_item(db: AsyncSession, item_id: uuid.UUID) -> Any:
+    """锁住内容项行（同事务串行化同帖互动），已软删/不存在抛 CONTENT_NOT_FOUND。"""
+    return await get("content_write").lock_content_item(db, item_id)
+
+
+async def bump_comment_count(db: AsyncSession, item_id: uuid.UUID, delta: int) -> int:
+    """把帖子的 ``comment_count`` 写穿加减（下限 0），返回新值。"""
+    return await get("content_write").bump_comment_count(db, item_id, delta)

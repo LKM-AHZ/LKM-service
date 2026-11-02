@@ -10,9 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.modules.comment.models import ContentComment
 from app.modules.content.models import (
     Board,
-    ContentComment,
     ContentItem,
     ContentStatus,
     ContentType,

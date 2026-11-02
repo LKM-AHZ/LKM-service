@@ -19,6 +19,9 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.comment.repository import ContentCommentRepository
+from app.modules.comment.schemas import ContentCommentCreate
+from app.modules.comment.service import create_comment
 from app.modules.content.articles.models import Article, ArticleCategory, ArticleComment
 from app.modules.content.articles.repository import ArticleCommentRepository
 from app.modules.content.blog.models import BlogSeries
@@ -28,13 +31,9 @@ from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import reconcile_counts
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentItem
-from app.modules.content.repository import (
-    ContentCommentRepository,
-    ContentItemRepository,
-)
-from app.modules.content.schemas import ContentCommentCreate, ContentItemCreate
+from app.modules.content.repository import ContentItemRepository
+from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import (
-    create_comment,
     create_item,
     delete_item,
     get_item,

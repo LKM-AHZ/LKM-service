@@ -10,19 +10,19 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
+from app.contracts.comment import ContentCommentInfo
 from app.modules.content.boards.service import list_boards
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import ContentStatus
-from app.modules.content.schemas import ContentCommentInfo, ContentItemInfo
+from app.modules.content.schemas import ContentItemInfo
 from app.modules.content.service import (
     bump_item_view,
     get_item,
     get_item_by_slug,
-    list_all_comments,
-    list_comments,
     list_items,
 )
 from core.err import BizError
+from core.ports import comment as comment_port
 
 # 公开 GraphQL 仅暴露该状态的内容（对齐 REST 列表的 PUBLISHED 过滤）
 PUBLISHED_STATUS = ContentStatus.PUBLISHED.value
@@ -248,7 +248,7 @@ class ContentQuery:
         db = _get_db(info)
         try:
             # viewer 决定每条的 liked：匿名时 service 不查明细表（user_id is None）
-            page_data = await list_comments(
+            page_data = await comment_port.list_comments(
                 db,
                 uuid.UUID(str(itemId)),
                 page=page,
@@ -298,7 +298,7 @@ class ContentQuery:
         """某内容的完整评论树（根为 parent_id is None 的楼层评论）。"""
         db = _get_db(info)
         try:
-            comments = await list_all_comments(
+            comments = await comment_port.list_all_comments(
                 db, uuid.UUID(str(itemId)), info.context.user_id
             )
         except BizError as e:

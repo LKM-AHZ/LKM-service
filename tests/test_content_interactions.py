@@ -25,6 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.models import Report as AdminReport
 from app.modules.admin.models import RolePermission
+from app.modules.comment.errors import CommentErr
+from app.modules.comment.models import ContentComment
+from app.modules.comment.repository import ContentCommentRepository
+from app.modules.comment.schemas import ContentCommentCreate
+from app.modules.comment.service import (
+    create_comment,
+    delete_comment,
+    like_comment,
+    list_comments,
+    unlike_comment,
+)
 from app.modules.content import graphql as content_graphql
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
@@ -33,20 +44,13 @@ from app.modules.content.counters import (
     reset_reconcile_oscillation_state,
 )
 from app.modules.content.errors import ContentErr
-from app.modules.content.models import ContentComment
-from app.modules.content.repository import ContentCommentRepository
-from app.modules.content.schemas import ContentCommentCreate, ContentItemCreate
+from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import (
-    create_comment,
     create_item,
-    delete_comment,
     forward_item,
     get_item,
-    like_comment,
     like_item,
-    list_comments,
     report_content,
-    unlike_comment,
 )
 from app.modules.interaction import graphql as interaction_graphql
 from app.modules.interaction import service as interaction_service
@@ -128,7 +132,7 @@ async def test_comment_like_rejects_mismatched_item(
 
     with pytest.raises(BizError) as exc:
         await like_comment(db, item_b, cid, uid)
-    assert exc.value.errcode == ContentErr.COMMENT_NOT_FOUND
+    assert exc.value.errcode == CommentErr.COMMENT_NOT_FOUND
 
 
 async def test_comment_like_soft_deleted_comment_is_404(
@@ -138,13 +142,13 @@ async def test_comment_like_soft_deleted_comment_is_404(
     item_id = await _make_item(db, uid)
     cid = await _make_comment(db, item_id, uid)
     comment = await ContentCommentRepository(db).get_one_or_raise(
-        ContentErr.COMMENT_NOT_FOUND, ContentComment.id == cid
+        CommentErr.COMMENT_NOT_FOUND, ContentComment.id == cid
     )
     await ContentCommentRepository(db).soft_delete(comment)
 
     with pytest.raises(BizError) as exc:
         await like_comment(db, item_id, cid, uid)
-    assert exc.value.errcode == ContentErr.COMMENT_NOT_FOUND
+    assert exc.value.errcode == CommentErr.COMMENT_NOT_FOUND
 
 
 async def test_delete_comment_soft_deletes_and_decrements_count(
@@ -162,7 +166,7 @@ async def test_delete_comment_soft_deletes_and_decrements_count(
     # 已软删的评论不能再删一次（软删过滤生效，而非重复递减计数）
     with pytest.raises(BizError) as exc:
         await delete_comment(db, item_id, cid)
-    assert exc.value.errcode == ContentErr.COMMENT_NOT_FOUND
+    assert exc.value.errcode == CommentErr.COMMENT_NOT_FOUND
     assert (await get_item(db, item_id)).comment_count == 0
 
 
@@ -357,7 +361,7 @@ async def test_report_missing_target_is_404(
 
     with pytest.raises(BizError) as exc2:
         await report_content(db, uid, "comment", uuid.uuid4(), "x")
-    assert exc2.value.errcode == ContentErr.COMMENT_NOT_FOUND
+    assert exc2.value.errcode == CommentErr.COMMENT_NOT_FOUND
 
     # 未知目标类型不是「举报成功」的静默降级
     with pytest.raises(BizError) as exc3:
@@ -524,7 +528,8 @@ async def test_graphql_comments_pass_viewer_to_service(
         seen.update(item_id=item_id, viewer_id=viewer_id, page=page, limit=limit)
         return PageData(items=[], total=0, page=page, pages=0)
 
-    monkeypatch.setattr(content_graphql, "list_comments", fake_list)
+    # 评论已拆到 comment 域：content 的 GraphQL 经端口取评论，故补丁打在端口上
+    monkeypatch.setattr(content_graphql.comment_port, "list_comments", fake_list)
     info = SimpleNamespace(context=SimpleNamespace(db=object(), user_id=uid))
 
     await content_graphql.ContentQuery().contentComments(

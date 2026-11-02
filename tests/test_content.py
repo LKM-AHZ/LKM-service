@@ -25,22 +25,21 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.comment.schemas import ContentCommentCreate
+from app.modules.comment.service import create_comment, list_comments
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.errors import ContentErr
 from app.modules.content.models import Column, ContentItem
 from app.modules.content.schemas import (
-    ContentCommentCreate,
     ContentItemCreate,
 )
 from app.modules.content.service import (
     bump_item_view,
-    create_comment,
     create_item,
     delete_item,
     get_item,
     like_item,
-    list_comments,
     list_items,
     publish_blog_item,
     unlike_item,

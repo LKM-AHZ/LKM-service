@@ -33,6 +33,7 @@ from app.ws.broker import publish_notification
 from core.config import settings
 from core.db.session import new_worker_session as new_session
 from core.messaging import SUB_NOTIFICATION
+from core.ports import comment as comment_port
 from core.ports import content as content_port
 from core.ports import qa as qa_port
 from core.ports.snapshot import get_user_snapshot
@@ -85,7 +86,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         ]
 
     if event == "comment" and prefix == "comment":
-        comment = await content_port.comment_brief(db, ref)
+        comment = await comment_port.comment_brief(db, ref)
         if comment is None:
             return []
         item = await content_port.item_brief(db, comment.content_id)
@@ -107,7 +108,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
                 )
             )
         if comment.parent_id is not None:
-            parent = await content_port.comment_brief(db, comment.parent_id)
+            parent = await comment_port.comment_brief(db, comment.parent_id)
             if parent is not None:
                 targets.append(
                     _Target(

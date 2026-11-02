@@ -13,9 +13,11 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app.modules.comment import service as comment_service
+from app.modules.comment.models import ContentComment
+from app.modules.comment.schemas import ContentCommentCreate
 from app.modules.content import service as content_service
-from app.modules.content.models import Board, ContentComment, ContentItem, ContentLike
-from app.modules.content.schemas import ContentCommentCreate
+from app.modules.content.models import Board, ContentItem, ContentLike
 
 
 async def _item(db: AsyncSession) -> uuid.UUID:
@@ -103,11 +105,11 @@ async def test_concurrent_comments_get_distinct_floors(
     async def no_names(_db: AsyncSession, _ids: list[uuid.UUID]) -> dict:
         return {}
 
-    monkeypatch.setattr(content_service, "_author_map", no_names)
+    monkeypatch.setattr(comment_service, "_author_map", no_names)
 
     async def first() -> int:
         async with maker() as session:
-            comment = await content_service.create_comment(
+            comment = await comment_service.create_comment(
                 session, item_id, uuid.uuid4(), ContentCommentCreate(content="一楼")
             )
             first_done.set()
@@ -119,7 +121,7 @@ async def test_concurrent_comments_get_distinct_floors(
         async with maker() as session:
             await session.connection()
             second_ready.set()
-            comment = await content_service.create_comment(
+            comment = await comment_service.create_comment(
                 session, item_id, uuid.uuid4(), ContentCommentCreate(content="二楼")
             )
             await session.commit()

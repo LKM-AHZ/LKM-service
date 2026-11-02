@@ -4,8 +4,9 @@
 ``app.bootstrap.APP_MODEL_MODULES``、``app/bootstrap.APP_TASK_MODULES``）。派生规则一旦写错，
 表现是**运行时 404 或缺错误码**——进程照常启动，所以这里把旧值逐项钉死。
 
-步骤 9 切片 1 把问答拆成独立模块 ``qa``，故新增一条：``qa`` 目录名排在 ``projects`` 与
-``rbac`` 之间，其错误码/模型/任务随之从 content 的清单里移出。
+步骤 9 切片 1 把问答拆成独立模块 ``qa``（目录名排在 ``projects`` 与 ``rbac`` 之间），
+切片 2 把评论拆成 ``comment``（排在 ``admin`` 与 ``content`` 之间），其错误码/模型/任务随之
+从 content 的清单里移出。
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from core.plugins.manifest import ManifestError
 # ── 拆分前的字面量（顺序即语义：路由注册顺序 / 错误码导入顺序）─────────────
 _LEGACY_MODULES = (
     "admin",
+    "comment",
     "content",
     "exam",
     "feed",
@@ -37,6 +39,7 @@ _LEGACY_MODULES = (
 )
 
 _LEGACY_ERROR_MODULES = (
+    "app.modules.comment.errors",
     "app.modules.content.errors",
     "app.modules.exam.errors",
     "app.modules.files.errors",
@@ -56,6 +59,8 @@ _LEGACY_ERROR_MODULES = (
 
 _LEGACY_MODEL_MODULES = (
     "app.modules.admin.models",
+    # 步骤 9 切片 2：评论模型迁出 content（表名不变，无需迁移）
+    "app.modules.comment.models",
     "app.modules.content.articles.models",
     "app.modules.content.blog.models",
     "app.modules.content.models",

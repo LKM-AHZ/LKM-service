@@ -5,7 +5,8 @@
 + 路由拆片」）。各子包同构，各自是路由拆片单元；本文件的 ``ROUTERS`` / ``GRAPHQL`` 是
 它们对外的唯一出口。
 
-步骤 9 切片 1 起，问答（``qa``）已是独立业务域 ``app.modules.qa``（表、错误码、任务随域走）。
+步骤 9 起问答（``qa``）与评论（``comment``）已是独立业务域（表、错误码、任务随域走），
+本包只剩 boards/columns/articles/blog 四个子域与统一内容项本身。
 """
 
 from __future__ import annotations

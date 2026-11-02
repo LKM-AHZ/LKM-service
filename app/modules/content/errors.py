@@ -3,7 +3,8 @@ from core.err import NS_CONTENT, ErrCode, register, register_unique_constraint
 
 class ContentErr(ErrCode):
     CONTENT_NOT_FOUND = NS_CONTENT.err(1)
-    COMMENT_NOT_FOUND = NS_CONTENT.err(2)
+    # 2 号（COMMENT_NOT_FOUND）随评论拆到 app.modules.comment.errors::CommentErr，
+    # 命名空间与编号不变——错误码是 API 契约，拆域不改号。此处刻意留空号。
     BOARD_NOT_FOUND = NS_CONTENT.err(3)
     COLUMN_NOT_FOUND = NS_CONTENT.err(4)
     UNSUPPORTED_TYPE = NS_CONTENT.err(5)
@@ -13,7 +14,6 @@ class ContentErr(ErrCode):
 register(
     {
         ContentErr.CONTENT_NOT_FOUND: (404, "Content not found"),
-        ContentErr.COMMENT_NOT_FOUND: (404, "Content comment not found"),
         ContentErr.BOARD_NOT_FOUND: (404, "Board not found"),
         ContentErr.COLUMN_NOT_FOUND: (404, "Column not found"),
         ContentErr.UNSUPPORTED_TYPE: (400, "Unsupported content type"),

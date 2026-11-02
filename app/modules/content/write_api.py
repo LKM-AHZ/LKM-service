@@ -11,6 +11,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.content.counters import bump_content_counter
+from app.modules.content.errors import ContentErr
 from app.modules.content.events import enqueue_content_event
 from app.modules.content.models import ContentItem
 from app.modules.content.repository import BoardRepository, ContentItemRepository
@@ -56,3 +58,20 @@ async def publish_qa_item(
     post_created_total.labels("qa").inc()
     # QA 提问同步落成 content_items 会增加统一内容列表的计数，需 bump content 集合版本
     await bump_collection_version("content")
+
+
+async def require_content_item(db: AsyncSession, item_id: uuid.UUID) -> None:
+    """断言内容项存在且未软删（评论读写前的前置检查）。"""
+    await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
+
+
+async def lock_content_item(db: AsyncSession, item_id: uuid.UUID) -> None:
+    """锁住内容项行并断言存在：同帖并发互动被串行化，软删后不再接受新互动。"""
+    await ContentItemRepository(db).lock_active(item_id)
+
+
+async def bump_comment_count(
+    db: AsyncSession, item_id: uuid.UUID, delta: int
+) -> int:
+    """帖子评论数写穿加减（``reconcile_counts`` 的在线一侧）。"""
+    return await bump_content_counter(db, item_id, "comment_count", delta)

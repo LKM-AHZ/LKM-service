@@ -298,51 +298,8 @@ class ContentItem(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
 
     board: Mapped[Board] = relationship()
     column: Mapped[Column | None] = relationship()
-    comments: Mapped[list[ContentComment]] = relationship(
-        back_populates="content_item", cascade="all, delete-orphan"
-    )
     like_records: Mapped[list[ContentLike]] = relationship(
         back_populates="content", cascade="all, delete-orphan"
-    )
-
-
-class ContentComment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
-    """统一内容评论（对齐原 forum_comments 的完整模式：floor_number/parent_id/like_count）。
-
-    软删（批 4）：楼层号生成取**含已软删**的最大值 +1，否则可见楼层会重号；
-    计数对账（``content/counters.py``）与在线计数同用「未软删」口径。
-    """
-
-    __tablename__: str = "content_comments"
-    __table_args__: tuple[Any, ...] = (
-        Index("ix_content_comments_item_floor", "content_id", "floor_number"),
-    )
-
-    content_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("content_items.id"), nullable=False
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    floor_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("content_comments.id"), nullable=True
-    )
-    like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-
-    content_item: Mapped[ContentItem] = relationship(back_populates="comments")
-    # remote_side 用字符串：主键 id 来自 UUIDPrimaryKeyMixin，类体内无 `id` 名字绑定
-    # （写 [id] 会解析到内置函数 id，configure_mappers 直接报错）
-    parent: Mapped[ContentComment | None] = relationship(
-        remote_side="ContentComment.id", back_populates="replies"
-    )
-    replies: Mapped[list[ContentComment]] = relationship(
-        back_populates="parent", cascade="all, delete-orphan"
-    )
-    like_records: Mapped[list[ContentCommentLike]] = relationship(
-        back_populates="comment", cascade="all, delete-orphan"
     )
 
 
@@ -360,26 +317,6 @@ class ContentLike(Base):
     )
 
     content: Mapped[ContentItem] = relationship(back_populates="like_records")
-
-
-class ContentCommentLike(Base):
-    """评论点赞记录，复合主键保证同一用户对同一评论最多一条（点赞幂等）。
-
-    与 ``ContentLike`` 同款：``content_comments.like_count`` 是它的派生计数，
-    真相源是本表行数（见 ``content/counters.py``）。
-    """
-
-    __tablename__: str = "content_comment_likes"
-
-    comment_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("content_comments.id"), primary_key=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        UTCDateTime, nullable=False, default=now_iso
-    )
-
-    comment: Mapped[ContentComment] = relationship(back_populates="like_records")
 
 
 class Board(UUIDPrimaryKeyMixin, Base):

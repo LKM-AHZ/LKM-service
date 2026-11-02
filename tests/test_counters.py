@@ -19,6 +19,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.redis as redis_mod
+from app.modules.comment.models import ContentComment
+from app.modules.comment.schemas import ContentCommentCreate
+from app.modules.comment.service import create_comment
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import (
@@ -27,9 +30,8 @@ from app.modules.content.counters import (
     reconcile_counts,
     reset_reconcile_oscillation_state,
 )
-from app.modules.content.models import ContentComment, ContentItem, ContentLike
-from app.modules.content.schemas import ContentCommentCreate
-from app.modules.content.service import create_comment, like_item, unlike_item
+from app.modules.content.models import ContentItem, ContentLike
+from app.modules.content.service import like_item, unlike_item
 from app.modules.interaction.models import InteractionFavorite
 from app.modules.interaction.service import add_favorite, remove_favorite
 from core import counters

@@ -1,0 +1,9 @@
+# comment 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+# 步骤 9 切片 2 自 content 拆出：两张 content_comment* 表与 COMMENT_NOT_FOUND 随域迁移。
+name = "comment"
+errors = [
+    "app.modules.comment.errors",
+]
+models = [
+    "app.modules.comment.models",
+]
