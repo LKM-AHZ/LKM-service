@@ -6,10 +6,10 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.modules.content.column_models import ColumnPostStatus, ColumnStatus
-from app.modules.content.columns.errors import ColumnErr
-from app.modules.content.columns.schemas import ColumnInfo, ColumnPostInfo
-from app.modules.content.columns.service import (
+from app.modules.columns.column_models import ColumnPostStatus, ColumnStatus
+from app.modules.columns.errors import ColumnErr
+from app.modules.columns.schemas import ColumnInfo, ColumnPostInfo
+from app.modules.columns.service import (
     get_column,
     get_column_by_slug,
     list_columns,

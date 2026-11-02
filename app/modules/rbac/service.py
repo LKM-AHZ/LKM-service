@@ -90,9 +90,22 @@ async def check_owner(
     owner_row = await ResourceRepository(db).get_owner_row(model, obj_id, id_field)
     if owner_row is None:
         raise BizError(CommonErr.FORBIDDEN)
-    if owner_row[0] == cur.id:
-        return False
+    return await check_owner_id(db, cur, owner_row[0], permission)
 
+
+async def check_owner_id(
+    db: DbSession,
+    cur: CurrentUser,
+    owner_id: uuid.UUID,
+    permission: Permission,
+) -> bool:
+    """同 :func:`check_owner`，但属主 id 由调用方给出（资源可属另一业务域）。
+
+    跨域场景（如 content 校验专栏属主）不该为拿一行 owner_id 而 import 对方的 ORM 模型：
+    由属主域给出的 id + 本函数完成同一套「属主放行，否则查代管权限点」判定。
+    """
+    if owner_id == cur.id:
+        return False
     if not await user_has_permission(db, cur, permission):
         raise BizError(CommonErr.FORBIDDEN)
     return True

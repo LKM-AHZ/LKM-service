@@ -373,6 +373,11 @@ class _ContentReadImpl:
 
         return await get_item_info(db, item_id)
 
+    async def find_board_id(self, db: AsyncSession, slug: str) -> uuid.UUID | None:
+        from app.modules.content.read_api import find_board_id
+
+        return await find_board_id(db, slug)
+
     async def count_discussions(self, db: AsyncSession) -> int:
         from app.modules.content.read_api import count_discussions
 
@@ -389,11 +394,6 @@ class _ContentReadImpl:
         from app.modules.content.read_api import pending_board_applications
 
         return await pending_board_applications(db)
-
-    async def pending_column_applications(self, db: AsyncSession) -> tuple[int, Any]:
-        from app.modules.content.read_api import pending_column_applications
-
-        return await pending_column_applications(db)
 
     def search_select(self, term: str, content_type: str | None) -> Any:
         from app.modules.content.search_api import search_select
@@ -619,6 +619,39 @@ class _BlogApiImpl:
         return await delete_comment(db, series_id, comment_id, actor_id, as_admin=as_admin)
 
 
+class _ColumnsApiImpl:
+    """``core.ports.columns`` 的实现：转发到 columns 域的读口。"""
+
+    async def pending_column_applications(self, db: AsyncSession) -> tuple[int, Any]:
+        from app.modules.columns.read_api import pending_column_applications
+
+        return await pending_column_applications(db)
+
+    async def column_titles(
+        self, db: AsyncSession, column_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        from app.modules.columns.read_api import column_titles
+
+        return await column_titles(db, column_ids)
+
+    async def column_exists(self, db: AsyncSession, column_id: uuid.UUID) -> bool:
+        from app.modules.columns.read_api import column_exists
+
+        return await column_exists(db, column_id)
+
+    async def column_owner_id(
+        self, db: AsyncSession, column_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        from app.modules.columns.read_api import column_owner_id
+
+        return await column_owner_id(db, column_id)
+
+    def select_feed_source(self, **kwargs: Any) -> Any:
+        from app.modules.columns.feed_api import select_source
+
+        return select_source(**kwargs)
+
+
 class _QaReadImpl:
     """``core.ports.qa`` 的实现：转发到 qa 域的只读口与时间线源。"""
 
@@ -712,6 +745,7 @@ def register() -> None:
     ports.install("content_write", _ContentWriteImpl())
     ports.install("comment_api", _CommentApiImpl())
     ports.install("blog_api", _BlogApiImpl())
+    ports.install("columns_api", _ColumnsApiImpl())
     ports.install("qa_read", _QaReadImpl())
     ports.install("files_read", _FilesReadImpl())
     ports.install("points_writer", _PointsWriterImpl())

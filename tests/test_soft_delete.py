@@ -19,13 +19,13 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.blog.models import BlogSeries
+from app.modules.blog.repository import BlogCommentRepository
 from app.modules.comment.repository import ContentCommentRepository
 from app.modules.comment.schemas import ContentCommentCreate
 from app.modules.comment.service import create_comment
 from app.modules.content.articles.models import Article, ArticleCategory, ArticleComment
 from app.modules.content.articles.repository import ArticleCommentRepository
-from app.modules.blog.models import BlogSeries
-from app.modules.blog.repository import BlogCommentRepository
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.counters import reconcile_counts

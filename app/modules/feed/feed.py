@@ -25,6 +25,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.feed.schemas import FeedItem
+from core.ports import columns as columns_port
 from core.ports import content as content_port
 from core.ports import projects as projects_port
 from core.ports import qa as qa_port
@@ -152,8 +153,7 @@ async def _fetch_column(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    stmt = stmt = content_port.select_feed_source(
-        "column",
+    stmt = stmt = columns_port.select_feed_source(
         author_ids=author_ids,
         board_ids=board_ids,
         before_time=before_time,

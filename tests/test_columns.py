@@ -19,16 +19,17 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.column_models import ColumnApplicationStatus
-from app.modules.content.columns.errors import ColumnErr
-from app.modules.content.columns.schemas import (
+from app.modules.columns.column_models import ColumnApplicationStatus
+from app.modules.columns.errors import ColumnErr
+from app.modules.columns.models import ColumnApplication
+from app.modules.columns.schemas import (
     ColumnApplicationCreate,
     ColumnApplicationInfo,
     ColumnApplicationReview,
     ColumnPostCreate,
     ColumnPostInfo,
 )
-from app.modules.content.columns.service import (
+from app.modules.columns.service import (
     create_application,
     create_post,
     get_application,
@@ -40,7 +41,6 @@ from app.modules.content.columns.service import (
     list_posts,
     review_application,
 )
-from app.modules.content.models import ColumnApplication
 from auth.errors import AuthErr
 from auth.models import AuditLog
 from auth.security import create_access_token

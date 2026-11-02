@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.content.models import (
     Board,
     BoardApplication,
-    ColumnApplication,
     ContentItem,
     ContentLike,
     ContentType,
@@ -103,18 +102,16 @@ async def _pending(
     return int(row[0]), row[1]
 
 
+async def find_board_id(db: AsyncSession, slug: str) -> uuid.UUID | None:
+    """按 slug 查板块 id（只读，不建）。"""
+    return await db.scalar(select(Board.id).where(Board.slug == slug))
+
+
 async def pending_board_applications(
     db: AsyncSession,
 ) -> tuple[int, datetime.datetime | None]:
     """待审版块申请：``(数量, 最早提交时间)``。"""
     return await _pending(db, BoardApplication)
-
-
-async def pending_column_applications(
-    db: AsyncSession,
-) -> tuple[int, datetime.datetime | None]:
-    """待审专栏申请：``(数量, 最早提交时间)``。"""
-    return await _pending(db, ColumnApplication)
 
 
 async def bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> int | None:

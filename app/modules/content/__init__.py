@@ -1,12 +1,12 @@
-"""内容（Content）模块：boards/columns/**articles/blog** 聚合。模块公共 API——跨模块 import 的唯一合法入口。
+"""内容（Content）模块：boards/articles 子域与统一内容项的聚合。模块公共 API——跨模块 import 的唯一合法入口。
 
 蓝图 M2「内容域收敛」：articles 与 blog 原先各自是独立业务域（独立表 + 交叉 import），
 现并入本聚合（**目录级合并，路由前缀与表结构一字不变**——M2 验收明许「过渡期可目录合并
 + 路由拆片」）。各子包同构，各自是路由拆片单元；本文件的 ``ROUTERS`` / ``GRAPHQL`` 是
 它们对外的唯一出口。
 
-步骤 9 起问答（``qa``）、评论（``comment``）、博客（``blog``）已是独立业务域（表、错误码、
-任务随域走），本包只剩 boards/columns/articles 三个子域与统一内容项本身。
+步骤 9 起问答（``qa``）、评论（``comment``）、博客（``blog``）、专栏（``columns``）已是独立
+业务域（表、错误码、任务随域走），本包只剩 boards/articles 两个子域与统一内容项本身。
 """
 
 from __future__ import annotations
@@ -29,10 +29,9 @@ def __getattr__(name: str) -> Any:
     if name == "GRAPHQL":
         if _exported_graphql is None:
             from app.modules.content.articles.graphql import ArticlesQuery
-            from app.modules.content.columns.graphql import ColumnsQuery
             from app.modules.content.graphql import ContentQuery
 
-            _exported_graphql = [ContentQuery, ColumnsQuery, ArticlesQuery]
+            _exported_graphql = [ContentQuery, ArticlesQuery]
         return _exported_graphql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

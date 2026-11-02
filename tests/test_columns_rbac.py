@@ -64,7 +64,7 @@ async def test_foreign_cannot_publish_to_other_column(
     # 注意：other 有 columns.publish（可发文）但【不授】column.owner_publish
     # （owner 权限仅 super_admin 持有）。若授了 column.owner_publish，check_owner
     # 会因拥有该权限点放行 → 200 而非 403，测试失真。
-    from app.modules.content.models import Column
+    from app.modules.columns.models import Column
 
     await _grant(db, "normal:columnist", "columns.publish")
     owner = await _mk_au(auth_db, "col_owner", role="columnist")
@@ -84,7 +84,7 @@ async def test_owner_can_publish_to_own_column(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
 ) -> None:
     # 属主本人（有 columns.publish，无 owner 权限点）走 id_field 属主判定放行。
-    from app.modules.content.models import Column
+    from app.modules.columns.models import Column
 
     await _grant(db, "normal:columnist", "columns.publish")
     owner = await _mk_au(auth_db, "cowner", role="columnist")
@@ -114,7 +114,7 @@ def _set_admin_mfa_cookie(client: Client, user: User) -> None:
 async def test_super_admin_can_review_application(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
 ) -> None:
-    from app.modules.content.models import ColumnApplication
+    from app.modules.columns.models import ColumnApplication
 
     # 申请人普通，super_admin 审核（2FA 门槛 + columns.application_review 权限点）。
     applicant = await _mk_au(
@@ -160,7 +160,7 @@ async def test_org_member_cannot_review_application(
     # 旧 review 仅 RequireLevel("admin")，org_member(level=admin) 会被放行 200；
     # 迁移后叠加 columns.application_review，org_member 无此权限 → 403。
     # 该用例验证 super_admin 与 org_member 的真实能力差异（此回归由迁移引入）。
-    from app.modules.content.models import ColumnApplication
+    from app.modules.columns.models import ColumnApplication
 
     applicant = await _mk_au(auth_db, "org_rev_app", role="member")
     app = ColumnApplication(
@@ -187,7 +187,7 @@ async def test_super_admin_can_publish_to_other_column(
     db: DB, client: Client, auth_db: AsyncSession, auth_seam_realm: None
 ) -> None:
     # super_admin 持有 columns.publish + column.owner_publish：可代发任意专栏。
-    from app.modules.content.models import Column
+    from app.modules.columns.models import Column
 
     await _grant(
         db,

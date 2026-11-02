@@ -51,13 +51,6 @@ async def pending_board_applications(
     return await get("content_read").pending_board_applications(db)
 
 
-async def pending_column_applications(
-    db: AsyncSession,
-) -> tuple[int, Any]:
-    """待审专栏申请：``(数量, 最早提交时间)``。"""
-    return await get("content_read").pending_column_applications(db)
-
-
 def search_select(term: str, content_type: str | None) -> Any:
     """内容侧检索分支：``(id, source, rank, created_at)``，供 search 做 UNION。"""
     return get("content_read").search_select(term, content_type)
@@ -226,3 +219,8 @@ async def publish_blog_item(
         cover=cover,
         tags=tags,
     )
+
+
+async def find_board_id(db: AsyncSession, slug: str) -> uuid.UUID | None:
+    """按 slug 查板块 id（只读，不存在返回 None）；不自动建。"""
+    return await get("content_read").find_board_id(db, slug)

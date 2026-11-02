@@ -1,0 +1,9 @@
+# columns 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+# 步骤 9 切片 3 自 content 拆出：columns/column_applications/column_posts 三表随域迁移。
+name = "columns"
+errors = [
+    "app.modules.columns.errors",
+]
+models = [
+    "app.modules.columns.models",
+]

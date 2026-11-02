@@ -16,12 +16,12 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.columns.seed import SEED_COLUMNS, seed_columns
-from app.modules.content.models import Column
+from app.modules.columns.models import Column
 from app.modules.files.models import LibraryFile
 from app.modules.files.seed import SEED_FILES, seed_files
 from auth import seed_users
 from auth.models import Profile, User
+from scripts.seed_columns import SEED_COLUMNS, seed_columns
 
 
 class _SharedSession:

@@ -16,8 +16,6 @@ from sqlalchemy.sql import Select
 from app.contracts.feed import cursor_order
 from app.modules.content.articles.models import Article
 from app.modules.content.models import (
-    ColumnPost,
-    ColumnPostStatus,
     ContentItem,
     ContentStatus,
 )
@@ -58,21 +56,11 @@ def _article_conditions(
     return [Article.status == "published"]
 
 
-def _column_conditions(
-    author_ids: set[uuid.UUID] | None, board_ids: set[uuid.UUID] | None
-) -> list[Any]:
-    conditions: list[Any] = [ColumnPost.status == ColumnPostStatus.PUBLISHED]
-    if author_ids is not None:
-        conditions.append(ColumnPost.author_id.in_(author_ids))
-    return conditions
-
-
 #: kind → (模型, 条件构造函数)。feed 的 SOURCES 键与此一一对应。
 _SOURCES: dict[str, tuple[Any, Any]] = {
     "discussion": (ContentItem, _discussion_conditions),
     "blog": (ContentItem, _blog_conditions),
     "article": (Article, _article_conditions),
-    "column": (ColumnPost, _column_conditions),
 }
 
 

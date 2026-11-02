@@ -5,7 +5,6 @@ errors = [
     "app.modules.content.errors",
     "app.modules.content.articles",
     "app.modules.content.boards",
-    "app.modules.content.columns",
 ]
 models = [
     "app.modules.content.articles.models",

@@ -4,10 +4,9 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# 内容域子路由：版块 / 专栏挂到 /content 前缀下（问答已是独立模块 app.modules.qa）。
+# 内容域子路由：版块挂到 /content 前缀下（问答/评论/专栏/博客已是独立模块）。
 from app.modules.content.boards.router import router as _boards_router
-from app.modules.content.columns.router import router as _columns_router
-from app.modules.content.models import Column, ContentItem, ContentType
+from app.modules.content.models import ContentItem, ContentType
 from app.modules.content.schemas import (
     ContentItemCreate,
     ContentItemInfo,
@@ -23,18 +22,18 @@ from app.modules.content.service import (
 )
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
-from app.modules.rbac.service import check_owner, user_has_permission
+from app.modules.rbac.service import check_owner, check_owner_id, user_has_permission
 from core.common import (
     ApiResp,
 )
 from core.contracts import CurrentUser
 from core.db.session import get_session
 from core.err import BizError, CommonErr, respond
+from core.ports import columns as columns_port
 from core.ports.authz import get_current_user
 
 router = APIRouter(prefix="/content", tags=["content"])
 router.include_router(_boards_router)
-router.include_router(_columns_router)
 
 
 @router.post("/items", response_model=ApiResp[ContentItemInfo])
@@ -55,13 +54,11 @@ async def create_content_item(
         if not await user_has_permission(db, cur, Permission.columns_publish):
             raise BizError(CommonErr.FORBIDDEN)
         if info.column_id:
-            await check_owner(
-                db,
-                cur,
-                info.column_id,
-                Column,
-                "owner_id",
-                Permission.column_owner_publish,
+            owner_id = await columns_port.column_owner_id(db, info.column_id)
+            if owner_id is None:
+                raise BizError(CommonErr.FORBIDDEN)
+            await check_owner_id(
+                db, cur, owner_id, Permission.column_owner_publish
             )
     if (info.is_pinned or info.is_featured) and not await user_has_permission(
         db, cur, Permission.admin_content_review

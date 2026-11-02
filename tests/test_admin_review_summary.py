@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.deps import COOKIE_NAME, COOKIE_PATH, create_admin_access_token
 from app.modules.admin.models import Report, RolePermission
-from app.modules.content.models import BoardApplication, ColumnApplication
+from app.modules.columns.models import ColumnApplication
+from app.modules.content.models import BoardApplication
 from app.modules.files.models import LibraryFile
 from app.modules.projects.models import ProjectApplication
 from auth.models import Profile, User

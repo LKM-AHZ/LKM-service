@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.admin.models import Report
 from app.modules.admin.schemas import AdminReviewQueueItem, AdminReviewSummary
+from core.ports import columns as columns_port
 from core.ports import content as content_port
 from core.ports import files as files_port
 from core.ports import projects as projects_port
@@ -41,7 +42,7 @@ _QUEUES: tuple[tuple[str, str | None, Any], ...] = (
     ("files", "/admin/files", files_port.pending_files),
     ("reports", "/admin/reports", _pending_reports),
     ("board_applications", None, content_port.pending_board_applications),
-    ("column_applications", None, content_port.pending_column_applications),
+    ("column_applications", None, columns_port.pending_column_applications),
     ("project_applications", None, projects_port.pending_project_applications),
 )
 

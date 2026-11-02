@@ -23,6 +23,7 @@ from core.plugins.manifest import ManifestError
 _LEGACY_MODULES = (
     "admin",
     "blog",
+    "columns",
     "comment",
     "content",
     "exam",
@@ -41,6 +42,7 @@ _LEGACY_MODULES = (
 
 _LEGACY_ERROR_MODULES = (
     "app.modules.blog.errors",
+    "app.modules.columns.errors",
     "app.modules.comment.errors",
     "app.modules.content.errors",
     "app.modules.exam.errors",
@@ -55,7 +57,6 @@ _LEGACY_ERROR_MODULES = (
     "app.modules.admin.moderation",
     "app.modules.content.articles",
     "app.modules.content.boards",
-    "app.modules.content.columns",
 )
 
 _LEGACY_MODEL_MODULES = (
@@ -63,6 +64,7 @@ _LEGACY_MODEL_MODULES = (
     # 步骤 9 切片 3：博客模型迁出 content（表名不变，无需迁移）
     "app.modules.blog.models",
     # 步骤 9 切片 2：评论模型迁出 content（表名不变，无需迁移）
+    "app.modules.columns.models",
     "app.modules.comment.models",
     "app.modules.content.articles.models",
     "app.modules.content.models",

@@ -10,11 +10,12 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.columns.models import Column
+from app.modules.columns.schemas import ColumnInfo
+from app.modules.columns.service import get_column
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
-from app.modules.content.columns.schemas import ColumnInfo
-from app.modules.content.columns.service import get_column
-from app.modules.content.models import Board, Column
+from app.modules.content.models import Board
 from tests.conftest import auth_user_uid
 
 

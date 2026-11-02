@@ -4,7 +4,8 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.columns.schemas import (
+from app.modules.columns.models import Column, ColumnApplication
+from app.modules.columns.schemas import (
     ColumnApplicationCreate,
     ColumnApplicationInfo,
     ColumnApplicationReview,
@@ -13,7 +14,7 @@ from app.modules.content.columns.schemas import (
     ColumnPostInfo,
     ReviewResultData,
 )
-from app.modules.content.columns.service import (
+from app.modules.columns.service import (
     create_application,
     create_post,
     get_application,
@@ -23,7 +24,6 @@ from app.modules.content.columns.service import (
     list_my_column_applications,
     review_application,
 )
-from app.modules.content.models import Column, ColumnApplication
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
 from app.modules.rbac.service import check_owner, user_has_permission
@@ -40,7 +40,7 @@ from core.err import BizError, CommonErr, respond
 from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import RequireLevel, get_current_user
 
-router = APIRouter(prefix="/columns", tags=["content", "columns"])
+router = APIRouter(prefix="/content/columns", tags=["columns"])
 
 
 @router.get("/status", response_model=ModuleStatus)

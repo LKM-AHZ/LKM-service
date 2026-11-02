@@ -1,4 +1,4 @@
-"""专栏示例数据。用法：uv run python -m app.modules.content.columns.seed
+"""专栏示例数据。用法：uv run python scripts/seed_columns.py
 
 为 columns / column_posts 填充社区「专栏」页展示所需的示例数据（幂等）。
 复刻前端原 mock-columns 的结构，字段以中文原文落库（本期仅中文站场景）。
@@ -12,13 +12,9 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.column_models import ColumnPostStatus, ColumnStatus
-from app.modules.content.models import (
-    Board,
-    Column,
-    ColumnApplication,
-    ColumnPost,
-)
+from app.modules.columns.column_models import ColumnPostStatus, ColumnStatus
+from app.modules.columns.models import Column, ColumnApplication, ColumnPost
+from app.modules.content.models import Board
 from core.db.base import now_iso
 from core.db.session import new_worker_session as new_session
 from core.ports.users import ensure_demo_user
@@ -187,7 +183,11 @@ _SEED_POSTS_TEMPLATES: dict[str, list[dict[str, str]]] = {
 
 
 async def _board_id(db: AsyncSession, slug: str | None) -> uuid.UUID | None:
-    """按 slug 解析 Board 主键；对应板块未 seed 时返回 None（不报错）。"""
+    """按 slug 解析 Board 主键；对应板块未 seed 时返回 None（不报错）。
+
+    这是**开发用种子脚本**（不是业务模块）：刻意允许同时读 content 与 columns 两个域，
+    以便按 slug 把专栏挂到已 seed 的板块上。业务代码里没有同样的入口——跨域只在端口后面。
+    """
     if not slug:
         return None
     return await db.scalar(select(Board.id).where(Board.slug == slug))

@@ -18,9 +18,9 @@ from typing import Any
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.columns.models import Column
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
-from app.modules.content.models import Column
 from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item
 from tests.conftest import AuthUser, auth_user_uid
