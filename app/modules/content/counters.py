@@ -67,6 +67,7 @@ _COLUMNS: dict[str, InstrumentedAttribute[int]] = {
     "bookmark_count": ContentItem.bookmark_count,
 }
 
+
 # 真相源：字段名 → 明细表的 content_id 列
 async def write_through_bump(
     db: AsyncSession, item_id: uuid.UUID, field: str, delta: int

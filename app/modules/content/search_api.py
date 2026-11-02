@@ -148,9 +148,7 @@ async def index_docs_batch(
     )
     if not rows:
         return [], after_id
-    names = await get_user_display_names(
-        db, {r.author_id for r in rows if r.author_id}
-    )
+    names = await get_user_display_names(db, {r.author_id for r in rows if r.author_id})
     docs = [
         build_doc(r, names.get(r.author_id, "") if r.author_id else "") for r in rows
     ]

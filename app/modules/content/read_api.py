@@ -16,6 +16,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.models import (
+    Board,
     BoardApplication,
     ColumnApplication,
     ContentComment,
@@ -68,9 +69,7 @@ async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
     return ItemBrief(id=row.id, title=row.title, author_id=row.author_id)
 
 
-async def comment_brief(
-    db: AsyncSession, comment_id: uuid.UUID
-) -> CommentBrief | None:
+async def comment_brief(db: AsyncSession, comment_id: uuid.UUID) -> CommentBrief | None:
     """未软删的评论摘要。"""
     row = await db.scalar(
         select(ContentComment).where(
@@ -80,7 +79,10 @@ async def comment_brief(
     if row is None:
         return None
     return CommentBrief(
-        id=row.id, content_id=row.content_id, user_id=row.user_id, parent_id=row.parent_id
+        id=row.id,
+        content_id=row.content_id,
+        user_id=row.user_id,
+        parent_id=row.parent_id,
     )
 
 
@@ -91,7 +93,9 @@ async def qa_answer_brief(
     row = await db.scalar(select(QAAnswer).where(QAAnswer.id == answer_id))
     if row is None:
         return None
-    return QaAnswerBrief(id=row.id, question_id=row.question_id, author_id=row.author_id)
+    return QaAnswerBrief(
+        id=row.id, question_id=row.question_id, author_id=row.author_id
+    )
 
 
 async def qa_question_brief(
@@ -229,9 +233,7 @@ async def item_counts(
     return int(row[0]), int(row[1])
 
 
-async def liked_by(
-    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
+async def liked_by(db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     """该用户是否点赞过该内容。"""
     return (
         await db.scalar(
@@ -267,74 +269,3 @@ def board_brief_view() -> Any:
     return select(Board.id.label("id"), Board.title.label("title")).subquery(
         "board_brief"
     )
-
-
-async def bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> int | None:
-    """当前收藏计数；内容行不存在（含软删）返回 None。"""
-    value = await db.scalar(
-        select(ContentItem.bookmark_count).where(
-            ContentItem.id == content_id,
-            ContentItem.deleted_at.is_(None),
-        )
-    )
-    return None if value is None else int(value)
-
-
-async def bump_bookmark_count(
-    db: AsyncSession, content_id: uuid.UUID, delta: int
-) -> int | None:
-    """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 None。"""
-    result = await db.execute(
-        sa_update(ContentItem)
-        .where(
-            ContentItem.id == content_id,
-            ContentItem.deleted_at.is_(None),
-        )
-        .values(bookmark_count=func.greatest(ContentItem.bookmark_count + delta, 0))
-        .returning(ContentItem.bookmark_count)
-    )
-    row = result.first()
-    return None if row is None else int(row[0])
-
-
-async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
-    """内容行是否存在（浏览上报的 404 前置判定）。"""
-    return (
-        await db.scalar(
-            select(ContentItem.id).where(
-                ContentItem.id == content_id,
-                ContentItem.deleted_at.is_(None),
-            )
-        )
-    ) is not None
-
-
-async def item_counts(
-    db: AsyncSession, content_id: uuid.UUID
-) -> tuple[int, int] | None:
-    """``(like_count, bookmark_count)``；内容行不存在（含软删）返回 None。"""
-    row = (
-        await db.execute(
-            select(ContentItem.like_count, ContentItem.bookmark_count).where(
-                ContentItem.id == content_id,
-                ContentItem.deleted_at.is_(None),
-            )
-        )
-    ).first()
-    if row is None:
-        return None
-    return int(row[0]), int(row[1])
-
-
-async def liked_by(
-    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
-    """该用户是否点赞过该内容。"""
-    return (
-        await db.scalar(
-            select(ContentLike.content_id).where(
-                ContentLike.content_id == content_id,
-                ContentLike.user_id == user_id,
-            )
-        )
-    ) is not None

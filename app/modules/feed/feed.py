@@ -22,19 +22,11 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.articles.models import Article
-from app.modules.content.models import (
-    ColumnPost,
-    ColumnPostStatus,
-    ContentItem,
-    ContentStatus,
-    QAQuestion,
-)
 from app.modules.feed.schemas import FeedItem
-from app.modules.projects.models import Project
+from core.ports import content as content_port
+from core.ports import projects as projects_port
 from core.ports.snapshot import get_user_display_names as _author_map
 
 _PREVIEW_LEN = 150
@@ -50,71 +42,6 @@ def _preview_of(text: str | None, limit: int = _PREVIEW_LEN) -> str:
     return cleaned[:limit].rstrip() + "..."
 
 
-def _before_conds(
-    col_time: Any,
-    model_id: Any,
-    before_time: datetime | None,
-    before_id: uuid.UUID | None,
-) -> list[Any]:
-    """(created_at, id) 游标下滤；无 id 时只按时间过滤。"""
-    if before_time is None:
-        return []
-    if before_id is None:
-        return [col_time < before_time]
-    return [
-        # created_at < before_time OR (created_at == before_time AND id < before_id)
-        (col_time < before_time) | ((col_time == before_time) & (model_id < before_id))
-    ]
-
-
-def _after_conds(
-    col_time: Any,
-    model_id: Any,
-    after_time: datetime,
-    after_id: uuid.UUID | None,
-) -> list[Any]:
-    """(created_at, id) 水位上滤条件。
-
-    与 :func:`_before_conds` 严格互补：``> after`` 或 ``== after 且 id >``。
-
-    首次运行无水位（``after_id is None``）时退化为纯 ``col_time > after_time``——
-    不能写成 ``model_id > NULL``：SQL 里该式恒为 NULL，会让「同一时刻的条目」被全部漏掉。
-    """
-    if after_id is None:
-        return [col_time > after_time]
-    return [
-        (col_time > after_time) | ((col_time == after_time) & (model_id > after_id))
-    ]
-
-
-def _cursor_order(
-    col_time: Any,
-    model_id: Any,
-    conditions: list[Any],
-    before_time: datetime | None,
-    before_id: uuid.UUID | None,
-    after_time: datetime | None,
-    after_id: uuid.UUID | None,
-) -> tuple[Any, ...]:
-    """按游标方向**就地**给 ``conditions`` 追加过滤，返回 ``order_by`` 元组。
-
-    - 给 ``after_time`` → 升序增量扫描（M6.11 fanout 按源水位取新内容）；
-    - 否则按 ``before_time`` 降序（读路径分页）。
-    两方向互斥（调用方只传一个）；各源共用本函数以保证「同源两路条件永不漂移」。
-    """
-    if after_time is not None:
-        conditions.extend(_after_conds(col_time, model_id, after_time, after_id))
-        return (col_time.asc(), model_id.asc())
-    if before_time is not None:
-        conditions.extend(_before_conds(col_time, model_id, before_time, before_id))
-    return (col_time.desc(), model_id.desc())
-
-
-# ---------------------------------------------------------------------------
-# Discussion（讨论帖，content_items 中 content_type==discussion）
-# ---------------------------------------------------------------------------
-
-
 async def _fetch_discussion(
     db: AsyncSession,
     author_ids: set[uuid.UUID] | None,
@@ -125,26 +52,17 @@ async def _fetch_discussion(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    conditions: list[Any] = [
-        ContentItem.content_type == "discussion",
-        ContentItem.status == ContentStatus.PUBLISHED,
-        ContentItem.deleted_at.is_(None),
-    ]
-    if author_ids is not None:
-        author_cond = ContentItem.author_id.in_(author_ids)
-        if board_ids:
-            author_cond = author_cond | ContentItem.board_id.in_(board_ids)
-        conditions.append(author_cond)
-    order_by = _cursor_order(
-        ContentItem.created_at,
-        ContentItem.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = content_port.select_feed_source(
+        "discussion",
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(ContentItem).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -185,17 +103,17 @@ async def _fetch_article(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    conditions: list[Any] = [Article.status == "published"]
-    order_by = _cursor_order(
-        Article.created_at,
-        Article.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = content_port.select_feed_source(
+        "article",
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(Article).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -214,7 +132,7 @@ async def _fetch_article(
     ]
 
 
-def _article_heat(r: Article) -> float:
+def _article_heat(r: Any) -> float:
     return math.log1p(r.views + r.likes * 2 + r.comments * 3 + r.bookmarks * 4)
 
 
@@ -233,19 +151,17 @@ async def _fetch_column(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    conditions: list[Any] = [ColumnPost.status == ColumnPostStatus.PUBLISHED]
-    if author_ids is not None:
-        conditions.append(ColumnPost.author_id.in_(author_ids))
-    order_by = _cursor_order(
-        ColumnPost.created_at,
-        ColumnPost.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = content_port.select_feed_source(
+        "column",
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(ColumnPost).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -264,7 +180,7 @@ async def _fetch_column(
     ]
 
 
-def _column_heat(r: ColumnPost) -> float:
+def _column_heat(r: Any) -> float:
     return math.log1p(r.view_count + r.like_count * 2 + r.comment_count * 3)
 
 
@@ -283,19 +199,17 @@ async def _fetch_qa(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    conditions: list[Any] = [QAQuestion.status.in_(["open", "accepted"])]
-    if author_ids is not None:
-        conditions.append(QAQuestion.author_id.in_(author_ids))
-    order_by = _cursor_order(
-        QAQuestion.created_at,
-        QAQuestion.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = content_port.select_feed_source(
+        "qa",
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(QAQuestion).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -329,19 +243,16 @@ async def _fetch_project(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    conditions: list[Any] = [Project.status == "active"]
-    if author_ids is not None:
-        conditions.append(Project.applicant_id.in_(author_ids))
-    order_by = _cursor_order(
-        Project.created_at,
-        Project.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = projects_port.select_feed_source(
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(Project).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     return [
         FeedItem(
@@ -375,23 +286,17 @@ async def _fetch_blog(
     blog_post 只落 content_items、无独立分表源（forum/article/column/qa 走各自旧表），
     故单独从 content_items 补源，避免与其他源重复。
     """
-    conditions: list[Any] = [
-        ContentItem.content_type == "blog_post",
-        ContentItem.status == ContentStatus.PUBLISHED,
-        ContentItem.deleted_at.is_(None),  # 软删（批 4）
-    ]
-    if author_ids is not None:
-        conditions.append(ContentItem.author_id.in_(author_ids))
-    order_by = _cursor_order(
-        ContentItem.created_at,
-        ContentItem.id,
-        conditions,
-        before_time,
-        before_id,
-        after_time,
-        after_id,
+    stmt = stmt = content_port.select_feed_source(
+        "blog",
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
     )
-    stmt = select(ContentItem).where(*conditions).order_by(*order_by).limit(limit)
+
     rows = (await db.execute(stmt)).scalars().all()
     names = await _author_map(db, {r.author_id for r in rows if r.author_id})
     return [

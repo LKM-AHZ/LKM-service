@@ -178,12 +178,15 @@ class _ProjectsReadImpl:
 
         return await is_member(db, project_id, user_id)
 
-    async def pending_project_applications(
-        self, db: AsyncSession
-    ) -> tuple[int, Any]:
+    async def pending_project_applications(self, db: AsyncSession) -> tuple[int, Any]:
         from app.modules.projects.read_api import pending_project_applications
 
         return await pending_project_applications(db)
+
+    def select_feed_source(self, **kwargs: Any) -> Any:
+        from app.modules.projects.feed_api import select_source
+
+        return select_source(**kwargs)
 
 
 class _ExamReadImpl:
@@ -268,26 +271,41 @@ class _AdminGuardImpl:
         self.require_admin_2fa = require_admin_2fa
 
 
-
 class _FeedFanoutImpl:
     """``core.ports.feed`` 的实现：转发到 feed 域的物化写入口。"""
 
-    async def backfill_author(self, db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, limit: int) -> int:
+    async def backfill_author(
+        self, db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, limit: int
+    ) -> int:
         from app.modules.feed.fanout import backfill_author
 
         return await backfill_author(db, follower_id, author_id, limit)
 
-    async def backfill_board(self, db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, limit: int) -> int:
+    async def backfill_board(
+        self, db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, limit: int
+    ) -> int:
         from app.modules.feed.fanout import backfill_board
 
         return await backfill_board(db, follower_id, board_id, limit)
 
-    async def remove_author_items(self, db: AsyncSession, follower_id: uuid.UUID, author_id: uuid.UUID, keep_boards: set[uuid.UUID]) -> int:
+    async def remove_author_items(
+        self,
+        db: AsyncSession,
+        follower_id: uuid.UUID,
+        author_id: uuid.UUID,
+        keep_boards: set[uuid.UUID],
+    ) -> int:
         from app.modules.feed.fanout import remove_author_items
 
         return await remove_author_items(db, follower_id, author_id, keep_boards)
 
-    async def remove_board_items(self, db: AsyncSession, follower_id: uuid.UUID, board_id: uuid.UUID, keep_authors: set[uuid.UUID]) -> int:
+    async def remove_board_items(
+        self,
+        db: AsyncSession,
+        follower_id: uuid.UUID,
+        board_id: uuid.UUID,
+        keep_authors: set[uuid.UUID],
+    ) -> int:
         from app.modules.feed.fanout import remove_board_items
 
         return await remove_board_items(db, follower_id, board_id, keep_authors)
@@ -301,27 +319,37 @@ class _FeedFanoutImpl:
 class _InteractionReadImpl:
     """``core.ports.interaction`` 的实现：转发到 interaction 域的读口。"""
 
-    async def get_following_ids(self, db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    async def get_following_ids(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
         from app.modules.interaction.service import get_following_ids
 
         return await get_following_ids(db, user_id)
 
-    async def get_followed_board_ids(self, db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    async def get_followed_board_ids(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
         from app.modules.interaction.service import get_followed_board_ids
 
         return await get_followed_board_ids(db, user_id)
 
-    async def list_bigv_author_ids(self, db: AsyncSession, *, threshold: int) -> list[uuid.UUID]:
+    async def list_bigv_author_ids(
+        self, db: AsyncSession, *, threshold: int
+    ) -> list[uuid.UUID]:
         from app.modules.interaction.service import list_bigv_author_ids
 
         return await list_bigv_author_ids(db, threshold=threshold)
 
-    async def list_follower_ids(self, db: AsyncSession, author_id: uuid.UUID, *, limit: int) -> list[uuid.UUID]:
+    async def list_follower_ids(
+        self, db: AsyncSession, author_id: uuid.UUID, *, limit: int
+    ) -> list[uuid.UUID]:
         from app.modules.interaction.service import list_follower_ids
 
         return await list_follower_ids(db, author_id, limit=limit)
 
-    async def list_board_follower_ids(self, db: AsyncSession, board_id: uuid.UUID, *, limit: int) -> list[uuid.UUID]:
+    async def list_board_follower_ids(
+        self, db: AsyncSession, board_id: uuid.UUID, *, limit: int
+    ) -> list[uuid.UUID]:
         from app.modules.interaction.service import list_board_follower_ids
 
         return await list_board_follower_ids(db, board_id, limit=limit)
@@ -330,7 +358,6 @@ class _InteractionReadImpl:
         from app.modules.interaction.read_api import favorite_count_subquery
 
         return favorite_count_subquery(outer_column)
-
 
 
 class _ContentReadImpl:
@@ -368,16 +395,12 @@ class _ContentReadImpl:
 
         return await daily_discussion_counts(db, start, days)
 
-    async def pending_board_applications(
-        self, db: AsyncSession
-    ) -> tuple[int, Any]:
+    async def pending_board_applications(self, db: AsyncSession) -> tuple[int, Any]:
         from app.modules.content.read_api import pending_board_applications
 
         return await pending_board_applications(db)
 
-    async def pending_column_applications(
-        self, db: AsyncSession
-    ) -> tuple[int, Any]:
+    async def pending_column_applications(self, db: AsyncSession) -> tuple[int, Any]:
         from app.modules.content.read_api import pending_column_applications
 
         return await pending_column_applications(db)
@@ -459,7 +482,10 @@ class _ContentReadImpl:
 
         return await liked_by(db, content_id, user_id)
 
+    def select_feed_source(self, kind: str, **kwargs: Any) -> Any:
+        from app.modules.content.feed_api import select_source
 
+        return select_source(kind, **kwargs)
 
 
 class _FilesReadImpl:
@@ -496,7 +522,6 @@ class _FilesReadImpl:
         from app.modules.files.search_api import index_docs_batch
 
         return await index_docs_batch(db, after_id=after_id, limit=limit)
-
 
 
 def register() -> None:

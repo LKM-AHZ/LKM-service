@@ -27,9 +27,7 @@ async def get_followed_board_ids(
     return await get("interaction_read").get_followed_board_ids(db, user_id)
 
 
-async def list_bigv_author_ids(
-    db: AsyncSession, *, threshold: int
-) -> list[uuid.UUID]:
+async def list_bigv_author_ids(db: AsyncSession, *, threshold: int) -> list[uuid.UUID]:
     """关注者数超过 ``threshold`` 的作者 id。"""
     return await get("interaction_read").list_bigv_author_ids(db, threshold=threshold)
 
@@ -45,7 +43,9 @@ async def list_board_follower_ids(
     db: AsyncSession, board_id: uuid.UUID, *, limit: int
 ) -> list[uuid.UUID]:
     """某版块的关注者 id（最多 ``limit`` 条）。"""
-    return await get("interaction_read").list_board_follower_ids(db, board_id, limit=limit)
+    return await get("interaction_read").list_board_follower_ids(
+        db, board_id, limit=limit
+    )
 
 
 def favorite_count_subquery(outer_column: Any) -> Any:

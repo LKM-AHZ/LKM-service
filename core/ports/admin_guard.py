@@ -21,9 +21,7 @@ from core.ports.registry import PortNotBound, get, is_bound
 
 async def _unbound() -> Any:
     """未装配时的占位依赖：**请求期**才失败，绝不静默放行。"""
-    raise PortNotBound(
-        "端口 'admin_guard' 未绑定：后台端点须先经 boot.assemble() 装配"
-    )
+    raise PortNotBound("端口 'admin_guard' 未绑定：后台端点须先经 boot.assemble() 装配")
 
 
 def require_admin_2fa() -> Any:

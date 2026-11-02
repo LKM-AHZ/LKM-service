@@ -38,8 +38,6 @@ async def index_doc(db: AsyncSession, file_id: Any) -> Any:
     return await get("files_read").index_doc(db, file_id)
 
 
-async def index_docs_batch(
-    db: AsyncSession, *, after_id: Any, limit: int
-) -> Any:
+async def index_docs_batch(db: AsyncSession, *, after_id: Any, limit: int) -> Any:
     """按 id 升序取一窗公开文件文档（全量重建索引）。"""
     return await get("files_read").index_docs_batch(db, after_id=after_id, limit=limit)

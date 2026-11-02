@@ -23,6 +23,7 @@ from core.ports.users import count_admission_users
 
 logger = logging.getLogger(__name__)
 
+
 async def _pending_reports(db: AsyncSession) -> tuple[int, Any]:
     """举报待审：本域自有模型，直接聚合。"""
     row = (

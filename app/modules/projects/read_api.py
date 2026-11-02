@@ -81,9 +81,10 @@ async def pending_project_applications(
     """待审项目申请：``(数量, 最早提交时间)``。"""
     row = (
         await db.execute(
-            select(func.count(ProjectApplication.id), func.min(ProjectApplication.created_at)).where(
-                ProjectApplication.status == "pending"
-            )
+            select(
+                func.count(ProjectApplication.id),
+                func.min(ProjectApplication.created_at),
+            ).where(ProjectApplication.status == "pending")
         )
     ).one()
     return int(row[0]), row[1]

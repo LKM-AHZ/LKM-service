@@ -168,9 +168,6 @@ source_modules = ["app.modules.admin","app.modules.content","app.modules.exam","
 forbidden_modules = ["app.modules.admin","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "true"
 ignore_imports = [
-    "app.modules.feed.feed -> app.modules.content.articles.models",
-    "app.modules.feed.feed -> app.modules.content.models",
-    "app.modules.feed.feed -> app.modules.projects.models",
     "app.modules.content.models -> app.modules.interaction.models",  # Board.followers 关系目标
     "app.modules.interaction.models -> app.modules.content.models",  # BoardFollow.board 关系目标(TYPE_CHECKING)
 ]

@@ -160,9 +160,7 @@ async def index_docs_batch(
     db: AsyncSession, *, after_id: uuid.UUID, limit: int
 ) -> tuple[list[IndexDoc], uuid.UUID]:
     """按 id 升序取一窗公开文件并映射成文档（全量重建索引）。"""
-    rows = (
-        (await db.execute(select_public_batch(after_id, limit))).scalars().all()
-    )
+    rows = (await db.execute(select_public_batch(after_id, limit))).scalars().all()
     if not rows:
         return [], after_id
     names = await get_user_display_names(db, {r.uploader_id for r in rows})

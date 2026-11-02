@@ -66,9 +66,7 @@ def search_select(term: str, content_type: str | None) -> Any:
     return get("content_read").search_select(term, content_type)
 
 
-async def search_count(
-    db: AsyncSession, term: str, content_type: str | None
-) -> int:
+async def search_count(db: AsyncSession, term: str, content_type: str | None) -> int:
     """内容命中数（PG 路径分页总数）。"""
     return await get("content_read").search_count(db, term, content_type)
 
@@ -92,9 +90,7 @@ async def index_doc(db: AsyncSession, item_id: uuid.UUID) -> Any:
     return await get("content_read").index_doc(db, item_id)
 
 
-async def index_docs_batch(
-    db: AsyncSession, *, after_id: uuid.UUID, limit: int
-) -> Any:
+async def index_docs_batch(db: AsyncSession, *, after_id: uuid.UUID, limit: int) -> Any:
     """按 id 升序取一窗已发布文档（全量重建索引）。"""
     return await get("content_read").index_docs_batch(
         db, after_id=after_id, limit=limit
@@ -135,8 +131,30 @@ async def item_counts(
     return await get("content_read").item_counts(db, content_id)
 
 
-async def liked_by(
-    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
+async def liked_by(db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     """该用户是否点赞过该内容。"""
     return await get("content_read").liked_by(db, content_id, user_id)
+
+
+def select_feed_source(
+    kind: str,
+    *,
+    author_ids: Any,
+    board_ids: Any,
+    before_time: Any,
+    before_id: Any,
+    after_time: Any,
+    after_id: Any,
+    limit: int,
+) -> Any:
+    """按 kind（discussion/article/column/qa/blog）取一窗时间线源行（未执行）。"""
+    return get("content_read").select_feed_source(
+        kind,
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
+    )

@@ -46,3 +46,25 @@ async def is_member(
 async def pending_project_applications(db: AsyncSession) -> tuple[int, Any]:
     """待审项目申请：``(数量, 最早提交时间)``。"""
     return await get("projects_read").pending_project_applications(db)
+
+
+def select_feed_source(
+    *,
+    author_ids: Any,
+    board_ids: Any,
+    before_time: Any,
+    before_id: Any,
+    after_time: Any,
+    after_id: Any,
+    limit: int,
+) -> Any:
+    """活跃项目的按游标一窗（未执行）。"""
+    return get("projects_read").select_feed_source(
+        author_ids=author_ids,
+        board_ids=board_ids,
+        before_time=before_time,
+        before_id=before_id,
+        after_time=after_time,
+        after_id=after_id,
+        limit=limit,
+    )

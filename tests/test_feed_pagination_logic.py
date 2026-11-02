@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy import Column, DateTime, MetaData, Table, Uuid
 
+from app.contracts import feed as feed_contracts
 from app.modules.admin.moderation.engine import Rule
 from app.modules.feed import feed as feed_src
 from app.modules.feed import service
@@ -166,7 +167,7 @@ def test_before_cursor_without_id_only_filters_by_time() -> None:
         Column("created_at", DateTime(timezone=True)),
         Column("id", Uuid),
     )
-    condition = feed_src._before_conds(
+    condition = feed_contracts.before_conditions(
         table.c.created_at, table.c.id, datetime.datetime.now(datetime.UTC), None
     )
     sql = str(condition[0])
