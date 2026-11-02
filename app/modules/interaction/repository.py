@@ -20,10 +20,8 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.modules.content.models import Board, ContentItem, ContentLike
 from app.modules.interaction.models import (
     BoardFollow,
     InteractionFavorite,
@@ -32,82 +30,52 @@ from app.modules.interaction.models import (
 )
 from core.db.base import now_iso
 from core.db.repository import AsyncRepository, DbSession
+from core.ports import content as content_port
 
 
-class InteractionContentItemRepository(AsyncRepository[ContentItem]):
-    """interaction 侧对 ``content_items`` 的只读判定 + 收藏计数原子增减。"""
+class InteractionContentItemRepository:
+    """interaction 侧对 ``content_items`` 的只读判定 + 收藏计数原子增减。
 
-    model = ContentItem
+    实现收归 content 域（``app/modules/content/read_api.py``）：计数列、软删口径与原子
+    UPDATE 都由属主维护，interaction 只经 ``core.ports.content`` 调用。
+    """
+
+    def __init__(self, db: DbSession) -> None:
+        self.db = db
 
     async def get_bookmark_count(self, content_id: uuid.UUID) -> int | None:
         """当前收藏计数；内容行不存在返回 ``None``。"""
-        return await self.db.scalar(
-            select(ContentItem.bookmark_count).where(
-                ContentItem.id == content_id,
-                ContentItem.deleted_at.is_(None),
-            )
-        )
+        return await content_port.bookmark_count(self.db, content_id)
 
     async def bump_bookmark_count(
         self, content_id: uuid.UUID, delta: int
     ) -> int | None:
-        """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 ``None``。
-
-        「不存在」也包含已软删（``deleted_at`` 非空）——与同类的 ``get_bookmark_count`` /
-        ``exists_content`` 同口径：否则写路径会对一条读路径报 404 的内容照改计数，读不到却
-        改得动（service 的先读守卫是另一条语句，中间并发软删即可穿透）。
-        """
-        result = await self.db.execute(
-            sa_update(ContentItem)
-            .where(
-                ContentItem.id == content_id,
-                ContentItem.deleted_at.is_(None),
-            )
-            .values(bookmark_count=func.greatest(ContentItem.bookmark_count + delta, 0))
-            .returning(ContentItem.bookmark_count)
-        )
-        row: Any = result.first()
-        return None if row is None else int(row[0])
+        """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 ``None``。"""
+        return await content_port.bump_bookmark_count(self.db, content_id, delta)
 
     async def exists_content(self, content_id: uuid.UUID) -> bool:
         """内容行是否存在（浏览上报的 404 前置判定）。"""
-        return await self.exists(ContentItem.id == content_id)
+        return await content_port.exists_content(self.db, content_id)
 
     async def get_viewer_state(
         self, *, content_id: uuid.UUID, user_id: uuid.UUID | None
     ) -> tuple[bool, bool, int, int] | None:
         """互动态 ``(liked, favorited, like_count, bookmark_count)``。
 
-        内容行不存在（含已软删）返回 ``None``，由 service 转 404——与
-        :meth:`get_bookmark_count` 同口径。``user_id`` 为 ``None``（匿名访客）时只回计数，
-        ``liked``/``favorited`` 恒 false，且**不查**两张明细表。
-
-        点赞明细 ``content_likes`` 属 content 域，本类是 interaction 侧既有的
-        「只读内容表」缝（``interaction.repository -> content.models`` 已豁免），
-        故直接按行存在性判定，不再绕一层服务调用。
+        内容行不存在（含已软删）返回 ``None``，由 service 转 404。``user_id`` 为 ``None``
+        （匿名访客）时只回计数，``liked``/``favorited`` 恒 false，且不查明细表。
         """
-        counts = (
-            await self.db.execute(
-                select(ContentItem.like_count, ContentItem.bookmark_count).where(
-                    ContentItem.id == content_id,
-                    ContentItem.deleted_at.is_(None),
-                )
-            )
-        ).first()
+        counts = await content_port.item_counts(self.db, content_id)
         if counts is None:
             return None
+        like_count, bookmark_count = counts
         if user_id is None:
-            return False, False, int(counts[0]), int(counts[1])
-        liked = await self.db.scalar(
-            select(ContentLike.content_id).where(
-                ContentLike.content_id == content_id,
-                ContentLike.user_id == user_id,
-            )
-        )
+            return False, False, like_count, bookmark_count
+        liked = await content_port.liked_by(self.db, content_id, user_id)
         favorited = await InteractionFavoriteRepository(self.db).is_favorited(
             user_id=user_id, content_id=content_id
         )
-        return liked is not None, favorited, int(counts[0]), int(counts[1])
+        return liked, favorited, like_count, bookmark_count
 
 
 class InteractionFavoriteRepository(AsyncRepository[InteractionFavorite]):
@@ -149,15 +117,13 @@ class InteractionFavoriteRepository(AsyncRepository[InteractionFavorite]):
 
         否则 total 与列表互相矛盾（列表 join 过滤后为空、total 仍计数）。
         """
+        brief = content_port.content_brief_view()
         return (
             await self.db.scalar(
                 select(func.count())
                 .select_from(InteractionFavorite)
-                .join(ContentItem, ContentItem.id == InteractionFavorite.content_id)
-                .where(
-                    InteractionFavorite.user_id == user_id,
-                    ContentItem.deleted_at.is_(None),
-                )
+                .join(brief, brief.c.id == InteractionFavorite.content_id)
+                .where(InteractionFavorite.user_id == user_id)
             )
             or 0
         )
@@ -166,18 +132,18 @@ class InteractionFavoriteRepository(AsyncRepository[InteractionFavorite]):
         self, user_id: uuid.UUID, *, offset: int, limit: int
     ) -> list[Any]:
         """「我的收藏」分页（join 内容摘要），按 created_at/content_id 倒序。"""
+        brief = content_port.content_brief_view()
         stmt = (
             select(
                 InteractionFavorite.content_id,
                 InteractionFavorite.created_at,
-                ContentItem.content_type,
-                ContentItem.title,
-                ContentItem.slug,
-                ContentItem.board_id,
+                brief.c.content_type,
+                brief.c.title,
+                brief.c.slug,
+                brief.c.board_id,
             )
-            .join(ContentItem, ContentItem.id == InteractionFavorite.content_id)
+            .join(brief, brief.c.id == InteractionFavorite.content_id)
             .where(InteractionFavorite.user_id == user_id)
-            .where(ContentItem.deleted_at.is_(None))
             .order_by(
                 InteractionFavorite.created_at.desc(),
                 InteractionFavorite.content_id.desc(),
@@ -207,15 +173,13 @@ class InteractionViewLogRepository(AsyncRepository[InteractionViewLog]):
 
     async def count_for_user(self, user_id: uuid.UUID) -> int:
         """历史总数——与 :meth:`list_page` 同口径：排除内容已软删的行（批 4）。"""
+        brief = content_port.content_brief_view()
         return (
             await self.db.scalar(
                 select(func.count())
                 .select_from(InteractionViewLog)
-                .join(ContentItem, ContentItem.id == InteractionViewLog.content_id)
-                .where(
-                    InteractionViewLog.user_id == user_id,
-                    ContentItem.deleted_at.is_(None),
-                )
+                .join(brief, brief.c.id == InteractionViewLog.content_id)
+                .where(InteractionViewLog.user_id == user_id)
             )
             or 0
         )
@@ -224,18 +188,18 @@ class InteractionViewLogRepository(AsyncRepository[InteractionViewLog]):
         self, user_id: uuid.UUID, *, offset: int, limit: int
     ) -> list[Any]:
         """「我的浏览历史」分页（join 内容摘要），按 viewed_at/id 倒序。"""
+        brief = content_port.content_brief_view()
         stmt = (
             select(
                 InteractionViewLog.content_id,
                 InteractionViewLog.viewed_at,
-                ContentItem.content_type,
-                ContentItem.title,
-                ContentItem.slug,
-                ContentItem.board_id,
+                brief.c.content_type,
+                brief.c.title,
+                brief.c.slug,
+                brief.c.board_id,
             )
-            .join(ContentItem, ContentItem.id == InteractionViewLog.content_id)
+            .join(brief, brief.c.id == InteractionViewLog.content_id)
             .where(InteractionViewLog.user_id == user_id)
-            .where(ContentItem.deleted_at.is_(None))
             .order_by(InteractionViewLog.viewed_at.desc(), InteractionViewLog.id.desc())
             .offset(offset)
             .limit(limit)
@@ -393,27 +357,27 @@ class BoardFollowRepository(AsyncRepository[BoardFollow]):
 class BoardReadRepository:
     """板块表**只读**缝（关注目标存在性 + 标题回填）。
 
-    原为 feed 侧的 ``FeedBoardRepository``；关注关系迁入 interaction 后随之迁来（它唯一
-    的消费方就是关注写/查，时间线并不用它）。刻意不继承 ``AsyncRepository[Board]``：继承
-    会把 create/update/delete/pg_upsert 这整套写面暴露给 interaction 域，既与该类契约、
-    也与 pyproject 里「interaction.repository -> content.models 只读缝」的 import-linter
-    豁免口径相矛盾；而且 ``Board`` 没有 ``deleted_at``，继承来的 soft_delete/soft_delete_where
-    会静默退化成真 DELETE（内容表实删）。写路径请回 content 域自己的仓储。
+    经 content 提供的可 join 视图读取，interaction 不持有 ``Board`` 模型。
     """
 
     def __init__(self, db: DbSession) -> None:
         self.db = db
 
-    async def get(self, board_id: uuid.UUID) -> Board | None:
-        """按主键取板块（不存在 → ``None``）。"""
-        return await self.db.get(Board, board_id)
+    async def get(self, board_id: uuid.UUID) -> Any | None:
+        """按主键取板块摘要（不存在 → ``None``）。"""
+        brief = content_port.board_brief_view()
+        return (
+            await self.db.execute(select(brief).where(brief.c.id == board_id))
+        ).first()
 
     async def title_map(self, board_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """板块 id → 标题。"""
         if not board_ids:
             return {}
+        brief = content_port.board_brief_view()
         rows = (
-            (await self.db.execute(select(Board).where(Board.id.in_(board_ids))))
-            .scalars()
-            .all()
-        )
-        return {b.id: b.title for b in rows}
+            await self.db.execute(
+                select(brief.c.id, brief.c.title).where(brief.c.id.in_(board_ids))
+            )
+        ).all()
+        return {row.id: row.title for row in rows}

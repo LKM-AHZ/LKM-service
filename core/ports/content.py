@@ -99,3 +99,44 @@ async def index_docs_batch(
     return await get("content_read").index_docs_batch(
         db, after_id=after_id, limit=limit
     )
+
+
+def content_brief_view() -> Any:
+    """内容摘要的可 join 子查询（``id``/``content_type``/``title``/``slug``/``board_id``）。"""
+    return get("content_read").content_brief_view()
+
+
+def board_brief_view() -> Any:
+    """板块摘要的可 join 子查询（``id``/``title``）。"""
+    return get("content_read").board_brief_view()
+
+
+async def bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> Any:
+    """当前收藏计数；行不存在（含软删）返回 None。"""
+    return await get("content_read").bookmark_count(db, content_id)
+
+
+async def bump_bookmark_count(
+    db: AsyncSession, content_id: uuid.UUID, delta: int
+) -> Any:
+    """原子增减 ``bookmark_count`` 并返回即时读数。"""
+    return await get("content_read").bump_bookmark_count(db, content_id, delta)
+
+
+async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
+    """内容行是否存在。"""
+    return await get("content_read").exists_content(db, content_id)
+
+
+async def item_counts(
+    db: AsyncSession, content_id: uuid.UUID
+) -> tuple[int, int] | None:
+    """``(like_count, bookmark_count)``。"""
+    return await get("content_read").item_counts(db, content_id)
+
+
+async def liked_by(
+    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """该用户是否点赞过该内容。"""
+    return await get("content_read").liked_by(db, content_id, user_id)

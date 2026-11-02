@@ -418,6 +418,47 @@ class _ContentReadImpl:
 
         return await index_docs_batch(db, after_id=after_id, limit=limit)
 
+    def content_brief_view(self) -> Any:
+        from app.modules.content.read_api import content_brief_view
+
+        return content_brief_view()
+
+    def board_brief_view(self) -> Any:
+        from app.modules.content.read_api import board_brief_view
+
+        return board_brief_view()
+
+    async def bookmark_count(self, db: AsyncSession, content_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import bookmark_count
+
+        return await bookmark_count(db, content_id)
+
+    async def bump_bookmark_count(
+        self, db: AsyncSession, content_id: uuid.UUID, delta: int
+    ) -> Any:
+        from app.modules.content.read_api import bump_bookmark_count
+
+        return await bump_bookmark_count(db, content_id, delta)
+
+    async def exists_content(self, db: AsyncSession, content_id: uuid.UUID) -> bool:
+        from app.modules.content.read_api import exists_content
+
+        return await exists_content(db, content_id)
+
+    async def item_counts(
+        self, db: AsyncSession, content_id: uuid.UUID
+    ) -> tuple[int, int] | None:
+        from app.modules.content.read_api import item_counts
+
+        return await item_counts(db, content_id)
+
+    async def liked_by(
+        self, db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        from app.modules.content.read_api import liked_by
+
+        return await liked_by(db, content_id, user_id)
+
 
 
 

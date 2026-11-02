@@ -203,7 +203,109 @@ async def bump_bookmark_count(
 async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
     """内容行是否存在（浏览上报的 404 前置判定）。"""
     return (
-        await db.scalar(select(ContentItem.id).where(ContentItem.id == content_id))
+        await db.scalar(
+            select(ContentItem.id).where(
+                ContentItem.id == content_id,
+                ContentItem.deleted_at.is_(None),
+            )
+        )
+    ) is not None
+
+
+async def item_counts(
+    db: AsyncSession, content_id: uuid.UUID
+) -> tuple[int, int] | None:
+    """``(like_count, bookmark_count)``；内容行不存在（含软删）返回 None。"""
+    row = (
+        await db.execute(
+            select(ContentItem.like_count, ContentItem.bookmark_count).where(
+                ContentItem.id == content_id,
+                ContentItem.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    return int(row[0]), int(row[1])
+
+
+async def liked_by(
+    db: AsyncSession, content_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """该用户是否点赞过该内容。"""
+    return (
+        await db.scalar(
+            select(ContentLike.content_id).where(
+                ContentLike.content_id == content_id,
+                ContentLike.user_id == user_id,
+            )
+        )
+    ) is not None
+
+
+def content_brief_view() -> Any:
+    """内容摘要的**可 join 子查询**（``id`` / ``content_type`` / ``title`` / ``slug`` / ``board_id``）。
+
+    供其他域在自己的分页 SQL 里 join：既保住单条语句的分页与排序语义，又不必 import
+    ``content.models``。已软删的行不进视图（与历史 join 过滤等价）。
+    """
+    return (
+        select(
+            ContentItem.id.label("id"),
+            ContentItem.content_type.label("content_type"),
+            ContentItem.title.label("title"),
+            ContentItem.slug.label("slug"),
+            ContentItem.board_id.label("board_id"),
+        )
+        .where(ContentItem.deleted_at.is_(None))
+        .subquery("content_brief")
+    )
+
+
+def board_brief_view() -> Any:
+    """板块摘要的可 join 子查询（``id`` / ``title``）。"""
+    return select(Board.id.label("id"), Board.title.label("title")).subquery(
+        "board_brief"
+    )
+
+
+async def bookmark_count(db: AsyncSession, content_id: uuid.UUID) -> int | None:
+    """当前收藏计数；内容行不存在（含软删）返回 None。"""
+    value = await db.scalar(
+        select(ContentItem.bookmark_count).where(
+            ContentItem.id == content_id,
+            ContentItem.deleted_at.is_(None),
+        )
+    )
+    return None if value is None else int(value)
+
+
+async def bump_bookmark_count(
+    db: AsyncSession, content_id: uuid.UUID, delta: int
+) -> int | None:
+    """原子增减 ``bookmark_count`` 并返回即时读数（下限 0）；行不存在返回 None。"""
+    result = await db.execute(
+        sa_update(ContentItem)
+        .where(
+            ContentItem.id == content_id,
+            ContentItem.deleted_at.is_(None),
+        )
+        .values(bookmark_count=func.greatest(ContentItem.bookmark_count + delta, 0))
+        .returning(ContentItem.bookmark_count)
+    )
+    row = result.first()
+    return None if row is None else int(row[0])
+
+
+async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
+    """内容行是否存在（浏览上报的 404 前置判定）。"""
+    return (
+        await db.scalar(
+            select(ContentItem.id).where(
+                ContentItem.id == content_id,
+                ContentItem.deleted_at.is_(None),
+            )
+        )
     ) is not None
 
 
