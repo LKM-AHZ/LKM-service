@@ -62,10 +62,11 @@ _LEGACY_MODEL_MODULES = (
     "app.modules.notification.models",
     "app.modules.points.models",
     "app.modules.projects.models",
+    # 步骤 7：RolePermission 从 admin.models 迁入 rbac 域（表名不变，无需迁移）；
+    # rbac 目录名排在 projects 与 search 之间，故此处按清单顺序插入。
+    "app.modules.rbac.models",
     "app.modules.starhope.models",
     "app.modules.treehole.models",
-    # 步骤 7：RolePermission 从 admin.models 迁入 rbac 域（表名不变，无需迁移）
-    "app.modules.rbac.models",
 )
 
 _LEGACY_TASK_MODULES = (
