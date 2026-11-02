@@ -35,9 +35,10 @@ async def delete_series(
     *,
     as_admin: bool = True,
 ) -> uuid.UUID:
-    from app.modules.content.blog.service import delete_series as _delete_series
+    """后台删博客系列：博客已是独立域，经 ``core.ports.blog`` 调它的写入口。"""
+    from core.ports import blog as blog_port
 
-    return await _delete_series(db, series_id, actor_id, as_admin=as_admin)
+    return await blog_port.delete_series(db, series_id, actor_id, as_admin=as_admin)
 
 
 async def delete_blog_comment(
@@ -48,9 +49,12 @@ async def delete_blog_comment(
     *,
     as_admin: bool = True,
 ) -> uuid.UUID:
-    from app.modules.content.blog.service import delete_comment as _delete_comment
+    """后台删博客评论：同上，经博客域端口。"""
+    from core.ports import blog as blog_port
 
-    return await _delete_comment(db, series_id, comment_id, actor_id, as_admin=as_admin)
+    return await blog_port.delete_comment(
+        db, series_id, comment_id, actor_id, as_admin=as_admin
+    )
 
 
 async def delete_article_comment(

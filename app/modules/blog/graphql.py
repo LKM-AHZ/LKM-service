@@ -7,13 +7,13 @@ import strawberry
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.types.info import Info
 
-from app.modules.content.blog.errors import BlogErr
-from app.modules.content.blog.schemas import (
+from app.modules.blog.errors import BlogErr
+from app.modules.blog.schemas import (
     BlogCommentInfo,
     BlogSeriesDetail,
     BlogSeriesInfo,
 )
-from app.modules.content.blog.service import (
+from app.modules.blog.service import (
     get_file_content,
     get_series,
     list_comments,

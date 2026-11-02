@@ -4,16 +4,13 @@ name = "content"
 errors = [
     "app.modules.content.errors",
     "app.modules.content.articles",
-    "app.modules.content.blog",
     "app.modules.content.boards",
     "app.modules.content.columns",
 ]
 models = [
     "app.modules.content.articles.models",
-    "app.modules.content.blog.models",
     "app.modules.content.models",
 ]
 tasks = [
-    "app.modules.content.blog.tasks",
     "app.modules.content.tasks",
 ]

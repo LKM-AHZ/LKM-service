@@ -12,16 +12,14 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.modules.content.blog.models import (
+from app.modules.blog.models import (
     BlogComment,
     BlogContent,
     BlogRepoQuarantine,
     BlogSeries,
     BlogStar,
 )
-from app.modules.content.models import Board
 from core.db.repository import AsyncRepository
-from core.err import BizError, CommonErr
 
 
 class BlogSeriesRepository(AsyncRepository[BlogSeries]):
@@ -143,29 +141,3 @@ class BlogRepoQuarantineRepository(AsyncRepository[BlogRepoQuarantine]):
 
     async def get_by_repo_name(self, repo_name: str) -> BlogRepoQuarantine | None:
         return await self.get_one(BlogRepoQuarantine.repo_name == repo_name)
-
-
-class BoardRepository(AsyncRepository[Board]):
-    """blog 发布路径用的板块 get-or-create（跨模块读缝已在 import-linter 豁免）。"""
-
-    model = Board
-
-    async def ensure_by_slug(self, slug: str) -> uuid.UUID:
-        existing = await self.get_one(Board.slug == slug)
-        if existing is not None:
-            return existing.id
-        # 并发发布同一 slug 时两边都查不到、各自 insert，后提交者撞 board.slug 唯一约束
-        # 会让整个发布请求失败。改为原子插入 + 冲突忽略后回读（同 points 的 pg_upsert 写法）。
-        await self.pg_upsert(
-            {
-                "slug": slug,
-                "title": slug,
-                "description": "auto-created for blog publish",
-            },
-            index_elements=["slug"],
-            do_nothing=True,
-        )
-        board = await self.get_one(Board.slug == slug)
-        if board is None:  # 仅防御：DO NOTHING + 回查理论上必命中
-            raise BizError(CommonErr.INTERNAL_ERROR, f"board slug={slug} not found")
-        return board.id

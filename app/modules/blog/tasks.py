@@ -19,7 +19,7 @@ from typing import cast
 
 from sqlalchemy import select
 
-from app.modules.content.blog.models import BlogRepoQuarantine, BlogSeries
+from app.modules.blog.models import BlogRepoQuarantine, BlogSeries
 from core.config import settings
 from core.db.session import new_worker_session as new_session
 from core.messaging import RKEY_RECONCILE, SUB_JOBS

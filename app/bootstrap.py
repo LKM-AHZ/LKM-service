@@ -368,6 +368,11 @@ class _ContentReadImpl:
 
         return await item_brief(db, item_id)
 
+    async def get_item_info(self, db: AsyncSession, item_id: uuid.UUID) -> Any:
+        from app.modules.content.read_api import get_item_info
+
+        return await get_item_info(db, item_id)
+
     async def count_discussions(self, db: AsyncSession) -> int:
         from app.modules.content.read_api import count_discussions
 
@@ -497,6 +502,38 @@ class _ContentWriteImpl:
             excerpt=excerpt,
         )
 
+    async def ensure_board(self, db: AsyncSession, slug: str) -> uuid.UUID:
+        from app.modules.content.write_api import ensure_board
+
+        return await ensure_board(db, slug)
+
+    async def publish_blog_item(
+        self,
+        db: AsyncSession,
+        owner_id: uuid.UUID,
+        *,
+        board_id: uuid.UUID,
+        slug: str | None,
+        title: str,
+        content: str,
+        summary: str | None,
+        cover: str | None,
+        tags: list[str],
+    ) -> uuid.UUID:
+        from app.modules.content.write_api import publish_blog_item
+
+        return await publish_blog_item(
+            db,
+            owner_id,
+            board_id=board_id,
+            slug=slug,
+            title=title,
+            content=content,
+            summary=summary,
+            cover=cover,
+            tags=tags,
+        )
+
     async def require_content_item(self, db: AsyncSession, item_id: uuid.UUID) -> None:
         from app.modules.content.write_api import require_content_item
 
@@ -551,6 +588,35 @@ class _CommentApiImpl:
         from app.modules.comment.service import list_all_comments
 
         return await list_all_comments(db, item_id, viewer_id)
+
+
+class _BlogApiImpl:
+    """``core.ports.blog`` 的实现：转发到 blog 域的删除写入口。"""
+
+    async def delete_series(
+        self,
+        db: AsyncSession,
+        series_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.blog.service import delete_series
+
+        return await delete_series(db, series_id, actor_id, as_admin=as_admin)
+
+    async def delete_comment(
+        self,
+        db: AsyncSession,
+        series_id: uuid.UUID,
+        comment_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        *,
+        as_admin: bool = True,
+    ) -> uuid.UUID:
+        from app.modules.blog.service import delete_comment
+
+        return await delete_comment(db, series_id, comment_id, actor_id, as_admin=as_admin)
 
 
 class _QaReadImpl:
@@ -645,6 +711,7 @@ def register() -> None:
     ports.install("content_read", _ContentReadImpl())
     ports.install("content_write", _ContentWriteImpl())
     ports.install("comment_api", _CommentApiImpl())
+    ports.install("blog_api", _BlogApiImpl())
     ports.install("qa_read", _QaReadImpl())
     ports.install("files_read", _FilesReadImpl())
     ports.install("points_writer", _PointsWriterImpl())

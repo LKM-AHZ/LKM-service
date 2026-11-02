@@ -3,22 +3,21 @@ import hashlib
 import uuid
 from typing import Any
 
-from app.modules.content.blog import git_svc
-from app.modules.content.blog.errors import BlogErr
-from app.modules.content.blog.models import (
+from app.modules.blog import git_svc
+from app.modules.blog.errors import BlogErr
+from app.modules.blog.models import (
     BlogComment,
     BlogContent,
     BlogSeries,
 )
-from app.modules.content.blog.repository import (
+from app.modules.blog.repository import (
     BlogCommentRepository,
     BlogContentRepository,
     BlogRepoQuarantineRepository,
     BlogSeriesRepository,
     BlogStarRepository,
-    BoardRepository,
 )
-from app.modules.content.blog.schemas import (
+from app.modules.blog.schemas import (
     BlogCommentCreate,
     BlogCommentInfo,
     BlogSeriesCreate,
@@ -27,13 +26,13 @@ from app.modules.content.blog.schemas import (
     BlogSeriesUpdate,
     BlogStarStatus,
 )
-from app.modules.content.service import publish_blog_item
 from core.common import PageData, paginate_offset, paginate_pages
 from core.contracts import ProfileInfo, profile_info_from_snap
 from core.db.base import now_iso
 from core.db.repo import get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
+from core.ports import content as content_port
 from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
 # ---- private converters ----
@@ -460,8 +459,11 @@ async def write_series_file(
 
 
 async def _ensure_board(db: DbSession, slug: str) -> uuid.UUID:
-    """blog 发布时按 slug 解析板块（统一分类轴）；不存在则自动建并返回 board_id。"""
-    return await BoardRepository(db).ensure_by_slug(slug)
+    """blog 发布时按 slug 解析板块（统一分类轴）；不存在则自动建并返回 board_id。
+
+    板块属 content 域，经端口取（同事务），博客域不再持有 Board 模型。
+    """
+    return await content_port.ensure_board(db, slug)
 
 
 async def publish_series_file(
@@ -504,7 +506,7 @@ async def publish_series_file(
     description = str(raw_description) if raw_description is not None else None
 
     board_id = await _ensure_board(db, category_slug)
-    return await publish_blog_item(
+    return await content_port.publish_blog_item(
         db,
         user_id,
         board_id=board_id,

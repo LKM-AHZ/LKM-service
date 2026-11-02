@@ -9,7 +9,7 @@
   探针而非应用配置；``LKM_ENV`` 已走 ``settings.env``。
 - ``core/secrets_bootstrap.py``：它的**职责**就是把 Infisical 拉到的东西写进 ``os.environ``
   （在 Settings 之前跑的引导层），不读即无法工作。
-- ``app/modules/content/blog/git_http.py``：``os.environ.copy()`` 是给 git 子进程备环境，
+- ``app/modules/blog/git_http.py``：``os.environ.copy()`` 是给 git 子进程备环境，
   不是读配置项。
 - ``auth/tasks.py``：给 Prefect 客户端**写** ``PREFECT_API_*``（库契约要求，见该处注释）。
 """
@@ -26,7 +26,7 @@ _PACKAGES = ("app", "auth", "boot", "core", "scripts", "loadtest")
 _ALLOWED_ENVIRON_FILES = {
     "core/config.py",
     "core/secrets_bootstrap.py",
-    "app/modules/content/blog/git_http.py",
+    "app/modules/blog/git_http.py",
     "auth/tasks.py",
 }
 

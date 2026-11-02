@@ -13,15 +13,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.blog import backfill
-from app.modules.content.blog.git_http import (
+from app.modules.blog import backfill
+from app.modules.blog.git_http import (
     _decode_basic_auth,
     _is_receive_pack,
     _require_owner_for_push,
     _resolve_series_id,
     maybe_backfill_after_push,
 )
-from app.modules.content.blog.models import BlogContent, BlogSeries
+from app.modules.blog.models import BlogContent, BlogSeries
 from auth.models import User
 from auth.seams import seam_enabled
 from auth.security import hashpwd
@@ -95,7 +95,7 @@ class TestGitHttpDbErrorPropagates:
         """Basic Auth 的 DB 查询失败应正常传播，而非被 except Exception 吞成匿名读。"""
         import os
 
-        from app.modules.content.blog.git_http import git_http_backend
+        from app.modules.blog.git_http import git_http_backend
         from core.config import settings
 
         repo_dir = str(tmp_path / "blog_repos")
@@ -137,7 +137,7 @@ class TestGitHttpStreamsBody:
         """请求体应经 request.stream() 流式喂入，而非 request.body() 全量缓冲。"""
         import os
 
-        from app.modules.content.blog.git_http import git_http_backend
+        from app.modules.blog.git_http import git_http_backend
         from core.config import settings
 
         repo_dir = str(tmp_path / "blog_repos")
@@ -367,7 +367,7 @@ class TestMaybeBackfillAfterPush:
             return db
 
         monkeypatch.setattr(
-            "app.modules.content.blog.git_http._session_factory", _factory
+            "app.modules.blog.git_http._session_factory", _factory
         )
 
     async def _make_series(self, db, repo_name: str) -> uuid.UUID:

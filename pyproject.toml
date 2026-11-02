@@ -164,8 +164,8 @@ allow_indirect_imports = "false"
 [[tool.importlinter.contracts]]
 name = "边界: 业务模块间不任意依赖(须走公共API/白名单)"
 type = "forbidden"
-source_modules = ["app.modules.admin","app.modules.comment","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.qa","app.modules.search","app.modules.starhope","app.modules.treehole"]
-forbidden_modules = ["app.modules.admin","app.modules.comment","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.qa","app.modules.search","app.modules.starhope","app.modules.treehole"]
+source_modules = ["app.modules.admin","app.modules.blog","app.modules.comment","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.qa","app.modules.search","app.modules.starhope","app.modules.treehole"]
+forbidden_modules = ["app.modules.admin","app.modules.blog","app.modules.comment","app.modules.content","app.modules.exam","app.modules.feed","app.modules.files","app.modules.interaction","app.modules.notification","app.modules.points","app.modules.projects","app.modules.qa","app.modules.search","app.modules.starhope","app.modules.treehole"]
 allow_indirect_imports = "false"
 ignore_imports = [
 ]

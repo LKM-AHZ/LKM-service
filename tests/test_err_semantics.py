@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy.exc import IntegrityError
 
-from app.modules.content.blog.errors import BlogErr
+from app.modules.blog.errors import BlogErr
 from app.modules.content.boards.errors import BoardErr
 from app.modules.content.errors import ContentErr
 from app.modules.interaction.errors import FollowErr, InteractionErr

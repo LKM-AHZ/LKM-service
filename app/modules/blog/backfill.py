@@ -13,9 +13,9 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.blog import git_svc
-from app.modules.content.blog.errors import BlogErr
-from app.modules.content.blog.models import BlogContent, BlogSeries
+from app.modules.blog import git_svc
+from app.modules.blog.errors import BlogErr
+from app.modules.blog.models import BlogContent, BlogSeries
 from core.db.base import now_iso
 from core.db.repo import get_or_raise
 from core.err import BizError

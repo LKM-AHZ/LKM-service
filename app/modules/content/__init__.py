@@ -5,8 +5,8 @@
 + 路由拆片」）。各子包同构，各自是路由拆片单元；本文件的 ``ROUTERS`` / ``GRAPHQL`` 是
 它们对外的唯一出口。
 
-步骤 9 起问答（``qa``）与评论（``comment``）已是独立业务域（表、错误码、任务随域走），
-本包只剩 boards/columns/articles/blog 四个子域与统一内容项本身。
+步骤 9 起问答（``qa``）、评论（``comment``）、博客（``blog``）已是独立业务域（表、错误码、
+任务随域走），本包只剩 boards/columns/articles 三个子域与统一内容项本身。
 """
 
 from __future__ import annotations
@@ -22,25 +22,17 @@ def __getattr__(name: str) -> Any:
     if name == "ROUTERS":
         if _exported_routers is None:
             from app.modules.content.articles.router import router as articles_router
-            from app.modules.content.blog.git_http import git_router
-            from app.modules.content.blog.router import router as blog_router
             from app.modules.content.router import router
 
-            _exported_routers = [router, articles_router, blog_router, git_router]
+            _exported_routers = [router, articles_router]
         return _exported_routers
     if name == "GRAPHQL":
         if _exported_graphql is None:
             from app.modules.content.articles.graphql import ArticlesQuery
-            from app.modules.content.blog.graphql import BlogQuery
             from app.modules.content.columns.graphql import ColumnsQuery
             from app.modules.content.graphql import ContentQuery
 
-            _exported_graphql = [
-                ContentQuery,
-                ColumnsQuery,
-                ArticlesQuery,
-                BlogQuery,
-            ]
+            _exported_graphql = [ContentQuery, ColumnsQuery, ArticlesQuery]
         return _exported_graphql
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

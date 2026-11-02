@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.blog import backfill, git_svc
-from app.modules.content.blog.models import BlogSeries
+from app.modules.blog import backfill, git_svc
+from app.modules.blog.models import BlogSeries
 from core.config import settings
 from core.db.session import get_read_session, new_session
 from core.err import BizError, CommonErr

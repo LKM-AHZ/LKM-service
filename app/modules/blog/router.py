@@ -3,7 +3,8 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.blog.schemas import (
+from app.contracts.content import ContentItemInfo
+from app.modules.blog.schemas import (
     BlogCommentCreate,
     BlogCommentInfo,
     BlogSeriesCreate,
@@ -13,7 +14,7 @@ from app.modules.content.blog.schemas import (
     SeriesFileWrite,
     SeriesPublish,
 )
-from app.modules.content.blog.service import (
+from app.modules.blog.service import (
     create_comment,
     create_series,
     delete_comment,
@@ -23,12 +24,11 @@ from app.modules.content.blog.service import (
     update_series,
     write_series_file,
 )
-from app.modules.content.schemas import ContentItemInfo
-from app.modules.content.service import get_item
 from core.common import ApiResp
 from core.contracts import CurrentUser
 from core.db.session import get_session
 from core.err import respond
+from core.ports import content as content_port
 from core.ports.authz import get_current_user
 
 router = APIRouter(prefix="/blog", tags=["blog"])
@@ -99,7 +99,7 @@ async def publish_series_file_endpoint(
     content_id = await publish_series_file(
         db, series_id, cur.id, body.filepath, body.override
     )
-    return await get_item(db, content_id)
+    return await content_port.get_item_info(db, content_id)
 
 
 # ---- Stars ----

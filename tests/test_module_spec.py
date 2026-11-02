@@ -22,6 +22,7 @@ from core.plugins.manifest import ManifestError
 # ── 拆分前的字面量（顺序即语义：路由注册顺序 / 错误码导入顺序）─────────────
 _LEGACY_MODULES = (
     "admin",
+    "blog",
     "comment",
     "content",
     "exam",
@@ -39,6 +40,7 @@ _LEGACY_MODULES = (
 )
 
 _LEGACY_ERROR_MODULES = (
+    "app.modules.blog.errors",
     "app.modules.comment.errors",
     "app.modules.content.errors",
     "app.modules.exam.errors",
@@ -52,17 +54,17 @@ _LEGACY_ERROR_MODULES = (
     "app.modules.starhope.errors",
     "app.modules.admin.moderation",
     "app.modules.content.articles",
-    "app.modules.content.blog",
     "app.modules.content.boards",
     "app.modules.content.columns",
 )
 
 _LEGACY_MODEL_MODULES = (
     "app.modules.admin.models",
+    # 步骤 9 切片 3：博客模型迁出 content（表名不变，无需迁移）
+    "app.modules.blog.models",
     # 步骤 9 切片 2：评论模型迁出 content（表名不变，无需迁移）
     "app.modules.comment.models",
     "app.modules.content.articles.models",
-    "app.modules.content.blog.models",
     "app.modules.content.models",
     "app.modules.exam.models",
     "app.modules.feed.models",
@@ -82,7 +84,7 @@ _LEGACY_MODEL_MODULES = (
 
 _LEGACY_TASK_MODULES = (
     "app.modules.admin.tasks",
-    "app.modules.content.blog.tasks",
+    "app.modules.blog.tasks",
     "app.modules.content.tasks",
     "app.modules.feed.tasks",
     "app.modules.files.tasks",

@@ -190,3 +190,39 @@ async def lock_content_item(db: AsyncSession, item_id: uuid.UUID) -> Any:
 async def bump_comment_count(db: AsyncSession, item_id: uuid.UUID, delta: int) -> int:
     """把帖子的 ``comment_count`` 写穿加减（下限 0），返回新值。"""
     return await get("content_write").bump_comment_count(db, item_id, delta)
+
+
+async def get_item_info(db: AsyncSession, item_id: uuid.UUID) -> Any:
+    """内容项完整只读视图（``app.contracts.content.ContentItemInfo``）。"""
+    return await get("content_read").get_item_info(db, item_id)
+
+
+async def ensure_board(db: AsyncSession, slug: str) -> uuid.UUID:
+    """按 slug 取板块 id，不存在则原子创建（博客发布用）。"""
+    return await get("content_write").ensure_board(db, slug)
+
+
+async def publish_blog_item(
+    db: AsyncSession,
+    owner_id: uuid.UUID,
+    *,
+    board_id: uuid.UUID,
+    slug: str | None,
+    title: str,
+    content: str,
+    summary: str | None,
+    cover: str | None,
+    tags: list[str],
+) -> uuid.UUID:
+    """把博客发布产物落成一条 ``content_items``（同事务，幂等）。"""
+    return await get("content_write").publish_blog_item(
+        db,
+        owner_id,
+        board_id=board_id,
+        slug=slug,
+        title=title,
+        content=content,
+        summary=summary,
+        cover=cover,
+        tags=tags,
+    )

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.modules.content.blog import git_svc
+from app.modules.blog import git_svc
 from core.config import settings
 
 # CI runner 没有全局 user.name/user.email，`git commit-tree` 会以 exit 128 失败

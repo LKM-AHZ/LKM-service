@@ -30,7 +30,7 @@ from app.modules.content.models import (
     ContentType,
 )
 from core.db.repository import AsyncRepository
-from core.err import BizError
+from core.err import BizError, CommonErr
 from core.ports import exam as exam_port
 
 
@@ -267,6 +267,27 @@ class BoardRepository(AsyncRepository[Board]):
 
     async def slug_taken(self, slug: str) -> bool:
         return await self.exists(Board.slug == slug)
+
+    async def ensure_by_slug(self, slug: str) -> uuid.UUID:
+        """按 slug 取板块 id，不存在则原子创建（博客发布等跨域路径用）。"""
+        existing = await self.get_one(Board.slug == slug)
+        if existing is not None:
+            return existing.id
+        # 并发建同一 slug 时两边都查不到、各自 insert，后提交者撞 board.slug 唯一约束
+        # 会让整个发布请求失败。改为原子插入 + 冲突忽略后回读（同 points 的 pg_upsert 写法）。
+        await self.pg_upsert(
+            {
+                "slug": slug,
+                "title": slug,
+                "description": "auto-created for blog publish",
+            },
+            index_elements=["slug"],
+            do_nothing=True,
+        )
+        board = await self.get_one(Board.slug == slug)
+        if board is None:  # 仅防御：DO NOTHING + 回查理论上必命中
+            raise BizError(CommonErr.INTERNAL_ERROR, f"board slug={slug} not found")
+        return board.id
 
     async def list_ordered(self) -> list[Board]:
         return await self.get_many(order_by=Board.id.asc())

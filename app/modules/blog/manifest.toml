@@ -1,0 +1,12 @@
+# blog 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+# 步骤 9 切片 3 自 content 拆出：博客系列/文件/评论/仓库隔离表、错误码与对账任务随域迁移。
+name = "blog"
+errors = [
+    "app.modules.blog.errors",
+]
+models = [
+    "app.modules.blog.models",
+]
+tasks = [
+    "app.modules.blog.tasks",
+]

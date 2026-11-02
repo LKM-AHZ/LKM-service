@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import yaml
 
-from app.modules.content.blog.errors import BlogErr
+from app.modules.blog.errors import BlogErr
 from core.config import settings
 from core.err import BizError, CommonErr
 

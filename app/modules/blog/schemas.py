@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm.collections import InstrumentedList
 
-from app.modules.content.blog.models import BlogSeriesStatus
+from app.modules.blog.models import BlogSeriesStatus
 from core.contracts import ProfileInfo
 
 # ---- request schemas ----

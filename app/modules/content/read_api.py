@@ -44,6 +44,13 @@ async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
     return ItemBrief(id=row.id, title=row.title, author_id=row.author_id)
 
 
+async def get_item_info(db: AsyncSession, item_id: uuid.UUID) -> Any:
+    """内容项完整只读视图（``ContentItemInfo``）；发布后回读详情用。"""
+    from app.modules.content.service import get_item
+
+    return await get_item(db, item_id)
+
+
 async def count_discussions(db: AsyncSession) -> int:
     """讨论帖总数（不含软删）。"""
     value = await db.scalar(
