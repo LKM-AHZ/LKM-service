@@ -3,6 +3,9 @@
 这四张派生表拆分前是分别手写的字面量（``registry.MODULES``、``registry._ERROR_MODULES``、
 ``app.bootstrap.APP_MODEL_MODULES``、``app/bootstrap.APP_TASK_MODULES``）。派生规则一旦写错，
 表现是**运行时 404 或缺错误码**——进程照常启动，所以这里把旧值逐项钉死。
+
+步骤 9 切片 1 把问答拆成独立模块 ``qa``，故新增一条：``qa`` 目录名排在 ``projects`` 与
+``rbac`` 之间，其错误码/模型/任务随之从 content 的清单里移出。
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ _LEGACY_MODULES = (
     "notification",
     "points",
     "projects",
+    "qa",
     "search",
     "starhope",
     "treehole",
@@ -40,6 +44,7 @@ _LEGACY_ERROR_MODULES = (
     "app.modules.notification.errors",
     "app.modules.points.errors",
     "app.modules.projects.errors",
+    "app.modules.qa.errors",
     "app.modules.search.errors",
     "app.modules.starhope.errors",
     "app.modules.admin.moderation",
@@ -47,7 +52,6 @@ _LEGACY_ERROR_MODULES = (
     "app.modules.content.blog",
     "app.modules.content.boards",
     "app.modules.content.columns",
-    "app.modules.content.qa",
 )
 
 _LEGACY_MODEL_MODULES = (
@@ -62,6 +66,8 @@ _LEGACY_MODEL_MODULES = (
     "app.modules.notification.models",
     "app.modules.points.models",
     "app.modules.projects.models",
+    # 步骤 9 切片 1：问答模型迁出 content（表名不变，无需迁移）
+    "app.modules.qa.models",
     # 步骤 7：RolePermission 从 admin.models 迁入 rbac 域（表名不变，无需迁移）；
     # rbac 目录名排在 projects 与 search 之间，故此处按清单顺序插入。
     "app.modules.rbac.models",
@@ -78,6 +84,7 @@ _LEGACY_TASK_MODULES = (
     "app.modules.interaction.tasks",
     "app.modules.notification.tasks",
     "app.modules.points.tasks",
+    "app.modules.qa.tasks",
     "app.modules.search.tasks",
 )
 

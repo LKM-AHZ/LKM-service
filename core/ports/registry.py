@@ -32,6 +32,8 @@ REQUIRED_PORTS: tuple[str, ...] = (
     "feed_fanout",
     "interaction_read",
     "content_read",
+    "content_write",
+    "qa_read",
     "files_read",
 )
 

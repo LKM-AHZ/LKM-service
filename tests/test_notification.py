@@ -16,8 +16,6 @@ from app.modules.content.models import (
     ContentItem,
     ContentStatus,
     ContentType,
-    QAAnswer,
-    QAQuestion,
 )
 from app.modules.notification import tasks as notif_tasks
 from app.modules.notification.errors import NotificationErr
@@ -38,6 +36,7 @@ from app.modules.notification.service import (
     set_preferences,
     unread_count,
 )
+from app.modules.qa.models import QAAnswer, QAQuestion
 from core.err import BizError
 from tests.conftest import auth_user_uid
 

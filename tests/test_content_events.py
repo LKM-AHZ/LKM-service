@@ -18,14 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
-from app.modules.content.models import QAQuestion
 from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import (
-    _sync_question_content_item,
     create_item,
     delete_item,
     publish_blog_item,
 )
+from app.modules.qa.models import QAQuestion
+from app.modules.qa.service import _sync_question_content_item
 from app.modules.search.tasks import apply_content_event
 from core.config import settings
 from core.db.outbox import OutboxMessage

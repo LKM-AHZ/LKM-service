@@ -20,7 +20,6 @@ from app.modules.content.models import (
     ColumnPostStatus,
     ContentItem,
     ContentStatus,
-    QAQuestion,
 )
 
 
@@ -68,22 +67,12 @@ def _column_conditions(
     return conditions
 
 
-def _qa_conditions(
-    author_ids: set[uuid.UUID] | None, board_ids: set[uuid.UUID] | None
-) -> list[Any]:
-    conditions: list[Any] = [QAQuestion.status.in_(["open", "accepted"])]
-    if author_ids is not None:
-        conditions.append(QAQuestion.author_id.in_(author_ids))
-    return conditions
-
-
 #: kind → (模型, 条件构造函数)。feed 的 SOURCES 键与此一一对应。
 _SOURCES: dict[str, tuple[Any, Any]] = {
     "discussion": (ContentItem, _discussion_conditions),
     "blog": (ContentItem, _blog_conditions),
     "article": (Article, _article_conditions),
     "column": (ColumnPost, _column_conditions),
-    "qa": (QAQuestion, _qa_conditions),
 }
 
 

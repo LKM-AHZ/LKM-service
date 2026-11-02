@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.feed.schemas import FeedItem
 from core.ports import content as content_port
 from core.ports import projects as projects_port
+from core.ports import qa as qa_port
 from core.ports.snapshot import get_user_display_names as _author_map
 
 _PREVIEW_LEN = 150
@@ -199,8 +200,7 @@ async def _fetch_qa(
     after_time: datetime | None = None,
     after_id: uuid.UUID | None = None,
 ) -> list[FeedItem]:
-    stmt = stmt = content_port.select_feed_source(
-        "qa",
+    stmt = stmt = qa_port.select_feed_source(
         author_ids=author_ids,
         board_ids=board_ids,
         before_time=before_time,

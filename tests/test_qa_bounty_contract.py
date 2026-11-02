@@ -10,9 +10,9 @@ from fastapi import UploadFile
 from PIL import Image
 from pydantic import ValidationError
 
-from app.modules.content.qa.errors import QaErr
-from app.modules.content.qa.images import _webp
-from app.modules.content.qa.schemas import AnswerCreate, QuestionCreate
+from app.modules.qa.errors import QaErr
+from app.modules.qa.images import _webp
+from app.modules.qa.schemas import AnswerCreate, QuestionCreate
 from core.err import BizError
 
 
@@ -64,7 +64,7 @@ def test_invalid_question_image_rejected() -> None:
 async def test_asker_cannot_answer_own_question_without_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.modules.content import service
+    from app.modules.qa import service
 
     author_id = uuid.uuid4()
 
@@ -87,7 +87,7 @@ async def test_asker_cannot_answer_own_question_without_database(
 async def test_image_upload_is_stored_and_retry_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import app.modules.content.qa.images as images
+    import app.modules.qa.images as images
 
     question_id = uuid.uuid4()
     author_id = uuid.uuid4()

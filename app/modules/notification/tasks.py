@@ -34,6 +34,7 @@ from core.config import settings
 from core.db.session import new_worker_session as new_session
 from core.messaging import SUB_NOTIFICATION
 from core.ports import content as content_port
+from core.ports import qa as qa_port
 from core.ports.snapshot import get_user_snapshot
 from core.task_registry import register_task
 
@@ -119,10 +120,10 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         return targets
 
     if event == "qa_accept_notice" and prefix == "answer":
-        answer = await content_port.qa_answer_brief(db, ref)
+        answer = await qa_port.qa_answer_brief(db, ref)
         if answer is None:
             return []
-        question = await content_port.qa_question_brief(db, answer.question_id)
+        question = await qa_port.qa_question_brief(db, answer.question_id)
         if question is None:
             return []
         return [

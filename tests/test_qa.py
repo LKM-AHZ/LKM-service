@@ -14,10 +14,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.content.models import QAQuestion
-from app.modules.content.qa.errors import QaErr
-from app.modules.content.qa.schemas import AnswerCreate, QuestionCreate
-from app.modules.content.qa.service import (
+from app.modules.points.service import get_balance, reward
+from app.modules.qa.errors import QaErr
+from app.modules.qa.models import QAQuestion
+from app.modules.qa.schemas import AnswerCreate, QuestionCreate
+from app.modules.qa.service import (
     accept_answer,
     close_question,
     create_answer,
@@ -26,7 +27,6 @@ from app.modules.content.qa.service import (
     get_question,
     list_questions,
 )
-from app.modules.points.service import get_balance, reward
 from core.err import BizError
 from tests.conftest import auth_user_uid
 

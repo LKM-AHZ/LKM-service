@@ -7,7 +7,6 @@ errors = [
     "app.modules.content.blog",
     "app.modules.content.boards",
     "app.modules.content.columns",
-    "app.modules.content.qa",
 ]
 models = [
     "app.modules.content.articles.models",

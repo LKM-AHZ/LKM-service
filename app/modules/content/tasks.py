@@ -83,30 +83,11 @@ async def reconcile_content_counts_full() -> None:
         await db.close()
 
 
-async def expire_qa_bounties() -> None:
-    """小时级结算到期悬赏，失败时事务回滚供下一轮重试。"""
-    from app.modules.content.service import expire_due_questions
-
-    while True:
-        db = await new_session()
-        try:
-            count = await expire_due_questions(db)
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
-        finally:
-            await db.close()
-        if count < 100:
-            break
-
-
 register_task(SUB_JOBS.name, "flush_content_counters", flush_content_counters)
 register_task(SUB_JOBS.name, "reconcile_content_counts", reconcile_content_counts)
 register_task(
     SUB_JOBS.name, "reconcile_content_counts_full", reconcile_content_counts_full
 )
-register_task(SUB_JOBS.name, "expire_qa_bounties", expire_qa_bounties)
 
 # 始终声明，Prefect 用 paused 同步状态；写穿模式下不触发，切换模式时可自动恢复。
 register_cron_job(
@@ -127,10 +108,4 @@ register_cron_job(
     cron="0 4 * * *",  # 每天 04:00：全量重扫，兜「打标后又漂移」的行（见任务 docstring）
     routing_key=RKEY_RECONCILE,
     fn="reconcile_content_counts_full",
-)
-register_cron_job(
-    job_id="expire_qa_bounties",
-    cron="0 * * * *",
-    routing_key=RKEY_CLEANUP,
-    fn="expire_qa_bounties",
 )

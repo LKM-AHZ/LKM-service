@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from app.modules.content.qa.images import serve_question_image, upload_question_image
-from app.modules.content.qa.schemas import (
+from app.modules.qa.images import serve_question_image, upload_question_image
+from app.modules.qa.schemas import (
     AcceptIn,
     AnswerCreate,
     AnswerOut,
@@ -15,7 +15,7 @@ from app.modules.content.qa.schemas import (
     QuestionDetail,
     QuestionOut,
 )
-from app.modules.content.qa.service import (
+from app.modules.qa.service import (
     accept_answer,
     close_question,
     create_answer,
@@ -48,7 +48,7 @@ def _status() -> ModuleStatus:
     )
 
 
-router = APIRouter(prefix="/qa", tags=["content", "qa"])
+router = APIRouter(prefix="/content/qa", tags=["qa"])
 
 
 @router.get("/status", response_model=ModuleStatus)

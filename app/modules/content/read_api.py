@@ -23,8 +23,6 @@ from app.modules.content.models import (
     ContentItem,
     ContentLike,
     ContentType,
-    QAAnswer,
-    QAQuestion,
 )
 
 
@@ -41,20 +39,6 @@ class CommentBrief:
     content_id: uuid.UUID
     user_id: uuid.UUID
     parent_id: uuid.UUID | None
-
-
-@dataclass(frozen=True)
-class QaAnswerBrief:
-    id: uuid.UUID
-    question_id: uuid.UUID
-    author_id: uuid.UUID
-
-
-@dataclass(frozen=True)
-class QaQuestionBrief:
-    id: uuid.UUID
-    title: str
-    bounty_per_person: int
 
 
 async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
@@ -83,30 +67,6 @@ async def comment_brief(db: AsyncSession, comment_id: uuid.UUID) -> CommentBrief
         content_id=row.content_id,
         user_id=row.user_id,
         parent_id=row.parent_id,
-    )
-
-
-async def qa_answer_brief(
-    db: AsyncSession, answer_id: uuid.UUID
-) -> QaAnswerBrief | None:
-    """问答回答摘要。"""
-    row = await db.scalar(select(QAAnswer).where(QAAnswer.id == answer_id))
-    if row is None:
-        return None
-    return QaAnswerBrief(
-        id=row.id, question_id=row.question_id, author_id=row.author_id
-    )
-
-
-async def qa_question_brief(
-    db: AsyncSession, question_id: uuid.UUID
-) -> QaQuestionBrief | None:
-    """问答问题摘要（含悬赏单价）。"""
-    row = await db.scalar(select(QAQuestion).where(QAQuestion.id == question_id))
-    if row is None:
-        return None
-    return QaQuestionBrief(
-        id=row.id, title=row.title, bounty_per_person=row.bounty_per_person
     )
 
 

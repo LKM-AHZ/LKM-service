@@ -12,8 +12,8 @@ from fastapi import UploadFile
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from app.modules.content.qa.errors import QaErr
-from app.modules.content.repository import QAQuestionRepository
+from app.modules.qa.errors import QaErr
+from app.modules.qa.repository import QAQuestionRepository
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
 from core.storage.factory import get_storage

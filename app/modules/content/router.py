@@ -4,11 +4,10 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# 内容域子路由：版块 / 专栏 / 问答 统一挂到 /content 前缀下（逐域子前缀）。
+# 内容域子路由：版块 / 专栏挂到 /content 前缀下（问答已是独立模块 app.modules.qa）。
 from app.modules.content.boards.router import router as _boards_router
 from app.modules.content.columns.router import router as _columns_router
 from app.modules.content.models import Column, ContentComment, ContentItem, ContentType
-from app.modules.content.qa.router import router as _qa_router
 from app.modules.content.schemas import (
     ContentCommentCreate,
     ContentCommentInfo,
@@ -46,7 +45,6 @@ from core.ports.authz import get_current_user, get_optional_user
 router = APIRouter(prefix="/content", tags=["content"])
 router.include_router(_boards_router)
 router.include_router(_columns_router)
-router.include_router(_qa_router)
 
 
 @router.post("/items", response_model=ApiResp[ContentItemInfo])

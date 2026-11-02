@@ -1,0 +1,12 @@
+# qa 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+# 步骤 9 切片 1 自 content 拆出：三张 qa_* 表、NS_QA 错误码与到期结算任务随域迁移。
+name = "qa"
+errors = [
+    "app.modules.qa.errors",
+]
+models = [
+    "app.modules.qa.models",
+]
+tasks = [
+    "app.modules.qa.tasks",
+]

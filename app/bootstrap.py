@@ -373,16 +373,6 @@ class _ContentReadImpl:
 
         return await comment_brief(db, comment_id)
 
-    async def qa_answer_brief(self, db: AsyncSession, answer_id: uuid.UUID) -> Any:
-        from app.modules.content.read_api import qa_answer_brief
-
-        return await qa_answer_brief(db, answer_id)
-
-    async def qa_question_brief(self, db: AsyncSession, question_id: uuid.UUID) -> Any:
-        from app.modules.content.read_api import qa_question_brief
-
-        return await qa_question_brief(db, question_id)
-
     async def count_discussions(self, db: AsyncSession) -> int:
         from app.modules.content.read_api import count_discussions
 
@@ -488,6 +478,50 @@ class _ContentReadImpl:
         return select_source(kind, **kwargs)
 
 
+class _ContentWriteImpl:
+    """``core.ports.content`` 的写入侧实现（回答「提问同步为论坛条目」）。"""
+
+    async def publish_qa_item(
+        self,
+        db: AsyncSession,
+        *,
+        author_id: uuid.UUID,
+        question_id: uuid.UUID,
+        title: str,
+        content: str,
+        excerpt: str,
+    ) -> None:
+        from app.modules.content.write_api import publish_qa_item
+
+        await publish_qa_item(
+            db,
+            author_id=author_id,
+            question_id=question_id,
+            title=title,
+            content=content,
+            excerpt=excerpt,
+        )
+
+
+class _QaReadImpl:
+    """``core.ports.qa`` 的实现：转发到 qa 域的只读口与时间线源。"""
+
+    async def qa_answer_brief(self, db: AsyncSession, answer_id: uuid.UUID) -> Any:
+        from app.modules.qa.read_api import qa_answer_brief
+
+        return await qa_answer_brief(db, answer_id)
+
+    async def qa_question_brief(self, db: AsyncSession, question_id: uuid.UUID) -> Any:
+        from app.modules.qa.read_api import qa_question_brief
+
+        return await qa_question_brief(db, question_id)
+
+    def select_feed_source(self, **kwargs: Any) -> Any:
+        from app.modules.qa.feed_api import select_source
+
+        return select_source(**kwargs)
+
+
 class _FilesReadImpl:
     """``core.ports.files`` 的实现：转发到 files 域的只读聚合。"""
 
@@ -559,6 +593,8 @@ def register() -> None:
     ports.install("feed_fanout", _FeedFanoutImpl())
     ports.install("interaction_read", _InteractionReadImpl())
     ports.install("content_read", _ContentReadImpl())
+    ports.install("content_write", _ContentWriteImpl())
+    ports.install("qa_read", _QaReadImpl())
     ports.install("files_read", _FilesReadImpl())
     ports.install("points_writer", _PointsWriterImpl())
 

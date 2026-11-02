@@ -1,8 +1,10 @@
-"""content 域只读端口：通知与后台需要的「内容摘要」。
+"""content 域端口：内容摘要（读）与问答条目落库（写）。
 
-notification 解析行为事件时要回查内容/评论/问答的标题与作者，原先直接读
-``content.models``。摘要形态由 content 域定义（``read_api`` 的数据类），调用方只读字段，
-不持有 ORM 实例。
+notification 解析行为事件时要回查内容/评论的标题与作者，原先直接读 ``content.models``。
+摘要形态由 content 域定义（``read_api`` 的数据类），调用方只读字段，不持有 ORM 实例。
+
+``publish_qa_item`` 是唯一一项写入：步骤 9 把问答拆成独立域后，「提问同步为论坛可见条目」
+不再能在 qa 里直接写 ``content_items``，改为由 content 提供同事务写入口（``content_write``）。
 """
 
 from __future__ import annotations
@@ -157,4 +159,24 @@ def select_feed_source(
         after_time=after_time,
         after_id=after_id,
         limit=limit,
+    )
+
+
+async def publish_qa_item(
+    db: AsyncSession,
+    *,
+    author_id: uuid.UUID,
+    question_id: uuid.UUID,
+    title: str,
+    content: str,
+    excerpt: str,
+) -> Any:
+    """把一条提问同步为论坛可见条目（``content_type='qa'``，同事务）。"""
+    return await get("content_write").publish_qa_item(
+        db,
+        author_id=author_id,
+        question_id=question_id,
+        title=title,
+        content=content,
+        excerpt=excerpt,
     )
