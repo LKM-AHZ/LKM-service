@@ -1,7 +1,16 @@
 """
-Current business schema baseline.
-Revision ID: 0001_uuid_baseline
+Current business schema baseline（压平为单条 revision）。
+Revision ID: 0001_initial
 Revises:
+
+本基线是**自包含**的：原 ``0002_application_guards``（专栏 pending 唯一、板块申请 slug
+释放、两处查询索引）与原 ``0003_bot_media_objects``（bot 媒体登记表）已折入建表与建索引
+语句，新库 ``upgrade head`` 一次到位，`versions/` 下只有本文件。
+
+项目尚未正式发布，故允许压平；**已应用过旧 revision 的库不能重跑本基线**（会撞
+``relation already exists``），须按 README「数据库与迁移」一节先核对表结构、再
+``alembic stamp 0001_initial``。
+
 - 乐观锁 ``version`` 列直接写进 ``content_items`` / ``boards`` / ``articles``
   的 create_table，无需事后 ``add_column``；
 - ``upload_sessions`` 表（预签名直传元数据落 DB）作为普通建表；
@@ -17,7 +26,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0001_uuid_baseline'
+revision: str = '0001_initial'
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -141,9 +150,11 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('slug')
+    sa.PrimaryKeyConstraint('id')
     )
+    # 被拒申请释放 slug，故只有非 rejected 行参与唯一（原 0002 的增量）
+    op.create_index('uq_board_applications_slug_active', 'board_applications', ['slug'], unique=True, postgresql_where=sa.text("status <> 'rejected'"))
+    op.create_index('ix_board_applications_applicant_slug', 'board_applications', ['applicant_id', 'slug'], unique=False)
     op.create_table('boards',
     sa.Column('slug', sa.String(length=50), nullable=False),
     sa.Column('title', sa.String(length=100), nullable=False),
@@ -163,6 +174,23 @@ def upgrade() -> None:
     sa.UniqueConstraint('slug')
     )
     op.create_index(op.f('ix_boards_parent_id'), 'boards', ['parent_id'], unique=False)
+    op.create_table('bot_media_objects',
+    sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
+    sa.Column('sha3_hash', sa.String(length=64), nullable=False),
+    sa.Column('bucket_key', sa.String(length=255), nullable=False),
+    sa.Column('storage_path', sa.String(length=1024), nullable=False, server_default=''),
+    sa.Column('original_name', sa.String(length=255), nullable=False, server_default=''),
+    sa.Column('mime_type', sa.String(length=100), nullable=False, server_default='application/octet-stream'),
+    sa.Column('size', sa.Integer(), nullable=False, server_default='0'),
+    sa.Column('source', sa.String(length=20), nullable=False, server_default='other'),
+    sa.Column('ref_count', sa.Integer(), nullable=False, server_default='1'),
+    sa.Column('extracted_text', sa.Text(), nullable=False, server_default=''),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('sha3_hash', name='uq_bot_media_sha3_hash')
+    )
+    op.create_index('ix_bot_media_expires', 'bot_media_objects', ['expires_at'], unique=False)
     op.create_table('column_applications',
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('title', sa.String(length=80), nullable=False),
@@ -176,6 +204,9 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), server_default=sa.text('public.uuid_generate_v7()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    # 同一用户同时只允许一条 pending 申请（原 0002 的增量）
+    op.create_index('uq_column_applications_pending_user', 'column_applications', ['user_id'], unique=True, postgresql_where=sa.text("status = 'pending'"))
+    op.create_index('ix_column_applications_user_status', 'column_applications', ['user_id', 'status'], unique=False)
     op.create_table('dlq_messages',
     sa.Column('routing_key', sa.String(length=255), nullable=False),
     sa.Column('payload_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -1121,6 +1152,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_dlq_messages_routing_key'), table_name='dlq_messages')
     op.drop_table('dlq_messages')
     op.drop_table('column_applications')
+    op.drop_index('ix_bot_media_expires', table_name='bot_media_objects')
+    op.drop_table('bot_media_objects')
     op.drop_index(op.f('ix_boards_parent_id'), table_name='boards')
     op.drop_table('boards')
     op.drop_table('board_applications')

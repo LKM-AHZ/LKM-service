@@ -7,6 +7,11 @@ Revises:
 原独立增量 ``0002_account_profile``（补 ``profiles.contact_links``、修复旧建号脚本写出的
 无效 ``admin:admin`` 角色）已折入本基线：新库由 ``create_all`` 直接带出该列且无历史数据，
 两条语句均为 no-op；仅「表已由 create_all 建过、再切 alembic 通道」的库才会真正生效。
+
+原 ``0002_user_admission``（``admission_status`` 等 7 列 + 索引）与
+``0003_pending_apply_reason``（``pending_registrations.apply_reason``）同样是「只补既存库」
+的一次性 ``ALTER ... IF NOT EXISTS``：新库的列由下面的 ``create_all`` 直接带出，故压平时
+一并删除，``versions/`` 只留本基线。
 """
 
 from collections.abc import Sequence
