@@ -6,6 +6,7 @@
 
 from core.ports.registry import (
     REQUIRED_PORTS,
+    PortConflict,
     PortNotBound,
     get,
     install,
@@ -16,6 +17,7 @@ from core.ports.registry import (
 
 __all__ = [
     "REQUIRED_PORTS",
+    "PortConflict",
     "PortNotBound",
     "get",
     "install",

@@ -4,7 +4,10 @@
 只做「文件 → 结构化对象 + 形状校验」，不解释字段含义。三条刻意选择的严格规则：
 
 1. **未知字段即报错**：拼错的键（如 ``model`` vs ``models``）若被静默忽略，表现是模块
-   没被加载、接口 404——启动完全正常，正是最难查的那类故障；
+   没被加载、接口 404——启动完全正常，正是最难查的那类故障。同理，清单里**不声明没有
+   读取方的字段**：早期的 ``routers`` / ``graphql`` 只被解析、无人消费（REST/GraphQL 出口
+   实际由模块 ``__init__.py`` 的 ``ROUTERS`` / ``GRAPHQL`` 约定提供），第三方插件照着写
+   只会拿到 0 条路由与一串 404。字段删除后，写它会命中本条第 1 款；
 2. **缺失 name / 非法类型即报错**：同上，fail-fast 优于降级；
 3. **按目录名排序返回**：目录扫描顺序在各文件系统上不保证一致，而调用方可能依赖顺序
    （如路由注册顺序）。排序让结果确定；顺序本身的语义由调用方的等价性测试钉住。
@@ -20,12 +23,11 @@ from typing import Any
 MANIFEST_FILENAME = "manifest.toml"
 
 #: 允许出现的字段。新增字段须同时更新这里，避免「写了但没人读」。
+#: 这里**没有** ``routers`` / ``graphql``：那两个字段曾被解析但没有任何读取方。
 _KNOWN_FIELDS = frozenset(
     {
         "name",
         "module",
-        "routers",
-        "graphql",
         "errors",
         "models",
         "tasks",
@@ -48,8 +50,6 @@ class Manifest:
     source: Path
     #: 包导入路径。内置模块留空（默认 ``app.modules.<name>``）；外部插件必须显式声明。
     module: str | None = None
-    routers: str | None = None
-    graphql: str | None = None
     errors: tuple[str, ...] = ()
     models: tuple[str, ...] = ()
     tasks: tuple[str, ...] = ()
@@ -95,8 +95,6 @@ def load_manifest(path: Path) -> Manifest:
         name=name,
         source=path,
         module=_opt_str(raw, "module", where=path),
-        routers=_opt_str(raw, "routers", where=path),
-        graphql=_opt_str(raw, "graphql", where=path),
         errors=_str_tuple(raw, "errors", where=path),
         models=_str_tuple(raw, "models", where=path),
         tasks=_str_tuple(raw, "tasks", where=path),

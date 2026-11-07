@@ -47,8 +47,22 @@ class PortNotBound(RuntimeError):
     """端口未绑定：该进程没有装配对应实现（多半是漏调 boot.assemble()）。"""
 
 
+class PortConflict(RuntimeError):
+    """同一端口被绑定到两个不同实现：装配期失败，而不是静默覆盖。"""
+
+
 def install(name: str, impl: Any) -> None:
-    """绑定端口实现（由 auth.bootstrap / app.bootstrap 调用）。"""
+    """绑定端口实现（由 auth.bootstrap / app.bootstrap 调用）。
+
+    同名端口重复绑定**不同**实现即抛 :class:`PortConflict`：否则「谁生效取决于装配顺序」，
+    与插件重名是同一类故障（鉴权端口被后装者覆盖 = 静默换实现，且很难在运行时发现）。
+    绑定同一对象视为幂等，允许重复调用。
+    """
+    existing = _impls.get(name)
+    if existing is not None and existing is not impl:
+        raise PortConflict(
+            f"端口 {name!r} 已被另一种实现绑定：拒绝覆盖（装配顺序不该决定实现）"
+        )
     _impls[name] = impl
 
 
@@ -74,6 +88,13 @@ def validate_all() -> None:
         raise PortNotBound(f"装配缺少端口实现: {missing}")
 
 
-def reset() -> None:
-    """清空绑定（仅供测试隔离）。"""
-    _impls.clear()
+def reset(name: str | None = None) -> None:
+    """清空绑定（仅供测试隔离）：给 ``name`` 只清该端口，否则全清。
+
+    单测替换某端口时用 ``reset("points_writer")`` 而不是全清：全清会让同一进程里
+    其余已装配端口一起消失，测试顺序反而变成新的不变量。
+    """
+    if name is None:
+        _impls.clear()
+    else:
+        _impls.pop(name, None)

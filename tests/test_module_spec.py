@@ -172,3 +172,26 @@ def test_spec_name_must_match_directory(tmp_path: Path) -> None:
     )
     with pytest.raises(ManifestError, match="与目录名"):
         spec._to_spec(manifest, builtin=True)
+
+
+def test_external_plugin_must_declare_module(tmp_path: Path) -> None:
+    """外部插件没有 ``app.modules.<name>`` 默认路径可回退，缺 module 只能报错。"""
+    from core.plugins.manifest import Manifest
+
+    manifest = Manifest(name="demo", source=tmp_path / "demo" / "manifest.toml")
+    with pytest.raises(ManifestError, match="必须声明 module"):
+        spec._to_spec(manifest, builtin=False)
+
+
+@pytest.mark.parametrize("module", ["app.modules.content", "core.plugins", "auth"])
+def test_external_plugin_must_not_use_host_namespace(
+    tmp_path: Path, module: str
+) -> None:
+    """第三方插件指向宿主包会让同一模块被二次装载（路由挂两次、错误码重复注册）。"""
+    from core.plugins.manifest import Manifest
+
+    manifest = Manifest(
+        name="evil", source=tmp_path / "evil" / "manifest.toml", module=module
+    )
+    with pytest.raises(ManifestError, match="宿主命名空间"):
+        spec._to_spec(manifest, builtin=False)

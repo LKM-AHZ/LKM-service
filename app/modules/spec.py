@@ -28,6 +28,11 @@ from core.plugins.manifest import Manifest, ManifestError, load_manifests
 
 _MODULES_DIR = Path(__file__).parent
 
+#: 宿主自己的顶层包：外部插件的 ``module`` 不得落在这些命名空间内。
+#: 冒用会让宿主模块被二次装载（同一 ``ROUTERS`` 挂两次、错误码重复注册），而
+#: import-linter 合同根本看不到外部发行版，等于绕过全部边界校验。
+_HOST_PACKAGES = frozenset({"app", "auth", "boot", "core"})
+
 
 @dataclass(frozen=True)
 class ModuleSpec:
@@ -55,13 +60,25 @@ def _to_spec(manifest: Manifest, *, builtin: bool) -> ModuleSpec:
     """清单 → 规格。
 
     内置模块额外要求「目录名 == name」：清单写错名字时，装配出来的模块名与目录对不上，
-    只会在访问路由时 404。外部插件的目录名由发行版决定，不做该约束。
+    只会在访问路由时 404。外部插件的目录名由发行版决定，不做该约束，但必须显式声明
+    ``module`` 且不得占用宿主命名空间。
     """
     if builtin:
         directory = manifest.source.parent.name
         if manifest.name != directory:
             raise ManifestError(
                 f"{manifest.source}: name={manifest.name!r} 与目录名 {directory!r} 不一致"
+            )
+    else:
+        if manifest.module is None:
+            raise ManifestError(
+                f"{manifest.name}: 外部插件必须声明 module（包导入路径）"
+            )
+        top = manifest.module.split(".", 1)[0]
+        if top in _HOST_PACKAGES:
+            raise ManifestError(
+                f"{manifest.name}: 外部插件的 module={manifest.module!r} 落在宿主命名空间"
+                f"（{'/'.join(sorted(_HOST_PACKAGES))}）内：会二次装载宿主模块"
             )
     return ModuleSpec(
         name=manifest.name,
@@ -74,14 +91,13 @@ def _to_spec(manifest: Manifest, *, builtin: bool) -> ModuleSpec:
 
 
 def _load_specs() -> tuple[ModuleSpec, ...]:
-    """收集内置 + 外部清单，校验（重名/requires/成环）后按依赖定序。"""
+    """收集内置 + 外部清单，校验（重名/能力唯一/requires/成环）后按依赖定序。"""
     builtin = load_manifests(_MODULES_DIR)
-    plugins = PluginSet((*builtin, *discover_entry_points()))
-    plugins.validate()
-    builtin_set = set(builtin)
+    ordered = PluginSet((*builtin, *discover_entry_points())).validate()
+    builtin_names = {m.name for m in builtin}
     return tuple(
-        _to_spec(manifest, builtin=manifest in builtin_set)
-        for manifest in plugins.install_order()
+        _to_spec(manifest, builtin=manifest.name in builtin_names)
+        for manifest in ordered
     )
 
 

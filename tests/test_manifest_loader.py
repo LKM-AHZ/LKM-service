@@ -32,6 +32,24 @@ def test_unknown_field_is_rejected(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_route_fields_are_rejected_as_unknown(tmp_path: Path) -> None:
+    """``routers`` / ``graphql`` 从未有读取方（出口走模块 ROUTERS/GRAPHQL 约定）。
+
+    保留字段等于接受「写了但没生效」：插件声明了路由却拿到 0 条、只表现为 404。
+    删掉字段后必须报「未知字段」，这才是可以被发现的失败。
+    """
+    for field, body in (
+        ("routers", 'routers = "alpha.router:router"\n'),
+        ("graphql", 'graphql = "alpha.graphql:Query"\n'),
+    ):
+        directory = tmp_path / field
+        directory.mkdir(parents=True)
+        path = directory / MANIFEST_FILENAME
+        path.write_text(f'name = "{field}"\n{body}', encoding="utf-8")
+        with pytest.raises(ManifestError, match=f"未知字段.*{field}"):
+            load_manifest(path)
+
+
 def test_missing_name_is_rejected(tmp_path: Path) -> None:
     path = _write(tmp_path, "alpha", 'models = ["a.models"]\n')
     with pytest.raises(ManifestError, match="缺少非空 name"):
