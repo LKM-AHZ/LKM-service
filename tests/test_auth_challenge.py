@@ -26,11 +26,12 @@ from auth.challenge import (
     state_payload,
     submit_factor,
 )
+from auth.deps import require_device_id
 from auth.errors import AuthErr
 from auth.models import TOTP, Profile, User
 from auth.security import encrypt_secret, generate_totp_secret, hashpwd
 from core.db.base import now_iso
-from core.err import BizError
+from core.err import BizError, CommonErr
 
 _PASSWORD = "secret123456"
 
@@ -309,3 +310,23 @@ class TestSecondFactor:
         factor = state_payload(challenge)["factors"][0]
         assert factor["kind"] == FACTOR_CODE
         assert factor["hint"] == "a***@example.com"
+
+
+class TestDeviceHeader:
+    """设备标识统一走 X-Device-Id：这里钉住依赖本身，端点侧只在装配里露头。"""
+
+    def test_requires_the_header(self) -> None:
+        with pytest.raises(BizError) as exc:
+            require_device_id(None)
+        assert int(exc.value.errcode) == int(CommonErr.INVALID_INPUT)
+
+    def test_rejects_blank(self) -> None:
+        with pytest.raises(BizError):
+            require_device_id("   ")
+
+    def test_rejects_oversized(self) -> None:
+        with pytest.raises(BizError):
+            require_device_id("x" * 129)
+
+    def test_trims_and_returns(self) -> None:
+        assert require_device_id("  device-a ") == "device-a"

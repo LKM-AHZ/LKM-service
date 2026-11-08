@@ -2,12 +2,16 @@
 
 轮转语义见 :mod:`auth.challenge`；这里只做参数校验、速率限制与响应包装。
 
+设备标识统一走 ``X-Device-Id`` 请求头（见 :mod:`auth.deps`）：所有挑战端点都要它，
+放 body 会让 GET 读状态没有位置，放 query 又得和 body 混着记。
+
 典型流程（密码登录，2 RTT）：
 
 1. ``POST /auth/challenge``                      → 挑战 + ``factors:[{kind:password}]``
 2. ``POST /auth/challenge/{id}/factor``          → 令牌，或下一批因子
 
-验证码登录多一步 ``POST /auth/challenge/{id}/request`` 触发发码。
+验证码登录多一步 ``POST /auth/challenge/{id}/request`` 触发发码；通行密钥走
+``/{id}/passkey/start`` + ``/{id}/passkey/complete``。
 """
 
 from __future__ import annotations
@@ -15,12 +19,13 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import challenge as challenge_service
 from auth.channels import channel_for
 from auth.db.session import get_auth_session
+from auth.deps import require_device_id
 from auth.schemas import (
     ChallengeCreate,
     ChallengeFactorSubmit,
@@ -46,6 +51,7 @@ _CREATE_WINDOW_SECONDS = 600
 async def create_challenge_route(
     payload: ChallengeCreate,
     request: Request,
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """建挑战。不查账号是否存在——那一步留到提交因子。"""
@@ -57,7 +63,7 @@ async def create_challenge_route(
     challenge = await challenge_service.create_challenge(
         db,
         account=payload.account,
-        device_id=payload.device_id,
+        device_id=device,
         primary_factor=payload.primary_factor,
     )
     return challenge_service.state_payload(challenge)
@@ -67,11 +73,11 @@ async def create_challenge_route(
 @respond
 async def get_challenge_route(
     challenge_id: uuid.UUID,
-    device_id: str = Query(..., min_length=1, max_length=128),
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """读挑战当前状态。客户端重连或回到登录页时用它恢复进度。"""
-    challenge = await challenge_service.load_challenge(db, challenge_id, device_id)
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
     return challenge_service.state_payload(challenge)
 
 
@@ -81,6 +87,7 @@ async def submit_factor_route(
     challenge_id: uuid.UUID,
     payload: ChallengeFactorSubmit,
     request: Request,
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """提交一个因子：返回下一状态，或完成态（含令牌）。
@@ -88,9 +95,7 @@ async def submit_factor_route(
     响应形状随进度变化：``{"status":"pending","factors":[...]}`` 或
     ``{"status":"complete","access_token":...}``。
     """
-    challenge = await challenge_service.load_challenge(
-        db, challenge_id, payload.device_id
-    )
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
     return await challenge_service.submit_factor(
         db,
         challenge,
@@ -110,6 +115,7 @@ async def start_passkey_factor_route(
     challenge_id: uuid.UUID,
     payload: ChallengePasskeyStart,
     request: Request,
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """生成 passkey 因子的断言选项（PublicKeyCredentialRequestOptions）。
@@ -119,9 +125,7 @@ async def start_passkey_factor_route(
     await check_code_rate_limit(
         f"challenge:passkey:start:{client_ip(request)}", max_count=20, window=60
     )
-    challenge = await challenge_service.load_challenge(
-        db, challenge_id, payload.device_id
-    )
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
     return await challenge_service.prepare_passkey_factor(db, challenge)
 
 
@@ -133,17 +137,15 @@ async def complete_passkey_factor_route(
     challenge_id: uuid.UUID,
     payload: ChallengePasskeyComplete,
     request: Request,
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """提交 passkey 断言：完成挑战并返回令牌。"""
     await check_code_rate_limit(
         f"challenge:passkey:complete:{client_ip(request)}", max_count=10, window=60
     )
-    challenge = await challenge_service.load_challenge(
-        db, challenge_id, payload.device_id
-    )
-    credential = payload.model_dump(exclude={"device_id"})
-    return await challenge_service.complete_passkey(db, challenge, credential)
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
+    return await challenge_service.complete_passkey(db, challenge, payload.model_dump())
 
 
 @router.post("/{challenge_id}/request", response_model=ApiResp[MessageResponse])
@@ -151,11 +153,11 @@ async def complete_passkey_factor_route(
 async def request_factor_code_route(
     challenge_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    device_id: str = Query(..., min_length=1, max_length=128),
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """为 ``code`` 因子发验证码。账号不存在时返回同一文案。"""
-    challenge = await challenge_service.load_challenge(db, challenge_id, device_id)
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
     issued = await challenge_service.issue_login_code(db, challenge)
     if issued is not None:
         contact, code = issued
@@ -167,10 +169,10 @@ async def request_factor_code_route(
 @respond
 async def cancel_challenge_route(
     challenge_id: uuid.UUID,
-    device_id: str = Query(..., min_length=1, max_length=128),
+    device: str = Depends(require_device_id),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
     """作废挑战（用户主动放弃或切换登录方式）。"""
-    challenge = await challenge_service.load_challenge(db, challenge_id, device_id)
+    challenge = await challenge_service.load_challenge(db, challenge_id, device)
     await challenge_service.cancel_challenge(db, challenge)
     return {"message": "Challenge cancelled"}

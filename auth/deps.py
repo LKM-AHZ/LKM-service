@@ -298,6 +298,23 @@ def get_sms_provider() -> SmsProvider:
     )
 
 
+def require_device_id(
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+) -> str:
+    """挑战流程的设备标识（``X-Device-Id`` 请求头）。
+
+    统一走请求头而不是 body/query：建挑战、提因子、读状态、发码、作废五个端点
+    plus passkey 的 start/complete 都要它，散在 body 与 query 两种形状里，客户端
+    每加一个端点就得再赌一次绑定位置（写错不会报参数错误，只会得到「挑战不存在」）。
+    """
+    value = (x_device_id or "").strip()
+    if not value:
+        raise BizError(CommonErr.INVALID_INPUT, "X-Device-Id header required")
+    if len(value) > 128:
+        raise BizError(CommonErr.INVALID_INPUT, "X-Device-Id header too long")
+    return value
+
+
 def get_email_provider() -> EmailProvider:
     """返回已配置的邮件服务提供商。
 

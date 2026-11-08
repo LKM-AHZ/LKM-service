@@ -112,10 +112,13 @@ class TOTPDisableRequest(BaseModel):
 
 
 class ChallengeCreate(BaseModel):
-    """建挑战：只要账号与设备标识，不带凭据。"""
+    """建挑战：只要账号，不带凭据。
+
+    设备标识走 ``X-Device-Id`` 请求头（见 ``auth.deps.require_device_id``），
+    五个挑战端点与 passkey start/complete 一律同源。
+    """
 
     account: str = Field(..., min_length=1, max_length=200)
-    device_id: str = Field(..., min_length=1, max_length=128)
     device_name: str | None = Field(default=None, max_length=100)
     platform: str | None = Field(default=None, max_length=40)
     primary_factor: str = Field(default="password", pattern="^(password|code)$")
@@ -141,7 +144,6 @@ class ChallengeState(BaseModel):
 class ChallengeFactorSubmit(BaseModel):
     """提交一个因子。``password`` / ``code`` 按 ``kind`` 二选一。"""
 
-    device_id: str = Field(..., min_length=1, max_length=128)
     kind: str = Field(..., pattern="^(password|code|totp)$")
     password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
     code: str | None = Field(default=None, max_length=32)
@@ -240,16 +242,12 @@ class PasskeyLoginCompleteRequest(BaseModel):
 
 
 class ChallengePasskeyStart(BaseModel):
-    """为挑战里的 passkey 因子取断言选项。"""
-
-    device_id: str = Field(..., min_length=1, max_length=128)
+    """为挑战里的 passkey 因子取断言选项（设备标识走请求头，故无字段）。"""
 
 
 class ChallengePasskeyComplete(PasskeyLoginCompleteRequest):
     """提交 passkey 断言。字段与 ``/auth/passkey/login/complete`` 保持一致，
-    客户端可复用同一套序列化。"""
-
-    device_id: str = Field(..., min_length=1, max_length=128)
+    客户端可复用同一套序列化；设备标识走 ``X-Device-Id`` 请求头。"""
 
 
 class PasskeyRegisterCompleteResponse(BaseModel):
