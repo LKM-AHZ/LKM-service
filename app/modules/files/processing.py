@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import socket
 import struct
@@ -18,6 +19,31 @@ _OFFICE_SUFFIXES = frozenset({".doc", ".docx", ".ppt", ".pptx", ".odt", ".odp"})
 _TEXT_SUFFIXES = frozenset({".txt", ".md", ".csv", ".json", ".xml"})
 _MAX_TEXT_CHARS = 200_000
 _CHUNK = 1024 * 1024
+
+
+def _limit_child_process() -> None:
+    """给转换类子进程设内核级资源上限（POSIX）。
+
+    LibreOffice / poppler 解析的是**用户上传的不可信文档**：超时只能挡住「跑得久」，
+    挡不住「一次吃掉几个 GB」。这里在 exec 前设 RLIMIT（CPU 60s、写文件 ≤ 预览上限 ×4、
+    不产 core）。**刻意不设 RLIMIT_AS**：LibreOffice 会映射远大于常驻内存的虚拟地址空间，
+    2GB 的地址空间上限会让它直接起不来（实测 docx→pdf 转换失败），内存兜底交给容器的
+    mem_limit / cgroup。Windows 没有 resource 模块，直接跳过（相关能力本就依赖 Linux 镜像）。
+    """
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - 仅 Windows 开发机
+        return
+    cpu_s = 60
+    file_b = max(settings.files_preview_max_bytes * 4, 64 * 1024**2)
+    for limit, value in (
+        (resource.RLIMIT_CPU, (cpu_s, cpu_s)),
+        (resource.RLIMIT_FSIZE, (file_b, file_b)),
+        (resource.RLIMIT_CORE, (0, 0)),
+    ):
+        # 个别内核/容器不允许设某类限制（如已硬限死的 RLIMIT_AS），跳过即可。
+        with contextlib.suppress(ValueError, OSError):
+            resource.setrlimit(limit, value)
 
 
 def is_office(name: str) -> bool:
@@ -59,6 +85,7 @@ def _pdf_text(path: Path) -> str:
             capture_output=True,
             timeout=30,
             check=False,
+            preexec_fn=_limit_child_process,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -104,6 +131,7 @@ def process_upload(
                                 capture_output=True,
                                 timeout=60,
                                 check=False,
+                                preexec_fn=_limit_child_process,
                             )
                         except (OSError, subprocess.TimeoutExpired):
                             result = None

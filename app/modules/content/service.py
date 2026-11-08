@@ -314,8 +314,7 @@ async def create_item(
 
     # 专栏已拆到 columns 域：存在性经端口判定，错误码仍用 content 自己的 17.4
     if info.content_type == ContentType.COLUMN_POST and (
-        not info.column_id
-        or not await columns_port.column_exists(db, info.column_id)
+        not info.column_id or not await columns_port.column_exists(db, info.column_id)
     ):
         raise BizError(ContentErr.COLUMN_NOT_FOUND)
 

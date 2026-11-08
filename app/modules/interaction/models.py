@@ -122,4 +122,3 @@ class BoardFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
-

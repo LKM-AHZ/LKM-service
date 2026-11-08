@@ -55,9 +55,11 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       # 扫描面刻意包含 core/boot/scripts：它们是 0 诊断的，纳入不增加负担。
-      # **tests/ 不纳入**：当前有 472 条存量诊断，一次性塞进门禁会把 CI 直接变红；
-      # 那是独立的清理任务（清理完成后再加进来，而不是靠 continue-on-error 绕过）。
+      # **tests/ 不直接纳入**：存量诊断约 480 条（monkeypatch / ASGI 桩 / fixture 动态类型），
+      # 一次性塞进门禁只会立刻变红、再被 continue-on-error 绕过。改用棘轮：只禁止**新增**，
+      # 基线在 tests/type_debt_baseline.txt，清理后由 --update 下调。
       - run: uv run ty check app auth core boot scripts
+      - run: uv run python scripts/check_type_debt.py
 
   migrations:
     name: migrations（逐 revision 双向离线 SQL）
@@ -109,8 +111,25 @@ jobs:
         env:
           PGPASSWORD: ${{ vars.CI_POSTGRES_PASSWORD || 'postgres' }}
         run: psql -h localhost -U postgres -c "CREATE DATABASE lkm_auth"
+      # schema 治理门禁：在**空库**上跑两条迁移链（业务 / auth），再用 `alembic check`
+      # 比对「迁移建出的结构」与 ORM metadata。默认部署走 create_all、迁移链只在
+      # LKM_USE_ALEMBIC=true 时执行，两条通道各自演化就会给出不同结构；这里要求零差异。
+      - name: schema 漂移（迁移链 vs ORM metadata）
+        run: uv run python scripts/check_schema_drift.py
       - name: pytest（默认排除 integration）
-        run: uv run pytest -q
+        run: |
+          uv run pytest -q \
+            --cov --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=80
+      # 覆盖率产物留档：PR 里看趋势，失败时用来判断「是回归还是本来就薄」。
+      - name: 覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
   integration:
     # 两个 L2 后端各跑一遍同套集成测试：换成 Dragonfly 时靠这条 matrix 保证 RESP 兼容

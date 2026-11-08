@@ -61,6 +61,9 @@ async def _create_auth_all() -> None:
     register_models()
     engine = get_auth_engine()
     async with engine.begin() as conn:
+        # DDL 解除语句超时（同 core.db.init_db._create_all）：auth 库的补列/建索引
+        # 在应用连接的 `statement_timeout`（默认 30s）下可能被误杀。
+        await conn.execute(sa.text("SET LOCAL statement_timeout = 0"))
         await ensure_shared_objects(conn)
         await conn.run_sync(auth_metadata.create_all)
         # create_all 不会修改已有 profiles 表；默认 Compose 也需补列并修复旧建号角色。

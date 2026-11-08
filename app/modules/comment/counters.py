@@ -23,9 +23,7 @@ from app.modules.comment.models import ContentComment, ContentCommentLike
 from core.err import BizError
 
 
-async def bump_like_count(
-    db: AsyncSession, comment_id: uuid.UUID, delta: int
-) -> int:
+async def bump_like_count(db: AsyncSession, comment_id: uuid.UUID, delta: int) -> int:
     """评论点赞计数：写穿原子 UPDATE（下限 0），返回新值。
 
     不接 Redis write-behind：那套是为 ``content_items`` 三项计数设计的回退通道，评论点赞

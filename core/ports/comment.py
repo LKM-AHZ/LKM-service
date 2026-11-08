@@ -30,9 +30,7 @@ def comment_count_subquery(outer_column: Any) -> Any:
     return get("comment_api").comment_count_subquery(outer_column)
 
 
-async def reconcile_comment_likes(
-    db: AsyncSession, item_ids: list[uuid.UUID]
-) -> int:
+async def reconcile_comment_likes(db: AsyncSession, item_ids: list[uuid.UUID]) -> int:
     """把这批内容项下所有评论的 ``like_count`` 按明细重算，返回被修正的行数。"""
     return await get("comment_api").reconcile_comment_likes(db, item_ids)
 

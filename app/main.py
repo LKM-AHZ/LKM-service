@@ -169,10 +169,16 @@ def create_app() -> FastAPI:
     # 加载业务模块与错误码。
     registry.load_all()
 
+    # 交互式文档只在非生产暴露：/docs 与 /redoc 会把全部端点、参数、错误码渲染成
+    # 可点的页面，生产环境没有理由对外提供（真正的契约消费方是 tests/contracts 的
+    # 快照与前端手写类型，不依赖这两个页面）。/openapi.json 保留：网关/工具链可能需要，
+    # 且它本来就是公开 API 面，不含内部信息。
     application = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         lifespan=lifespan,
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
     )
 
     application.add_middleware(GraphQLHTTPMiddleware)

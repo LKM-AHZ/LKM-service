@@ -316,4 +316,3 @@ async def _ensure_column_for_application(
     # 集合新增：升级列列表版本号，使旧分页缓存立即失效（写后读一致）
     await bump_collection_version("columns")
     return ColumnInfo.model_validate(col)
-

@@ -43,6 +43,9 @@ def get_auth_engine() -> AsyncEngine:
             # 池形态（回收/等待上限）与两库共用，尺寸按 realm 分列（见 config 注释）。
             pool_recycle=settings.db_pool_recycle_s,
             pool_timeout=settings.db_pool_timeout_s,
+            # 服务端兜底同样按 realm 共用：auth 的慢查询一样会占死它自己的池。
+            statement_timeout_ms=settings.db_statement_timeout_ms,
+            idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
         )
     return _auth_async_engine
 

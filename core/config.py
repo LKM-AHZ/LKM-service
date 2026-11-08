@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # 连接达到回收时间后重建。
     db_pool_recycle_s: int = 1800
     db_pool_timeout_s: float = 30.0
+    # 服务端语句超时（毫秒）：PG 侧兜底，慢查询不会无限期占住一条池连接。0 = 关闭。
+    # 建连时随 `server_settings` 下发，只作用于 asyncpg 应用连接；Alembic 的 psycopg2
+    # 同步连接不受影响（大表 DDL / 索引构建不会被误杀）。
+    db_statement_timeout_ms: int = 30_000
+    # 事务空闲超时（毫秒）：事务开着却长时间不发语句（典型是握着连接等下游 HTTP）时
+    # 由 PG 主动断开，把池位还给别人。0 = 关闭。
+    db_idle_tx_timeout_ms: int = 60_000
     # worker / 后台批处理的**独立**池：
     db_worker_pool_size: int = 5
     db_worker_pool_max_overflow: int = 10

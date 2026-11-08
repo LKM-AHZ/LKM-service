@@ -76,9 +76,12 @@ async def test_reward_and_spend_forward_keyword_only_flag(
     session = object()
     uid = uuid.uuid4()
     assert await points_port.reward(session, uid, 5, "post", "item", "1") == "entry"
-    assert await points_port.reward(
-        session, uid, -5, "punish", "item", "2", allow_negative=True
-    ) == "entry"
+    assert (
+        await points_port.reward(
+            session, uid, -5, "punish", "item", "2", allow_negative=True
+        )
+        == "entry"
+    )
     assert await points_port.spend(session, uid, 3, "buy", "item", "3") == "entry"
 
     assert writer.calls[0][-1] is False

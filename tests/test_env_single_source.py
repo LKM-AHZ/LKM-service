@@ -28,6 +28,9 @@ _ALLOWED_ENVIRON_FILES = {
     "core/secrets_bootstrap.py",
     "app/modules/blog/git_http.py",
     "auth/tasks.py",
+    # 运维校验脚本：把临时库名注入 alembic 子进程（读-改-写 os.environ 副本），
+    # 不是运行期配置，不进 Settings。
+    "scripts/check_schema_drift.py",
 }
 
 _GETENV = re.compile(r"\bos\.getenv\s*\(")

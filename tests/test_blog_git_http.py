@@ -366,9 +366,7 @@ class TestMaybeBackfillAfterPush:
         async def _factory() -> AsyncSession:
             return db
 
-        monkeypatch.setattr(
-            "app.modules.blog.git_http._session_factory", _factory
-        )
+        monkeypatch.setattr("app.modules.blog.git_http._session_factory", _factory)
 
     async def _make_series(self, db, repo_name: str) -> uuid.UUID:
         # 先建真实 owner 取 uuid 再挂 series 属主（owner_id 现为 auth realm uuid）。

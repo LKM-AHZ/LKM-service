@@ -492,9 +492,7 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     assert "key: LKM_BOT_SSO_TTL_SECONDS" not in lkmbot_yaml
 
     # 消费侧（LKM-bot）代码默认值必须与签发侧逐字相同（只读源码比对，不 import）
-    sso_py = (_ROOT / "LKM-bot" / "bot" / "lkm" / "sso.py").read_text(
-        encoding="utf-8"
-    )
+    sso_py = (_ROOT / "LKM-bot" / "bot" / "lkm" / "sso.py").read_text(encoding="utf-8")
     for env_name, default in (
         ("LKM_BOT_SSO_AUDIENCE", BOT_SSO_AUD),
         ("LKM_BOT_SSO_TYPE", BOT_SSO_TYPE),

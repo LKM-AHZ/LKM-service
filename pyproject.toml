@@ -55,6 +55,20 @@ filterwarnings = [
     "ignore::ResourceWarning",
 ]
 
+[tool.coverage.run]
+# 只统计业务代码；scripts/、tests/、alembic/ 不进覆盖率口径。
+source = ["app", "auth", "core", "boot"]
+
+[tool.coverage.report]
+# 只列未覆盖行：不 skip 的话 term 报告会把每个文件的所有行刷一遍。
+skip_covered = true
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
 [tool.basedpyright]
 include = ["core", "app", "auth"]
 typeCheckingMode = "standard"
@@ -90,6 +104,7 @@ dev = [
     "hypothesis>=6.112",
     "pyyaml>=6.0",
     "pytest-xdist>=3.8.0",
+    "pytest-cov>=6",
 ]
 
 [tool.ruff]

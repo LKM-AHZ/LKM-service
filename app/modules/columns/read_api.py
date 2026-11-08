@@ -21,8 +21,9 @@ async def pending_column_applications(
     """待审专栏申请：``(数量, 最早提交时间)``。"""
     row = (
         await db.execute(
-            select(func.count(ColumnApplication.id), func.min(ColumnApplication.created_at))
-            .where(ColumnApplication.status == "pending")
+            select(
+                func.count(ColumnApplication.id), func.min(ColumnApplication.created_at)
+            ).where(ColumnApplication.status == "pending")
         )
     ).one()
     return int(row[0]), row[1]
@@ -45,8 +46,6 @@ async def column_exists(db: AsyncSession, column_id: uuid.UUID) -> bool:
     return await db.scalar(select(Column.id).where(Column.id == column_id)) is not None
 
 
-async def column_owner_id(
-    db: AsyncSession, column_id: uuid.UUID
-) -> uuid.UUID | None:
+async def column_owner_id(db: AsyncSession, column_id: uuid.UUID) -> uuid.UUID | None:
     """专栏属主 id（不存在返回 None）；供 content 做对象级权限判定。"""
     return await db.scalar(select(Column.owner_id).where(Column.id == column_id))

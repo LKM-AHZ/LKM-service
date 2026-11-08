@@ -27,7 +27,16 @@ RUN mkdir -p /data
 ENV LKM_BLOG_REPO_DIR=/data/blog_repos \
     LKM_FILES_STORE_DIR=/data/files_store
 
-RUN chmod +x /app/deploy/docker-entrypoint.sh
+# 非 root 运行：进程只需要写 /data（blog 仓库、落盘文件）与 /tmp（上传/转换的临时目录），
+# 代码与环境属于 root 且只读。此前以 root 跑意味着「上传一个文档 → LibreOffice 解析 →
+# 拿到进程全部凭据（DB/S3/JWT）」的爆炸半径是整个节点。
+RUN groupadd --gid 10001 lkm \
+    && useradd --uid 10001 --gid lkm --create-home --shell /usr/sbin/nologin lkm \
+    && chown -R lkm:lkm /data \
+    && chmod +x /app/deploy/docker-entrypoint.sh
+ENV HOME=/home/lkm
+USER lkm
+
 ENTRYPOINT ["/app/deploy/docker-entrypoint.sh"]
 
 EXPOSE 8000

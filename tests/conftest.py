@@ -135,6 +135,9 @@ _hypothesis_settings.load_profile("lkm")
 # （含属性测试自建引擎、混合收集）都照常建库，避免判断太聪明反而漏建模板库。
 _DB_NEEDED = True
 
+#: 兜底 PG 容器名（`_ensure_pg_shared_objects` 里按需启动，session 结束时销毁）。
+_PG_CONTAINER: str | None = None
+
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
@@ -155,10 +158,21 @@ def _ensure_pg_shared_objects() -> None:
     索引 opclass 与列 server_default 都显式限定 ``public.``。auth 是**独立 database**，
     public schema 与业务库互不相通，必须各建一份。幂等；库不可达时静默跳过，交由既有
     DB fixture 给出更明确的连接错误。
+
+    **本 fixture 必须是第一个碰库的**：它也是「本地没有 PG 时用 docker 起兜底实例」的
+    入口（``_pg_bootstrap.start``）。放在这里而不是模板 fixture 里，是因为一旦本步先跑在
+    默认 5432 上并静默失败，后续模板虽会建在新实例上，主库却缺 uuid_generate_v7——
+    表现为「建表报 function does not exist」这种与真实原因无关的错。
     """
+
+    global _PG_CONTAINER
 
     if not _DB_NEEDED:
         return
+
+    from tests import _pg_bootstrap
+
+    _PG_CONTAINER = _pg_bootstrap.start(settings)
 
     async def _run() -> None:
         # 与生产两条建库链同源（core.db.shared_objects），避免测试与生产漂移。
@@ -326,8 +340,12 @@ async def _drop_database(name: str, base_url: str = "") -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _pg_templates() -> Iterator[None]:
-    """session 级建三个模板库（业务 / auth / 融合），测毕清理。"""
+def _pg_templates(_ensure_pg_shared_objects: None) -> Iterator[None]:
+    """session 级建三个模板库（业务 / auth / 融合），测毕清理。
+
+    显式依赖 `_ensure_pg_shared_objects`：后者负责「没有 PG 就起兜底实例」，
+    模板必须建在**同一个**已确定的实例上。
+    """
 
     if not _DB_NEEDED:
         # 生成器型 fixture 必须 yield 才能真正结束；裸 return 会被 pytest 判成
@@ -358,6 +376,10 @@ def _pg_templates() -> Iterator[None]:
     asyncio.run(_build())
     yield
     asyncio.run(_cleanup())
+    if _PG_CONTAINER:
+        from tests import _pg_bootstrap
+
+        _pg_bootstrap.stop(_PG_CONTAINER)
 
 
 @contextlib.asynccontextmanager

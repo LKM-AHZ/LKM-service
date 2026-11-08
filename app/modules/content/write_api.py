@@ -70,9 +70,7 @@ async def lock_content_item(db: AsyncSession, item_id: uuid.UUID) -> None:
     await ContentItemRepository(db).lock_active(item_id)
 
 
-async def bump_comment_count(
-    db: AsyncSession, item_id: uuid.UUID, delta: int
-) -> int:
+async def bump_comment_count(db: AsyncSession, item_id: uuid.UUID, delta: int) -> int:
     """帖子评论数写穿加减（``reconcile_counts`` 的在线一侧）。"""
     return await bump_content_counter(db, item_id, "comment_count", delta)
 

@@ -38,6 +38,8 @@ def create_realm_async_engine(
     pool_pre_ping: bool | None = None,
     pool_recycle: int | None = None,
     pool_timeout: float | None = None,
+    statement_timeout_ms: int | None = None,
+    idle_tx_timeout_ms: int | None = None,
 ) -> AsyncEngine:
     """按池参数建立 PostgreSQL(asyncpg) async 引擎。
 
@@ -47,8 +49,24 @@ def create_realm_async_engine(
     ``pool_recycle``/``pool_timeout`` 见 ``settings.db_pool_recycle_s``/``db_pool_timeout_s``
     的注释（蓝图 §3.3：连接回收 + 池满等待超时）。两者是**池形态**参数，各 realm 共用；
     只有尺寸（size/overflow）按 realm 分列。
+
+    ``statement_timeout_ms``/``idle_tx_timeout_ms`` 是**服务端**兜底（0/None = 不下发）：
+
+    - 语句超时挡住「一条慢查询把池位占死到天荒地老」——``pool_timeout`` 只能让排队者
+      失败，不能让正在跑的查询停下，两者是互补而非重复；
+    - 事务空闲超时挡住「开了事务等下游 HTTP/S3，连接空转」——这正是本仓库
+      「事务边界 = 整个请求」形态下最容易被忽视的泄漏面。
+
+    只影响 asyncpg 连接；Alembic 走 psycopg2 同步引擎，大表 DDL 不会被这两项误杀。
     """
     connect_args: dict[str, object] = {}
+    server_settings: dict[str, str] = {}
+    if statement_timeout_ms:
+        server_settings["statement_timeout"] = str(statement_timeout_ms)
+    if idle_tx_timeout_ms:
+        server_settings["idle_in_transaction_session_timeout"] = str(idle_tx_timeout_ms)
+    if server_settings:
+        connect_args["server_settings"] = server_settings
     engine_kwargs: dict[str, object] = {"echo": False, "connect_args": connect_args}
     if pool_size is not None:
         engine_kwargs["pool_size"] = pool_size
@@ -84,6 +102,8 @@ def _ensure_engine_locked() -> AsyncEngine:
             pool_pre_ping=settings.db_pool_pre_ping,
             pool_recycle=settings.db_pool_recycle_s,
             pool_timeout=settings.db_pool_timeout_s,
+            statement_timeout_ms=settings.db_statement_timeout_ms,
+            idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
         )
     return _async_engine
 
@@ -184,6 +204,8 @@ def _ensure_worker_engine_locked() -> AsyncEngine:
             pool_pre_ping=settings.db_pool_pre_ping,
             pool_recycle=settings.db_pool_recycle_s,
             pool_timeout=settings.db_pool_timeout_s,
+            statement_timeout_ms=settings.db_statement_timeout_ms,
+            idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
         )
     return _worker_engine
 

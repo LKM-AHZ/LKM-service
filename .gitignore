@@ -36,3 +36,10 @@ SQLALCHEMY_MIGRATION.md
 
 # blog git repos (bare repos generated at runtime)
 blog_repos/
+
+# 覆盖率产物（CI 里由 pytest --cov 生成并按 artifact 上传，不进版本库）
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+htmlcov/

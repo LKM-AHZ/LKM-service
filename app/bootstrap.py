@@ -577,7 +577,9 @@ class _CommentApiImpl:
 
         return await reconcile_comment_likes(db, item_ids)
 
-    async def list_comments(self, db: AsyncSession, item_id: uuid.UUID, **kw: Any) -> Any:
+    async def list_comments(
+        self, db: AsyncSession, item_id: uuid.UUID, **kw: Any
+    ) -> Any:
         from app.modules.comment.service import list_comments
 
         return await list_comments(db, item_id, **kw)
@@ -616,7 +618,9 @@ class _BlogApiImpl:
     ) -> uuid.UUID:
         from app.modules.blog.service import delete_comment
 
-        return await delete_comment(db, series_id, comment_id, actor_id, as_admin=as_admin)
+        return await delete_comment(
+            db, series_id, comment_id, actor_id, as_admin=as_admin
+        )
 
 
 class _ColumnsApiImpl:

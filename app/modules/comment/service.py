@@ -189,4 +189,3 @@ async def delete_comment(
     comment = await _assert_comment_in_item(db, item_id, comment_id)
     await ContentCommentRepository(db).soft_delete(comment)
     await content_port.bump_comment_count(db, item_id, -1)
-

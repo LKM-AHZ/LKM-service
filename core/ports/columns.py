@@ -32,9 +32,7 @@ async def column_exists(db: AsyncSession, column_id: uuid.UUID) -> bool:
     return await get("columns_api").column_exists(db, column_id)
 
 
-async def column_owner_id(
-    db: AsyncSession, column_id: uuid.UUID
-) -> uuid.UUID | None:
+async def column_owner_id(db: AsyncSession, column_id: uuid.UUID) -> uuid.UUID | None:
     """专栏属主 id（不存在返回 None）；供调用方做对象级权限判定。"""
     return await get("columns_api").column_owner_id(db, column_id)
 

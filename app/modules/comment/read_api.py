@@ -49,9 +49,7 @@ async def comment_brief(db: AsyncSession, comment_id: uuid.UUID) -> CommentBrief
 
 async def comment_body(db: AsyncSession, comment_id: uuid.UUID) -> str:
     """被举报评论的正文；不存在即抛 ``COMMENT_NOT_FOUND``（envelope 会整体回滚）。"""
-    row = await db.scalar(
-        select(ContentComment).where(ContentComment.id == comment_id)
-    )
+    row = await db.scalar(select(ContentComment).where(ContentComment.id == comment_id))
     if row is None:
         raise BizError(CommentErr.COMMENT_NOT_FOUND)
     return row.content

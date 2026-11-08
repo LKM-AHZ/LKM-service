@@ -57,9 +57,7 @@ async def create_content_item(
             owner_id = await columns_port.column_owner_id(db, info.column_id)
             if owner_id is None:
                 raise BizError(CommonErr.FORBIDDEN)
-            await check_owner_id(
-                db, cur, owner_id, Permission.column_owner_publish
-            )
+            await check_owner_id(db, cur, owner_id, Permission.column_owner_publish)
     if (info.is_pinned or info.is_featured) and not await user_has_permission(
         db, cur, Permission.admin_content_review
     ):

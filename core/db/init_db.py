@@ -395,6 +395,8 @@ async def _create_all() -> None:
     建表后另做 TimescaleDB 装配（hypertable + 冷表压缩 + continuous aggregate），
     见 :func:`_ensure_hypertables` 与 :func:`_ensure_continuous_aggregates`。
     """
+    from sqlalchemy import text as _text
+
     from core.db.base import Base
     from core.db.model_registry import ensure_all_models
     from core.db.session import get_async_engine
@@ -406,6 +408,10 @@ async def _create_all() -> None:
     changed: list[str] = []
     timescale_ready = False
     async with engine.begin() as conn:
+        # 建表/补列/建索引是 DDL：大表上一条 CREATE INDEX 可能超过应用连接的
+        # `statement_timeout`（默认 30s），必须在本事务内解除，否则启动期 schema 初始化
+        # 会被自己设的兜底超时杀掉。SET LOCAL 只作用于本事务，出事务即恢复。
+        await conn.execute(_text("SET LOCAL statement_timeout = 0"))
         await ensure_shared_objects(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_sync_additive_schema)
@@ -493,6 +499,14 @@ async def _init_db_schema() -> None:
     from core.config import settings
 
     if not settings.use_alembic:
+        if settings.is_production:
+            # 生产走 create_all 是**刻意的默认**（新库零维护），但必须让日志说清楚：
+            # 「服务起来了」不等于「迁移跑过」。加性变更（加列/加索引）会自动生效，
+            # 改类型/改约束/删列**不会**——那类变更需要显式打开 LKM_USE_ALEMBIC。
+            logger.warning(
+                "schema 由 ORM create_all 维护（LKM_USE_ALEMBIC=false）：迁移链未执行。"
+                "加列/加索引会自动补齐；改类型、改约束、删列不会生效，需显式启用迁移。"
+            )
         held = await acquire_migration_lock(_MIGRATION_LOCK_KEY)
         try:
             await _create_all()
