@@ -27,11 +27,12 @@ from typing import Any
 
 from auth.channels import channel_for
 from auth.errors import AuthErr
-from auth.models import AuthChallenge
+from auth.models import AuthChallenge, User
 from auth.repository import UserRepository
 from auth.schemas import UserLoginPassword
 from auth.service_2fa import verify_second_factor
 from auth.service_auth import issue_session_tokens, login_code, login_password
+from auth.service_passkey import begin_passkey_factor, verify_passkey_assertion
 from auth.service_verify import check_code_rate_limit
 from core.db.base import now_iso
 from core.db.repository import DbSession
@@ -42,6 +43,11 @@ logger = logging.getLogger(__name__)
 FACTOR_PASSWORD = "password"
 FACTOR_CODE = "code"
 FACTOR_TOTP = "totp"
+FACTOR_PASSKEY = "passkey"
+
+#: 可以作为第一因子的取得方式。passkey 是「无密码登录」入口：账号用来收敛
+#: allowCredentials，凭据本身证明身份。
+_PRIMARY_FACTORS = (FACTOR_PASSWORD, FACTOR_CODE, FACTOR_PASSKEY)
 
 #: 挑战有效期。用户停在这一屏去翻邮箱的时间要算进来，但也不能太长。
 CHALLENGE_TTL_MINUTES = 5
@@ -67,7 +73,7 @@ async def create_challenge(
     primary_factor: str = FACTOR_PASSWORD,
 ) -> AuthChallenge:
     """建挑战。**不查用户**：账号是否存在要到提交因子时才体现。"""
-    if primary_factor not in (FACTOR_PASSWORD, FACTOR_CODE):
+    if primary_factor not in _PRIMARY_FACTORS:
         raise BizError(AuthErr.CHALLENGE_STEP_INVALID)
 
     now = now_iso()
@@ -175,6 +181,36 @@ async def cancel_challenge(db: DbSession, challenge: AuthChallenge) -> None:
     await _consume(db, challenge, status="cancelled")
 
 
+async def _complete_with_user(
+    db: DbSession,
+    challenge: AuthChallenge,
+    user: User,
+    *,
+    factor: str,
+    mfa_verified: bool,
+) -> dict[str, Any]:
+    """结束挑战并签发会话。第二个及以后的因子证明的身份已经是强认证。"""
+    access_token, refresh_token = await issue_session_tokens(
+        db, user, mfa_verified=mfa_verified
+    )
+
+    challenge.steps_done = [*challenge.steps_done, factor]
+    challenge.steps_left = []
+    challenge.status = "complete"
+    challenge.consumed = True
+    challenge.user_id = user.id
+    await db.commit()
+    await db.refresh(challenge)
+
+    return {
+        "status": "complete",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user_id": str(user.id),
+        "account_level": str(user.account_level),
+    }
+
+
 async def _complete_with_totp(
     db: DbSession,
     challenge: AuthChallenge,
@@ -194,24 +230,45 @@ async def _complete_with_totp(
     await verify_second_factor(
         db, challenge.user_id, code=code, recovery_code=recovery_code
     )
-    access_token, refresh_token = await issue_session_tokens(
-        db, user, mfa_verified=True
+    return await _complete_with_user(
+        db, challenge, user, factor=FACTOR_TOTP, mfa_verified=True
     )
 
-    challenge.steps_done = [*challenge.steps_done, FACTOR_TOTP]
-    challenge.steps_left = []
-    challenge.status = "complete"
-    challenge.consumed = True
-    await db.commit()
-    await db.refresh(challenge)
 
-    return {
-        "status": "complete",
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "user_id": str(challenge.user_id),
-        "account_level": str(user.account_level),
-    }
+async def prepare_passkey_factor(
+    db: DbSession, challenge: AuthChallenge
+) -> dict[str, Any]:
+    """为挑战里的 passkey 因子生成断言选项。
+
+    账号解析结果只落在服务端（``challenge.user_id``），不回给客户端——回传就等于
+    告诉调用方「这个账号存在且有通行密钥」。
+    """
+    options = await begin_passkey_factor(db, challenge.account)
+    raw_user_id = options.pop("user_id", None)
+    if raw_user_id is not None:
+        challenge.user_id = uuid.UUID(str(raw_user_id))
+        await db.commit()
+    return options
+
+
+async def complete_passkey(
+    db: DbSession,
+    challenge: AuthChallenge,
+    credential: dict[str, Any],
+) -> dict[str, Any]:
+    """校验断言并结束挑战。挑战里没有已解析账号时直接拒绝。"""
+    if challenge.user_id is None:
+        raise BizError(
+            AuthErr.PASSKEY_VERIFICATION_FAILED,
+            "This account has no registered passkey",
+        )
+
+    user = await verify_passkey_assertion(
+        db, credential, expected_user_id=challenge.user_id
+    )
+    return await _complete_with_user(
+        db, challenge, user, factor=FACTOR_PASSKEY, mfa_verified=True
+    )
 
 
 def _mask_contact(contact: str) -> str:
@@ -237,7 +294,7 @@ def state_payload(challenge: AuthChallenge) -> dict[str, Any]:
             {
                 "kind": kind,
                 "hint": _mask_contact(challenge.account)
-                if kind == FACTOR_CODE
+                if kind in (FACTOR_CODE, FACTOR_PASSKEY)
                 else None,
             }
             for kind in challenge.steps_left

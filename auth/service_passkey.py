@@ -276,7 +276,20 @@ async def begin_passkey_login(db: DbSession) -> dict:
     }
 
 
-async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
+async def verify_passkey_assertion(
+    db: DbSession,
+    credential: dict,
+    *,
+    expected_user_id: uuid.UUID | None = None,
+) -> User:
+    """校验一次 WebAuthn 断言，返回凭据归属的用户。
+
+    ``expected_user_id`` 供挑战流程用：挑战里记的账号必须就是这个凭据的主人，
+    否则「拿 A 的挑战 + B 的 passkey」也能登进 A 的会话。
+
+    锁定与准入门禁不在这里——调用方汇到 ``finalize_auth_response`` /
+    ``issue_session_tokens``，那两个汇合点已有判据（passkey 曾漏掉锁定检查）。
+    """
     raw_id = credential.get("rawId") or ""
     challenge_id = credential.get("challenge_id")
 
@@ -287,9 +300,7 @@ async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
 
     challenge = await _consume_challenge(db, challenge_id)
     if not challenge:
-        raise BizError(
-            AuthErr.PASSKEY_VERIFICATION_FAILED, "Challenge expired or invalid"
-        )
+        raise BizError(AuthErr.PASSKEY_VERIFICATION_FAILED, "Challenge expired or invalid")
 
     passkey = await get_or_raise(
         db,
@@ -298,6 +309,12 @@ async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
         PasskeyCredential.credential_id == raw_id,
         detail="Credential not found",
     )
+
+    if expected_user_id is not None and passkey.user_id != expected_user_id:
+        raise BizError(
+            AuthErr.PASSKEY_VERIFICATION_FAILED,
+            "Credential does not belong to this account",
+        )
 
     try:
         verification = verify_authentication_response(
@@ -322,11 +339,53 @@ async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
     if user.account_level == "local":
         raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
 
+    return user
+
+
+async def complete_passkey_login(db: DbSession, credential: dict) -> dict:
+    user = await verify_passkey_assertion(db, credential)
+
     # 锁定门禁在 finalize_auth_response 内（所有发令牌入口的汇合点）：passkey 登录
     # 曾绕过 is_locked 直接发 token，勿在别处再补一份判据。
     from auth.service_auth import finalize_auth_response
 
     return await finalize_auth_response(db, user)
+
+
+async def begin_passkey_factor(db: DbSession, account: str) -> dict:
+    """为一个挑战账号生成断言的 request options。
+
+    ``allowCredentials`` 按账号收敛；账号不存在时给空列表——与「存在但没有凭据」
+    形状一致，不额外暴露账号是否存在。
+    """
+    from auth.repository import UserRepository
+
+    challenge_id, challenge = await _store_challenge(db)
+
+    normalized = account.strip()
+    user = await UserRepository(db).find_by_identity(
+        username=normalized, email=normalized, phone=normalized
+    )
+    allow: list[PublicKeyCredentialDescriptor] = []
+    if user is not None:
+        credentials = await PasskeyCredentialRepository(db).list_for_user(user.id)
+        allow = [
+            PublicKeyCredentialDescriptor(id=_b64decode(c.credential_id))
+            for c in credentials
+        ]
+
+    options = generate_authentication_options(
+        rp_id=settings.rp_id,
+        challenge=challenge,
+        timeout=60000,
+        user_verification=UserVerificationRequirement.REQUIRED,
+        allow_credentials=allow,
+    )
+    return {
+        "challenge_id": challenge_id,
+        "public_key": json.loads(options_to_json(options)),
+        "user_id": str(user.id) if user is not None else None,
+    }
 
 
 async def list_credentials(db: DbSession, user_id: uuid.UUID) -> list[dict]:

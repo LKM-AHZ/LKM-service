@@ -24,6 +24,8 @@ from auth.db.session import get_auth_session
 from auth.schemas import (
     ChallengeCreate,
     ChallengeFactorSubmit,
+    ChallengePasskeyComplete,
+    ChallengePasskeyStart,
     ChallengeState,
     MessageResponse,
 )
@@ -98,6 +100,50 @@ async def submit_factor_route(
         recovery_code=payload.recovery_code,
         ip_address=client_ip(request),
     )
+
+
+@router.post(
+    "/{challenge_id}/passkey/start", response_model=ApiResp[dict[str, Any]]
+)
+@respond
+async def start_passkey_factor_route(
+    challenge_id: uuid.UUID,
+    payload: ChallengePasskeyStart,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, Any]:
+    """生成 passkey 因子的断言选项（PublicKeyCredentialRequestOptions）。
+
+    与 ``/auth/passkey/login/begin`` 同款限流：这是一条公开写库面。
+    """
+    await check_code_rate_limit(
+        f"challenge:passkey:start:{client_ip(request)}", max_count=20, window=60
+    )
+    challenge = await challenge_service.load_challenge(
+        db, challenge_id, payload.device_id
+    )
+    return await challenge_service.prepare_passkey_factor(db, challenge)
+
+
+@router.post(
+    "/{challenge_id}/passkey/complete", response_model=ApiResp[dict[str, Any]]
+)
+@respond
+async def complete_passkey_factor_route(
+    challenge_id: uuid.UUID,
+    payload: ChallengePasskeyComplete,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, Any]:
+    """提交 passkey 断言：完成挑战并返回令牌。"""
+    await check_code_rate_limit(
+        f"challenge:passkey:complete:{client_ip(request)}", max_count=10, window=60
+    )
+    challenge = await challenge_service.load_challenge(
+        db, challenge_id, payload.device_id
+    )
+    credential = payload.model_dump(exclude={"device_id"})
+    return await challenge_service.complete_passkey(db, challenge, credential)
 
 
 @router.post("/{challenge_id}/request", response_model=ApiResp[MessageResponse])

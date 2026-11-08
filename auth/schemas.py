@@ -239,6 +239,19 @@ class PasskeyLoginCompleteRequest(BaseModel):
     response: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChallengePasskeyStart(BaseModel):
+    """为挑战里的 passkey 因子取断言选项。"""
+
+    device_id: str = Field(..., min_length=1, max_length=128)
+
+
+class ChallengePasskeyComplete(PasskeyLoginCompleteRequest):
+    """提交 passkey 断言。字段与 ``/auth/passkey/login/complete`` 保持一致，
+    客户端可复用同一套序列化。"""
+
+    device_id: str = Field(..., min_length=1, max_length=128)
+
+
 class PasskeyRegisterCompleteResponse(BaseModel):
     message: str
     device_name: str

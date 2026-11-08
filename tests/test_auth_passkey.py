@@ -556,3 +556,116 @@ class TestCredentialManagement:
         creds = await _service().list_credentials(db, u1.id)
         with pytest.raises(BizError):
             await _service().delete_credential(db, bob.id, creds[0]["id"])
+
+
+# ==================================================================
+# Challenge passkey factor（/auth/challenge 的 passkey 因子）
+# ==================================================================
+
+
+def _assertion_for(challenge_b64, key, cred_id, sign_count=1):
+    """按 webauthn.get 语义造一份可验证的断言。"""
+    client_data = json.dumps(
+        {
+            "type": "webauthn.get",
+            "challenge": challenge_b64,
+            "origin": "http://localhost:5173",
+        }
+    )
+    client_data_b64 = _b64(client_data.encode("utf-8"))
+    auth_data = _make_authenticator_data("localhost", sign_count)
+    signature = _sign_assertion(key, auth_data, client_data_b64)
+    return {
+        "rawId": cred_id,
+        "challenge_id": "",
+        "response": {
+            "authenticatorData": _b64(auth_data),
+            "clientDataJSON": client_data_b64,
+            "signature": _b64(signature),
+        },
+    }
+
+
+class TestChallengePasskeyFactor:
+    async def should_complete_the_challenge(self, db):
+        from auth import challenge as challenge_service
+
+        user = await _reg_normal(db, username="pk", email="pk@test.com")
+        key = _generate_ec_key()
+        cred_id = _b64(b"challenge-cred")
+        await _register_passkey(db, user.id, cred_id, key=key)
+
+        challenge = await challenge_service.create_challenge(
+            db, account="pk", device_id="device-a", primary_factor="passkey"
+        )
+        options = await challenge_service.prepare_passkey_factor(db, challenge)
+
+        allows = options["public_key"]["allowCredentials"]
+        assert [entry["id"] for entry in allows] == [cred_id]
+
+        credential = _assertion_for(
+            options["public_key"]["challenge"], key, cred_id
+        )
+        credential["challenge_id"] = options["challenge_id"]
+
+        result = await challenge_service.complete_passkey(db, challenge, credential)
+
+        assert result["status"] == "complete"
+        assert result["user_id"] == str(user.id)
+        assert result["access_token"]
+        await db.refresh(challenge)
+        assert challenge.consumed is True
+        assert challenge.user_id == user.id
+
+    async def should_reject_another_accounts_credential(self, db):
+        from auth import challenge as challenge_service
+
+        alice = await _reg_normal(db, username="alice2", email="alice2@test.com")
+        bob = await _reg_normal(db, username="bob2", email="bob2@test.com")
+        await _register_passkey(db, alice.id, _b64(b"alice-cred"), key=_generate_ec_key())
+        bob_key = _generate_ec_key()
+        bob_cred = _b64(b"bob-cred")
+        await _register_passkey(db, bob.id, bob_cred, key=bob_key)
+
+        challenge = await challenge_service.create_challenge(
+            db, account="alice2", device_id="device-a", primary_factor="passkey"
+        )
+        options = await challenge_service.prepare_passkey_factor(db, challenge)
+
+        # 用 B 的凭据去完成 A 的挑战：签名本身是有效的，必须被归属检查拦住。
+        credential = _assertion_for(
+            options["public_key"]["challenge"], bob_key, bob_cred
+        )
+        credential["challenge_id"] = options["challenge_id"]
+
+        with pytest.raises(BizError) as exc:
+            await challenge_service.complete_passkey(db, challenge, credential)
+        assert exc.value.errcode == AuthErr.PASSKEY_VERIFICATION_FAILED
+
+    async def should_not_leak_unknown_accounts(self, db):
+        from auth import challenge as challenge_service
+
+        challenge = await challenge_service.create_challenge(
+            db, account="nobody", device_id="device-a", primary_factor="passkey"
+        )
+
+        options = await challenge_service.prepare_passkey_factor(db, challenge)
+
+        # 形状与「存在但没有凭据」一致：空 allowCredentials，不报错。
+        assert options["public_key"]["allowCredentials"] == []
+        assert challenge.user_id is None
+
+    async def should_refuse_completion_without_a_resolved_account(self, db):
+        from auth import challenge as challenge_service
+
+        challenge = await challenge_service.create_challenge(
+            db, account="nobody", device_id="device-a", primary_factor="passkey"
+        )
+
+        with pytest.raises(BizError) as exc:
+            await challenge_service.complete_passkey(
+                db,
+                challenge,
+                {"rawId": "x", "challenge_id": "y", "response": {}},
+            )
+        assert exc.value.errcode == AuthErr.PASSKEY_VERIFICATION_FAILED
