@@ -273,6 +273,15 @@ class AuthErr(ErrCode):
     USERNAME_TAKEN = NS_AUTH.err(29)
     ADMISSION_PENDING = NS_AUTH.err(30)
     ADMISSION_REJECTED = NS_AUTH.err(31)
+    # 挑战-因子轮转（auth.challenge）：挑战作废类错误一律同码，避免把「存在与否」
+    # 和「设备不匹配」区分开，变成探测面。
+    CHALLENGE_NOT_FOUND = NS_AUTH.err(32)
+    CHALLENGE_EXPIRED = NS_AUTH.err(33)
+    CHALLENGE_CONSUMED = NS_AUTH.err(34)
+    CHALLENGE_DEVICE_MISMATCH = NS_AUTH.err(35)
+    CHALLENGE_STEP_INVALID = NS_AUTH.err(36)
+    CHALLENGE_TOO_MANY_ATTEMPTS = NS_AUTH.err(37)
+    CHALLENGE_UNSUPPORTED_STEP = NS_AUTH.err(38)
 
 
 register(
@@ -314,6 +323,16 @@ register(
         AuthErr.USERNAME_TAKEN: (409, "Username already taken"),
         AuthErr.ADMISSION_PENDING: (403, "Registration pending admin approval"),
         AuthErr.ADMISSION_REJECTED: (403, "Registration was rejected"),
+        AuthErr.CHALLENGE_NOT_FOUND: (404, "Challenge not found"),
+        AuthErr.CHALLENGE_EXPIRED: (404, "Challenge not found"),
+        AuthErr.CHALLENGE_CONSUMED: (409, "Challenge already completed"),
+        AuthErr.CHALLENGE_DEVICE_MISMATCH: (404, "Challenge not found"),
+        AuthErr.CHALLENGE_STEP_INVALID: (400, "Unexpected challenge factor"),
+        AuthErr.CHALLENGE_TOO_MANY_ATTEMPTS: (429, "Too many challenge attempts"),
+        AuthErr.CHALLENGE_UNSUPPORTED_STEP: (
+            409,
+            "Challenge step not supported by this flow",
+        ),
     }
 )
 

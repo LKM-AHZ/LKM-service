@@ -223,6 +223,39 @@ class SetupTransaction(UUIDPrimaryKeyMixin, AuthBase):
     )
 
 
+class AuthChallenge(UUIDPrimaryKeyMixin, AuthBase):
+    """挑战-因子轮转的一次登录尝试。
+
+    服务端持有「谁在登录 / 走到第几步 / 还剩哪些因子」，客户端只按 ``steps_left``
+    渲染因子并逐个提交。与 stargate 的差异（不绑 IP、因子渐进披露）见
+    :mod:`auth.challenge` 模块注释。
+    """
+
+    __tablename__: str = "auth_challenges"
+    __table_args__: tuple[Any, ...] = (
+        Index("ix_auth_challenges_device_status", "device_hash", "status"),
+    )
+
+    # 用户输入的账号（用户名/邮箱/手机号）；建挑战时不查库，避免账号枚举。
+    account: Mapped[str] = mapped_column(String(200), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False, default="login")
+    # 绑定客户端设备而非 IP：桌面端换网络时绑 IP 会把合法挑战判成 404。
+    device_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    # 已完成 / 待完成的因子；``steps_left[0]`` 就是下一步必须提交的因子。
+    steps_done: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    steps_left: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
 class PendingRegistration(UUIDPrimaryKeyMixin, AuthBase):
     """存储待处理的普通注册数据，直到联系方式被验证。"""
 

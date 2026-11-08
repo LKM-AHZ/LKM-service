@@ -31,6 +31,7 @@ def __getattr__(name: str) -> Any:
             from auth.router_2fa import router as router_2fa
             from auth.router_authz import router as router_authz
             from auth.router_bot_sso import router as router_bot_sso
+            from auth.router_challenge import router as router_challenge
             from auth.router_internal_verify import router as router_internal_verify
             from auth.router_oauth import router as router_oauth
             from auth.router_onboarding import router as router_onboarding
@@ -44,6 +45,7 @@ def __getattr__(name: str) -> Any:
             _exported_routers = [
                 router,
                 router_2fa,
+                router_challenge,
                 router_authz,
                 router_bot_sso,
                 router_internal_verify,

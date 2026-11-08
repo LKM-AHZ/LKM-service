@@ -64,6 +64,7 @@ _AUTH_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("/api/v1/auth/login/password", "auth/router.py 主登录"),
     ("/api/v1/auth/me", "auth/router.py 身份读面"),
     ("/api/v1/auth/2fa", "auth/router_2fa.py"),
+    ("/api/v1/auth/challenge", "auth/router_challenge.py"),
     ("/api/v1/auth/passkey/credentials", "auth/router_passkey.py"),
     ("/api/v1/auth/internal/admin-ids", "auth/router_read.py 内部读缝"),
 )

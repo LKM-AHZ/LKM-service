@@ -111,6 +111,42 @@ class TOTPDisableRequest(BaseModel):
 # ── 通用消息响应 ──────────────────────────────────────────────
 
 
+class ChallengeCreate(BaseModel):
+    """建挑战：只要账号与设备标识，不带凭据。"""
+
+    account: str = Field(..., min_length=1, max_length=200)
+    device_id: str = Field(..., min_length=1, max_length=128)
+    device_name: str | None = Field(default=None, max_length=100)
+    platform: str | None = Field(default=None, max_length=40)
+    primary_factor: str = Field(default="password", pattern="^(password|code)$")
+
+
+class ChallengeFactorRef(BaseModel):
+    """客户端要渲染的一个因子。``hint`` 留给后续「已发往 a***@example.com」。"""
+
+    kind: str
+    hint: str | None = None
+
+
+class ChallengeState(BaseModel):
+    """挑战快照：下一步该提交哪些因子、什么时候过期。"""
+
+    id: uuid.UUID
+    status: str
+    purpose: str = "login"
+    factors: list[ChallengeFactorRef] = Field(default_factory=list)
+    expires_at: datetime.datetime
+
+
+class ChallengeFactorSubmit(BaseModel):
+    """提交一个因子。``password`` / ``code`` 按 ``kind`` 二选一。"""
+
+    device_id: str = Field(..., min_length=1, max_length=128)
+    kind: str = Field(..., pattern="^(password|code|totp)$")
+    password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
+    code: str | None = Field(default=None, max_length=32)
+
+
 class MessageResponse(BaseModel):
     message: str
 
