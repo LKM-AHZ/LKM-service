@@ -28,8 +28,10 @@ from typing import Any
 from auth.channels import channel_for
 from auth.errors import AuthErr
 from auth.models import AuthChallenge
+from auth.repository import UserRepository
 from auth.schemas import UserLoginPassword
-from auth.service_auth import login_code, login_password
+from auth.service_2fa import verify_second_factor
+from auth.service_auth import issue_session_tokens, login_code, login_password
 from auth.service_verify import check_code_rate_limit
 from core.db.base import now_iso
 from core.db.repository import DbSession
@@ -113,6 +115,7 @@ async def submit_factor(
     kind: str,
     password: str | None = None,
     code: str | None = None,
+    recovery_code: str | None = None,
     ip_address: str = "",
 ) -> dict[str, Any]:
     """提交一个因子：返回下一状态，或在最后一个因子后返回令牌。
@@ -141,6 +144,11 @@ async def submit_factor(
         )
     elif kind == FACTOR_CODE:
         data = await login_code(db, challenge.account, code or "")
+    elif kind == FACTOR_TOTP:
+        # 第二因子：身份已在上一因子证明，这里只验码并直接发会话。
+        return await _complete_with_totp(
+            db, challenge, code=code, recovery_code=recovery_code
+        )
     else:  # pragma: no cover - 由 load 之前的 kind 校验拦住
         raise BizError(AuthErr.CHALLENGE_STEP_INVALID)
 
@@ -167,13 +175,73 @@ async def cancel_challenge(db: DbSession, challenge: AuthChallenge) -> None:
     await _consume(db, challenge, status="cancelled")
 
 
+async def _complete_with_totp(
+    db: DbSession,
+    challenge: AuthChallenge,
+    *,
+    code: str | None,
+    recovery_code: str | None,
+) -> dict[str, Any]:
+    """验第二因子并结束挑战。恢复码作为 TOTP 兜底（丢手机时的唯一出路）。"""
+    if challenge.user_id is None:
+        # 走到 totp 却没有已证明的身份：状态机被绕过，直接作废。
+        await _consume(db, challenge, status="cancelled")
+        raise BizError(AuthErr.CHALLENGE_STEP_INVALID)
+
+    user = await UserRepository(db).get_with_profile_or_raise(
+        challenge.user_id, AuthErr.USER_NOT_FOUND
+    )
+    await verify_second_factor(
+        db, challenge.user_id, code=code, recovery_code=recovery_code
+    )
+    access_token, refresh_token = await issue_session_tokens(
+        db, user, mfa_verified=True
+    )
+
+    challenge.steps_done = [*challenge.steps_done, FACTOR_TOTP]
+    challenge.steps_left = []
+    challenge.status = "complete"
+    challenge.consumed = True
+    await db.commit()
+    await db.refresh(challenge)
+
+    return {
+        "status": "complete",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user_id": str(challenge.user_id),
+        "account_level": str(user.account_level),
+    }
+
+
+def _mask_contact(contact: str) -> str:
+    """把账号遮成 a***@example.com / 138****8000，供客户端提示「验证码发到哪」。"""
+    value = contact.strip()
+    if "@" in value:
+        name, _, domain = value.partition("@")
+        head = name[:1] if name else ""
+        return f"{head}***@{domain}"
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) >= 7:
+        return f"{digits[:3]}****{digits[-4:]}"
+    return "***"
+
+
 def state_payload(challenge: AuthChallenge) -> dict[str, Any]:
     """客户端渲染用的挑战快照。只暴露下一步及之后的因子种类。"""
     return {
         "id": str(challenge.id),
         "status": challenge.status,
         "purpose": challenge.purpose,
-        "factors": [{"kind": kind} for kind in challenge.steps_left],
+        "factors": [
+            {
+                "kind": kind,
+                "hint": _mask_contact(challenge.account)
+                if kind == FACTOR_CODE
+                else None,
+            }
+            for kind in challenge.steps_left
+        ],
         "expires_at": challenge.expires_at.isoformat(),
     }
 
@@ -202,6 +270,10 @@ async def _advance(
     if data.get("requires_2fa"):
         challenge.steps_done = done
         challenge.steps_left = [FACTOR_TOTP]
+        raw_pending_user = data.get("user_id")
+        if raw_pending_user is not None:
+            # 后续因子只认这个身份，不再回看 account 字段。
+            challenge.user_id = uuid.UUID(str(raw_pending_user))
         await db.commit()
         await db.refresh(challenge)
         return state_payload(challenge)

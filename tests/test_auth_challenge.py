@@ -4,7 +4,12 @@
 所以这里只断言「挑战怎么推进」，不断言密码策略本身（那有独立用例）。
 """
 
+import base64
 import datetime
+import hashlib
+import hmac
+import struct
+import time
 import uuid
 
 import pytest
@@ -22,8 +27,8 @@ from auth.challenge import (
     submit_factor,
 )
 from auth.errors import AuthErr
-from auth.models import Profile, User
-from auth.security import hashpwd
+from auth.models import TOTP, Profile, User
+from auth.security import encrypt_secret, generate_totp_secret, hashpwd
 from core.db.base import now_iso
 from core.err import BizError
 
@@ -43,6 +48,23 @@ async def _mk_user(db: AsyncSession, username: str = "alma") -> User:
     return user
 
 
+async def _enable_totp(db: AsyncSession, user: User) -> str:
+    """给用户挂一条已启用的 TOTP 记录，返回明文 secret。"""
+    secret = generate_totp_secret()
+    db.add(TOTP(user_id=user.id, secret=encrypt_secret(secret), enabled=True))
+    await db.flush()
+    return secret
+
+
+def _totp_code(secret: str) -> str:
+    step = int(time.time()) // 30
+    key = base64.b32decode(secret, casefold=True)
+    digest = hmac.new(key, struct.pack(">Q", step), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{value % 1_000_000:06d}"
+
+
 def _errcode(exc: pytest.ExceptionInfo[BizError]) -> int:
     return int(exc.value.errcode)
 
@@ -57,7 +79,7 @@ class TestChallengeLifecycle:
 
         payload = state_payload(challenge)
         assert payload["status"] == "pending"
-        assert payload["factors"] == [{"kind": FACTOR_PASSWORD}]
+        assert [f["kind"] for f in payload["factors"]] == [FACTOR_PASSWORD]
         # 只存哈希，不存原始 device_id。
         assert challenge.device_hash == fingerprint("device-a")
         assert challenge.device_hash != "device-a"
@@ -129,7 +151,9 @@ class TestChallengeLifecycle:
         challenge = await create_challenge(
             auth_db, account="nobody", device_id="device-a"
         )
-        assert state_payload(challenge)["factors"] == [{"kind": FACTOR_PASSWORD}]
+        assert [f["kind"] for f in state_payload(challenge)["factors"]] == [
+            FACTOR_PASSWORD
+        ]
 
         with pytest.raises(BizError) as exc:
             await submit_factor(
@@ -148,7 +172,9 @@ class TestChallengeLifecycle:
         )
 
         assert await issue_login_code(auth_db, challenge) is None
-        assert state_payload(challenge)["factors"] == [{"kind": FACTOR_CODE}]
+        assert [f["kind"] for f in state_payload(challenge)["factors"]] == [
+            FACTOR_CODE
+        ]
 
 
 class TestChallengeGuards:
@@ -223,3 +249,63 @@ class TestChallengeGuards:
 
         with pytest.raises(BizError):
             await load_challenge(auth_db, challenge.id, "device-a")
+
+
+class TestSecondFactor:
+    async def test_totp_step_completes_the_challenge(
+        self, auth_db: AsyncSession
+    ) -> None:
+        user = await _mk_user(auth_db)
+        secret = await _enable_totp(auth_db, user)
+        challenge = await create_challenge(
+            auth_db, account="alma", device_id="device-a"
+        )
+        # 模拟密码步已过、进入 TOTP 步的状态（当前策略下登录不强制 TOTP，
+        # 引擎仍须能完成这一步，否则以后开策略就要改客户端）。
+        challenge.steps_done = [FACTOR_PASSWORD]
+        challenge.steps_left = ["totp"]
+        challenge.user_id = user.id
+        await auth_db.commit()
+
+        result = await submit_factor(
+            auth_db, challenge, kind="totp", code=_totp_code(secret)
+        )
+
+        assert result["status"] == "complete"
+        assert result["access_token"]
+        assert result["user_id"] == str(user.id)
+        await auth_db.refresh(challenge)
+        assert challenge.consumed is True
+
+    async def test_totp_step_rejects_a_bad_code(
+        self, auth_db: AsyncSession
+    ) -> None:
+        user = await _mk_user(auth_db)
+        await _enable_totp(auth_db, user)
+        challenge = await create_challenge(
+            auth_db, account="alma", device_id="device-a"
+        )
+        challenge.steps_left = ["totp"]
+        challenge.user_id = user.id
+        await auth_db.commit()
+
+        with pytest.raises(BizError) as exc:
+            await submit_factor(auth_db, challenge, kind="totp", code="000000")
+        assert _errcode(exc) == AuthErr.TOTP_CODE_INVALID
+
+        await auth_db.refresh(challenge)
+        assert challenge.status == "pending"
+
+    async def test_code_factor_carries_a_masked_hint(
+        self, auth_db: AsyncSession
+    ) -> None:
+        challenge = await create_challenge(
+            auth_db,
+            account="alma@example.com",
+            device_id="device-a",
+            primary_factor=FACTOR_CODE,
+        )
+
+        factor = state_payload(challenge)["factors"][0]
+        assert factor["kind"] == FACTOR_CODE
+        assert factor["hint"] == "a***@example.com"

@@ -95,6 +95,7 @@ async def submit_factor_route(
         kind=payload.kind,
         password=payload.password,
         code=payload.code,
+        recovery_code=payload.recovery_code,
         ip_address=client_ip(request),
     )
 

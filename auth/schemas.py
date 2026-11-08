@@ -145,6 +145,7 @@ class ChallengeFactorSubmit(BaseModel):
     kind: str = Field(..., pattern="^(password|code|totp)$")
     password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
     code: str | None = Field(default=None, max_length=32)
+    recovery_code: str | None = Field(default=None, max_length=64)
 
 
 class MessageResponse(BaseModel):
