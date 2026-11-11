@@ -250,3 +250,112 @@ class TestOAuthEmailAutoBind:
         # 负向断言：未创建任何 OAuth 绑定（自动绑定确已移除）
         bindings = (await db.execute(select(UserOAuth))).scalars().all()
         assert bindings == []
+
+
+class TestDesktopRedirect:
+    """GitHub OAuth 的桌面 loopback 回跳：只允许回环地址 + PKCE 承诺。"""
+
+    def should_accept_loopback_redirects(self):
+        from auth.service_oauth import normalize_desktop_redirect
+
+        assert (
+            normalize_desktop_redirect("http://127.0.0.1:4567/cb")
+            == "http://127.0.0.1:4567/cb"
+        )
+        assert (
+            normalize_desktop_redirect("http://localhost:4567/cb")
+            == "http://localhost:4567/cb"
+        )
+        assert normalize_desktop_redirect(None) is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://evil.example/cb",
+            "http://127.0.0.1.evil.example/cb",
+            "http://user:pass@127.0.0.1:4567/cb",
+            "http://127.0.0.1:4567/cb#fragment",
+            "file:///tmp/cb",
+        ],
+    )
+    def should_reject_non_loopback_redirects(self, url: str):
+        from auth.service_oauth import normalize_desktop_redirect
+        from core.err import BizError
+
+        with pytest.raises(BizError):
+            normalize_desktop_redirect(url)
+
+    def should_require_a_sha256_challenge_with_redirect(self):
+        import hashlib
+
+        from auth.service_oauth import normalize_desktop_challenge
+        from core.err import BizError
+
+        challenge = hashlib.sha256(b"verifier-1234567890").hexdigest()
+        redirect = "http://127.0.0.1:4567/cb"
+        assert normalize_desktop_challenge(challenge.upper(), redirect) == challenge
+        assert normalize_desktop_challenge(None, None) is None
+        with pytest.raises(BizError):
+            normalize_desktop_challenge(None, redirect)
+        with pytest.raises(BizError):
+            normalize_desktop_challenge("not-a-hash", redirect)
+
+    async def should_store_redirect_and_challenge_on_state(self, db: AsyncSession):
+        from auth.service_oauth import generate_oauth_state
+
+        state = await generate_oauth_state(
+            db,
+            "login",
+            desktop_redirect="http://127.0.0.1:4567/cb",
+            desktop_challenge="a" * 64,
+        )
+        row = (
+            await db.execute(select(OAuthState).where(OAuthState.state == state))
+        ).scalar_one()
+        assert row.desktop_redirect == "http://127.0.0.1:4567/cb"
+        assert row.desktop_challenge == "a" * 64
+
+    async def should_exchange_code_once_with_the_right_verifier(
+        self, db: AsyncSession
+    ):
+        import hashlib
+        import uuid
+
+        from auth.service_oauth import create_desktop_code, exchange_desktop_code
+        from core.err import BizError
+
+        verifier = "verifier-1234567890-abcdef"
+        challenge = hashlib.sha256(verifier.encode()).hexdigest()
+        user_id = uuid.uuid4()
+        result = {
+            "access_token": "acc",
+            "refresh_token": "ref",
+            "user_id": user_id,
+            "account_level": "normal",
+        }
+        code = await create_desktop_code(db, result, challenge)
+
+        with pytest.raises(BizError):
+            await exchange_desktop_code(db, code, "wrong-verifier-123456")
+
+        # 错误 verifier 不消耗 code，正确 verifier 仍可兑换；UUID 已转字符串。
+        assert await exchange_desktop_code(db, code, verifier) == {
+            **result,
+            "user_id": str(user_id),
+        }
+
+        with pytest.raises(BizError):
+            await exchange_desktop_code(db, code, verifier)
+
+    def should_append_query_without_fragment(self):
+        from auth.service_oauth import desktop_redirect_url
+
+        assert (
+            desktop_redirect_url(
+                "http://127.0.0.1:4567/cb?state=x", code="c1"
+            )
+            == "http://127.0.0.1:4567/cb?state=x&code=c1"
+        )
+        assert "error=no+good" in desktop_redirect_url(
+            "http://127.0.0.1:4567/cb", error="no good"
+        )

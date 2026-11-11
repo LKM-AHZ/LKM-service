@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,8 +13,11 @@ from auth.errors import AuthErr
 from auth.schemas import (
     AuthTokenData,
     MessageResponse,
+    OAuthDesktopExchangeRequest,
     OAuthRedirectResponse,
 )
+from auth.service_verify import check_code_rate_limit
+from core.client_ip import client_ip
 from core.common import ApiResp
 from core.err import BizError, respond
 
@@ -50,10 +53,25 @@ def _guard_oauth_query(
 
 @router.get("/github/login")
 async def github_login(
+    redirect_uri: Annotated[str | None, Query(max_length=2048)] = None,
+    challenge: Annotated[str | None, Query(max_length=128)] = None,
     db: AsyncSession = Depends(get_auth_session),
 ) -> RedirectResponse:
-    """将用户重定向到 Github OAuth 授权页面。"""
-    url = await service_oauth.get_github_auth_url(db, purpose="login")
+    """将用户重定向到 Github OAuth 授权页面。
+
+    ``redirect_uri``/``challenge`` 供桌面端 loopback 登录使用：回调不再向浏览器
+    吐令牌，而是重定向到回环地址并带一次性 code，桌面端用 verifier 兑换。
+    """
+    desktop_redirect = service_oauth.normalize_desktop_redirect(redirect_uri)
+    desktop_challenge = service_oauth.normalize_desktop_challenge(
+        challenge, desktop_redirect
+    )
+    url = await service_oauth.get_github_auth_url(
+        db,
+        purpose="login",
+        desktop_redirect=desktop_redirect,
+        desktop_challenge=desktop_challenge,
+    )
     return RedirectResponse(url=url)
 
 
@@ -65,23 +83,62 @@ async def github_callback(
     error: Annotated[str | None, Query()] = None,
     error_description: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_auth_session),
-) -> dict[str, Any]:
+) -> dict[str, Any] | RedirectResponse:
     """处理 Github OAuth 回调。验证状态令牌，交换授权码，查找或创建用户，并返回认证令牌。
 
     code/state 声明为可选（并接收 provider 的 error/error_description），见 _guard_oauth_query。
+    桌面登录（state 带 desktop_redirect）改为重定向一次性 code。
     """
-    code, state = _guard_oauth_query(code, state, error, error_description)
-    return await service_oauth.handle_github_callback(db, code, state)
+    desktop = await service_oauth.peek_oauth_state(db, state or "", "login")
+    redirect = desktop.desktop_redirect if desktop else None
+    try:
+        code, state = _guard_oauth_query(code, state, error, error_description)
+        result = await service_oauth.handle_github_callback(db, code, state)
+    except BizError as exc:
+        if redirect is None:
+            raise
+        return RedirectResponse(
+            service_oauth.desktop_redirect_url(redirect, error=exc.detail)
+        )
+    if redirect is None:
+        return result
+    if desktop is None or not desktop.desktop_challenge:
+        return RedirectResponse(
+            service_oauth.desktop_redirect_url(
+                redirect, error="Desktop challenge missing"
+            )
+        )
+    desktop_code = await service_oauth.create_desktop_code(
+        db, result, desktop.desktop_challenge
+    )
+    return RedirectResponse(
+        service_oauth.desktop_redirect_url(redirect, code=desktop_code)
+    )
 
 
 @router.post("/github/login/redirect", response_model=ApiResp[OAuthRedirectResponse])
 @respond
 async def github_bind_redirect(
+    redirect_uri: Annotated[str | None, Query(max_length=2048)] = None,
+    challenge: Annotated[str | None, Query(max_length=128)] = None,
     _cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, str]:
-    """返回用于绑定的 OAuth 授权 URL（从 JS 客户端调用）。"""
-    url = await service_oauth.get_github_auth_url(db, purpose="bind", user_id=_cur.id)
+    """返回用于绑定的 OAuth 授权 URL（从 JS 客户端调用）。
+
+    桌面端可带 loopback ``redirect_uri``；绑定成功/失败会重定向回来。
+    """
+    desktop_redirect = service_oauth.normalize_desktop_redirect(redirect_uri)
+    desktop_challenge = service_oauth.normalize_desktop_challenge(
+        challenge, desktop_redirect
+    )
+    url = await service_oauth.get_github_auth_url(
+        db,
+        purpose="bind",
+        user_id=_cur.id,
+        desktop_redirect=desktop_redirect,
+        desktop_challenge=desktop_challenge,
+    )
     return {"url": url}
 
 
@@ -93,11 +150,40 @@ async def github_bind_callback(
     error: Annotated[str | None, Query()] = None,
     error_description: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_auth_session),
-) -> dict[str, Any]:
+) -> dict[str, Any] | RedirectResponse:
     """处理用于账号绑定的 Github OAuth 回调。
 
     归属用户由 OAuth state 记录携带（``bind_github`` 内部从 state 取 user_id），
     回调无需 JWT 鉴权，故不注入 CurrentUser。用户取消授权时同样只回 error，见 _guard_oauth_query。
+    桌面绑定（state 带 desktop_redirect）改为重定向 ``bound=1`` 或 ``error``。
     """
-    code, state = _guard_oauth_query(code, state, error, error_description)
-    return await service_oauth.bind_github(db, code, state)
+    desktop = await service_oauth.peek_oauth_state(db, state or "", "bind")
+    redirect = desktop.desktop_redirect if desktop else None
+    try:
+        code, state = _guard_oauth_query(code, state, error, error_description)
+        result = await service_oauth.bind_github(db, code, state)
+    except BizError as exc:
+        if redirect is None:
+            raise
+        return RedirectResponse(
+            service_oauth.desktop_redirect_url(redirect, error=exc.detail)
+        )
+    if redirect is None:
+        return result
+    return RedirectResponse(
+        service_oauth.desktop_redirect_url(redirect, code="bound")
+    )
+
+
+@router.post("/desktop/exchange", response_model=ApiResp[AuthTokenData])
+@respond
+async def desktop_exchange(
+    body: OAuthDesktopExchangeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_auth_session),
+) -> dict[str, Any]:
+    """用 loopback 回跳带来的一次性 code + PKCE verifier 兑换认证结果。"""
+    await check_code_rate_limit(
+        f"oauth:desktop:exchange:ip:{client_ip(request)}", max_count=20, window=60
+    )
+    return await service_oauth.exchange_desktop_code(db, body.code, body.verifier)

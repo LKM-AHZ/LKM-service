@@ -30,6 +30,7 @@ from auth.models import (
     TOTP,
     AuditLog,
     MagicLink,
+    OAuthDesktopCode,
     OAuthState,
     OnboardingProgress,
     PasskeyChallenge,
@@ -360,6 +361,17 @@ class OAuthStateRepository(AsyncRepository[OAuthState]):
         )
 
 
+class OAuthDesktopCodeRepository(AsyncRepository[OAuthDesktopCode]):
+    model = OAuthDesktopCode
+
+    def consume_conditions(self, code: str, now: datetime.datetime) -> tuple[Any, ...]:
+        return (
+            OAuthDesktopCode.code == code,
+            OAuthDesktopCode.consumed.is_(False),
+            OAuthDesktopCode.expires_at > now,
+        )
+
+
 class UserOAuthRepository(AsyncRepository[UserOAuth]):
     model = UserOAuth
 
@@ -600,6 +612,7 @@ class VerificationRepository(AsyncRepository[Any]):
 __all__ = [
     "AuditLogRepository",
     "MagicLinkRepository",
+    "OAuthDesktopCodeRepository",
     "OAuthStateRepository",
     "OnboardingProgressRepository",
     "PasskeyChallengeRepository",

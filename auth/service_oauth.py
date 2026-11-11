@@ -4,9 +4,13 @@
 提供商只负责 authorize_url / exchange_code / fetch_user 三个动作。
 """
 
+import hashlib
+import hmac
+import re
 import secrets
 import uuid
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.exc import IntegrityError
 
@@ -15,6 +19,7 @@ from auth.models import OAuthState, User
 from auth.providers.github import GithubOAuth
 from auth.providers.oauth import get_provider
 from auth.repository import (
+    OAuthDesktopCodeRepository,
     OAuthStateRepository,
     UserOAuthRepository,
     UserRepository,
@@ -34,15 +39,141 @@ from core.db.repo import consume_once, get_or_raise
 from core.db.repository import DbSession
 from core.err import BizError
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_CHALLENGE_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def normalize_desktop_redirect(raw: str | None) -> str | None:
+    """Only loopback HTTP(S) redirects are allowed: tokens must never be sent
+    to an attacker-controlled host. Fragments are rejected because the desktop
+    endpoint appends its own query parameters."""
+    if raw is None or raw.strip() == "":
+        return None
+    value = raw.strip()
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise BizError(
+            AuthErr.OAUTH_PROVIDER_ERROR,
+            "Desktop redirect must be a loopback http(s) URL",
+        )
+    return value
+
+
+def normalize_desktop_challenge(
+    raw: str | None, redirect: str | None
+) -> str | None:
+    """A desktop redirect requires the PKCE-style SHA-256 challenge, so a
+    process that races the loopback port still cannot redeem the code."""
+    if redirect is None:
+        return None
+    challenge = (raw or "").strip().lower()
+    if not _CHALLENGE_RE.fullmatch(challenge):
+        raise BizError(
+            AuthErr.OAUTH_PROVIDER_ERROR,
+            "Desktop redirect requires a SHA-256 challenge",
+        )
+    return challenge
+
+
+def desktop_redirect_url(
+    base: str, *, code: str | None = None, error: str | None = None
+) -> str:
+    """Append `code` or `error` to the stored loopback redirect, keeping any
+    query the desktop already put there and never emitting a fragment."""
+    parsed = urlsplit(base)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if code is not None:
+        query["code"] = code
+    if error is not None:
+        query["error"] = error
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), "")
+    )
+
+
+async def peek_oauth_state(
+    db: DbSession, state: str, purpose: str
+) -> OAuthState | None:
+    """Read an unconsumed state row without consuming it, so the callback can
+    still redirect a failure to the desktop loopback."""
+    return await OAuthStateRepository(db).get_one(
+        OAuthState.state == state,
+        OAuthState.consumed.is_(False),
+        OAuthState.purpose == purpose,
+        OAuthState.expires_at > now_iso(),
+    )
+
+
+def _json_safe(value: Any) -> Any:
+    """AuthTokenData 里的 ``user_id`` 是 UUID，JSON 列不能直接存，统一转字符串。"""
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+async def create_desktop_code(
+    db: DbSession, result: dict[str, Any], challenge: str
+) -> str:
+    code = secrets.token_urlsafe(32)
+    await OAuthDesktopCodeRepository(db).create(
+        code=code,
+        challenge=challenge,
+        result=_json_safe(result),
+        expires_at=expires_at(minutes=2),
+    )
+    return code
+
+
+async def exchange_desktop_code(
+    db: DbSession, code: str, verifier: str
+) -> dict[str, Any]:
+    """Redeem a desktop code with its PKCE verifier. The code is single-use;
+    a wrong verifier does not consume it, so a mistyped input can be retried."""
+    repo = OAuthDesktopCodeRepository(db)
+    row = await repo.get_one(*repo.consume_conditions(code, now_iso()))
+    if row is None:
+        raise BizError(AuthErr.TOKEN_INVALID, "Invalid or expired desktop code")
+    expected = hashlib.sha256(verifier.encode()).hexdigest()
+    if not hmac.compare_digest(row.challenge, expected):
+        raise BizError(AuthErr.TOKEN_INVALID, "Desktop verifier mismatch")
+    consumed = await consume_once(
+        db,
+        type(row),
+        {"consumed": True},
+        *repo.consume_conditions(code, now_iso()),
+    )
+    if not consumed:
+        raise BizError(AuthErr.TOKEN_INVALID, "Desktop code already used")
+    return dict(row.result)
+
 
 async def generate_oauth_state(
-    db: DbSession, purpose: str, user_id: uuid.UUID | None = None
+    db: DbSession,
+    purpose: str,
+    user_id: uuid.UUID | None = None,
+    desktop_redirect: str | None = None,
+    desktop_challenge: str | None = None,
 ) -> str:
     """生成一个高熵的 OAuth state 令牌，存储并返回它。bind 场景关联发起用户。"""
     state = secrets.token_urlsafe(32)
     expiry = expires_at(minutes=10)
     await OAuthStateRepository(db).create(
-        state=state, purpose=purpose, user_id=user_id, expires_at=expiry
+        state=state,
+        purpose=purpose,
+        user_id=user_id,
+        desktop_redirect=desktop_redirect,
+        desktop_challenge=desktop_challenge,
+        expires_at=expiry,
     )
     return state
 
@@ -68,10 +199,21 @@ async def consume_oauth_state(db: DbSession, state: str, purpose: str) -> OAuthS
 
 
 async def get_github_auth_url(
-    db: DbSession, purpose: str = "login", user_id: uuid.UUID | None = None
+    db: DbSession,
+    purpose: str = "login",
+    user_id: uuid.UUID | None = None,
+    desktop_redirect: str | None = None,
+    desktop_challenge: str | None = None,
 ) -> str:
     """兼容入口：GitHub 授权 URL。"""
-    return await get_oauth_auth_url(db, GithubOAuth.name, purpose, user_id)
+    return await get_oauth_auth_url(
+        db,
+        GithubOAuth.name,
+        purpose,
+        user_id,
+        desktop_redirect=desktop_redirect,
+        desktop_challenge=desktop_challenge,
+    )
 
 
 async def get_oauth_auth_url(
@@ -79,8 +221,17 @@ async def get_oauth_auth_url(
     provider_name: str,
     purpose: str = "login",
     user_id: uuid.UUID | None = None,
+    *,
+    desktop_redirect: str | None = None,
+    desktop_challenge: str | None = None,
 ) -> str:
-    state = await generate_oauth_state(db, purpose, user_id)
+    state = await generate_oauth_state(
+        db,
+        purpose,
+        user_id,
+        desktop_redirect=desktop_redirect,
+        desktop_challenge=desktop_challenge,
+    )
     return get_provider(provider_name).authorize_url(state)
 
 

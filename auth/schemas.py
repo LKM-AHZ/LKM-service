@@ -211,6 +211,13 @@ class OAuthRedirectResponse(BaseModel):
     url: str
 
 
+class OAuthDesktopExchangeRequest(BaseModel):
+    """桌面 loopback 回跳后，用一次性 code + PKCE verifier 兑换令牌。"""
+
+    code: str = Field(..., min_length=1, max_length=128)
+    verifier: str = Field(..., min_length=16, max_length=128)
+
+
 # ── Passkey 响应 ──────────────────────────────────────────────
 
 

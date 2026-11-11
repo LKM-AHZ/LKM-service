@@ -371,6 +371,35 @@ class OAuthState(UUIDPrimaryKeyMixin, AuthBase):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )  # 仅 bind 场景：发起绑定的用户
+    # 桌面端（loopback）登录：回调不再把令牌吐给浏览器，而是重定向到
+    # desktop_redirect 并带一次性 code；desktop_challenge 是客户端 PKCE
+    # 承诺（verifier 的 SHA-256 hex），兑换时必须出示 verifier。
+    desktop_redirect: Mapped[str | None] = mapped_column(
+        String(2048), nullable=True
+    )
+    desktop_challenge: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
+class OAuthDesktopCode(UUIDPrimaryKeyMixin, AuthBase):
+    """桌面 OAuth 的一次性兑换码（2 分钟 TTL，单次有效）。
+
+    ``result`` 直接保存回调原本要返回给浏览器的 AuthTokenData（含令牌或
+    requires_2fa/temp_token/admission_status），兑换时原样返回，避免兑换时
+    重走登录门禁而与回调结果不一致。
+    """
+
+    __tablename__: str = "oauth_desktop_codes"
+
+    code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    challenge: Mapped[str] = mapped_column(String(128), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expires_at: Mapped[datetime.datetime] = mapped_column(UTCDateTime, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
