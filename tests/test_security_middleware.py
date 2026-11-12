@@ -75,10 +75,10 @@ async def test_security_headers_on_normal_response(sec_env) -> None:
 
 async def test_hsts_enabled_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "env", "production")
-    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd")
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "allowed_hosts", "community.example")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app = _make_app()
-    async with _client(app, base_url="http://lkm-ahz.ltd") as c:
+    async with _client(app, base_url="http://community.example") as c:
         resp = await c.get("/ping")
     assert resp.status_code == 200
     assert resp.headers["strict-transport-security"] == _HSTS_VALUE
@@ -86,7 +86,7 @@ async def test_hsts_enabled_in_production(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_security_headers_applied_on_rejected_host(sec_env, monkeypatch) -> None:
     """安全头在最外层：TrustedHost 的 400 拒答也带安全头。"""
-    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "allowed_hosts", "community.example")
     app = _make_app()
     async with _client(app, base_url="http://evil.example") as c:
         resp = await c.get("/ping")
@@ -149,10 +149,10 @@ async def test_ambiguous_or_unsafe_request_id_is_replaced(sec_env) -> None:
 async def test_trusted_host_allows_listed_and_rejects_others(
     sec_env, monkeypatch
 ) -> None:
-    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd,backend,127.0.0.1")
+    monkeypatch.setattr(settings, "allowed_hosts", "community.example,backend,127.0.0.1")
     app = _make_app()
     for host, expected in (
-        ("http://lkm-ahz.ltd", 200),
+        ("http://community.example", 200),
         # 端口须被剥离后再比对（容器 healthcheck 直连 127.0.0.1:8000）
         ("http://127.0.0.1:8000", 200),
         ("http://evil.example", 400),
@@ -174,11 +174,11 @@ async def test_allowed_hosts_empty_means_wildcard(sec_env) -> None:
 async def test_cors_allows_whitelisted_origin_with_credentials(
     sec_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app = _make_app()
     async with _client(app) as c:
-        resp = await c.get("/ping", headers={"Origin": "https://lkm-ahz.ltd"})
-    assert resp.headers["access-control-allow-origin"] == "https://lkm-ahz.ltd"
+        resp = await c.get("/ping", headers={"Origin": "https://community.example"})
+    assert resp.headers["access-control-allow-origin"] == "https://community.example"
     assert resp.headers["access-control-allow-credentials"] == "true"
     assert "X-Request-ID" in resp.headers["access-control-expose-headers"]
 
@@ -186,7 +186,7 @@ async def test_cors_allows_whitelisted_origin_with_credentials(
 async def test_cors_rejects_unknown_origin(
     sec_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app = _make_app()
     async with _client(app) as c:
         resp = await c.get("/ping", headers={"Origin": "https://evil.example"})
@@ -197,7 +197,7 @@ async def test_cors_rejects_unknown_origin(
 async def test_cors_preflight_rejected_for_unknown_origin(
     sec_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app = _make_app()
     async with _client(app) as c:
         resp = await c.options(
@@ -214,18 +214,18 @@ async def test_cors_preflight_rejected_for_unknown_origin(
 async def test_cors_preflight_allowed_for_whitelisted_origin(
     sec_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app = _make_app()
     async with _client(app) as c:
         resp = await c.options(
             "/ping",
             headers={
-                "Origin": "https://lkm-ahz.ltd",
+                "Origin": "https://community.example",
                 "Access-Control-Request-Method": "POST",
             },
         )
     assert resp.status_code == 200
-    assert resp.headers["access-control-allow-origin"] == "https://lkm-ahz.ltd"
+    assert resp.headers["access-control-allow-origin"] == "https://community.example"
 
 
 async def test_cors_wildcard_disables_credentials(
@@ -247,7 +247,7 @@ async def test_cors_origins_dev_fallback(sec_env) -> None:
 async def test_cors_not_mounted_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
     """生产不挂应用层 CORS：唯一权威是 APISIX，避免第二个真相源（见 core/middleware 取舍）。"""
     monkeypatch.setattr(settings, "env", "production")
-    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd,127.0.0.1")
+    monkeypatch.setattr(settings, "allowed_hosts", "community.example,127.0.0.1")
     app = _make_app()
     installed = {cls for cls, _args, _kw in app.user_middleware}
     assert middleware.CORSMiddleware not in installed
@@ -255,10 +255,10 @@ async def test_cors_not_mounted_in_production(monkeypatch: pytest.MonkeyPatch) -
     assert middleware.SecurityHeadersMiddleware in installed
 
     # 即便显式配了来源，生产也不应回任何 CORS 头
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     app2 = _make_app()
-    async with _client(app2, base_url="http://lkm-ahz.ltd") as c:
-        resp = await c.get("/ping", headers={"Origin": "https://lkm-ahz.ltd"})
+    async with _client(app2, base_url="http://community.example") as c:
+        resp = await c.get("/ping", headers={"Origin": "https://community.example"})
     assert "access-control-allow-origin" not in resp.headers
 
 
@@ -279,8 +279,8 @@ def test_production_passes_with_both_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "env", "production")
-    monkeypatch.setattr(settings, "allowed_hosts", "lkm-ahz.ltd")
-    monkeypatch.setattr(settings, "cors_origins", "https://lkm-ahz.ltd")
+    monkeypatch.setattr(settings, "allowed_hosts", "community.example")
+    monkeypatch.setattr(settings, "cors_origins", "https://community.example")
     install_security_middleware(FastAPI())  # 不抛即通过
 
 

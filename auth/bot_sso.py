@@ -1,6 +1,6 @@
 """BOT 面板 SSO 票据签发原语（LKM-bot 面板并入社区后台）。
 
-背景：LKM-bot 面板由独立子域 ``bot.lkm-ahz.ltd`` 改为社区站同域子路径 ``/bot/`` 后，管理员
+背景：LKM-bot 面板由独立子域 ``bot.community.example`` 改为社区站同域子路径 ``/bot/`` 后，管理员
 已登录社区后台（``admin_session`` cookie）再打开 iframe 面板时不应二次登录。本模块提供**一次性
 短期票据**的签发原语：社区侧凭有效 admin 会话铸票 → 浏览器带票访问 bot 面板的 SSO 端点 →
 bot 用**公钥**验签后自建面板会话。

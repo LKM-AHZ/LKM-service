@@ -36,12 +36,12 @@ _COMPOSE = _ROOT / "docker-compose.yml"
 _APISIX_DIR = _ROOT / "deploy" / "apisix"
 _K8S_BASE = _ROOT / "deploy" / "k8s" / "base"
 
-_COMMUNITY = "lkm-ahz.ltd"
+_COMMUNITY = "community.example"
 _COMMUNITY_HOSTS = [_COMMUNITY, f"www.{_COMMUNITY}"]
 #: 面板子路径前缀（网关路由 uri 与 proxy-rewrite 的匹配对象）。
 _BOT_PREFIX = "/bot"
 #: 旧独立子域名：已下线，只在「不得再出现」类断言里用。
-_RETIRED_BOT_DOMAIN = "bot.lkm-ahz.ltd"
+_RETIRED_BOT_DOMAIN = "bot.community.example"
 _COMMUNITY_BODY_LIMIT = 104857600  # LKM_MAX_UPLOAD_BYTES 默认值
 _BOT_BODY_LIMIT = 550000000  # LKM_BOT_MAX_UPLOAD_BYTES 默认值
 
@@ -79,6 +79,7 @@ def _render_once(extra_env: dict | None = None) -> dict:
         "APISIX_OUT_CONFIG": str(out_dir / "config.yaml"),
         "APISIX_CERT_ROOT": str(cert_root),
         "APISIX_RENDER_ONCE": "1",
+        "APISIX_COMMUNITY_DOMAINS": _COMMUNITY,
     }
     if extra_env:
         env.update(extra_env)

@@ -527,7 +527,8 @@ async def finalize_auth_response(db: DbSession, user: User) -> dict[str, Any]:
     if admin_setup is not None:
         return admin_setup
 
-    # 登录不再每次强制 2FA（对齐 GitHub 缓动）：仅"首次强制设置"由上面
+    # 产品策略：普通登录免 2FA，仅敏感操作补验（不等同 GitHub 的重新登录策略）。
+    # 仅"首次强制设置"由上面
     # _check_admin_totp_required 处理；已启用 TOTP 的普通登录直接发会话令牌，
     # 危险操作时再由 admin 后台 step-up 校验（见 require_admin_2fa）。
     return await _create_auth_response(db, user, requires_2fa=False)
@@ -764,11 +765,6 @@ async def verify_magic_link(
     if user.account_level == "local":
         raise BizError(AuthErr.ACCOUNT_LEVEL_INSUFFICIENT)
 
-    if user.account_level == "admin":
-        totp = await TOTPRepository(db).get_by_user(user.id)
-        if not totp or not totp.enabled:
-            raise BizError(AuthErr.TOTP_SETUP_REQUIRED)
-
     # reset 用途只做令牌校验：密码恢复流程随后自行重置口令并解除失败锁，不应在这里
     # 发会话令牌（被失败次数锁定的账号必须能走恢复；真正的登录发令牌由
     # ``_create_auth_response`` 的锁定门禁拦截）。
@@ -776,7 +772,7 @@ async def verify_magic_link(
         return {"user_id": user.id, "account_level": user.account_level}
 
     # 与 login_password 相同：登录不再每次强制 2FA，直接发会话令牌。
-    return await _create_auth_response(db, user, requires_2fa=False)
+    return await finalize_auth_response(db, user)
 
 
 async def upgrade_to_normal(db: DbSession, user: User) -> None:

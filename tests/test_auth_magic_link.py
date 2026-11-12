@@ -209,14 +209,15 @@ class TestVerifyMagicLink:
             await svc.verify_magic_link(db, raw_token, purpose="login")
         assert exc.value.errcode == AuthErr.USER_NOT_FOUND
 
-    async def should_reject_admin_without_totp(self, db: AsyncSession):
+    async def should_offer_setup_to_admin_without_totp(self, db: AsyncSession):
         await _create_user(db, email="admin@example.com", account_level="admin")
         raw_token, _ = await _make_magic_link(db, "admin@example.com")
 
         svc = _service()
-        with pytest.raises(BizError) as exc:
-            await svc.verify_magic_link(db, raw_token, purpose="login")
-        assert exc.value.errcode == AuthErr.TOTP_SETUP_REQUIRED
+        result = await svc.verify_magic_link(db, raw_token, purpose="login")
+        assert result["setup_required"] is True
+        assert result["temp_token"]
+        assert result["access_token"] is None
 
     async def should_login_with_totp_without_forced_2fa(self, db: AsyncSession):
         """登录不再强制 2FA：已启用 TOTP 的普通用户验证魔法链接直接得完整会话（危险操作时才 step-up）。"""

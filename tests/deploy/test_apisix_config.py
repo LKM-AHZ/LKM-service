@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parents[3]  # LKM-Website
 _APISIX_DIR = _ROOT / "deploy" / "apisix"
 _COMPOSE = _ROOT / "docker-compose.yml"
 
-_COMMUNITY = "lkm-ahz.ltd"
+_COMMUNITY = "community.example"
 # bot 面板已并入社群域子路径 /bot/（不再有独立子域名）
 _DOMAINS = [_COMMUNITY]
 _ALL_HOSTS = [h for d in _DOMAINS for h in (d, f"www.{d}")]
@@ -67,6 +67,7 @@ def _run_render(cert_root: Path, out_dir: Path, extra_env: dict | None = None) -
         "APISIX_OUT_CONFIG": str(out_dir / "config.yaml"),
         "APISIX_CERT_ROOT": str(cert_root),
         "APISIX_RENDER_ONCE": "1",
+        "APISIX_COMMUNITY_DOMAINS": _COMMUNITY,
     }
     if extra_env:
         env.update(extra_env)
@@ -265,6 +266,13 @@ def _render_with_domains(raw: str) -> dict:
     out_dir.mkdir(parents=True)
     _run_render(cert_root, out_dir, extra_env={"APISIX_COMMUNITY_DOMAINS": raw})
     return yaml.safe_load((out_dir / "apisix.yaml").read_text())
+
+
+def test_unconfigured_gateway_uses_loopback_host() -> None:
+    rendered = _render_with_domains("")
+    routes = {route["id"]: route for route in rendered["routes"]}
+    assert routes["api-prefix"]["hosts"] == ["localhost", "www.localhost"]
+    assert routes["minio"]["upstream"]["upstream_host"] == "localhost"
 
 
 def test_domain_list_separator_is_normalized() -> None:
@@ -500,6 +508,7 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
         "APISIX_OUT_CONFIG": str(tmp_path / "out" / "config.yaml"),
         "APISIX_CERT_ROOT": str(cert_root),
         "APISIX_RENDER_ONCE": "1",
+        "APISIX_COMMUNITY_DOMAINS": _COMMUNITY,
     }
     subprocess.run(["sh", str(_APISIX_DIR / "render.sh")], env=env, check=True)
 
@@ -510,7 +519,7 @@ def test_render_script_inlines_certs(tmp_path: Path) -> None:
     for entry in rendered["ssls"]:
         assert "BEGIN CERTIFICATE" in entry["cert"]
         assert "BEGIN PRIVATE KEY" in entry["key"]
-        assert any(s.endswith("lkm-ahz.ltd") for s in entry["snis"])
+        assert any(s.endswith("community.example") for s in entry["snis"])
     # 路由模板完整保留
     assert len(rendered["routes"]) == len(_load("apisix.yaml")["routes"])
 

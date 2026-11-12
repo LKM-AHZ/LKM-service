@@ -12,9 +12,8 @@
 3. **验证码复用原通道**。发码仍走 :func:`auth.channels` 的同一套逻辑，含「账号不存在
    也返回同一文案」的既有防护，不在挑战层另起一套。
 
-暂不支持而在挑战内显式拒绝的步骤：管理员首次强制设置 TOTP（响应带 ``temp_token`` +
-``setup_required``）。那条路径继续走 ``/auth/2fa/setup/complete/temp``，挑战层报
-``CHALLENGE_UNSUPPORTED_STEP``，避免把 temp_token 落库。
+管理员首次强制设置 TOTP 时，消费当前挑战并返回 ``setup_required`` 和临时令牌，
+客户端继续走既有 ``/auth/2fa/setup/*/temp``；临时令牌不落挑战表。
 """
 
 from __future__ import annotations
@@ -312,7 +311,10 @@ async def _advance(
 ) -> dict[str, Any]:
     """把一次成功的凭据校验结果落成挑战的下一态或完成态。"""
     # 管理员首次强制设置 TOTP：响应里带的是 temp_token 而不是会话令牌。
-    if data.get("setup_required") or data.get("temp_token"):
+    if data.get("setup_required") and data.get("temp_token"):
+        await _consume(db, challenge, status="complete")
+        return {**data, "status": "setup_required"}
+    if data.get("temp_token"):
         await _consume(db, challenge, status="cancelled")
         raise BizError(AuthErr.CHALLENGE_UNSUPPORTED_STEP)
 

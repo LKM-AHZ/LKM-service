@@ -469,7 +469,7 @@ class Settings(BaseSettings):
         if not self.allowed_hosts.strip():
             raise ValueError(
                 "公网安全面未配置（生产必填）：LKM_ALLOWED_HOSTS；"
-                "示例 LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,127.0.0.1"
+                "示例 LKM_ALLOWED_HOSTS=community.example,www.community.example,backend,auth,127.0.0.1"
             )
 
     @property
