@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from core.db.base import now_iso
 from core.db.repository import AsyncRepository, DbSession, ValuesDict
 
 
@@ -26,13 +28,35 @@ class StarHopeRepository(AsyncRepository[Any]):
         super().__init__(db)
         self.model = model
 
+    async def sync_time(self, user_id: uuid.UUID) -> datetime.datetime:
+        """Serialize a workspace's reads/writes through commit before taking its cursor.
+
+        A timestamp taken before a competing transaction commits would skip its
+        receipts. PostgreSQL's transaction lock covers both pull and push; the
+        database clock also avoids disagreement between application servers.
+        """
+        if self.db.get_bind().dialect.name == "postgresql":
+            key = int.from_bytes(
+                hashlib.sha256(
+                    f"starhope:{self.model.__tablename__}:{user_id}".encode()
+                ).digest()[:8],
+                "big",
+                signed=True,
+            )
+            await self.db.execute(select(func.pg_advisory_xact_lock(key)))
+            timestamp = await self.db.scalar(select(func.clock_timestamp()))
+            if not isinstance(timestamp, datetime.datetime):
+                raise RuntimeError("Missing database sync timestamp")
+            return timestamp
+        return now_iso()
+
     async def list_changed(
         self, *, user_id: uuid.UUID, since: datetime.datetime | None
     ) -> list[Any]:
-        """该用户未软删的实体行；``since`` 非空时只取 ``updated_at > since``。"""
+        """按服务端接收时间增量读取，客户端离线时间只参与 LWW。"""
         conditions: list[Any] = [self.model.user_id == user_id]
         if since is not None:
-            conditions.append(self.model.updated_at > since)
+            conditions.append(self.model.received_at >= since)
         return await self.get_many(*conditions)
 
     async def list_tombstones(
@@ -44,7 +68,7 @@ class StarHopeRepository(AsyncRepository[Any]):
             self.model.deleted_at.is_not(None),
         )
         if since is not None:
-            stmt = stmt.where(self.model.deleted_at > since)
+            stmt = stmt.where(self.model.received_at >= since)
         return [
             (entity_id, deleted_at)
             for entity_id, deleted_at in (await self.db.execute(stmt)).all()
@@ -65,6 +89,7 @@ class StarHopeRepository(AsyncRepository[Any]):
         已软删行仅被更新的 incoming 复活；incoming 不新于现存 ``updated_at`` 时跳过。
         """
         ids = {rid for rid, _, _ in upserts} | {rid for rid, _ in deletes}
+        received_at = await self.sync_time(user_id)
         existing_map: dict[str, Any] = {}
         if ids:
             rows = await self.get_many(
@@ -78,7 +103,7 @@ class StarHopeRepository(AsyncRepository[Any]):
         for rid, data, updated_at in upserts:
             existing = existing_map.get(rid)
             if existing is None:
-                obj = self.model(**data)
+                obj = self.model(**data, received_at=received_at)
                 self.db.add(obj)
                 # 登记进 existing_map：同一批次里重复的 id 走下面的合并分支，
                 # 不会暂存两个同主键实例（flush 时双 INSERT 撞键）；也令随后的
@@ -94,6 +119,7 @@ class StarHopeRepository(AsyncRepository[Any]):
                     if key not in ("id", "user_id"):
                         setattr(existing, key, value)
                 existing.deleted_at = None
+                existing.received_at = received_at
                 synced += 1
 
         for rid, deleted_at in deletes:
@@ -104,6 +130,7 @@ class StarHopeRepository(AsyncRepository[Any]):
             if deleted_at > last_write:
                 existing.deleted_at = deleted_at
                 existing.updated_at = deleted_at
+                existing.received_at = received_at
                 synced += 1
 
         await self.flush()

@@ -2,7 +2,7 @@
 
 Pydantic ``FeedResponse`` 仍负责构造/校验；本模块只做「校验后 → 可 msgspec 直编」的镜像转换。
 字段名与 Pydantic 逐一对齐且保持 **snake_case**：现有前端契约
-（``LKM-official-website/src/lib/api/modules/timeline.ts``）消费 ``item_type``/``content_preview``/
+（桌面客户端的时间线模块）消费 ``item_type``/``content_preview``/
 ``next_cursor``，故**不按蓝图文面用 to_camel**（偏离已登记路线图 §8）。
 
 编码等价性：msgspec 对 ``datetime``(UTC→``...Z``/naive/带偏移)、float、None、unicode 的输出与

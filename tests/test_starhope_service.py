@@ -120,6 +120,7 @@ class TestStarHopeService:
             ],
             [],
         )
+        cursor = (await pull_entity(db, "questions", uid, None)).server_time
         await push_entity(
             db,
             "questions",
@@ -132,10 +133,63 @@ class TestStarHopeService:
             ],
             [],
         )
-        data = await pull_entity(
-            db, "questions", uid, datetime.datetime(2026, 8, 15, tzinfo=datetime.UTC)
-        )
+        data = await pull_entity(db, "questions", uid, cursor)
         assert [i["id"] for i in data.items] == ["new"]
+
+    async def test_offline_writes_and_tombstones_survive_existing_cursor(
+        self, db, auth_db
+    ):
+        uid = await _user(auth_db)
+        cursor = (await pull_entity(db, "questions", uid, None)).server_time
+        old = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+        await push_entity(db, "questions", uid, [_q(updated_at=old)], [])
+        inserted = await pull_entity(db, "questions", uid, cursor)
+        assert [row["id"] for row in inserted.items] == ["q1"]
+        assert inserted.items[0]["updated_at"].startswith("2026-01-01")
+        await push_entity(
+            db,
+            "questions",
+            uid,
+            [],
+            [
+                StarHopeTombstone(
+                    id="q1",
+                    deleted_at=old + datetime.timedelta(days=1),
+                )
+            ],
+        )
+        removed = await pull_entity(db, "questions", uid, inserted.server_time)
+        assert not removed.items
+        assert [row.id for row in removed.tombstones] == ["q1"]
+
+    async def test_pull_waits_for_uncommitted_sync_before_issuing_cursor(
+        self, db, auth_db
+    ):
+        import asyncio
+
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+        from sqlalchemy.pool import NullPool
+
+        uid = await _user(auth_db)
+        await push_entity(db, "questions", uid, [_q()], [])
+        engine = create_async_engine(db.bind.url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine) as reader:
+                pending = asyncio.create_task(
+                    pull_entity(reader, "questions", uid, None)
+                )
+                try:
+                    await asyncio.sleep(0.03)
+                    assert not pending.done()
+                    await db.commit()
+                    result = await pending
+                    assert [row["id"] for row in result.items] == ["q1"]
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+        finally:
+            await engine.dispose()
 
     async def test_invalid_entity(self, db, auth_db):
         uid = await _user(auth_db)

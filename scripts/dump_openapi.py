@@ -1,6 +1,6 @@
 """把后端的 OpenAPI 契约导出为稳定快照，或校验快照是否过期。
 
-为什么需要：前端（``LKM-official-website/src/lib/api/types.ts``）是**手写**的类型，
+为什么需要：客户端接口类型由各客户端维护，
 后端改字段名/枚举/错误码时 TS 编译不会报错，只有运行时才炸。而 ``tests/deploy`` 已经
 为「最容易静默失效」的基础设施建了跨仓契约，HTTP 契约反而没有等价物——本快照补上：
 契约变更必须显式出现在 ``tests/contracts/openapi.json`` 的 diff 里，被 review 看见。

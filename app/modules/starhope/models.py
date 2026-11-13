@@ -14,7 +14,14 @@ from core.db.base import (  # 注意 db.base 而非 db.models
 )
 
 
-class StarHopeQuestion(SoftDeleteMixin, Base):
+class SyncReceiptMixin:
+    # Client updated_at remains the LWW clock; receipts drive incremental reads.
+    received_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso, index=True
+    )
+
+
+class StarHopeQuestion(SyncReceiptMixin, SoftDeleteMixin, Base):
     __tablename__: str = "starhope_questions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -37,7 +44,7 @@ class StarHopeQuestion(SoftDeleteMixin, Base):
     )
 
 
-class StarHopeFolder(SoftDeleteMixin, Base):
+class StarHopeFolder(SyncReceiptMixin, SoftDeleteMixin, Base):
     __tablename__: str = "starhope_folders"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -55,7 +62,7 @@ class StarHopeFolder(SoftDeleteMixin, Base):
     )
 
 
-class StarHopePracticeSession(SoftDeleteMixin, Base):
+class StarHopePracticeSession(SyncReceiptMixin, SoftDeleteMixin, Base):
     __tablename__: str = "starhope_practice_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -84,7 +91,7 @@ class StarHopePracticeSession(SoftDeleteMixin, Base):
     )
 
 
-class StarHopeAiAgent(SoftDeleteMixin, Base):
+class StarHopeAiAgent(SyncReceiptMixin, SoftDeleteMixin, Base):
     __tablename__: str = "starhope_ai_agents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

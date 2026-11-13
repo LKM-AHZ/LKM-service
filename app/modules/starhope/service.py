@@ -94,7 +94,7 @@ async def pull_entity(
 ) -> StarHopePullData[Any]:
     model, _in, out_schema = _lookup(entity)
     repo = StarHopeRepository(db, model)
-    cursor = now_iso()  # 查询前取游标（见下方 server_time 注释）
+    cursor = await repo.sync_time(user_id)
     rows = await repo.list_changed(user_id=user_id, since=since)
     items = [out_schema.model_validate(r).model_dump(mode="json") for r in rows]
 

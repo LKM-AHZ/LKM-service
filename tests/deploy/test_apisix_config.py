@@ -398,7 +398,7 @@ def test_upload_routes_have_body_limit() -> None:
 
 def test_cache_headers_on_assets() -> None:
     routes = _routes()
-    for rid in ("astro-assets", "avatars"):
+    for rid in ("avatars",):
         cache = routes[rid]["plugins"]["response-rewrite"]["headers"]["set"][
             "Cache-Control"
         ]
@@ -422,7 +422,7 @@ def test_cors_explicit_whitelist_no_empty_fallback() -> None:
         assert f"https://www.{_COMMUNITY}" in origins
         assert cors["allow_credential"] is True
         # APISIX cors schema 硬规则：allow_credential=true 时四个字段**任一**为 `*` 即校验失败
-        # → **整条路由不被加载**（限流/WS upgrade/CORS 静默失效，流量退化为经 astro 转发）。
+        # → **整条路由不被加载**（限流/WS upgrade/CORS 静默失效，流量没有匹配路由）。
         # 按规则本身断言，而非照抄实现取值（否则与实现同错 → 假绿，见 §8 #19/#26）。
         for field in (
             "allow_origins",

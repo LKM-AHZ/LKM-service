@@ -21,7 +21,7 @@ from prometheus_client import REGISTRY
 from core.config import settings
 from tests.conftest import Client
 
-# 前端真实查询（LKM-official-website/src/lib/api/modules/content.graphql.ts 的 CONTENT_ITEMS
+# 前端真实查询（社区内容列表的 CONTENT_ITEMS
 # 缩略版：深度 3、字段面与线上一致，且分页实参走**变量**）：默认阈值必须放行。
 _FRONTEND_QUERY = """
 query ContentItems($page: Int!, $pageSize: Int!) {

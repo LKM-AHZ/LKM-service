@@ -10,8 +10,7 @@
      会把 bot 上传静默打死；两个数必须来自不同变量；
   4) **路径**：bot 面板挂在**社群域的子路径 `/bot/`**（不再有独立子域名）——其自带 API 与
      社群站同为绝对路径 /api/v1/*，同 host 下原样转发会与 backend 路由正面冲突，故网关用
-     `proxy-rewrite` 剥掉 `/bot` 前缀后再送面板；路由 priority 必须高过 community-catchall，
-     否则面板流量会被 Astro 接走；
+     `proxy-rewrite` 剥掉 `/bot` 前缀后再送面板；API 路由必须优先于面板静态入口；
   5) **k8s**：bot 是可选组件（`replicas: 0`），data 走 PVC + `strategy: Recreate`
      （RWO 单写者：滚动更新会双挂载并让 SQLite 双写）。
 """
@@ -186,7 +185,7 @@ def should_pass_ship_data_dir_as_host_absolute_path() -> None:
 
 
 def should_route_bot_by_subpath() -> None:
-    """面板挂在社群域子路径 /bot/*：静态页交给 astro，API 交给 lkmbot。
+    """面板挂在社群域子路径 /bot/*：静态页与 API 均交给 lkmbot。
 
     同 host 下靠路径前缀区分，避免与 backend 的 /api/v1/* 冲突。
     """
@@ -194,27 +193,26 @@ def should_route_bot_by_subpath() -> None:
     panel = routes["bot-panel"]
     assert panel["hosts"] == _COMMUNITY_HOSTS
     assert panel["uri"] == f"{_BOT_PREFIX}/*"
-    assert panel["upstream"]["service_name"].startswith("astro:")
+    assert panel["upstream"]["service_name"].startswith("lkmbot:")
     assert panel["upstream"]["pass_host"] == "pass"
-    # priority 必须高过 community-catchall(10)，否则面板流量被 Astro 的兜底路由接走
-    assert panel["priority"] > routes["community-catchall"]["priority"]
+    assert routes["bot-api"]["priority"] > panel["priority"]
 
     api = routes["bot-api"]
     assert api["uri"] == f"{_BOT_PREFIX}/api/*"
     assert api["upstream"]["service_name"].startswith("lkmbot:")
-    assert routes["bot-panel-root"]["upstream"]["service_name"].startswith("astro:")
+    assert routes["bot-panel-root"]["upstream"]["service_name"].startswith("lkmbot:")
 
 
 def should_rewrite_bot_prefix_off() -> None:
     """网关剥掉 /bot 前缀：面板 API 进程仍以根路径服务其 /api/v1/*（零应用侧改动）。"""
     routes = _routes()
-    for route_id in ("bot-api", "bot-auth-login"):
+    for route_id in ("bot-api", "bot-auth-login", "bot-panel"):
         rewrite = routes[route_id]["plugins"]["proxy-rewrite"]
         assert rewrite["regex_uri"] == [f"^{_BOT_PREFIX}/(.*)", "/$1"], route_id
     # 无尾斜杠的 /bot 由独立精确路由重写到官网 SPA 入口（`/bot/*` 不匹配它）
     root = routes["bot-panel-root"]
     assert root["uri"] == _BOT_PREFIX
-    assert root["plugins"]["proxy-rewrite"]["uri"] == f"{_BOT_PREFIX}/index.html"
+    assert root["plugins"]["proxy-rewrite"]["uri"] == "/"
     assert root["hosts"] == _COMMUNITY_HOSTS
 
 
@@ -346,11 +344,10 @@ def should_pin_dashboard_base_path_to_subpath() -> None:
     svc = _services()["lkmbot"]
     # 运行期 base：无尾斜杠形态
     assert svc["environment"]["BOT_DASHBOARD_BASE_PATH"] == prefix
-    # 前端构建期 base：面板已迁入官网仓库，构建期 base 在官网镜像里固定为 /bot/（vite 语义）
-    website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
-        encoding="utf-8"
-    )
-    assert f"VITE_BASE_PATH={_BOT_PREFIX}/ " in website_dockerfile
+    # The bot's own build receives the same prefix as its runtime and gateway.
+    assert svc["build"]["args"]["BOT_BASE_PATH"] == prefix
+    bot_dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
+    assert "VITE_BASE_PATH=${BOT_BASE_PATH}" in bot_dockerfile
     # 网关渲染侧同一来源（路由 uri 与剥前缀正则由它展开）
     assert _services()["apisix-render"]["environment"]["APISIX_BOT_BASE_PATH"] == prefix
     # 模板里只放占位：前缀不得硬编码进路由
@@ -507,17 +504,24 @@ def should_wire_bot_sso_protocol_values_once() -> None:
     assert "LKM_BOT_SSO_TTL_SECONDS" not in sso_py
 
 
-def should_ship_panel_from_website_image_only() -> None:
-    """面板前端随官网镜像构建（带 /bot base）；bot 镜像不再内置 dist 或下载它。"""
+def should_ship_panel_without_website_image() -> None:
+    """The bot image owns the panel build, runtime assets and lockfile."""
     bot_dockerfile = (_ROOT / "LKM-bot" / "Dockerfile").read_text(encoding="utf-8")
-    assert "pnpm" not in bot_dockerfile
-    assert "bot/dashboard/dist" not in bot_dockerfile
-
-    website_dockerfile = (_ROOT / "LKM-official-website" / "Dockerfile").read_text(
-        encoding="utf-8"
+    assert "pnpm install --frozen-lockfile" in bot_dockerfile
+    assert (
+        "COPY --from=dashboard /bot/dashboard/dist /LKMBot/bot/dashboard/dist"
+        in bot_dockerfile
     )
-    assert "COPY bot-panel/ ./" in website_dockerfile
-    assert "COPY --from=bot-panel /public/bot ./public/bot" in website_dockerfile
-    # 上游默认排除 dashboard/ 目录；bot 侧不再需要放开它
-    bot_dockerignore = (_ROOT / "LKM-bot" / ".dockerignore").read_text(encoding="utf-8")
-    assert "dashboard/node_modules" not in bot_dockerignore
+    assert "LKM-official-website" not in bot_dockerfile
+    assert (_ROOT / "LKM-bot/dashboard/pnpm-lock.yaml").is_file()
+    vite = (_ROOT / "LKM-bot/dashboard/vite.config.ts").read_text(encoding="utf-8")
+    assert "outDir: '../bot/dashboard/dist'" in vite
+    assert "../public/bot" not in vite
+    bot_dockerignore = (_ROOT / "LKM-bot/.dockerignore").read_text(encoding="utf-8")
+    assert "dashboard/node_modules/" in bot_dockerignore
+    # All builds and deployment manifests must remain independent of the retired UI.
+    assert "astro" not in _services()
+    assert "astro-assets" not in _routes()
+    assert "community-catchall" not in _routes()
+    base = yaml.safe_load((_K8S_BASE / "kustomization.yaml").read_text())
+    assert not any("frontend" in resource for resource in base["resources"])
