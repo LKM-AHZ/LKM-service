@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from importlib.util import find_spec
@@ -24,6 +25,9 @@ from core.plugins.manifest import Manifest
 
 #: 外部插件入口点组名。插件包需暴露一个无参可调用对象，返回 :class:`Manifest`。
 ENTRY_POINT_GROUP = "lkm.plugins"
+
+#: 每个插件隐式提供的能力前缀（``lkm.module.<name>``）；清单不得显式声明该前缀。
+MODULE_CAPABILITY_PREFIX = "lkm.module."
 
 
 class PluginError(ValueError):
@@ -42,15 +46,17 @@ class PluginSet:
         返回值就是安装顺序（被依赖者在前）。让校验顺手返回定序，而不是让调用方再调一次
         :meth:`install_order`：两处都做一遍拓扑排序没有收益，漏调第二处还会让顺序悄悄改变。
         """
-        names = [m.name for m in self.manifests]
-        duplicates = sorted({n for n in names if names.count(n) > 1})
+        counts = Counter(m.name for m in self.manifests)
+        duplicates = sorted(n for n, count in counts.items() if count > 1)
         if duplicates:
             raise PluginError(f"插件重名：{duplicates}")
 
+        self._check_reserved_capabilities()
+        # providers 只算一次：validate 与定序需要同一份能力表，各算一遍没有收益。
         providers = self._providers_by_capability()
         self._check_unique_capabilities(providers)
         self._check_requirements(providers)
-        return self.install_order()
+        return self._install_order(providers)
 
     def install_order(self) -> tuple[Manifest, ...]:
         """按 ``requires`` 拓扑排序（被依赖者在前）；无依赖时保持输入顺序。
@@ -61,7 +67,11 @@ class PluginSet:
         成环时抛 :class:`PluginError`，**不**返回排序到一半的短列表：那个短列表会让部分
         模块静默消失（正是本模块 docstring 要消灭的 404 类故障）。
         """
-        providers = self._providers_by_capability()
+        return self._install_order(self._providers_by_capability())
+
+    def _install_order(
+        self, providers: dict[str, list[str]]
+    ) -> tuple[Manifest, ...]:
         pending = list(self.manifests)
         done: list[Manifest] = []
         done_names: set[str] = set()
@@ -82,12 +92,38 @@ class PluginSet:
         return tuple(done)
 
     def _providers_by_capability(self) -> dict[str, list[str]]:
-        """能力名 → 提供方（按清单顺序）。``requires`` 只按能力名寻址，故必须唯一。"""
+        """能力名 → 提供方（按清单顺序）。``requires`` 只按能力名寻址，故必须唯一。
+
+        每个插件**隐式**提供 :data:`MODULE_CAPABILITY_PREFIX` + 自身名字：外部插件要
+        「排在某个宿主模块之后加载」时直接 ``requires = ["lkm.module.content"]``，
+        不需要宿主逐条导出业务能力清单。
+        """
         providers: dict[str, list[str]] = {}
+
+        def _add(cap: str, name: str) -> None:
+            owners = providers.setdefault(cap, [])
+            if name not in owners:
+                owners.append(name)
+
         for manifest in self.manifests:
+            _add(MODULE_CAPABILITY_PREFIX + manifest.name, manifest.name)
             for cap in manifest.provides:
-                providers.setdefault(cap, []).append(manifest.name)
+                _add(cap, manifest.name)
         return providers
+
+    def _check_reserved_capabilities(self) -> None:
+        """``lkm.module.*`` 由插件名隐式提供，显式声明会与隐式提供方打架。"""
+        for manifest in self.manifests:
+            reserved = [
+                cap
+                for cap in manifest.provides
+                if cap.startswith(MODULE_CAPABILITY_PREFIX)
+            ]
+            if reserved:
+                raise PluginError(
+                    f"插件 {manifest.name!r} 的 provides 不得使用保留前缀 "
+                    f"{MODULE_CAPABILITY_PREFIX!r}：该能力由插件名自动提供"
+                )
 
     @staticmethod
     def _check_unique_capabilities(providers: dict[str, list[str]]) -> None:
@@ -113,6 +149,17 @@ class PluginSet:
                 f"requires 无法满足：{sorted(missing)}"
                 f"（已提供的 provides：{sorted(providers)}）"
             )
+        # 自己 requires 自己 provides 的能力等价于自环；不定序会把它报成「成环」，
+        # 但真实原因是清单写错，按后者报错更容易定位。
+        for manifest in self.manifests:
+            own = (
+                set(manifest.provides)
+                | {MODULE_CAPABILITY_PREFIX + manifest.name}
+            ) & set(manifest.requires)
+            if own:
+                raise PluginError(
+                    f"插件 {manifest.name!r} 依赖自身提供的能力：{sorted(own)}"
+                )
 
 
 def _load_one(ep: Any) -> Manifest:
@@ -153,15 +200,22 @@ def _load_one(ep: Any) -> Manifest:
     return manifest
 
 
-def discover_entry_points(group: str = ENTRY_POINT_GROUP) -> tuple[Manifest, ...]:
+def discover_entry_points(
+    group: str = ENTRY_POINT_GROUP, *, exclude: frozenset[str] = frozenset()
+) -> tuple[Manifest, ...]:
     """读取已安装发行版声明的外部插件清单，按入口点名排序；未安装插件时返回空元组。
 
     排序是刻意的：``importlib.metadata`` 的枚举顺序不保证跨环境一致，而清单顺序会决定
     装配顺序（理由同 :func:`~core.plugins.manifest.load_manifests` 按目录名排序）。
+
+    ``exclude`` 按入口点名在 **``ep.load()`` 之前**过滤：运维禁用某个插件时不应先执行
+    它的代码（工厂本身就可能做初始化）。入口点名与清单 name 的一致性由 :func:`_load_one`
+    保证，因此按名过滤不会在加载后再发现对不上。
     """
     return tuple(
         _load_one(ep)
         for ep in sorted(
             entry_points(group=group), key=lambda e: getattr(e, "name", "")
         )
+        if getattr(ep, "name", "") not in exclude
     )

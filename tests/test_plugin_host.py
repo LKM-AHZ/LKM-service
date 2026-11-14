@@ -87,6 +87,59 @@ def test_duplicate_capability_provider_is_rejected() -> None:
         plugins.validate()
 
 
+def test_self_dependency_is_rejected_as_config_error() -> None:
+    """requires 自己 provides 的能力是自环：按「成环」报会掩盖真实原因（清单写错）。"""
+    plugins = host.PluginSet(
+        (_manifest("a", provides=("a.x",), requires=("a.x",)),)
+    )
+    with pytest.raises(host.PluginError, match="依赖自身"):
+        plugins.validate()
+
+
+def test_every_plugin_implicitly_provides_its_module_capability() -> None:
+    """插件无需声明 provides，也能被 ``lkm.module.<name>`` 依赖以约束加载顺序。"""
+    plugins = host.PluginSet(
+        (
+            _manifest("consumer", requires=("lkm.module.provider",)),
+            _manifest("provider"),
+        )
+    )
+    assert [m.name for m in plugins.validate()] == ["provider", "consumer"]
+
+
+def test_reserved_capability_prefix_is_rejected() -> None:
+    """``lkm.module.*`` 由插件名自动提供，显式声明会造成提供方重复/冒名。"""
+    plugins = host.PluginSet((_manifest("a", provides=("lkm.module.b",)),))
+    with pytest.raises(host.PluginError, match="保留前缀"):
+        plugins.validate()
+
+
+def test_implicit_capability_self_dependency_is_rejected() -> None:
+    plugins = host.PluginSet((_manifest("a", requires=("lkm.module.a",)),))
+    with pytest.raises(host.PluginError, match="依赖自身"):
+        plugins.validate()
+
+
+def test_discover_excludes_names_before_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """禁用的插件不应先执行入口点工厂（工厂本身可能有副作用）。"""
+    kept = _manifest("keep")
+
+    def _must_not_load() -> Any:
+        raise AssertionError("被禁用的插件工厂被执行了")
+
+    monkeypatch.setattr(
+        host,
+        "entry_points",
+        lambda group: [
+            _FakeEntryPoint("drop", _must_not_load),
+            _FakeEntryPoint("keep", lambda: kept),
+        ],
+    )
+    assert host.discover_entry_points(exclude=frozenset({"drop"})) == (kept,)
+
+
 def test_validate_returns_the_install_order() -> None:
     """校验顺手返回定序：调用方不必再排一次，也不会忘掉 install_order。"""
     plugins = host.PluginSet(

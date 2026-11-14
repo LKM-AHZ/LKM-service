@@ -14,15 +14,42 @@ from core.logging import get_request_id
 logger = logging.getLogger(__name__)
 
 
+#: 已占用的命名空间：编号与前缀都唯一。构造即登记，外部插件撞号在 import 期报错，
+#: 而不是把两个模块的错误码悄悄编码到同一个数值空间。
+_NAMESPACES: dict[int, Any] = {}
+
+
 class Namespace:
-    """Error-code namespace: encodes ns_id<<16 | local so modules stay collision-free."""
+    """Error-code namespace: encodes ns_id<<16 | local so modules stay collision-free.
+
+    构造时登记；同一 (编号, 前缀) 重复构造视为幂等（模块重载安全），编号或前缀与他人
+    冲突则立即抛 :class:`ValueError`。
+    """
 
     ns_id: int
     prefix: str
 
     def __init__(self, ns_id: int, prefix: str) -> None:
+        if not isinstance(ns_id, int) or isinstance(ns_id, bool) or ns_id < 0:
+            raise ValueError(f"错误码命名空间编号必须是非负整数：{ns_id!r}")
+        if not isinstance(prefix, str) or not prefix:
+            raise ValueError(f"错误码命名空间前缀必须是非空字符串：{prefix!r}")
+        existing = _NAMESPACES.get(ns_id)
+        if existing is not None:
+            if existing.prefix == prefix:
+                self.ns_id = ns_id
+                self.prefix = prefix
+                return
+            raise ValueError(
+                f"错误码命名空间编号 {ns_id} 已被 {existing.prefix!r} 占用，"
+                f"不能用于 {prefix!r}"
+            )
+        for other in _NAMESPACES.values():
+            if other.prefix == prefix:
+                raise ValueError(f"错误码命名空间前缀 {prefix!r} 已被占用")
         self.ns_id = ns_id
         self.prefix = prefix
+        _NAMESPACES[ns_id] = self
 
     def err(self, local: int) -> int:
         return (self.ns_id << 16) | local

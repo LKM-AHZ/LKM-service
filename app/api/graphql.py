@@ -43,6 +43,7 @@ from strawberry.tools import merge_types
 from strawberry.utils.await_maybe import await_maybe
 
 from app.modules import registry
+from app.modules.spec import GRAPHQL_VERSIONS
 from core.config import settings
 from core.metrics import (
     graphql_query_depth,
@@ -88,9 +89,8 @@ _LIST_LIMIT_ARGS = ("limit", "first", "page_size", "pageSize", "max_results")
 _COST_HARD_CAP = 1_000_000
 
 # ---- 多端点版本化（§2）----
-# 版本 → 贡献 Query 类的模块清单。架构级破坏（删字段/改类型/收缩返回/改枚举语义）时**新增**
-# 一条记录（如 "v2"），旧端点原样保留服务存量客户端。
-GRAPHQL_VERSIONS: dict[str, tuple[str, ...]] = {"v1": registry.MODULES}
+# 版本 → 贡献 Query 类的模块清单，由各模块清单的 ``graphql_versions`` 派生（未声明 = v1）。
+# 插件声明新版本（如 "v2"）即自动获得 ``/graphql/v2`` 端点，旧端点原样保留。
 # 直接调用 build_schema() 时使用的默认版本；HTTP 入口仍须显式带版本。
 GRAPHQL_DEFAULT_VERSION = "v1"
 

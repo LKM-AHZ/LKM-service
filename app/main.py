@@ -20,7 +20,7 @@ from app.api.graphql import (
 from app.api.router import api_router
 from app.modules import registry
 from app.ws.manager import manager
-from core import clickhouse, messaging, user_cache_events
+from core import clickhouse, lifecycle, messaging, user_cache_events
 from core import logging as logger
 from core import redis as redis_client
 from core.apm import init_sentry
@@ -119,6 +119,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # 聚合 worker 和 auth 的 Redis 指标快照。
     start_metrics_relay_reporter()
 
+    # 插件启动钩子（boot.assemble 注册；未装配时 no-op）。失败即启动失败。
+    await lifecycle.run_startup()
+
     yield
 
     # 关闭前取消 schema 初始化任务。
@@ -132,6 +135,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
     await _shutdown_step("ws_manager", manager.close)
     await _shutdown_step("user_cache_events", user_cache_events.stop)
+    # 插件关闭钩子先于下游资源（db/redis/messaging）释放。
+    await _shutdown_step("plugins", lifecycle.run_shutdown)
     # 收尾验签公钥刷新 task（唯一在途的出站请求在此被取消）
     await _shutdown_step("verify_key_refresh", stop_verify_key_refresh)
     await _shutdown_step("pulsar_lag", stop_lag_reporter)
@@ -208,6 +213,10 @@ def create_app() -> FastAPI:
                 },
             )
             raise
+
+    # 插件中间件（``MIDDLEWARE`` 约定）：后挂的安全中间件在外层，插件看不到未过安全面的请求。
+    for _plugin_middleware in registry.middlewares():
+        application.add_middleware(_plugin_middleware)
 
     install_security_middleware(application)
 

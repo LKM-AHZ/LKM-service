@@ -84,7 +84,10 @@ from core.bus.topics import (
     TOPIC_USER_EVENTS,
     Subscription,
     _validate_namespace_isolation,
+    make_topic,
     namespace_of,
+    register_routing_key,
+    register_subscription,
 )
 
 __all__ = [
@@ -147,9 +150,12 @@ __all__ = [
     "close",
     "contract_violations",
     "make_event_schema",
+    "make_topic",
     "namespace_of",
     "permanent_failure_reason",
     "publish",
+    "register_routing_key",
+    "register_subscription",
     "run_subscription",
     "set_transport",
     "shutdown",

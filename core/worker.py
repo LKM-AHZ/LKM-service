@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from core import event_contract, messaging, metrics_relay, task_registry
+from core import event_contract, lifecycle, messaging, metrics_relay, task_registry
 from core.db.event_processed import DEFAULT_SCOPE, already_processed, record_processed
 from core.db.session import new_worker_session as new_session
 from core.logging import log_exceptions
@@ -38,6 +38,84 @@ AUDIT_PERMISSION_SUBSCRIPTION = messaging.SUB_AUDIT_PERMISSION.name
 
 # worker_dlq 消费的死信 topic。
 DLQ = messaging.TOPIC_DLQ
+
+#: 可挂载插件订阅的 worker 进程名（对应部署里已存在的进程，插件不新增部署单元）。
+WORKER_NAMES: frozenset[str] = frozenset(
+    {
+        "send",
+        "notify",
+        "points",
+        "points-reward",
+        "points-stats",
+        "points-tasks",
+        "notification",
+        "content-index",
+        "default",
+    }
+)
+
+_BASE_SUBSCRIPTIONS: dict[str, tuple[str, ...]] = {
+    "send": (SEND_SUBSCRIPTION,),
+    "notify": (NOTIFY_SUBSCRIPTION,),
+    "points": (POINTS_REWARD_SUBSCRIPTION,),
+    "points-reward": (POINTS_REWARD_SUBSCRIPTION,),
+    "points-stats": (POINTS_STATS_SUBSCRIPTION,),
+    "points-tasks": (POINTS_TASKS_SUBSCRIPTION,),
+    "notification": (NOTIFICATION_SUBSCRIPTION,),
+    "content-index": (CONTENT_INDEX_SUBSCRIPTION,),
+    "default": (
+        JOBS_SUBSCRIPTION,
+        USER_INVALIDATE_SUBSCRIPTION,
+        AUDIT_SUBSCRIPTION,
+        AUDIT_PERMISSION_SUBSCRIPTION,
+    ),
+}
+
+_EXTRA_SUBSCRIPTIONS: dict[str, list[str]] = {}
+
+
+def register_worker_subscription(worker: str, subscription: str) -> None:
+    """插件在导入期把新订阅挂到某个已存在的 worker 进程（同名重复挂载幂等）。
+
+    订阅本身须先用 ``core.messaging.register_subscription`` 登记；worker 名必须是
+    :data:`WORKER_NAMES` 之一。挂到 ``default`` 最省事（该进程本来就多订阅并发消费）。
+    """
+    if worker not in WORKER_NAMES:
+        raise ValueError(
+            f"未知 worker {worker!r}；可选：{sorted(WORKER_NAMES)}"
+        )
+    if subscription not in messaging.SUBSCRIPTIONS:
+        raise ValueError(
+            f"订阅 {subscription!r} 未登记；请先调用 core.messaging.register_subscription"
+        )
+    names = _EXTRA_SUBSCRIPTIONS.setdefault(worker, [])
+    if subscription not in names:
+        names.append(subscription)
+
+
+def subscriptions_for(worker: str) -> tuple[str, ...]:
+    """该 worker 要消费的全部订阅：内置清单 + 插件挂载（去重保序）。"""
+    try:
+        base = _BASE_SUBSCRIPTIONS[worker]
+    except KeyError:
+        raise ValueError(
+            f"未知 worker {worker!r}；可选：{sorted(WORKER_NAMES)}"
+        ) from None
+    ordered = [*base, *_EXTRA_SUBSCRIPTIONS.get(worker, [])]
+    return tuple(dict.fromkeys(ordered))
+
+
+async def _serve(worker: str) -> None:
+    """启动插件钩子 → 并发消费该 worker 的全部订阅 → 停止后执行关闭钩子。"""
+    await lifecycle.run_startup()
+    tasks = [asyncio.create_task(_consume(name)) for name in subscriptions_for(worker)]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await lifecycle.run_shutdown()
 
 
 async def _dispatch_with_dedup(
@@ -118,37 +196,37 @@ async def _consume(subscription_name: str) -> None:
 
 
 async def run_send_worker() -> None:
-    await _consume(SEND_SUBSCRIPTION)
+    await _serve("send")
 
 
 async def run_notify_worker() -> None:
-    await _consume(NOTIFY_SUBSCRIPTION)
+    await _serve("notify")
 
 
 async def run_points_reward_worker() -> None:
-    await _consume(POINTS_REWARD_SUBSCRIPTION)
+    await _serve("points-reward")
 
 
 async def run_points_stats_worker() -> None:
-    await _consume(POINTS_STATS_SUBSCRIPTION)
+    await _serve("points-stats")
 
 
 async def run_points_tasks_worker() -> None:
-    await _consume(POINTS_TASKS_SUBSCRIPTION)
+    await _serve("points-tasks")
 
 
 async def run_notification_worker() -> None:
-    await _consume(NOTIFICATION_SUBSCRIPTION)
+    await _serve("notification")
 
 
 async def run_content_index_worker() -> None:
     """content-index worker：消费 content.* 事件，增量同步外部检索索引。"""
-    await _consume(CONTENT_INDEX_SUBSCRIPTION)
+    await _serve("content-index")
 
 
 async def run_points_worker() -> None:
     """兼容旧入口：points 拆三订阅后默认跑 reward 订阅（生产用三个独立入口）。"""
-    await _consume(POINTS_REWARD_SUBSCRIPTION)
+    await _serve("points")
 
 
 async def run_default_worker() -> None:
@@ -158,9 +236,4 @@ async def run_default_worker() -> None:
     不落库、无外部依赖，故与 user-invalidate 同款**折进本 worker**，不为它单开容器；
     单开会让部署面多一个空转进程，而收益只是隔离——这里没有需要隔离的重活。
     """
-    await asyncio.gather(
-        _consume(JOBS_SUBSCRIPTION),
-        _consume(USER_INVALIDATE_SUBSCRIPTION),
-        _consume(AUDIT_SUBSCRIPTION),
-        _consume(AUDIT_PERMISSION_SUBSCRIPTION),
-    )
+    await _serve("default")

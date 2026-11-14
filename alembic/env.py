@@ -1,5 +1,6 @@
 """Alembic environment configuration for online/offline migrations."""
 
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -23,12 +24,23 @@ config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"
 
 # Import all models so metadata is fully populated for autogenerate
 from app import bootstrap as app_bootstrap
+from app.modules.spec import MIGRATION_DIRS
 from core.db.base import Base
 from core.db.model_registry import ensure_all_models
 from core.db.shared_objects import TIMESCALE_AUTO_INDEXES
 
 app_bootstrap.register()
 ensure_all_models()
+
+# 插件自带迁移目录：与宿主 versions 一起纳入 Alembic 的 revision 搜索路径。
+# ``alembic.ini`` 的 path_separator=os 决定分隔符（os.pathsep）；显式写死以免回落到
+# 「按空格/逗号切分」的旧规则，让含空格或分隔符的插件路径错位。
+if MIGRATION_DIRS:
+    host_versions = Path(__file__).resolve().parent / "versions"
+    config.set_main_option(
+        "version_locations",
+        os.pathsep.join(str(path) for path in (host_versions, *MIGRATION_DIRS)),
+    )
 
 target_metadata = Base.metadata
 

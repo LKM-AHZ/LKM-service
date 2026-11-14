@@ -170,10 +170,70 @@ SUBSCRIPTIONS: dict[str, Subscription] = {
 }
 
 
+def make_topic(namespace: str, name: str) -> str:
+    """构造 topic 全名（插件新增路由时用；命名空间必须在 :data:`NAMESPACES` 内）。"""
+    return _topic(namespace, name)
+
+
+def register_routing_key(routing_key: str, topic: str) -> None:
+    """插件在导入期登记新的 routing_key → topic（同键同值幂等，冲突即报错）。"""
+    if not isinstance(routing_key, str) or not routing_key:
+        raise ValueError("routing_key 必须是非空字符串")
+    existing = ROUTING_KEY_TOPICS.get(routing_key)
+    if existing is not None:
+        if existing == topic:
+            return
+        raise ValueError(
+            f"routing_key {routing_key!r} 已指向 {existing!r}，不能再登记 {topic!r}"
+        )
+    ns = namespace_of(topic)
+    if ns not in NAMESPACES:
+        raise ValueError(f"routing_key {routing_key!r} 使用未知命名空间 {ns!r}")
+    ROUTING_KEY_TOPICS[routing_key] = topic
+
+
+def register_subscription(subscription: Subscription) -> None:
+    """插件在导入期登记新订阅（消费进程仍需把该订阅挂到某个 worker 入口）。
+
+    与 :data:`SUBSCRIPTIONS` 的表相同：订阅名唯一，同名同定义幂等、同名异定义报错。
+    命名空间隔离与 routing_key 归属按内置订阅同一套规则即时校验。
+    """
+    if not isinstance(subscription.name, str) or not subscription.name:
+        raise ValueError("订阅 name 必须是非空字符串")
+    existing = SUBSCRIPTIONS.get(subscription.name)
+    if existing is not None:
+        if existing == subscription:
+            return
+        raise ValueError(
+            f"订阅 {subscription.name!r} 已登记且定义不同："
+            f"{existing!r} vs {subscription!r}"
+        )
+    _validate_subscription(subscription)
+    SUBSCRIPTIONS[subscription.name] = subscription
+
+
+def _validate_subscription(sub: Subscription) -> None:
+    sub_ns = namespace_of(sub.topic)
+    if sub_ns not in NAMESPACES:
+        raise ValueError(f"订阅 {sub.name!r} 使用未知命名空间 {sub_ns!r}")
+    for routing_key in sub.routing_keys:
+        topic = ROUTING_KEY_TOPICS.get(routing_key)
+        if topic is None:
+            raise ValueError(f"订阅 {sub.name!r} 声明了未知 routing_key {routing_key!r}")
+        if namespace_of(topic) != sub_ns:
+            raise ValueError(
+                f"订阅 {sub.name!r} 跨命名空间：{routing_key!r} → {topic}"
+                f"（订阅 topic 在 {sub_ns!r}）"
+            )
+        if topic != sub.topic:
+            raise ValueError(
+                f"订阅 {sub.name!r} topic 不匹配：{routing_key!r} → {topic}"
+                f"（订阅 topic 为 {sub.topic}）"
+            )
+
+
 def _validate_namespace_isolation() -> None:
-    """
-    装配期校验命名空间隔离
-    """
+    """装配期校验命名空间隔离（插件随后新增的条目由注册函数即时校验）。"""
     for routing_key, topic in ROUTING_KEY_TOPICS.items():
         ns = namespace_of(topic)
         if ns not in NAMESPACES:
@@ -181,25 +241,7 @@ def _validate_namespace_isolation() -> None:
                 f"routing_key {routing_key!r} → 未知命名空间 {ns!r}: {topic}"
             )
     for sub in SUBSCRIPTIONS.values():
-        sub_ns = namespace_of(sub.topic)
-        if sub_ns not in NAMESPACES:
-            raise ValueError(f"订阅 {sub.name!r} 使用未知命名空间 {sub_ns!r}")
-        for routing_key in sub.routing_keys:
-            topic = ROUTING_KEY_TOPICS.get(routing_key)
-            if topic is None:
-                raise ValueError(
-                    f"订阅 {sub.name!r} 声明了未知 routing_key {routing_key!r}"
-                )
-            if namespace_of(topic) != sub_ns:
-                raise ValueError(
-                    f"订阅 {sub.name!r} 跨命名空间：{routing_key!r} → {topic}"
-                    f"（订阅 topic 在 {sub_ns!r}）"
-                )
-            if topic != sub.topic:
-                raise ValueError(
-                    f"订阅 {sub.name!r} topic 不匹配：{routing_key!r} → {topic}"
-                    f"（订阅 topic 为 {sub.topic}）"
-                )
+        _validate_subscription(sub)
 
 
 _validate_namespace_isolation()

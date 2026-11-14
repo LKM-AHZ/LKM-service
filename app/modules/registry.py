@@ -16,7 +16,8 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from app.modules.spec import ERROR_MODULES, MODULE_PATHS, MODULES
+from app.modules.spec import ERROR_MODULES, MODULE_PATHS, MODULES, SPECS
+from core.config import env_value
 
 __all__ = [
     "ERROR_MODULES",
@@ -26,6 +27,8 @@ __all__ = [
     "graphql_of",
     "load_all",
     "load_errors",
+    "middlewares",
+    "plugin_config",
     "routers_of",
 ]
 
@@ -50,6 +53,37 @@ def routers_of(name: str) -> list[Any]:
 def graphql_of(name: str) -> list[Any]:
     """模块在 __init__.py 暴露的 ``GRAPHQL`` 列表（可空）。"""
     return list(getattr(each_module(name), "GRAPHQL", []) or [])
+
+
+def plugin_config(name: str, key: str, default: str | None = None) -> str | None:
+    """读取插件声明的配置项：环境变量 ``LKM_PLUGIN_<NAME>_<KEY>``。
+
+    只接受清单 ``config`` 字段里声明过的键——拼错键名在这里立刻报错，而不是读到
+    ``None`` 后静默走默认分支。值保持字符串，类型转换由插件自己负责。
+    """
+    spec_ = next((item for item in SPECS if item.name == name), None)
+    if spec_ is None:
+        raise ValueError(f"未登记的插件 {name!r}")
+    if key not in spec_.config:
+        raise ValueError(
+            f"插件 {name!r} 未在 manifest 声明配置键 {key!r}"
+            f"（已声明：{list(spec_.config)}）"
+        )
+    env_name = (
+        f"LKM_PLUGIN_{name}_{key}".upper().replace("-", "_").replace(".", "_")
+    )
+    return env_value(env_name, default)
+
+
+def middlewares() -> list[Any]:
+    """各插件模块在 ``__init__.py`` 暴露的 ``MIDDLEWARE``（ASGI 中间件类，可空）。
+
+    按清单顺序收集；``app.main`` 把它们挂在安全中间件之内、业务路由之外。
+    """
+    found: list[Any] = []
+    for spec_ in SPECS:
+        found.extend(getattr(each_module(spec_.name), "MIDDLEWARE", []) or [])
+    return found
 
 
 def load_errors() -> None:

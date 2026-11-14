@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     rbac_ssd_constraints: str = "[]"
     rbac_dsd_constraints: str = "[]"
 
+    # 外部插件禁用名单（逗号分隔的入口点名，``LKM_PLUGIN_DENYLIST``）。
+    # 在入口点 ``load()`` 之前剔除，因此被禁插件代码不会执行；内置模块不可禁用。
+    # 其他插件若仍 require 被禁者的能力，装配期报「requires 无法满足」而非静默降级。
+    plugin_denylist: str = ""
+
     # 后台 cookie 会话：access cookie 存活分钟（refresh 天数复用 refresh_token_expire_days）
     admin_access_cookie_minutes: int = 15
     # 一次性运维脚本与压测入口也统一走 Settings；敏感值不进入 repr。
@@ -515,3 +520,13 @@ def is_test_env() -> bool:
     集中一处，避免各模块各自 ``os.environ.get(...)`` 拼同一判据。
     """
     return settings.env == "test" or bool(os.environ.get("PYTEST_RUNNING"))
+
+
+def env_value(name: str, default: str | None = None) -> str | None:
+    """读取**动态命名**的环境变量（插件配置等无法预先枚举进 Settings 的键）。
+
+    静态配置仍必须加 ``Settings`` 字段；这里是唯一允许绕过字段声明的通道，避免各插件
+    各自 ``os.environ`` 形成第二事实源。插件键的合法性由 ``registry.plugin_config``
+    对照 manifest 的 ``config`` 声明校验。
+    """
+    return os.environ.get(name, default)

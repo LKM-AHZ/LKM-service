@@ -12,6 +12,7 @@ import pytest
 
 from core.plugins.manifest import (
     MANIFEST_FILENAME,
+    Manifest,
     ManifestError,
     load_manifest,
     load_manifests,
@@ -62,6 +63,49 @@ def test_non_string_list_is_rejected(tmp_path: Path) -> None:
         load_manifest(path)
 
 
+def test_empty_string_entry_is_rejected(tmp_path: Path) -> None:
+    """空路径不是「没写」，装配期 import 会抛难以定位的空模块名。"""
+    path = _write(tmp_path, "alpha", 'name = "alpha"\nmodels = [""]\n')
+    with pytest.raises(ManifestError, match="非空字符串数组"):
+        load_manifest(path)
+
+
+def test_duplicate_entry_is_rejected(tmp_path: Path) -> None:
+    """重复项会被下游注册表静默去重，让「写了两次」看起来生效了。"""
+    path = _write(
+        tmp_path, "alpha", 'name = "alpha"\nmodels = ["a.models", "a.models"]\n'
+    )
+    with pytest.raises(ManifestError, match="重复项"):
+        load_manifest(path)
+
+
+def test_empty_module_is_rejected(tmp_path: Path) -> None:
+    """``module = ""`` 曾会被当成「未设置」而静默回退默认路径。"""
+    path = _write(tmp_path, "alpha", 'name = "alpha"\nmodule = ""\n')
+    with pytest.raises(ManifestError, match="非空字符串"):
+        load_manifest(path)
+
+
+def test_factory_constructed_manifest_is_validated(tmp_path: Path) -> None:
+    """外部插件工厂直接构造 Manifest，不经过文件加载——形状校验必须同源生效。"""
+    with pytest.raises(ManifestError, match="非空字符串数组"):
+        Manifest(name="alpha", source=tmp_path / "manifest.toml", models=("",))
+    with pytest.raises(ManifestError, match="重复项"):
+        Manifest(
+            name="alpha",
+            source=tmp_path / "manifest.toml",
+            models=("a.models", "a.models"),
+        )
+    with pytest.raises(ManifestError, match="非空字符串"):
+        Manifest(name="alpha", source=tmp_path / "manifest.toml", module="")
+    with pytest.raises(ManifestError, match="v<数字>"):
+        Manifest(
+            name="alpha",
+            source=tmp_path / "manifest.toml",
+            graphql_versions=("v1.2",),
+        )
+
+
 def test_invalid_toml_is_rejected(tmp_path: Path) -> None:
     path = _write(tmp_path, "alpha", 'name = "alpha"\nmodels = [\n')
     with pytest.raises(ManifestError, match="TOML 解析失败"):
@@ -95,3 +139,30 @@ def test_defaults_fill_optional_fields(tmp_path: Path) -> None:
     assert manifest.tasks == ()
     assert manifest.errors == ()
     assert manifest.aggregate is True
+    assert manifest.migrations is None
+    assert manifest.graphql_versions == ()
+    assert manifest.config == ()
+
+
+def test_extended_fields_are_parsed(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "alpha",
+        'name = "alpha"\n'
+        'migrations = "alpha.migrations"\n'
+        'graphql_versions = ["v1", "v2"]\n'
+        'config = ["api_key", "retries"]\n',
+    )
+    manifest = load_manifest(path)
+    assert manifest.migrations == "alpha.migrations"
+    assert manifest.graphql_versions == ("v1", "v2")
+    assert manifest.config == ("api_key", "retries")
+
+
+def test_invalid_graphql_version_is_rejected(tmp_path: Path) -> None:
+    """版本名会进端点路径，只允许 v<数字>（排除 ``../`` 之类的路径注入面）。"""
+    path = _write(
+        tmp_path, "alpha", 'name = "alpha"\ngraphql_versions = ["2"]\n'
+    )
+    with pytest.raises(ManifestError, match="v<数字>"):
+        load_manifest(path)

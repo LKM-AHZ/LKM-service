@@ -7,6 +7,7 @@ sqlstate；这里用复刻该形状的替身把映射钉住，不依赖真库（
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.modules.blog.errors import BlogErr
@@ -28,6 +29,7 @@ from core.err import (
     AuthErr,
     BizError,
     CommonErr,
+    Namespace,
     err_info,
     resp_json,
 )
@@ -227,3 +229,20 @@ class TestRetryAfterHeader:
         resp = resp_json(AuthErr.EMAIL_TAKEN)
         assert resp.status_code == 409
         assert "retry-after" not in resp.headers
+
+
+def test_namespace_id_and_prefix_must_be_unique() -> None:
+    """外部插件自行分配 ns_id：撞号/撞前缀在 import 期报错，而不是错误码静默串号。"""
+    Namespace(9001, "plugin-alpha")
+    Namespace(9001, "plugin-alpha")  # 同参数重复构造幂等（模块重载安全）
+    with pytest.raises(ValueError, match="编号 9001"):
+        Namespace(9001, "plugin-beta")
+    with pytest.raises(ValueError, match="前缀 'plugin-alpha'"):
+        Namespace(9002, "plugin-alpha")
+
+
+def test_namespace_rejects_invalid_shape() -> None:
+    with pytest.raises(ValueError, match="非负整数"):
+        Namespace(-1, "plugin-negative")
+    with pytest.raises(ValueError, match="非空字符串"):
+        Namespace(9003, "")
