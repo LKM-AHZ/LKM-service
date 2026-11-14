@@ -5,8 +5,8 @@
 不是「第二个登录入口」，只是「一次凭据判定」。
 
 装配套路与 ``router_bot_sso`` / ``router_read`` 相同：同挂 ``/auth/internal``，共用内部 Bearer
-共享令牌（未配置即 fail-closed 401，不成公网面）。monolith 经 ``auth.ROUTERS``、独立 AUTH 进程
-经 ``auth.main._AUTH_ROUTERS`` 分别挂载，两处都要登记，否则拆库部署恒 404。
+共享令牌（未配置即 fail-closed 401，不成公网面）。双形态退役后仅由 ``auth.main._AUTH_ROUTERS``
+挂载；漏登记会让 bot 登录恒 404。
 
 安全面：
 - 只回 ``user_id`` / ``username`` / ``account_level``，不回邮箱、手机号等 PII；

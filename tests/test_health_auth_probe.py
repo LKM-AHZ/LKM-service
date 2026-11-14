@@ -1,12 +1,10 @@
-"""M3 B1.3 monolith 就绪 AUTH 依赖探针（config-gated）。
+"""就绪 AUTH 依赖探针（双形态退役后恒启用）。
 
 范围：``app/modules/health/router`` 的 ``_probe_auth`` 及其对 ``/health`` overall 的聚合。
 
-- 默认(flag OFF)：auth_http_url 为空 → ``auth.disabled`` 且**不**参与降级 → overall 只由
-  DB+Redis 决定（单进程就绪语义零变化）。
-- flag ON：独立 AUTH 进程接出时，就绪反映 AUTH /liveness 活性；不可达/超时/非 ok → error 降级
-  （503 语义由编排读 status），探针自身**绝不抛出**也不让一个不可达 AUTH 挂死整体就绪。
-- liveness(monolith) 不受此探针影响 → 单测只针对 /health 就绪路径。
+- 独立 AUTH 进程是唯一认证真值：``auth_http_url`` 未配置即 error（不再有 disabled 形态）。
+- 就绪反映 AUTH /liveness 活性；不可达/超时/非 ok → error 降级，探针自身**绝不抛出**，
+  也不让一个不可达 AUTH 挂死整体就绪。
 
 HTTP 全部经 httpx.MockTransport 注入出站，hermetic 零真实网络。fixture/复位范式沿用仓库。
 """
@@ -37,7 +35,7 @@ def _on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """flag OFF：默认空（单进程），AUTH 探针不启用。"""
+    """模拟未配置 auth 服务地址。"""
     monkeypatch.setattr(settings, "auth_http_url", "")
 
 
@@ -53,13 +51,14 @@ def _inject_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
 
 # ---- 探子级：_probe_auth 语义 ----
 class TestProbeAuth:
-    async def test_disabled_when_flag_off(
+    async def test_error_when_unconfigured(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """auth_http_url 空 → disabled（不参与降级）。"""
+        """auth_http_url 空 → error（auth 是必需依赖，不再有 disabled 形态）。"""
         _off(monkeypatch)
         deps = await health_mod._probe_auth()
-        assert deps.status == "disabled"
+        assert deps.status == "error"
+        assert deps.detail
 
     async def test_up_when_liveness_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """flag ON + AUTH /liveness 200 ok → up。请求打到 <url>/liveness。"""
@@ -118,26 +117,22 @@ class TestProbeAuth:
 
 # ---- 端点级聚合：/health overall 反映 auth（仅 flag ON 参与）----
 class TestHealthAggregation:
-    async def test_flag_off_auth_disabled_not_degrade(
+    async def test_unconfigured_auth_degrades(
         self, client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """默认 OFF：即使 db/redis up，auth=disabled 不影响 overall；单进程就绪不变。"""
+        """未配置 auth 服务：db/redis up 也判 degraded。"""
         _off(monkeypatch)
 
         async def _up() -> DependencyStatus:
             return DependencyStatus(status="up")
 
-        async def _disabled() -> DependencyStatus:
-            return DependencyStatus(status="disabled", detail="auth_http_url 未配置")
-
         monkeypatch.setattr(health_mod, "_probe_db", _up)
         monkeypatch.setattr(health_mod, "_probe_redis", _up)
-        # probe_auth 走真实禁用逻辑，不改桩，以验证 disabled 不走降级
         resp = await client.get("/api/v1/health")
         assert resp.status_code == 200
         p: dict = resp.json()
-        assert p["data"]["auth"]["status"] == "disabled"
-        assert p["data"]["status"] == "ok"  # disabled 不参与 → db+redis up 即 ok
+        assert p["data"]["auth"]["status"] == "error"
+        assert p["data"]["status"] == "degraded"
 
     async def test_flag_on_auth_error_degrades(
         self, client, monkeypatch: pytest.MonkeyPatch

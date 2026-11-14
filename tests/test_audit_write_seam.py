@@ -18,12 +18,10 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import auth.seams as seams
 import auth.user_http as user_http
-from auth.models import AuditLog
 from core.config import settings
 from core.err import BizError, CommonErr
 
@@ -142,21 +140,3 @@ class TestRecordAuditFromBusiness:
             )
         assert exc.value.errcode == CommonErr.UNAVAILABLE
 
-    async def test_seam_off_writes_caller_session(
-        self, monkeypatch: pytest.MonkeyPatch, fused_db_session: AsyncSession
-    ) -> None:
-        """单库/蓝绿（seam 未配置）回落同库直写，写的是调用方会话。"""
-        monkeypatch.setattr(settings, "auth_http_url", "")
-        monkeypatch.setattr(settings, "auth_http_token", "")
-        assert user_http.enabled() is False
-
-        await seams.record_audit_from_business(
-            fused_db_session, None, "local_audit", detail="fallback"
-        )
-
-        row = (
-            await fused_db_session.execute(
-                select(AuditLog).where(AuditLog.action == "local_audit")
-            )
-        ).scalar_one()
-        assert row.detail == "fallback"

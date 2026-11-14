@@ -23,9 +23,8 @@ from auth.admin_session import (
 )
 from auth.audit_export import export_audit_logs
 from auth.db.session import get_auth_session, new_auth_session
-from auth.deps import _resolve_current_user as resolve_current_user
 from auth.deps import _resolve_via_seam as resolve_via_seam
-from auth.deps import get_email_provider, get_sms_provider, seam_enabled
+from auth.deps import get_email_provider, get_sms_provider
 from auth.jwt_keys import (
     refresh_public_key_from_jwks as refresh_verify_key,
 )
@@ -89,9 +88,7 @@ __all__ = [
     "reconcile_user_dim_periodic",
     "record_audit_from_business",
     "refresh_verify_key",
-    "resolve_current_user",
     "resolve_via_seam",
-    "seam_enabled",
     "setup_2fa_begin",
     "setup_2fa_complete",
     "start_verify_key_refresh",
@@ -211,38 +208,19 @@ async def verify_password_via_seam(
 
 
 async def list_admin_ids(db: Any) -> list[uuid.UUID]:
-    """管理员 user id 列表（每日待办摘要收件人）：拆库走 AUTH internal，单库直查。
+    """管理员 user id 列表（每日待办摘要收件人）：恒走 AUTH internal。
 
     **fail-closed**：缝不可用时抛 ``BizError(UNAVAILABLE)``，调用方放弃本次发送——
-    宁可不发，也不猜收件人。缝未配置（单库/蓝绿）时 ``db`` 与 auth 表同库，可直接查。
+    宁可不发，也不猜收件人。``db`` 仅为保留既有调用签名。
     """
     from auth import user_http
 
-    if user_http.enabled():
-        try:
-            return await user_http.fetch_admin_ids_via_seam()
-        except user_http.UserHttpUnavailable as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}"
-            ) from None
-        except Exception as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}"
-            ) from exc
-    from sqlalchemy import select
-
-    from auth.models import User
-
-    rows = (
-        (
-            await db.execute(
-                select(User.id).where(User.account_level == "admin").order_by(User.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return list(rows)
+    try:
+        return await user_http.fetch_admin_ids_via_seam()
+    except user_http.UserHttpUnavailable as exc:
+        raise BizError(CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}") from None
+    except Exception as exc:
+        raise BizError(CommonErr.UNAVAILABLE, f"Admin list unavailable: {exc}") from exc
 
 
 async def record_audit_from_business(
@@ -258,78 +236,62 @@ async def record_audit_from_business(
     业务域**不得**把业务 ``get_session`` 传给 ``log_audit``：``audit_logs`` 是 ``AuthBase``
     表，拆库后业务库无此表，INSERT 必 ``UndefinedTable`` 并把整个业务事务一起回滚。
 
-    **fail-closed**：缝模式下 AUTH 不可用/畸形 → 抛 ``BizError(UNAVAILABLE)``，调用方的
-    业务事务应随之中止（审计缺失优先于操作生效）。缝未配置时（单库/蓝绿）才回落
-    ``log_audit(db, …)``，此时 ``db`` 必须与 auth 表同库（fused 装配）。
+    **fail-closed**：AUTH 不可用/畸形 → 抛 ``BizError(UNAVAILABLE)``，调用方的业务事务
+    应随之中止（审计缺失优先于操作生效）。``db`` 仅为保留既有调用签名。
 
     惰性取 ``auth.user_http`` 模块属性，保持测试对 ``write_audit_via_seam`` 的
     monkeypatch 依然生效。
     """
     from auth import user_http
 
-    if user_http.enabled():
-        try:
-            await user_http.write_audit_via_seam(
-                user_id=user_id,
-                action=action,
-                detail=detail,
-                ip_address=ip_address,
-            )
-        except user_http.UserHttpUnavailable as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}"
-            ) from None
-        except Exception as exc:
-            # 同 mint_bot_sso_ticket：非 HTTPError（InvalidURL 等）也要收口在 fail-closed 内。
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}"
-            ) from exc
-        return
-    await log_audit(db, user_id, action, detail=detail, ip_address=ip_address)
+    try:
+        await user_http.write_audit_via_seam(
+            user_id=user_id,
+            action=action,
+            detail=detail,
+            ip_address=ip_address,
+        )
+    except user_http.UserHttpUnavailable as exc:
+        raise BizError(CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}") from None
+    except Exception as exc:
+        # 同 mint_bot_sso_ticket：非 HTTPError（InvalidURL 等）也要收口在 fail-closed 内。
+        raise BizError(CommonErr.UNAVAILABLE, f"Audit write unavailable: {exc}") from exc
 
 
 async def list_admission_users(db: Any, status: str) -> list[dict[str, Any]]:
-    """按准入状态列用户（管理端审核页）：拆库走 AUTH internal，单库直调 auth 服务。"""
+    """按准入状态列用户（管理端审核页）：恒走 AUTH internal；``db`` 仅为签名兼容。"""
     from auth import user_http
 
-    if user_http.enabled():
-        try:
-            return await user_http.fetch_admission_users_via_seam(status)
-        except BizError:
-            raise
-        except user_http.UserHttpUnavailable as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
-            ) from None
-        except Exception as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
-            ) from exc
-    from auth.service_admission import list_admission_users as _list
-
-    return await _list(db, status)
+    try:
+        return await user_http.fetch_admission_users_via_seam(status)
+    except BizError:
+        raise
+    except user_http.UserHttpUnavailable as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
+        ) from None
+    except Exception as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission list unavailable: {exc}"
+        ) from exc
 
 
 async def count_admission_users(db: Any, status: str) -> int:
-    """按准入状态计数（后台角标/待办聚合）：拆库走 AUTH internal，单库直查。"""
+    """按准入状态计数（后台角标/待办聚合）：恒走 AUTH internal；``db`` 仅为签名兼容。"""
     from auth import user_http
 
-    if user_http.enabled():
-        try:
-            return await user_http.fetch_admission_count_via_seam(status)
-        except BizError:
-            raise
-        except user_http.UserHttpUnavailable as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
-            ) from None
-        except Exception as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
-            ) from exc
-    from auth.service_admission import count_admission_users as _count
-
-    return await _count(db, status)
+    try:
+        return await user_http.fetch_admission_count_via_seam(status)
+    except BizError:
+        raise
+    except user_http.UserHttpUnavailable as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
+        ) from None
+    except Exception as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission count unavailable: {exc}"
+        ) from exc
 
 
 async def decide_admission(
@@ -340,33 +302,23 @@ async def decide_admission(
     reviewer_id: uuid.UUID,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    """approve/reject 一个待审账号（auth 权威写）：拆库走内部端点，单库直调。"""
+    """approve/reject 一个待审账号（auth 权威写）：恒走内部端点；``db`` 仅为签名兼容。"""
     from auth import user_http
 
-    if user_http.enabled():
-        try:
-            return await user_http.decide_admission_via_seam(
-                user_id=user_id,
-                action=action,
-                reviewer_id=reviewer_id,
-                reason=reason,
-            )
-        except BizError:
-            raise
-        except user_http.UserHttpUnavailable as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
-            ) from None
-        except Exception as exc:
-            raise BizError(
-                CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
-            ) from exc
-    from auth.service_admission import decide_admission as _decide
-
-    return await _decide(
-        db,
-        user_id=user_id,
-        action=action,
-        reviewer_id=reviewer_id,
-        reason=reason,
-    )
+    try:
+        return await user_http.decide_admission_via_seam(
+            user_id=user_id,
+            action=action,
+            reviewer_id=reviewer_id,
+            reason=reason,
+        )
+    except BizError:
+        raise
+    except user_http.UserHttpUnavailable as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
+        ) from None
+    except Exception as exc:
+        raise BizError(
+            CommonErr.UNAVAILABLE, f"Admission decision unavailable: {exc}"
+        ) from exc

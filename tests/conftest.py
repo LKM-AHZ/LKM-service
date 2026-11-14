@@ -59,8 +59,8 @@ from core.db.session import get_read_session, get_session
 from core.db.shared_objects import ensure_shared_objects
 
 # 收集期即装配（不能放 fixture）：下面 `from app.main import app` 在**收集阶段**就构建
-# API 路由，而 auth 前台路由经 core.route_registry 注入、鉴权依赖经 core.ports 取实现——
-# 晚于此则路由挂不上、端口抛 PortNotBound。生产侧由 boot.backend / boot.workers.* 承担同一件事。
+# API 路由，鉴权依赖经 core.ports 取实现——晚于此已绑定的端口会抛 PortNotBound。
+# 生产侧由 boot.backend / boot.workers.* 承担同一件事。
 assemble()
 
 from app.main import app  # noqa: E402
@@ -498,29 +498,27 @@ async def client(
 
 @pytest.fixture
 async def auth_front_client(auth_db: AsyncSession) -> AsyncGenerator[AsyncClient]:
-    """前台 auth HTTP 宿主（S5 slice-1 收敛样板）：单体 monolith + auth 库会话。
+    """前台 auth HTTP 宿主：**auth 独立进程** ``auth.main.app`` + auth 库会话。
 
-    前台 /auth/* 路由与会话依赖经上述收敛已绑 ``get_auth_session``（auth 独立库）。
-    本 fixture 起单体的 ``app.main.app``(ASGITransport, 不触发 lifespan)，并把该通道
-    ``get_auth_session`` override 到本测 ``auth_db`` 的 AuthBase 专属 schema —— 使前台
-    auth 路由的 User/TOTP/RefreshToken 读写落到该测量 auth 真值，与测试体直呼
-    ``auth_db``(flush 未 commit 即 POST→GET 同见) 共享同一长活会话。
-
-    相对既有 ``client``（get_session→业务 db, 服务业务域端点）语义**不变**：本 fixture 专用于
-    "前台认证语义" 端点（业务域各自仍走 ``client``），两者 override 键互不污染。
+    双形态退役后单体不再挂 auth 路由，前台 /auth/* 只由 auth 进程提供。本 fixture 以
+    ASGITransport（不触发 lifespan）起 ``auth.main.app``，并把 ``get_auth_session``
+    override 到本测 ``auth_db`` 的 AuthBase 专属 schema——使前台 auth 路由的
+    User/TOTP/RefreshToken 读写落到该测量 auth 真值，与测试体直呼 ``auth_db``
+    （flush 未 commit 即 POST→GET 同见）共享同一长活会话。
     """
     from auth.db.session import get_auth_session
+    from auth.main import app as auth_app
 
     async def override_get_auth() -> AsyncGenerator[AsyncSession]:
         yield auth_db
 
-    app.dependency_overrides[get_auth_session] = override_get_auth
-    transport = ASGITransport(app=app)
+    auth_app.dependency_overrides[get_auth_session] = override_get_auth
+    transport = ASGITransport(app=auth_app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
     finally:
-        app.dependency_overrides.pop(get_auth_session, None)
+        auth_app.dependency_overrides.pop(get_auth_session, None)
 
 
 @pytest.fixture
@@ -647,7 +645,7 @@ async def auth_user_factory(
 # auth seam realm double（M3.B S5 C）：拆库后业务“display_name/existence”读的跨 realm 落点
 #
 # 拆库后业务进程不该（也不能）经 `select(User)` 读业务 db 的 users（users 已迁 auth realm）。
-# 业务代码的身份/展示读一律走 auth 缝（auth.snapshot + auth HTTP seam：`user_http.enabled()`
+# 业务代码的身份/展示读一律走 auth 缝（auth.snapshot + auth HTTP seam
 # 开启时 deps 鉴权→`authorize_via_seam`、snapshot 单/批读→`fetch_user_http_payload`）。
 # 测试要为真正跑业务 HTTP 鉴权 + display-name 可读找一个“指向本测 auth schema 的替身”：
 # 本 fixture **开启** seam（配齐 url+token），并把 seam 两个入口 monkeypatch 成按 user_id 直读

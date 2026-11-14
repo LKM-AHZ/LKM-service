@@ -12,12 +12,7 @@ from typing import Any, Literal
 
 
 class _AuthzImpl:
-    """鉴权与票据实现。"""
-
-    def seam_enabled(self) -> bool:
-        from auth import seams as _seams
-
-        return bool(_seams.seam_enabled())
+    """鉴权与票据实现（app realm：裁决恒经 auth HTTP 缝）。"""
 
     def decode_access_token(self, token: str) -> Any:
         from auth.security import decode_access_token
@@ -25,23 +20,20 @@ class _AuthzImpl:
         return decode_access_token(token)
 
     async def resolve_current_user(self, token: str, db: Any = None) -> Any:
-        """裁决令牌对应的用户。
-
-        ``db`` 可为 None（此时自开 auth 会话）——FastAPI 依赖路径与生产 WS 走这条；
-        传入会话的场景是「调用方持有可查 users 的会话」（融合部署/测试）。
-        """
+        """解签后经 auth HTTP 缝裁决用户；``db`` 仅为保留既有调用签名。"""
+        from auth import deps as _deps
         from auth import seams as _seams
 
-        if db is not None:
-            return await _seams.resolve_current_user(token, db)
-
-        from auth.db.session import new_auth_session
-
-        session = await new_auth_session()
-        try:
-            return await _seams.resolve_current_user(token, session)
-        finally:
-            await session.close()
+        user_id, payload, selected_roles = _deps.parse_access_claims(token)
+        kwargs = {"selected_roles": selected_roles} if selected_roles is not None else {}
+        return await _seams.resolve_via_seam(
+            user_id,
+            int(payload.get("token_version", 0)),
+            payload.get("iat"),
+            require_admin=False,
+            jti=payload.get("jti"),
+            **kwargs,
+        )
 
     async def resolve_via_seam(
         self,
@@ -202,30 +194,10 @@ class _UsersImpl:
     async def verify_password(
         self, db: Any, username: str, password: str
     ) -> dict[str, Any] | None:
-        """Basic 凭证校验：拆库走 HTTP 缝，融合形态就地查本库 User 行。
-
-        融合分支原先写在 app 侧 git-http（那里直接 ``select(User)``），随端口化移入 auth——
-        业务侧不该知道 users 表；``db`` 由调用方传入（融合形态下两边同库）。
-        """
+        """Basic 凭证校验：恒走 auth 内部 HTTP 缝；``db`` 仅为保留既有调用签名。"""
         from auth import seams as _seams
 
-        if _seams.seam_enabled():
-            return await _seams.verify_password_via_seam(username, password)
-
-        from sqlalchemy import select
-
-        from auth.entities import User
-
-        user = (
-            (await db.execute(select(User).where(User.username == username)))
-            .scalars()
-            .first()
-        )
-        if user is None or not user.hashed_password:
-            return None
-        if not await _seams.verifypwd(password, str(user.hashed_password)):
-            return None
-        return {"user_id": user.id, "username": user.username}
+        return await _seams.verify_password_via_seam(username, password)
 
     async def verifypwd(self, plain: str, hashed: str) -> bool:
         from auth import seams as _seams
@@ -346,22 +318,11 @@ class _VerifyKeysImpl:
         await _seams.cleanup_expired_challenges()
 
 
-def _auth_session_dep() -> Any:
-    """auth 会话的 FastAPI 依赖（core 侧 ``auth_session`` 包装它）。
-
-    取模块属性而非导入期绑定，保住既有对 ``auth.db.session`` 的打桩。
-    """
-    from auth.db import session as _session
-
-    return _session.get_auth_session
-
-
 def bind_all() -> None:
     """把全部 auth 侧端口实现绑定进 core.ports（幂等）。"""
     from core import ports
 
     ports.install("authz", _AuthzImpl())
-    ports.install("authz_session", _auth_session_dep())
     ports.install("snapshot", _SnapshotImpl())
     ports.install("audit", _AuditImpl())
     ports.install("users", _UsersImpl())

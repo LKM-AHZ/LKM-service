@@ -18,7 +18,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import deps as auth_deps
 from auth.models import User
 from auth.snapshot import get_user_snapshot_batch
 from tests.conftest import DB, auth_user_uid
@@ -67,7 +66,9 @@ async def test_authz_seam_resolves_current_user_from_auth_realm(
         role="member",
         token_version=0,
     )
-    cu = await auth_deps._resolve_current_user(token, db)
+    from core.ports.authz import resolve_current_user
+
+    cu = await resolve_current_user(token)
     assert cu.id == au.id
     assert cu.account_level == "normal"
     assert cu.role == "member"

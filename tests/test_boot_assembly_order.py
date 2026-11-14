@@ -1,24 +1,13 @@
-"""装配时序回归测试：``boot.assemble()`` 必须早于 ``import app.main``。
+"""双形态退役后的路由归属回归测试。
 
 被守护的不变量
-    ``app/api/router.py`` 在**模块级**就从 ``core.route_registry`` 取
-    ``extra_routers()``，而 auth 的前台路由是在 ``auth.bootstrap.register()``
-    （由 ``boot.assemble()`` 触发）里才登记的。顺序一旦反了，``api_router``
-    会以「注册表还是空的」状态被构建，auth 路由**静默**丢失：进程照常启动、
-    liveness/readiness 照常通过，只在请求认证端点时才 404。这类失效没有任何
-    启动期信号，故必须由测试守住。
+    认证 HTTP 面只由独立 AUTH 进程（``auth.main``）提供；单体 ``boot.backend``
+    **不得**再挂载任何 auth 路由。历史上 auth 路由经 ``core.route_registry`` 混挂到
+    单体，导致两套拓扑、两条启动路径并行；退役后若有路由漏回单体，认证面会重新分叉。
 
 为什么必须开独立子进程
-    ``tests/conftest.py`` 在**收集期**就已经 ``assemble()`` 并 ``import app.main``，
-    本套件进程内的 ``api_router`` 早已按正确顺序构建完毕。在进程内断言 auth 路由
-    存在，无论 ``boot/backend.py`` 的 import 顺序被怎么改都会通过（假绿）。
-    只有全新的解释器进程才能重放真实启动路径。
-
-实测的破坏签名（FastAPI 当前版本，后端git哈希：430aa18a47d8fb1db90fd5d17927b67922b1a448）
-    正确顺序  227 条 openapi path，其中 75 条含 ``/auth/``
-    反序      153 条 openapi path，其中  1 条含 ``/auth/``
-    残留的那条是 backend 自己的 ``/api/v1/admin/auth/me``，并非 auth 包的路由，
-    所以断言必须落在 auth 包自己的端点上，不能只看「有没有含 auth 的路径」。
+    ``tests/conftest.py`` 在收集期就已 ``assemble()`` 并 import 两个 app，进程内断言无法
+    重放真实启动路径。只有全新的解释器进程才能验证各自的 app 实际挂载了哪些路由。
 """
 
 from __future__ import annotations
@@ -44,22 +33,16 @@ paths = sorted(boot.backend.app.openapi()["paths"])
 print("{_SENTINEL}" + json.dumps(paths))
 """
 
-#: 刻意破坏顺序：先构建 app，再装配。用于证明该约束是承重的（见下方第二个测试）。
-_VIOLATED_ORDER_PROBE = f"""
+_AUTH_PROCESS_PROBE = f"""
 import json
 
-import app.main
+from auth.main import app
 
-import boot.assemble
-
-boot.assemble.assemble()
-
-paths = sorted(app.main.app.openapi()["paths"])
+paths = sorted(app.openapi()["paths"])
 print("{_SENTINEL}" + json.dumps(paths))
 """
 
 #: 每个 auth 子路由各取一个端点：任一 router 没挂上都应被发现，而不是只验证「有 auth 路由」。
-#: 二元组第二项是归属说明，失败信息里直接指出该去哪查。
 _AUTH_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("/api/v1/auth/login/password", "auth/router.py 主登录"),
     ("/api/v1/auth/me", "auth/router.py 身份读面"),
@@ -87,7 +70,7 @@ def _openapi_paths(probe: str) -> set[str]:
         timeout=300,
     )
     assert result.returncode == 0, (
-        "子进程启动失败，无法验证装配时序"
+        "子进程启动失败，无法验证路由归属"
         f"（returncode={result.returncode}）\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
@@ -102,36 +85,25 @@ def _openapi_paths(probe: str) -> set[str]:
     )
 
 
-def test_boot_backend_mounts_auth_routers() -> None:
-    """生产入口 ``boot.backend`` 装配后，auth 各 router 的端点必须都在 app 上。"""
+def test_backend_does_not_mount_auth_routers() -> None:
+    """单体入口 ``boot.backend`` 不得再挂 auth 路由（双形态已退役）。"""
     paths = _openapi_paths(_BOOT_BACKEND_PROBE)
+    leaked = [f"{path}（{owner}）" for path, owner in _AUTH_ENDPOINTS if path in paths]
+    assert not leaked, (
+        "单体 app 又挂上了 auth 路由，认证面重新分叉：\n  "
+        + "\n  ".join(leaked)
+        + "\n\n检查 auth/bootstrap.py 是否重新向 core.route_registry 登记了 auth 路由。"
+    )
+
+
+def test_auth_process_mounts_auth_routers() -> None:
+    """独立 AUTH 进程必须挂齐全部 auth 子路由。"""
+    paths = _openapi_paths(_AUTH_PROCESS_PROBE)
     missing = [
         f"{path}（{owner}）" for path, owner in _AUTH_ENDPOINTS if path not in paths
     ]
     assert not missing, (
-        "boot.backend 装配后缺失 auth 路由，认证端点会静默 404：\n  "
+        "auth.main 缺少 auth 路由，认证端点会静默 404：\n  "
         + "\n  ".join(missing)
-        + "\n\n最可能的原因：boot/backend.py 里 `import app.main` 被移到了"
-        "\n`assemble()` 之前（见该模块文件头注释）。app/api/router.py 在模块级"
-        "\n读取 core.route_registry，早于 auth.bootstrap.register() 就会得到空注册表。"
-    )
-
-
-def test_import_order_is_load_bearing() -> None:
-    """反序 import 必须真的丢 auth 路由——否则上一条守卫是假绿。
-
-    这是**刻意的特征化测试**：它断言「错误顺序会坏」，从而证明
-    ``test_boot_backend_mounts_auth_routers`` 的通过不是无意义的重言式。
-
-    若本条开始失败（反序也能挂上 auth 路由），说明 FastAPI 的路由装配语义
-    或本项目架构已经变了、顺序不再承重：那是一个**该重新评估约束**的信号，
-    请连同 ``boot/backend.py`` 的注释与本文件一起更新，而不是简单删掉断言。
-    """
-    paths = _openapi_paths(_VIOLATED_ORDER_PROBE)
-    leaked = [f"{path}（{owner}）" for path, owner in _AUTH_ENDPOINTS if path in paths]
-    assert not leaked, (
-        "反序 import 竟然挂上了 auth 路由，装配时序约束可能已不再承重：\n  "
-        + "\n  ".join(leaked)
-        + "\n\n这通常意味着架构发生了变化。请重新评估 boot/backend.py 的"
-        "\n装配时序约束，并同步更新本测试与相关注释。"
+        + "\n\n检查 auth/main.py 的 _AUTH_ROUTERS 是否漏登记。"
     )

@@ -226,24 +226,24 @@ async def test_mint_ticket_rejects_empty_subject() -> None:
 
 
 async def test_internal_ticket_fail_closed_without_token(
-    client: Client, monkeypatch: pytest.MonkeyPatch
+    auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """内部 token 未配置 → 一律 401（此端点不成为公网面）；错 token 同样 401。"""
     monkeypatch.setattr(settings, "auth_http_token", "")
     body = {"user_id": str(uuid.uuid4()), "account_level": "admin"}
-    assert (await client.post(_INTERNAL_PATH, json=body)).status_code == 401
+    assert (await auth_front_client.post(_INTERNAL_PATH, json=body)).status_code == 401
     assert (
-        await client.post(_INTERNAL_PATH, json=body, headers=_internal_headers("nope"))
+        await auth_front_client.post(_INTERNAL_PATH, json=body, headers=_internal_headers("nope"))
     ).status_code == 401
 
 
 async def test_internal_ticket_issues_for_admin(
-    client: Client, monkeypatch: pytest.MonkeyPatch
+    auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """配齐内部 token + admin → 200，返回可验签的一次性票据。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     uid = uuid.uuid4()
-    resp = await client.post(
+    resp = await auth_front_client.post(
         _INTERNAL_PATH,
         json={"user_id": str(uid), "account_level": "admin"},
         headers=_internal_headers("internal-secret-xyz"),
@@ -255,11 +255,11 @@ async def test_internal_ticket_issues_for_admin(
 
 
 async def test_internal_ticket_forbidden_for_non_admin(
-    client: Client, monkeypatch: pytest.MonkeyPatch
+    auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """非 admin → 403（跨进程边界独立复核，不信任上游已裁决的断言）。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
-    resp = await client.post(
+    resp = await auth_front_client.post(
         _INTERNAL_PATH,
         json={"user_id": str(uuid.uuid4()), "account_level": "normal"},
         headers=_internal_headers("internal-secret-xyz"),

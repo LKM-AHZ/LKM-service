@@ -127,9 +127,8 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     app_logging.setup_logging()
     init_sentry()
     init_db_task = asyncio.create_task(_startup_preheat_bloom())
-    # passkey 挑战码周期清理：本进程是 auth 库的宿主（「进程=库边界」），拆库部署下这条只能由
-    # 这里承担——主进程没有 auth 库连接（起不来，见 app.main.lifespan 的 seam 判断）。融合
-    # 部署（无独立 AUTH 进程）仍由 app.main 起，两者按 authz 缝开关互斥，不会重复跑。
+    # passkey 挑战码周期清理：双形态退役后本进程是 auth 库的唯一宿主，该 task 只在这里跑
+    # （app.main 不再持有 auth 库连接，也不再起清理 task）。
     cleanup_task = asyncio.create_task(cleanup_expired_challenges())
     # 跨进程指标中继（选项③）：本进程写 user_snap_cache_total / user_snap_singleflight_total /
     # notify_failed_total，且刻意不挂 /metrics（见 create_auth_app 说明）——快照交给 API 进程代报。

@@ -219,7 +219,10 @@ async def test_admin_stepup_persists_verification_time(monkeypatch):
     monkeypatch.setattr(
         admin_router.jwt_keys,
         "decode",
-        lambda *a, **k: {"rt_hash": admin_router.hash_refresh_token("old-refresh")},
+        lambda *a, **k: {
+            "type": "admin",
+            "rt_hash": admin_router.hash_refresh_token("old-refresh"),
+        },
     )
     signed = {}
 

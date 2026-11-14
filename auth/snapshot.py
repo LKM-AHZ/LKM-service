@@ -181,32 +181,22 @@ async def _retrieve_fields(
 ) -> tuple[dict[str, Any] | None, int | None]:
     """取回填源的**冻结字段 dict + 来源版本**，失败已按 fail-open 语义收口。
 
-    - seam 打开（``user_http.enabled()``）且 AUTH 响应：返回其冻结字段 + AUTH 端真实 sv
-      （先校验可重建，user_id 不可解析的畸形体按不可用处理，不把畸形当 truth）。
-    - seam 打开但 AUTH 不可用/畸形（抛 ``UserHttpUnavailable``）：记降级日志，**回落 DB**
-      （就地 ``select(User)...`` + ``_to_snap`` + ``version_of_updated_at``），不把失败当 None。
-    - seam 关闭（默认）：就地 DB 直读（既有 A6 原路径）。
+    app realm 唯一真值在 auth 进程：恒经 HTTP 读端点。AUTH 不可用/畸形时记降级日志并
+    返回 ``(None, None)``（缺行 == 空白展示，绝不回落业务库——业务库没有 users 表）。
     """
-    if user_http.enabled():
-        try:
-            fields, version = await user_http.fetch_user_http_payload(user_id)
-        except user_http.UserHttpUnavailable:
-            logger.warning(
-                "auth_http read failed uid=%s; fail-open to local DB", user_id
-            )
-        else:
-            if fields is None:  # 权威不存在：不回落 DB、不缓存缺行
-                return None, version
-            try:
-                _snap_from_fields(fields)
-            except (KeyError, TypeError, ValueError):
-                logger.warning(
-                    "auth_http malformed snapshot uid=%s; fail-open to local DB",
-                    user_id,
-                )
-            else:
-                return fields, version
-    return await _fetch_fields_from_db(user_id, db)
+    try:
+        fields, version = await user_http.fetch_user_http_payload(user_id)
+    except user_http.UserHttpUnavailable:
+        logger.warning("auth_http read failed uid=%s; treat as missing", user_id)
+        return None, None
+    if fields is None:  # 权威不存在：不缓存缺行
+        return None, version
+    try:
+        _snap_from_fields(fields)
+    except (KeyError, TypeError, ValueError):
+        logger.warning("auth_http malformed snapshot uid=%s; treat as missing", user_id)
+        return None, None
+    return fields, version
 
 
 async def _fetch_fields_from_db(
@@ -328,24 +318,17 @@ async def _retrieve_fields_batch(
 ) -> dict[uuid.UUID, dict[str, Any]]:
     """批量取回填源**冻结字段 dict**（跨 realm 语义，同单读）。
 
-    - seam 打开（``user_http.enabled()``）：①**一次批量缓存读**（L1 逐个 + L2 单次 MGET）→
-      ②未命中项按 ≤`BATCH_IDS_MAX` 分块，每块经**批内 singleflight**（并发同块只放一个去拉）
-      → **一次 HTTP** 批量端点 → ③命中结果带来源版本逐条 CAS 回填缓存。权威缺(``data=null``)
-      或 HTTP 不可用 → **跳过该 id**（不入结果，配合业务展示读取方自己的 ``.get(id,"")``
-      语义降级为空白展示）；**绝不让该 id 回落业务 db 查 User**（M3.B S5 拆库后业务 realm
-      无 users，读了会 UndefinedTable）。（不抛错：跨 realm 下"批量展示读"无本地回退可抛，
-      纪律=缺行跳过 ≠ 故障。）
-    - seam 关闭（默认）：就地 **SQL 单查询批量**读本进程 db（既有 A6 原路径、非 N+1）。
+    ①**一次批量缓存读**（L1 逐个 + L2 单次 MGET）→ ②未命中项按 ≤`BATCH_IDS_MAX` 分块，每块经
+    **批内 singleflight**（并发同块只放一个去拉）→ **一次 HTTP** 批量端点 → ③命中结果带来源版本
+    逐条 CAS 回填缓存。权威缺(``data=null``) 或 HTTP 不可用 → **跳过该 id**（不入结果，配合业务
+    展示读取方自己的 ``.get(id,"")`` 语义降级为空白展示）；**绝不让该 id 回落业务 db 查 User**
+    （业务 realm 无 users）。（不抛错：跨 realm 下"批量展示读"无本地回退可抛，纪律=缺行跳过 ≠ 故障。）
     """
     absent = await bloom.definitely_absent_many([str(uid) for uid in set(user_ids)])
     if absent:
         user_ids = [uid for uid in user_ids if str(uid) not in absent]
         if not user_ids:
             return {}
-
-    if not user_http.enabled():
-        rows = await _fetch_fields_batch_from_db(user_ids, db)
-        return {uid: fields for uid, (fields, _sv) in rows.items()}
 
     ids = sorted(set(user_ids))
     out: dict[uuid.UUID, dict[str, Any]] = await user_cache.read_snaps(ids)

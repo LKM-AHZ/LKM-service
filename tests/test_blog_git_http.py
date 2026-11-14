@@ -23,15 +23,14 @@ from app.modules.blog.git_http import (
 )
 from app.modules.blog.models import BlogContent, BlogSeries
 from auth.models import User
-from auth.seams import seam_enabled
 from auth.security import hashpwd
 from auth.user_http import UserHttpUnavailable
 from core.err import BizError, err_info
 
 
 @pytest.fixture
-async def db(fused_db_session: AsyncSession) -> AsyncSession:
-    """git-http owner 判定需 auth(user)+biz(blog/series) 单 schema（融合）。"""
+async def db(fused_db_session: AsyncSession, auth_seam_fused) -> AsyncSession:
+    """git-http owner 判定需 auth(user)+biz(blog/series) 单 schema，且验密恒走 auth 缝。"""
     return fused_db_session
 
 
@@ -90,25 +89,24 @@ class _FakeRequest:
 
 class TestGitHttpDbErrorPropagates:
     async def should_propagate_db_error_instead_of_swallowing(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+        self, fused_db_session: AsyncSession, auth_seam_fused
     ):
-        """Basic Auth 的 DB 查询失败应正常传播，而非被 except Exception 吞成匿名读。"""
-        import os
+        """属主/仓库查询的 DB 故障应正常传播，而非被吞成匿名读。
 
-        from app.modules.blog.git_http import git_http_backend
-        from core.config import settings
+        凭证校验恒走 auth 缝（不再查业务 DB），因此 DB 故障点移到 ``_resolve_series``。
+        """
+        from app.modules.blog.git_http import _require_owner_for_push
 
-        repo_dir = str(tmp_path / "blog_repos")
-        monkeypatch.setattr(settings, "blog_repo_dir", repo_dir)
-        # 端点先检查 repo 目录存在才进入 Basic Auth 校验，故需先建目录
-        os.makedirs(os.path.join(repo_dir, "my-blog.git"))
+        fused_db_session.add(
+            User(username="user", hashed_password=await hashpwd("pass"))
+        )
+        await fused_db_session.flush()
 
         with pytest.raises(RuntimeError, match="db down"):
-            await git_http_backend(
+            await _require_owner_for_push(
+                _FakeDbError(),  # type: ignore[arg-type]
                 "my-blog",
-                "info/refs",
-                _FakeRequest(),  # type: ignore
-                _FakeDbError(),  # type: ignore
+                _FakeRequest(),  # type: ignore[arg-type]
             )
 
 
@@ -216,7 +214,10 @@ def _push_auth_request(auth_header: dict[str, str]) -> SimpleNamespace:
 
 
 class TestRequireOwnerForPush:
-    """写路径(push)授权：仅 repo 属主可 push；未认证/非属主/孤儿一律拒绝。"""
+    """写路径(push)授权：仅 repo 属主可 push；未认证/非属主/孤儿一律拒绝。
+
+    双形态退役后验密恒经 auth HTTP 缝（``auth_seam_fused`` 指到同库 auth 表）。
+    """
 
     @pytest.fixture(autouse=True)
     async def _users(self, db):
@@ -310,7 +311,6 @@ class TestRequireOwnerForPushViaSeam:
 
     async def should_authenticate_via_seam(self, db, _users):
         await self._series(db, _users.id, "blog-seam")
-        assert seam_enabled() is True
         authed = await _require_owner_for_push(
             db, "blog-seam", _push_auth_request(_auth_header("seamowner", "pw123456"))
         )

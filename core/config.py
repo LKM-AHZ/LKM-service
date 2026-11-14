@@ -404,8 +404,11 @@ class Settings(BaseSettings):
             ):
                 if _bad(reveal(value)):
                     insecure.append(name)
-        if self.auth_http_url and _bad(reveal(self.auth_http_token)):
-            insecure.append("auth_http_token(missing while auth_http_url set)")
+        # 双形态退役：auth 独立进程是唯一认证真值，生产必须配齐内部缝地址与令牌。
+        if not self.auth_http_url or _bad(reveal(self.auth_http_token)):
+            insecure.append(
+                "auth_http_url/auth_http_token(required: auth is a separate service)"
+            )
         # bot 服务令牌是可写存储面的唯一门禁：留空=关闭（合法），但只要启用就必须足够强，
         # 弱令牌等于把 ``/internal/files`` 变成公开上传口。
         bot_token = reveal(self.bot_internal_token)

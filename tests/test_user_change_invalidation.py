@@ -83,10 +83,13 @@ async def _fused_realm():
 
 
 @pytest.fixture
-async def db(_fused_realm) -> AsyncSession:
-    """覆盖 conftest.db：跑在融合 auth+biz schema 的长活会话（auth 写点/outbox 单会话可见）。"""
+async def db(_fused_realm, monkeypatch: pytest.MonkeyPatch) -> AsyncSession:
+    """覆盖 conftest.db：融合 auth+biz schema + auth HTTP 缝指向同一会话。"""
     _engine, maker = _fused_realm
     async with maker() as s:
+        from tests.conftest import _install_user_seam
+
+        _install_user_seam(s, monkeypatch)
         yield s
 
 

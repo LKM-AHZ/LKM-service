@@ -10,6 +10,7 @@ bucket 语义：
   GLOBAL_VERIFY_*         —— 跨渠道全局防御（magic-link/2FA 核验）10 次 / 1 小时
   RECOVER_ADMIN_BEGIN_*   —— admin 恢复发起：3 次 / 1 小时
   RECOVER_ADMIN_VERIFY_*  —— admin 恢复核验：3 次 / 10 分钟
+  ADMIN_LOGIN_*           —— 后台密码登录：用户名桶 5 次 / 5 分钟、来源 IP 桶 20 次 / 5 分钟
 """
 
 # 验证码发放 / 核验（默认桶）
@@ -31,3 +32,9 @@ RECOVER_ADMIN_BEGIN_WINDOW = 3600
 # admin 恢复：核验验证码
 RECOVER_ADMIN_VERIFY_MAX = 3
 RECOVER_ADMIN_VERIFY_WINDOW = 600
+
+# 后台密码登录：用户名桶（带来源 IP，防定向锁死目标管理员）与来源 IP 桶
+ADMIN_LOGIN_USER_MAX = 5
+ADMIN_LOGIN_USER_WINDOW = 300
+ADMIN_LOGIN_IP_MAX = 20
+ADMIN_LOGIN_IP_WINDOW = 300

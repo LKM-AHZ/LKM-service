@@ -13,6 +13,10 @@ admin 会话真值收进 auth 域后，签发/校验/清空后台 cookie 所需�
 
 *db-less、纯函数*：本模块只依赖 ``core``（config/err）+ ``core.db.base``(now_iso)，
 不带任何 auth 表/session —— 让签名端(auth)与校验端(admin)都能孤立复用。
+
+后台 cookie 常量（名字/路径/audience/窗口）的单一事实源在 ``core.ports.authz``：
+app 侧受 import-linter 约束不得 import auth，只能从 core 取，故常量放 core 契约层，
+签约/校验实现在本模块。
 """
 
 from __future__ import annotations
@@ -24,20 +28,15 @@ from typing import Any
 import jwt
 
 from auth import jwt_keys
-from core.config import settings
 from core.err import BizError, CommonErr
-
-COOKIE_NAME = "admin_session"
-REFRESH_NAME = "admin_refresh"
-# 与 cookie max_age 同源（auth.admin_router._set_access_cookie 用 settings.admin_access_cookie_minutes）：
-# 写死 15 时运维只改 settings 会让 JWT exp 与 cookie 存活期漂移（cookie 还在但请求全 403）
-ACCESS_TOKEN_MINUTES = settings.admin_access_cookie_minutes
-# 与前台/后台分离的 audience：后台 access cookie 只认本 audience，防被其它会话冒用。
-_ADMIN_AUD = "lkm:admin"
-# 后台 SSR 页面（/admin/bot）也要收到会话 cookie 才能换 SSO 票据。
-COOKIE_PATH = "/"
-# 危险操作 step-up 2FA 的信任窗口：验证通过后 1 小时内不再重复要求。
-MFA_TRUST_SECONDS = 3600
+from core.ports.authz import (
+    _ADMIN_AUD,
+    ACCESS_TOKEN_MINUTES,
+    COOKIE_NAME,
+    COOKIE_PATH,
+    MFA_TRUST_SECONDS,
+    REFRESH_NAME,
+)
 
 
 def create_admin_access_token(

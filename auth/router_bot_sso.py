@@ -1,8 +1,8 @@
 """AUTH 内部 bot-SSO 铸票端点：供业务进程（后台）为代表已裁决的管理员换取一次性票据。
 
 装配：与 ``router_read`` / ``router_authz`` 同挂 ``/auth/internal``，共用同一内部 Bearer 共享令牌
-（未配置即 fail-closed 401，不成公网面）。monolith（经 registry ROUTERS）与独立 AUTH 进程
-（auth.main 显式挂）都挂载它。
+（未配置即 fail-closed 401，不成公网面）。双形态退役后仅由独立 AUTH 进程（auth.main 显式挂）
+挂载它。
 
 职责边界：本端点**只铸票不建会话**——票据由 bot 面板自行验签并换其面板会话（见
 ``auth.bot_sso`` 模块 docstring、社区侧 ``app/modules/admin/bot_router``）。故这里不需要 DB 会话，

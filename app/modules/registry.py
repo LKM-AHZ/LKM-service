@@ -4,8 +4,8 @@
 延迟导入与聚合，不再各自维护 ``MODULES`` / ``_ERROR_MODULES`` 两份字面量。
 
 表的范围是 ``app/modules/`` 下的**业务域**；auth 已独立成顶层包（``auth/``），
-不在此表内。``boot.assemble`` 调用两侧 bootstrap 完成装配；auth 路由经
-``core.route_registry`` 提供给 ``api/router.py``，app 不直接 import auth。
+不在此表内，也不在业务 app 上挂路由。``boot.assemble`` 调用两侧 bootstrap 完成装配，
+app 只经 ``core.ports`` 与 auth 协作。
 
 跨模块 import 走各模块 ``__init__.py`` 的公共 API；本表用 ``import_module`` 延迟
 加载（字符串导入），不产生 ``main`` 命名空间对 ``app`` 包名的绑定冲突（见 §7）。

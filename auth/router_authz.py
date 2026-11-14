@@ -5,7 +5,7 @@
 与 router_read 共用同一内部 Bearer 共享令牌（未配置即 fail-closed 401，不成公网面），并操作 auth 侧
 自持库会话——S5 拆库后统一走 ``get_auth_session``（auth 库），不再用业务 ``get_session``。
 
-装配：并入 auth 域 ROUTERS（auth 进程与 monolith 都挂载本 router——同一进程内直接走实现亦无碍）。
+装配：由 ``auth.main._AUTH_ROUTERS`` 挂载（双形态退役后 monolith 不再挂 auth 路由）。
 跨库语义在 Phase 4 接线：业务 → 内部 client → 打到 auth 内部端点，由 auth 进程落库并发 user 事件失效。
 
 写缝语义（Phase 4 消费）：升权只单向提升不降级、有改才 bump token_version；auth 自己的事务内 commit。

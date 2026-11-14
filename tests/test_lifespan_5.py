@@ -26,13 +26,9 @@ def _patch_common(monkeypatch) -> list[str]:
     async def _fake_dispose_engine() -> None:
         calls.append("dispose_engine")
 
-    async def _fake_cleanup() -> None:
-        calls.append("cleanup_start")
-
     monkeypatch.setattr(main_mod.redis_client, "get_redis", _fake_get_redis)
     monkeypatch.setattr(main_mod.redis_client, "close_redis", _fake_close_redis)
     monkeypatch.setattr(main_mod, "dispose_engine", _fake_dispose_engine)
-    monkeypatch.setattr(main_mod, "cleanup_expired_challenges", _fake_cleanup)
     return calls
 
 
@@ -104,20 +100,14 @@ async def test_lifespan_does_not_wait_for_redis_connect(monkeypatch) -> None:
             await connect_started.wait()
 
 
-async def test_lifespan_skips_auth_cleanup_when_auth_seam_enabled(monkeypatch) -> None:
-    """拆库部署（authz 缝启用）时主进程**不**起 passkey 清理 task。
-
-    拆库后 auth 库归 AUTH 进程（``auth/db/session.py`` 的「进程=库边界」明写主进程永不实例化
-    该库），主进程起这条只会每 5 分钟刷一条 ConnectionRefusedError 且从未真正清理过——
-    清理改由 ``auth.main`` 承担。其余启动步骤不受影响。
-    """
+async def test_lifespan_never_starts_auth_cleanup(monkeypatch) -> None:
+    """passkey 清理恒归 ``auth.main``：主进程 lifespan 不再持有该 task（双形态已退役）。"""
     calls = _patch_common(monkeypatch)
 
     async def _fake_init_db() -> None:
         calls.append("init_db")
 
     monkeypatch.setattr(main_mod, "init_db", _fake_init_db)
-    monkeypatch.setattr(main_mod, "seam_enabled", lambda: True)
 
     async with main_mod.lifespan(None):  # ty: ignore[invalid-argument-type]
         await asyncio.sleep(0)

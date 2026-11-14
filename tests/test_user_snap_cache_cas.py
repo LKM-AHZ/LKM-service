@@ -33,8 +33,8 @@ from tests.conftest import DB
 
 
 @pytest.fixture
-async def db(auth_db: AsyncSession) -> AsyncSession:
-    """snapshot/cache 读的 user 在 auth 独立库。"""
+async def db(auth_db: AsyncSession, auth_seam_realm: None) -> AsyncSession:
+    """snapshot/cache 读的 user 在 auth 独立库，读经 auth HTTP 缝。"""
     return auth_db
 
 

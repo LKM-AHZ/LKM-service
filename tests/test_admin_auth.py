@@ -8,7 +8,7 @@ S5-A2 Step1 后拓扑：
   users，改经 ``auth_seam_realm`` 把裁决指到 auth 独立库真值）；seam 未启用 → fail-closed。
 
 本文件回归锚（均在 monolith ``client`` + ``auth_seam_realm`` seam realm 上、真 auth_db）：
-- me：无 cookie 403；seam 关闭(未配 seam)即便带有效 admin cookie 也 403（fail-closed）；
+- me：无 cookie 403；auth 服务未接出时即便带有效 admin cookie 也 403（fail-closed）；
   seam 开 + admin(role super_admin + admin_dashboard 持仓) → 200 返回 id/account_level/role。
 - seam 裁决 revoke(non-ok) → monolith fail-closed 403（会话失效/锁定/改密撤销缝降级握接）。
 - danger（content delete, require_admin_2fa）：无 mfa cookie → 401 code=4；
@@ -78,17 +78,17 @@ class TestAdminMe:
         resp = await client.get("/api/v1/admin/auth/me")
         assert resp.status_code == 403
 
-    async def should_fail_closed_when_seam_off(
+    async def should_fail_closed_when_auth_unconfigured(
         self, db: DB, client: Client, auth_db: AsyncSession
     ) -> None:
-        """seam 未启用(未开启 seam realm) → 即便带有效 admin cookie 也 fail-closed 403。"""
+        """auth 服务未接出 → 即便带有效 admin cookie 也 fail-closed 403。"""
         admin = await _mk_admin(auth_db, "seam_off_admin")
         await _grant_super_admin(db, "admin.dashboard")
         _set_admin_cookie(client, admin)
         resp = await client.get("/api/v1/admin/auth/me")
-        # business 不能本地裁决后台真值 → 一律拒（Admin auth service not configured）
+        # business 不能本地裁决后台真值 → 一律拒
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Admin auth service not configured"
+        assert resp.json()["message"] == "Admin account state invalid or unavailable"
 
     async def should_allow_seam_admin(
         self,

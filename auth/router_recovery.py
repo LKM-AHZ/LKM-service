@@ -21,6 +21,8 @@ from auth import service_recovery
 from auth.db.session import get_auth_session
 from auth.deps import get_email_provider
 from auth.limits import (
+    CODE_MAX_PER_WINDOW,
+    CODE_WINDOW_SECONDS,
     GLOBAL_VERIFY_MAX_PER_WINDOW,
     GLOBAL_VERIFY_WINDOW_SECONDS,
     RECOVER_ADMIN_VERIFY_MAX,
@@ -103,7 +105,11 @@ async def recover_phone(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
-    await check_code_rate_limit(f"recover:phone:{info.phone}", max_count=5, window=3600)
+    await check_code_rate_limit(
+        f"recover:phone:{info.phone}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
+    )
     code, _ = await create_phone_verification(db, info.phone, "reset")
     await jobs.send_code("phone", info.phone, code)
     return {"message": "Verification code sent"}
@@ -115,7 +121,9 @@ async def recover_phone_verify(
     info: RecoverPhoneVerifyRequest, db: AsyncSession = Depends(get_auth_session)
 ) -> dict[str, Any]:
     await check_code_rate_limit(
-        f"recover:phone:verify:{info.phone}", max_count=5, window=3600
+        f"recover:phone:verify:{info.phone}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
     )
     return await service_recovery.recover_by_contact(
         db, info.phone, info.code, info.new_password
@@ -129,7 +137,11 @@ async def recover_email(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_auth_session),
 ) -> dict[str, Any]:
-    await check_code_rate_limit(f"recover:email:{info.email}", max_count=5, window=3600)
+    await check_code_rate_limit(
+        f"recover:email:{info.email}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
+    )
     code, _ = await create_email_verification(db, info.email, "reset")
     await jobs.send_code("email", info.email, code)
     return {"message": "Verification code sent"}
@@ -141,7 +153,9 @@ async def recover_email_verify(
     info: RecoverEmailVerifyRequest, db: AsyncSession = Depends(get_auth_session)
 ) -> dict[str, Any]:
     await check_code_rate_limit(
-        f"recover:email:verify:{info.email}", max_count=5, window=3600
+        f"recover:email:verify:{info.email}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
     )
     return await service_recovery.recover_by_contact(
         db, info.email, info.code, info.new_password

@@ -2,8 +2,9 @@
 
 import datetime as _dt
 import logging
-import time as _time
 import uuid
+from collections.abc import Mapping
+from typing import Any
 
 from fastapi import Depends, Header
 from jwt import PyJWTError
@@ -31,7 +32,7 @@ from auth.token_revocation import is_jti_blocked, token_version_is_stale
 from core.config import is_test_env
 from core.contracts import CurrentUser
 from core.err import BizError, CommonErr
-from core.ports.authz import MFA_TRUST_SECONDS, _bearer_token, _parse_bearer
+from core.ports.authz import _bearer_token, _parse_bearer, assert_mfa_trusted
 from core.rbac_roles import (
     SSD_CONSTRAINTS,
     activated_roles,
@@ -43,8 +44,14 @@ from core.rbac_roles import (
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
-    """解码令牌并查找用户。任何失败都抛出 BizError。"""
+def parse_access_claims(
+    token: str,
+) -> tuple[uuid.UUID, Mapping[str, Any], tuple[str, ...] | None]:
+    """解签并校验访问令牌的基础载荷（不查库）。任何失败抛 ``BizError``。
+
+    两条 realm 共用：auth 进程本地裁决（本模块）与 app realm 的 HTTP 缝实现
+    （``auth.ports_impl``），避免各自复制用户 id / 角色声明的解析。
+    """
     try:
         payload = decode_access_token(token)
     except (PyJWTError, ValueError) as exc:
@@ -54,11 +61,6 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
     except ValueError as exc:
         raise BizError(AuthErr.TOKEN_INVALID) from exc
 
-    if await is_jti_blocked(payload.get("jti")):
-        raise BizError(
-            AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
-        )
-
     raw_user_id = payload.get("user_id")
     if not raw_user_id:
         raise BizError(AuthErr.TOKEN_INVALID, "Token missing user_id")
@@ -66,23 +68,21 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         user_id = uuid.UUID(str(raw_user_id))
     except ValueError as exc:
         raise BizError(AuthErr.TOKEN_INVALID, "Token user_id malformed") from exc
+    return user_id, payload, selected_roles
 
-    if await token_version_is_stale(user_id, payload.get("token_version")):
+
+async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
+    """解码令牌并在 auth 库查找用户（auth 进程本地裁决）。任何失败都抛 ``BizError``。"""
+    user_id, payload, selected_roles = parse_access_claims(token)
+
+    if await is_jti_blocked(payload.get("jti")):
         raise BizError(
             AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
         )
 
-    if seam_enabled():
-        kwargs = (
-            {"selected_roles": selected_roles} if selected_roles is not None else {}
-        )
-        return await _resolve_via_seam(
-            user_id,
-            int(payload.get("token_version", 0)),
-            payload.get("iat"),
-            require_admin=False,
-            jti=payload.get("jti"),
-            **kwargs,
+    if await token_version_is_stale(user_id, payload.get("token_version")):
+        raise BizError(
+            AuthErr.TOKEN_EXPIRED, "Session invalidated – please login again"
         )
 
     result = await db.execute(
@@ -141,13 +141,6 @@ async def _resolve_current_user(token: str, db: AsyncSession) -> CurrentUser:
         email=user.email,
         phone=user.phone,
     )
-
-
-def seam_enabled() -> bool:
-    """鉴权缝（authz HTTP seam）是否启用：monolith deps 据此把裁决交 auth（拆库后唯一真值）。"""
-    from auth import user_http as auth_user_http
-
-    return auth_user_http.enabled()
 
 
 def _fail_current_user(cause: object | None) -> BizError:
@@ -264,18 +257,7 @@ async def get_current_user_2fa(
     校验失败抛 CommonErr.MFA_REQUIRED，前端据此弹 TOTP 验证（POST /auth/2fa/step-up）后重试。
     未启用 TOTP 的用户同样无法满足 mfa 标记，一并引导先启用 2FA（与后台 require_admin_2fa 行为一致）。
     """
-    try:
-        payload = decode_access_token(token)
-    except (PyJWTError, ValueError) as exc:
-        raise BizError(CommonErr.MFA_REQUIRED) from exc
-    if not payload.get("mfa"):
-        raise BizError(CommonErr.MFA_REQUIRED, "MFA required")
-    mfa_at = payload.get("mfa_at")
-    if mfa_at is None:
-        raise BizError(CommonErr.MFA_REQUIRED, "MFA required")
-    tried_at = float(mfa_at)
-    if _time.time() - tried_at > MFA_TRUST_SECONDS:
-        raise BizError(CommonErr.MFA_REQUIRED, "MFA trust expired")
+    assert_mfa_trusted(token)
     return cur
 
 

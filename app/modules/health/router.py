@@ -77,17 +77,15 @@ logger = logging.getLogger(__name__)
 
 
 async def _probe_auth() -> DependencyStatus:
-    """AUTH 依赖可选探针（M3 B1.3）：仅当配置了 ``auth_http_url`` 才探，否则 disabled。
+    """AUTH 依赖探针：双形态退役后 auth 独立进程是唯一认证真值，故恒参与就绪判定。
 
-    单进程默认(auth_http_url 为空) → disabled 且不影响 overall —— monolith 与 AUTH 同进程
-    部署时本体不声明任何对外 auth 依赖，就绪语义与既存完全一致。配置了(独立 AUTH 进程反代
-    接出)才反映 AUTH 可达性：GET ``<auth_http_url>/liveness``（AUTH 自足存活端点，零级联其
-    DB/Redis），失败/超时 → error(降级)。超时受配置 ``auth_http_timeout_s`` 上界约束，绝不让
-    一个不可达的 AUTH 把 monolith 就绪探针挂死在连接等待上；本模块的 liveness 面不受影响。
+    GET ``<auth_http_url>/liveness``（AUTH 自足存活端点，零级联其 DB/Redis）；未配置或
+    失败/超时 → error(降级)。超时受配置 ``auth_http_timeout_s`` 上界约束，绝不让一个不可达的
+    AUTH 把就绪探针挂死在连接等待上；本模块的 liveness 面不受影响。
     """
     base = (settings.auth_http_url or "").strip().rstrip("/")
     if not base:
-        return DependencyStatus(status="disabled", detail="auth_http_url 未配置")
+        return DependencyStatus(status="error", detail="auth_http_url 未配置")
     url = f"{base}/liveness"
     try:
         async with _build_auth_client() as client:
@@ -327,9 +325,10 @@ async def liveness() -> LiveData:
 async def readiness(response: Response) -> ReadyData:
     """就绪探针：DB + Redis + Pulsar + AUTH + **验签公钥** 复合（AND 语义），未就绪返回 **503**。
 
-    - 硬依赖：DB/Redis 必须 ``up``；Pulsar/AUTH 已配置时必须 ``up``；**验签公钥**必须可用
+    - 硬依赖：DB/Redis/**AUTH** 必须 ``up``；Pulsar 已配置时必须 ``up``；**验签公钥**必须可用
       （RS256-only，见 ``_probe_verify_key``）。
-    - ``disabled``（未配置，如单机无总线/未接 AUTH 进程）不降就绪——是部署取向而非故障。
+    - ``disabled``（未配置，如单机无总线）不降就绪——是部署取向而非故障；AUTH 不再有
+      disabled 形态（独立进程是唯一认证真值）。
     - **软依赖**（检索/对象存储，蓝图 §2 第 3 条）：仅作 ``soft`` 字段告知，**不参与**下述
       ``ready`` 判定——它们缺失时可降级，绝不能把进程挡在入流之外。
     - 状态码语义：就绪 200 / 未就绪 503（供 compose depends_on、K8s readinessProbe、
@@ -350,7 +349,7 @@ async def readiness(response: Response) -> ReadyData:
         db.status == "up"
         and redis.status == "up"
         and pulsar.status in ("up", "disabled")
-        and auth.status in ("up", "disabled")
+        and auth.status == "up"
         and verify_key.status == "up"
     )
     if not ready:
@@ -370,10 +369,9 @@ async def readiness(response: Response) -> ReadyData:
 @router.get("/health", response_model=ApiResp[HealthData])
 @respond
 async def health_check() -> dict[str, object]:
-    """健康检查：聚合 DB、Redis 与(可选)AUTH 状态，供探活与可观测基座使用。
+    """健康检查：聚合 DB、Redis 与 AUTH 状态，供探活与可观测基座使用。
 
-    AUTH 探针仅在配置 ``auth_http_url``(独立 AUTH 进程接出)时参与降级判定；默认空 →
-    ``auth.disabled`` 不参与，overall 只取决于 DB+Redis，保持既存单进程就绪语义零变化。
+    AUTH 独立进程是唯一认证真值，``auth`` 非 up 即 overall degraded。
 
     注意：本端点**刻意不探 Pulsar**——它是「进程+依赖是否可用」的粗粒度视图，而 Pulsar
     是 `/readiness` 的接流硬依赖。Pulsar 不可达时两者判定会不同（此处 ok / readiness 503），
@@ -388,7 +386,7 @@ async def health_check() -> dict[str, object]:
         "ok"
         if db_status.status == "up"
         and redis_status.status == "up"
-        and (auth_status.status == "up" or auth_status.status == "disabled")
+        and auth_status.status == "up"
         else "degraded"
     )
     return {

@@ -186,11 +186,9 @@ async def review_application(
 async def _apply_incubation(db: DbSession, applicant_id: uuid.UUID) -> None:
     """纳入成员升级：account_level→admin / member role→incubated_member（auth 域权威写面）。
 
-    M3.B S5 C：拆库后本项目 DB 会话（业务 realm）已无 users/profiles——auth 是身份词表唯一
-    owner（含写）。故不再把业务 ``db`` 直塞 auth 的 grant 例程；改经 seam 调度
-    ``auth.seams.grant_incubation_from_business(db, …)``：seam 开时（生产拆库 + 测试
-    auth_seam_realm）由 auth 内部写端点把升权落地 auth realm；seam 关时回落本地同库会话执行
-    （蓝绿/单库，语义与旧实现一一对等并发出 user.updated）。
+    业务 realm 已无 users/profiles——auth 是身份词表唯一 owner（含写）。升权恒经
+    ``auth.seams.grant_incubation_from_business`` 打 auth 内部写端点落地 auth realm
+    （测试用 ``auth_seam_realm`` 替身），不再有本地同库执行的回退分支。
     """
     from core.ports.users import grant_incubation_from_business
 

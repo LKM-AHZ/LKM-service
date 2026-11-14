@@ -8,15 +8,11 @@
 """
 
 import uuid
-from collections.abc import AsyncGenerator
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import auth.router_authz  # noqa: F401  # 确保 ROUTERS 已装好 router_authz
-from app.main import app as _app
-from auth.db.session import get_auth_session
 from auth.models import AuditLog, Profile, User
 from auth.security import hashpwd
 from auth.service_authz import grant_exam_unlock
@@ -30,20 +26,6 @@ from tests.conftest import DB, Client
 async def db(auth_db: AsyncSession) -> AsyncSession:
     """auth 内部 seam 用 auth 独立库（User/Profile/token_version 等 auth 表）。"""
     return auth_db
-
-
-@pytest.fixture(autouse=True)
-async def _bind_internal_auth_session(db: DB):
-    """内部端点 S5 拆库后走 get_auth_session（auth 库），覆盖到本测 auth schema。"""
-
-    async def _override() -> AsyncGenerator[AsyncSession]:
-        yield db
-
-    _app.dependency_overrides[get_auth_session] = _override
-    try:
-        yield
-    finally:
-        _app.dependency_overrides.pop(get_auth_session, None)
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +71,7 @@ async def _level(db: AsyncSession, uid: uuid.UUID) -> tuple[str, str, int]:
 
 
 async def test_internal_seams_fail_closed_without_token(
-    client: Client, monkeypatch: pytest.MonkeyPatch, db: DB
+    auth_front_client: Client, monkeypatch: pytest.MonkeyPatch, db: DB
 ) -> None:
     """内部写缝未配 token 时 fail-closed(401)——不成为公网面。"""
     monkeypatch.setattr(settings, "auth_http_token", "")
@@ -107,35 +89,35 @@ async def test_internal_seams_fail_closed_without_token(
             {"action": "review_file"},
         ),
     ):
-        r = await client.post(path, json=payload)
+        r = await auth_front_client.post(path, json=payload)
         assert r.status_code == 401
-        r2 = await client.post(path, json=payload, headers=_auth_headers())
+        r2 = await auth_front_client.post(path, json=payload, headers=_auth_headers())
         assert r2.status_code == 401
 
-    r = await client.get("/api/v1/auth/internal/admin-ids")
+    r = await auth_front_client.get("/api/v1/auth/internal/admin-ids")
     assert r.status_code == 401
-    r = await client.get("/api/v1/auth/internal/admission")
+    r = await auth_front_client.get("/api/v1/auth/internal/admission")
     assert r.status_code == 401
-    r = await client.get("/api/v1/auth/internal/admission/count")
+    r = await auth_front_client.get("/api/v1/auth/internal/admission/count")
     assert r.status_code == 401
 
 
 async def test_internal_admin_ids_lists_only_admins(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """admin-ids 只回 account_level=admin 的 id（每日摘要收件人）。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     await _mk_user(db, "plain_user", account_level="normal")
     admin_id = await _mk_user(db, "digest_admin", account_level="admin")
 
-    resp = await client.get("/api/v1/auth/internal/admin-ids", headers=_auth_headers())
+    resp = await auth_front_client.get("/api/v1/auth/internal/admin-ids", headers=_auth_headers())
 
     assert resp.status_code == 200
     assert resp.json() == {"ids": [str(admin_id)]}
 
 
 async def test_internal_admission_list_and_decide(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """准入内部缝：pending 列表 + approve 落 active。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
@@ -151,7 +133,7 @@ async def test_internal_admission_list_and_decide(
     db.add(pending)
     await db.flush()
 
-    resp = await client.get(
+    resp = await auth_front_client.get(
         "/api/v1/auth/internal/admission",
         params={"status": "pending"},
         headers=_auth_headers(),
@@ -161,7 +143,7 @@ async def test_internal_admission_list_and_decide(
     assert [item["username"] for item in items] == ["admit_me"]
     assert items[0]["email"] == "admit@example.com"
 
-    count = await client.get(
+    count = await auth_front_client.get(
         "/api/v1/auth/internal/admission/count",
         params={"status": "pending"},
         headers=_auth_headers(),
@@ -169,7 +151,7 @@ async def test_internal_admission_list_and_decide(
     assert count.status_code == 200
     assert count.json() == {"count": 1}
 
-    resp = await client.post(
+    resp = await auth_front_client.post(
         f"/api/v1/auth/internal/admission/{pending.id}",
         json={
             "action": "approve",
@@ -185,7 +167,7 @@ async def test_internal_admission_list_and_decide(
     assert row.admission_status == "active"
 
     # 再决策一次：已非 pending → 409
-    resp = await client.post(
+    resp = await auth_front_client.post(
         f"/api/v1/auth/internal/admission/{pending.id}",
         json={"action": "reject", "reviewer_id": str(admin_id), "reason": "x"},
         headers=_auth_headers(),
@@ -194,13 +176,13 @@ async def test_internal_admission_list_and_decide(
 
 
 async def test_internal_audit_writes_row(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """内部审计缝：带 user_id 写主体，省略 user_id 写系统动作（可空）。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     uid = await _mk_user(db, "audit_subject")
 
-    r = await client.post(
+    r = await auth_front_client.post(
         "/api/v1/auth/internal/audit",
         json={
             "user_id": str(uid),
@@ -213,7 +195,7 @@ async def test_internal_audit_writes_row(
     assert r.status_code == 200
     assert r.json() == {"ok": True}
 
-    r2 = await client.post(
+    r2 = await auth_front_client.post(
         "/api/v1/auth/internal/audit",
         json={"action": "system_cleanup", "detail": "no actor"},
         headers=_auth_headers(),
@@ -240,14 +222,14 @@ async def test_internal_audit_writes_row(
 
 
 async def test_grant_exam_unlock_upgrades_and_bumps_token(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """normal/member 用户经 exam_unlock 升到 admin，token_version+1。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     uid = await _mk_user(db, "alice", account_level="normal", role="member")
     await db.commit()
 
-    r = await client.post(
+    r = await auth_front_client.post(
         "/api/v1/auth/internal/grant",
         json={
             "kind": "exam_unlock",
@@ -268,7 +250,7 @@ async def test_grant_exam_unlock_upgrades_and_bumps_token(
 
 
 async def test_grant_exam_unlock_is_monotonic_no_downgrade(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """单向：已是更低目标不降级（升 admin 后再次请求 normal→no-op，token 不二次 bump）。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
@@ -276,7 +258,7 @@ async def test_grant_exam_unlock_is_monotonic_no_downgrade(
     await db.commit()
 
     # 已 author/member-normal，试降级 unlock_level normal / unlock_role member → 无实际动作
-    r = await client.post(
+    r = await auth_front_client.post(
         "/api/v1/auth/internal/grant",
         json={
             "kind": "exam_unlock",
@@ -294,14 +276,14 @@ async def test_grant_exam_unlock_is_monotonic_no_downgrade(
 
 
 async def test_grant_incubation_sets_admin_and_member_role(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """纳入成员：level→admin；member role→incubated_member；token bump。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     uid = await _mk_user(db, "dave", account_level="normal", role="member")
     await db.commit()
 
-    r = await client.post(
+    r = await auth_front_client.post(
         "/api/v1/auth/internal/grant",
         json={"kind": "incubation", "user_id": str(uid)},
         headers=_auth_headers(),
@@ -314,7 +296,7 @@ async def test_grant_incubation_sets_admin_and_member_role(
 
 
 async def test_verify_password_ok_and_mismatch(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """verify-password：正确凭据 true，错误/不存在 false，只读不改行。"""
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
@@ -322,17 +304,17 @@ async def test_verify_password_ok_and_mismatch(
     await db.commit()
 
     ok_path = "/api/v1/auth/internal/verify-password"
-    good = await client.post(
+    good = await auth_front_client.post(
         ok_path,
         json={"username": "erin", "password": "secretwxyz123"},
         headers=_auth_headers(),
     )
-    bad = await client.post(
+    bad = await auth_front_client.post(
         ok_path,
         json={"username": "erin", "password": "wrongpass"},
         headers=_auth_headers(),
     )
-    missing = await client.post(
+    missing = await auth_front_client.post(
         ok_path,
         json={"username": "nobody", "password": "x"},
         headers=_auth_headers(),
@@ -364,11 +346,11 @@ async def test_authz_primitives_idempotent(db: DB) -> None:
 
 
 async def test_internal_dev_code_disabled_by_default(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
 
-    resp = await client.get(
+    resp = await auth_front_client.get(
         "/api/v1/auth/internal/dev-code",
         params={"channel": "email", "contact": "dev@example.com"},
         headers=_auth_headers(),
@@ -378,14 +360,14 @@ async def test_internal_dev_code_disabled_by_default(
 
 
 async def test_internal_dev_code_mints_register_code(
-    db: DB, client: Client, monkeypatch: pytest.MonkeyPatch
+    db: DB, auth_front_client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from auth.service_verify import consume_email_code
 
     monkeypatch.setattr(settings, "auth_http_token", "internal-secret-xyz")
     monkeypatch.setattr(settings, "dev_code_sink", True)
 
-    resp = await client.get(
+    resp = await auth_front_client.get(
         "/api/v1/auth/internal/dev-code",
         params={"channel": "email", "contact": "Dev@Example.com"},
         headers=_auth_headers(),

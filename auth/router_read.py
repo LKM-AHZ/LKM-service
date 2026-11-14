@@ -1,9 +1,8 @@
 """AUTH 内部 HTTP 读端点（M3 B1.2）：供单体/他进程经 HTTP 跨缝取单用户快照（冻结字段）。
 
 装配：本 router 与业务域名前缀分开、显式带 ``/auth/internal``；**只**承载内部读、不承载任何
-浏览器可触的高危面。monolith（经 registry ROUTERS）与独立 AUTH 进程（auth.main 显式挂）都挂
-载它 → 两个进程都能 serve 同一读契约；B1.2 只 build 缝 + client + flag + 端点，网关 ``/auth/**``
-路由（B1.3）在下个 leg。
+浏览器可触的高危面。双形态退役后仅由独立 AUTH 进程（auth.main 显式挂）挂载；app 侧经
+``auth.user_http`` 消费同一读契约。
 
 鉴权模型（防新公共 blast surface）——**内部共享 token**（与 files/notify 同类最小摩擦力）：
 - 要求 ``Authorization: Bearer {settings.auth_http_token}``。token 未配置（默认空）→ 一律 401

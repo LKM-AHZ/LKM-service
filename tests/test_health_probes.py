@@ -116,11 +116,11 @@ async def test_readiness_503_when_any_hard_dep_errors(
     assert payload[failing]["status"] == "error"
 
 
-@pytest.mark.parametrize("optional", ["pulsar", "auth"])
+@pytest.mark.parametrize("optional", ["pulsar"])
 async def test_readiness_disabled_deps_do_not_block(
     probe_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, optional: str
 ) -> None:
-    """未配置（disabled）的 Pulsar/AUTH 是部署取向而非故障，不降就绪。"""
+    """未配置（disabled）的 Pulsar 是部署取向而非故障，不降就绪；AUTH 已无 disabled 形态。"""
     _stub_probes(monkeypatch, **{optional: "disabled"})
     resp = await probe_client.get("/readiness")
     assert resp.status_code == 200

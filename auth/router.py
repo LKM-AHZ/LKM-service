@@ -31,6 +31,8 @@ from auth.deps import (
 )
 from auth.errors import AuthErr
 from auth.limits import (
+    CODE_MAX_PER_WINDOW,
+    CODE_WINDOW_SECONDS,
     GLOBAL_VERIFY_MAX_PER_WINDOW,
     GLOBAL_VERIFY_WINDOW_SECONDS,
     REFRESH_MAX_PER_WINDOW,
@@ -145,7 +147,9 @@ async def _send_reg_code(
     db: AsyncSession,
 ) -> None:
     await check_code_rate_limit(
-        f"reg:{channel.name}:{contact}", max_count=5, window=3600
+        f"reg:{channel.name}:{contact}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
     )
     code, _ = await channel.create_verification(db, contact, "register")
     background_tasks.add_task(jobs.send_code, channel.name, contact, code)
@@ -159,7 +163,9 @@ async def _complete_reg_verify(
     apply_reason: str | None = None,
 ) -> dict[str, Any]:
     await check_code_rate_limit(
-        f"reg:{channel.name}:verify:{contact}", max_count=5, window=3600
+        f"reg:{channel.name}:verify:{contact}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
     )
     await channel.consume_code(db, contact, code, "register")
     return await service_auth.register_by_verify(
@@ -371,7 +377,11 @@ async def login_code_request(
     """请求登录验证码。自动检测邮箱还是手机号。"""
 
     # 无论用户是否存在，都进行速率限制
-    await check_code_rate_limit(f"login:code:{contact}", max_count=5, window=3600)
+    await check_code_rate_limit(
+        f"login:code:{contact}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
+    )
 
     # 检查用户是否存在且符合条件
     channel = channel_for(contact)
@@ -398,7 +408,9 @@ async def login_code(
 ) -> dict[str, Any]:
     """使用验证码登录。仅限普通/管理员用户。"""
     await check_code_rate_limit(
-        f"login:code:verify:{contact}", max_count=5, window=3600
+        f"login:code:verify:{contact}",
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
     )
     return await service_auth.login_code(db, contact, code)
 

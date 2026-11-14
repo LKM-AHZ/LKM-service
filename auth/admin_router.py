@@ -38,9 +38,18 @@ from auth.admin_session import (
     MFA_TRUST_SECONDS,
     REFRESH_NAME,
     create_admin_access_token,
+    decode_admin_access,
 )
 from auth.db.session import get_auth_session
 from auth.errors import AuthErr
+from auth.limits import (
+    ADMIN_LOGIN_IP_MAX,
+    ADMIN_LOGIN_IP_WINDOW,
+    ADMIN_LOGIN_USER_MAX,
+    ADMIN_LOGIN_USER_WINDOW,
+    REFRESH_MAX_PER_WINDOW,
+    REFRESH_WINDOW_SECONDS,
+)
 from auth.models import RefreshToken, User
 from auth.repository import RevokedAccessTokenRepository, UserRoleRepository
 from auth.security import PASSWORD_MAX_LENGTH, dummy_verify, verifypwd
@@ -50,6 +59,7 @@ from auth.service_auth import (
     hash_refresh_token,
     valid_refresh_token,
 )
+from auth.service_authz import authorize_user
 from auth.service_roles import list_user_roles, list_users_for_role, set_user_role
 from auth.service_verify import check_code_rate_limit
 from auth.token_revocation import block_payload_jti, is_jti_blocked
@@ -80,16 +90,18 @@ async def _require_role_manager(request: Request, db: AsyncSession) -> User:
     return actor
 
 
+def _decode_admin_payload(request: Request) -> dict[str, Any]:
+    """解签并校验 admin access cookie；缺失/非法一律 FORBIDDEN。"""
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise BizError(CommonErr.FORBIDDEN, "Not logged into admin panel")
+    return decode_admin_access(token)
+
+
 async def _active_cookie_roles(
     request: Request, db: AsyncSession, user: User
 ) -> tuple[str, ...]:
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        raise BizError(CommonErr.FORBIDDEN)
-    try:
-        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
-    except jwt.InvalidTokenError as exc:
-        raise BizError(CommonErr.FORBIDDEN, "Session invalid") from exc
+    payload = _decode_admin_payload(request)
     await db.refresh(user, attribute_names=["profile"])
     role = user.profile.role if user.profile else "member"
     try:
@@ -123,7 +135,7 @@ async def activate_admin_roles(
     raw_refresh = request.cookies.get(REFRESH_NAME)
     if not raw_refresh or not valid_refresh_token(raw_refresh):
         raise BizError(CommonErr.FORBIDDEN, "Refresh session missing")
-    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
+    old = _decode_admin_payload(request)
     refresh_hash = hash_refresh_token(raw_refresh)
     if old.get("rt_hash") != refresh_hash:
         raise BizError(CommonErr.FORBIDDEN, "Access and refresh sessions differ")
@@ -355,54 +367,35 @@ async def _jti_revoked_in_db(db: AsyncSession, jti: Any) -> bool:
 
 
 async def _require_admin_from_cookie(request: Request, db: AsyncSession) -> User:
-    """按 admin access cookie 识别当前登录管理员（auth 库自足复刻 get_current_admin 语义）。
+    """按 admin access cookie 识别当前登录管理员（auth 库权威裁决）。
 
-    相比单体现行依赖业务 admin deps 的 seam 裁决，此处**直连 current DBA=false 只在 auth
-    进程**读 auth 库：解析 admin_session cookie → 取 user → 强制 account_level=admin +
-    锁定 / token_version / updated_at 校验（与前台一致，防绕过安全态）。非法一律 FORBIDDEN。
+    授权判据统一走 ``service_authz.authorize_user``（存在性 / 锁定 / 准入 / token_version /
+    改密撤销 / admin 达标 / 角色约束），本函数只负责解签、jti 预检与把失败映射为 FORBIDDEN，
+    不再复刻一套判定。非法一律 FORBIDDEN。
     """
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        raise BizError(CommonErr.FORBIDDEN, "Not logged into admin panel")
-
-    try:
-        payload = jwt_keys.decode(token, audience=_ADMIN_AUD)
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, jwt.DecodeError):
-        # 过期/伪造/算法不符的 cookie 是常态（陈旧会话），按「非法一律 FORBIDDEN」收口；
-        # 不兜住会从端点冒出 PyJWT 异常 → 500（与 _current_mfa_trust 对齐）。
-        raise BizError(CommonErr.FORBIDDEN, "Admin session invalid") from None
-    if payload.get("type") != "admin":
-        raise BizError(CommonErr.FORBIDDEN, "Not an admin session token")
+    payload = _decode_admin_payload(request)
     jti = payload.get("jti")
     if await is_jti_blocked(jti) or await _jti_revoked_in_db(db, jti):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
-    sub = payload.get("sub")
     # sub 是 str(user.id)（UUID 串）；非法/缺失一律 FORBIDDEN，绝不 500。
     # 先 str() 再解析：拒绝把裸 int 当 128-bit UUID 接受。
     try:
-        user_id = uuid.UUID(str(sub))
+        user_id = uuid.UUID(str(payload.get("sub")))
+        expect_token_version = int(payload.get("token_version", 0))
     except (AttributeError, TypeError, ValueError):
         raise BizError(CommonErr.FORBIDDEN, "Admin session subject invalid") from None
 
-    user = await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
-    if lock_is_active(user):
-        raise BizError(CommonErr.FORBIDDEN, "Admin account is locked")
-    if int(payload.get("token_version", 0)) != int(user.token_version):
-        raise BizError(CommonErr.FORBIDDEN, "Admin session invalidated")
-    # 改密撤销：JWT iat >= user.updated_at（允许 5 秒容差），与前台一致
-    if user.updated_at:
-        token_iat = payload.get("iat")
-        if token_iat is not None:
-            token_time = datetime.datetime.fromtimestamp(
-                float(token_iat), tz=datetime.UTC
-            )
-            if user.updated_at - token_time > datetime.timedelta(seconds=5):
-                raise BizError(
-                    CommonErr.FORBIDDEN, "Admin session invalidated – password changed"
-                )
-    if user.account_level != "admin":
-        raise BizError(CommonErr.FORBIDDEN, "Insufficient admin privilege")
-    return user
+    verdict = await authorize_user(
+        db,
+        user_id=user_id,
+        expect_token_version=expect_token_version,
+        iat_ts=payload.get("iat"),
+        require_admin=True,
+        jti=jti if isinstance(jti, str) else None,
+    )
+    if not verdict.get("ok"):
+        raise BizError(CommonErr.FORBIDDEN, "Admin account state invalid")
+    return await get_or_raise(db, User, AuthErr.USER_NOT_FOUND, User.id == user_id)
 
 
 @router.post("/login")
@@ -421,11 +414,13 @@ async def admin_login(
     # **目标管理员**锁 5 分钟（定向 DoS），而 IP 桶 20/5min 补不上这个缺口
     await check_code_rate_limit(
         f"admin:login:user:{client_ip(request)}:{body.username}",
-        max_count=5,
-        window=300,
+        max_count=ADMIN_LOGIN_USER_MAX,
+        window=ADMIN_LOGIN_USER_WINDOW,
     )
     await check_code_rate_limit(
-        f"admin:login:ip:{client_ip(request)}", max_count=20, window=300
+        f"admin:login:ip:{client_ip(request)}",
+        max_count=ADMIN_LOGIN_IP_MAX,
+        window=ADMIN_LOGIN_IP_WINDOW,
     )
 
     result = await db.execute(select(User).where(User.username == body.username))
@@ -433,15 +428,15 @@ async def admin_login(
 
     if not user:
         await dummy_verify()
-        return resp_json(CommonErr.FORBIDDEN, detail="用户名或密码错误")
+        raise BizError(CommonErr.FORBIDDEN, "用户名或密码错误")
     if not await verifypwd(body.password, user.hashed_password):
-        return resp_json(CommonErr.FORBIDDEN, detail="用户名或密码错误")
+        raise BizError(CommonErr.FORBIDDEN, "用户名或密码错误")
 
     if user.account_level != "admin":
-        return resp_json(CommonErr.FORBIDDEN, detail="无后台访问权限")
+        raise BizError(CommonErr.FORBIDDEN, "无后台访问权限")
 
     if lock_is_active(user):
-        return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
+        raise BizError(CommonErr.FORBIDDEN, "账号已锁定")
 
     await db.refresh(user, attribute_names=["profile"])
     raw_refresh = generate_refresh_token()
@@ -478,14 +473,16 @@ async def admin_refresh(
     # 按来源 IP 分桶：全局单桶时任一客户端打满 30/min 就会让所有管理员的刷新被限流，
     # 而 access cookie 只有 15min，刷新被耗尽等价于把别人一起登出
     await check_code_rate_limit(
-        f"admin:token:refresh:ip:{client_ip(request)}", max_count=30, window=60
+        f"admin:token:refresh:ip:{client_ip(request)}",
+        max_count=REFRESH_MAX_PER_WINDOW,
+        window=REFRESH_WINDOW_SECONDS,
     )
 
     raw_refresh = request.cookies.get(REFRESH_NAME)
     if not raw_refresh:
-        return resp_json(CommonErr.FORBIDDEN, detail="缺少刷新令牌")
+        raise BizError(CommonErr.FORBIDDEN, "缺少刷新令牌")
     if not valid_refresh_token(raw_refresh):
-        return resp_json(CommonErr.FORBIDDEN, detail="刷新令牌无效")
+        raise BizError(CommonErr.FORBIDDEN, "刷新令牌无效")
 
     tok_hash = hash_refresh_token(raw_refresh)
     now = now_iso()
@@ -497,7 +494,7 @@ async def admin_refresh(
         RefreshToken.kind == "admin",
         RefreshToken.revoked_at.is_(None),
     ):
-        return resp_json(CommonErr.FORBIDDEN, detail="刷新令牌无效")
+        raise BizError(CommonErr.FORBIDDEN, "刷新令牌无效")
 
     stored = await get_or_raise(
         db,
@@ -506,15 +503,15 @@ async def admin_refresh(
         RefreshToken.token_hash == tok_hash,
     )
     if stored.expires_at <= now:
-        return resp_json(CommonErr.FORBIDDEN, detail="会话已过期")
+        raise BizError(CommonErr.FORBIDDEN, "会话已过期")
 
     user = await get_or_raise(
         db, User, AuthErr.USER_NOT_FOUND, User.id == stored.user_id
     )
     if user.account_level != "admin":
-        return resp_json(CommonErr.FORBIDDEN, detail="会话无效")
+        raise BizError(CommonErr.FORBIDDEN, "会话无效")
     if lock_is_active(user):
-        return resp_json(CommonErr.FORBIDDEN, detail="账号已锁定")
+        raise BizError(CommonErr.FORBIDDEN, "账号已锁定")
 
     # 2FA 信任以 auth 库 refresh 行为真值：access cookie 只活 15min，只读它的话
     # cookie 一过期就得到 (False, None)，新 refresh 行被写成 mfa_verified=False/mfa_at=NULL，
@@ -629,7 +626,7 @@ async def admin_verify_2fa(
     if not raw_refresh or not valid_refresh_token(raw_refresh):
         raise BizError(CommonErr.FORBIDDEN, "Refresh session missing")
     refresh_hash = hash_refresh_token(raw_refresh)
-    old = jwt_keys.decode(request.cookies[COOKIE_NAME], audience=_ADMIN_AUD)
+    old = _decode_admin_payload(request)
     if old.get("rt_hash") != refresh_hash:
         raise BizError(CommonErr.FORBIDDEN, "Access and refresh sessions differ")
     result = await db.execute(

@@ -28,8 +28,8 @@ _UID = uuid.UUID("00000000-0000-7000-8000-000000000001")
 
 
 @pytest.fixture
-async def db(auth_db: AsyncSession) -> AsyncSession:
-    """本文件读缝直对 auth realm（M3.B S5 拆库）。
+async def db(auth_db: AsyncSession, auth_seam_realm: None) -> AsyncSession:
+    """本文件读缝直对 auth realm（M3.B S5 拆库），且 snapshot 恒经 auth HTTP 缝。
 
     conftest 的 ``db`` 现只建 Base（53 表、**无 users**）；``auth_db`` 才建 AuthBase（18
     表，含 users/profiles）。本模块是 auth/snapshot 读缝的核心测试，User/Profile 归属 auth

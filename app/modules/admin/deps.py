@@ -7,8 +7,8 @@ authz seam）裁决 account_level == "admin" 的存活会话。
 token_version 提升 / 改密撤销 / role / account_level）现只由 **auth 域** 持有。因此本模块
 不再本地 ``select(User)``：``get_current_admin`` / danger(``get_current_admin_2fa``) 只经
 ``auth`` internal authz seam(HTTP) 或 **fail-closed 拒**。后台 cookie 的签发/校验基元
-（create/decode/aud/常量）唯一事实源在 auth 包，此处经 ``auth.seams`` 单向
-import 复用（方向 admin→auth，owner-leaf 合规）。
+与常量经 ``core.ports.authz`` 使用（import-linter 禁止 app→auth；auth 侧实现在
+``auth.admin_session``，常量契约在 core）。
 
 - seam 未启用（auth_http_url&&token 未配齐）→ 一律 FORBIDDEN 拒，后台绝不保守放行。
 - 危险操作依赖（``require_admin_2fa``）在有效 admin seam 会话之上额外校验 cookie 的
@@ -36,13 +36,12 @@ from core.ports.authz import (
     decode_admin_access,
     is_jti_blocked,
     resolve_via_seam,
-    seam_enabled,
 )
 from core.rbac_roles import session_roles_claim
 
-# —— 后台 cookie 签发/校验纯基元与常量：单一事实源 auth.admin_session，此处原样 re-export，
-#    供既有调用方（auth_router / users / content / moderation / reports …及需造后台 cookie 的
-#    拆库 seam 测试）从 admin.deps 向后兼容导入，绝不复制第二份值 ——
+# —— 后台 cookie 签发/校验纯基元与常量：常量契约单一事实源 core.ports.authz（auth.admin_session
+#    实现），此处原样 re-export，供既有调用方（auth_router / users / content / moderation /
+#    reports …及需造后台 cookie 的拆库 seam 测试）从 admin.deps 导入，绝不复制第二份值 ——
 __all__ = [
     "ACCESS_TOKEN_MINUTES",
     "COOKIE_NAME",
@@ -95,9 +94,8 @@ async def get_current_admin(
     if await is_jti_blocked(payload.get("jti")):
         raise BizError(CommonErr.FORBIDDEN, "Admin session invalid or expired")
 
-    # seam-only：未配置 authz seam → fail-closed（business 无本地 auth 真值可判，宁可拒）
-    if not seam_enabled():
-        raise BizError(CommonErr.FORBIDDEN, "Admin auth service not configured")
+    # seam-only：business 无本地 auth 真值可判，auth 不可用由 _resolve_admin_via_seam
+    # fail-closed 映射为 FORBIDDEN（绝不回落本地读 users）。
 
     # 同 sub：声明是裸值，可能是 null/字符串/浮点，直接 int() 会以 TypeError/ValueError
     # 冒成 500；解析失败按 fail-closed 拒（而非放行）

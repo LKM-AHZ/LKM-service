@@ -25,6 +25,7 @@ from auth.models import Profile, User
 from auth.security import create_access_token, hashpwd
 from core.config import settings
 from core.err import BizError
+from core.ports.authz import resolve_current_user
 from tests.conftest import DB
 
 
@@ -114,7 +115,7 @@ async def test_seam_on_settles_auth_not_local_db(db: DB, monkeypatch) -> None:
         )
 
     _inject_client(handler)
-    cu = await auth_deps._resolve_current_user(_default_user_token(uid), db)
+    cu = await resolve_current_user(_default_user_token(uid))
     assert hit["seen"]  # 确实经 HTTP seam 而非本地 DB
     assert cu.account_level == "admin"
     assert cu.role == "author"
@@ -133,7 +134,7 @@ async def test_seam_reject_is_honored(db: DB, monkeypatch) -> None:
 
     _inject_client(handler)
     with pytest.raises(BizError) as ei:
-        await auth_deps._resolve_current_user(_default_user_token(uid), db)
+        await resolve_current_user(_default_user_token(uid))
     assert ei.value.errcode == AuthErr.ACCOUNT_LOCKED
 
 
@@ -147,11 +148,11 @@ async def test_seam_fail_closed_on_5xx(db: DB, monkeypatch) -> None:
 
     _inject_client(handler)
     with pytest.raises(BizError):
-        await auth_deps._resolve_current_user(_default_user_token(uid), db)
+        await resolve_current_user(_default_user_token(uid))
 
 
-async def test_seam_off_stays_local_lock(db: DB, monkeypatch) -> None:
-    """seam 关闭（默认）→ deps 走本地 DB 直读：本地锁定照拒（行为不因改造变）。"""
+async def test_auth_realm_local_lock(db: DB, monkeypatch) -> None:
+    """auth 进程本地裁决：本地锁定照拒（auth.deps 不再有 seam 分支）。"""
     uid = await _mk_active(db, "so", locked=True)
     with pytest.raises(BizError) as ei:
         await auth_deps._resolve_current_user(_default_user_token(uid), db)

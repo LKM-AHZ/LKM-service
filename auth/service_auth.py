@@ -16,6 +16,7 @@ from auth.admission import (
 )
 from auth.channels import CHANNELS, channel_for
 from auth.errors import AuthErr
+from auth.limits import CODE_MAX_PER_WINDOW, CODE_WINDOW_SECONDS
 from auth.models import (
     MagicLink,
     PendingRegistration,
@@ -690,7 +691,11 @@ async def request_magic_link(
     —— 不会创建或发送链接，但仍会消耗速率限制配额。
     """
     rate_limit_key = f"magiclink:{_normalize_email(email)}:{purpose}"
-    await check_code_rate_limit(rate_limit_key, max_count=5, window=3600)
+    await check_code_rate_limit(
+        rate_limit_key,
+        max_count=CODE_MAX_PER_WINDOW,
+        window=CODE_WINDOW_SECONDS,
+    )
 
     user = await UserRepository(db).get_by_email(email)
     if not user or user.account_level == "local":

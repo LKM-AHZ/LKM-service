@@ -310,10 +310,11 @@ async def grant_incubation(db: DbSession, user_id: uuid.UUID) -> int:
 
 
 async def grant_incubation_from_business(db: DbSession, user_id: uuid.UUID) -> int:
-    """business supplier 触发"纳入成员升级"的单向升权（auth realm 权威写）。"""
-    if user_http.enabled():
-        return await user_http.grant_via_seam(kind="incubation", user_id=user_id)
-    return await grant_incubation(db, user_id)
+    """business supplier 触发"纳入成员升级"的单向升权（恒经 auth HTTP 写缝）。
+
+    ``db`` 仅为保留既有调用签名：app realm 不持有 auth 库会话。
+    """
+    return await user_http.grant_via_seam(kind="incubation", user_id=user_id)
 
 
 async def grant_exam_unlock_from_business(
@@ -323,14 +324,13 @@ async def grant_exam_unlock_from_business(
     unlock_level: str | None,
     unlock_role: str | None,
 ) -> int:
-    """business supplier 触发"考试通过解锁"的单向升权（auth realm 权威写）。"""
-    if user_http.enabled():
-        return await user_http.grant_via_seam(
-            kind="exam_unlock",
-            user_id=user_id,
-            unlock_level=unlock_level,
-            unlock_role=unlock_role,
-        )
-    return await grant_exam_unlock(
-        db, user_id, unlock_level=unlock_level, unlock_role=unlock_role
+    """business supplier 触发"考试通过解锁"的单向升权（恒经 auth HTTP 写缝）。
+
+    ``db`` 仅为保留既有调用签名：app realm 不持有 auth 库会话。
+    """
+    return await user_http.grant_via_seam(
+        kind="exam_unlock",
+        user_id=user_id,
+        unlock_level=unlock_level,
+        unlock_role=unlock_role,
     )

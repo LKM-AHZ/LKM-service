@@ -156,7 +156,10 @@ class TestBackfill:
 
 class TestNewUserIsNeverRejected:
     async def should_stay_readable_after_creation(
-        self, auth_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+        self,
+        auth_db: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_seam_realm: None,
     ) -> None:
         """**关键回归**：门禁已开、位图已预热，但一个**刚建号**的用户必须当场可读。
 

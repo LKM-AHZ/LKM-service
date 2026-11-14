@@ -38,31 +38,25 @@ async def db(auth_db: AsyncSession) -> AsyncSession:
 
 
 @pytest.fixture
-async def fused_front_client(fused_db_session: AsyncSession) -> Any:
+async def fused_front_client(
+    fused_db_session: AsyncSession, auth_seam_fused: None
+) -> Any:
     """前台业务路由 + auth 身份同 fused schema 的 HTTP 客户端。
 
     业务删除路由要读业务库 ``role_permissions``/``content_items``，同时要 auth 身份裁决；
-    仅 override auth 会话（``auth_front_client``）会让业务会话落默认库而表不存在。这里把
-    ``get_session``/``get_read_session``/``get_auth_session`` 三处都指到 fused（auth+业务
-    同 schema），供需要业务权限表的前台用例使用。
-
-    另需一并覆盖 ``core.ports.authz.auth_session``：业务路由的鉴权依赖经 core 端口取会话，
-    不再直接依赖 auth 的 ``get_auth_session``（见 core/ports/authz.py）。
+    ``auth_seam_fused`` 把 app 侧鉴权 HTTP 缝指到同库 auth 表，本 fixture 再把业务会话
+    override 到 fused schema（auth+业务同 schema），供需要业务权限表的前台用例使用。
     """
     from httpx import ASGITransport, AsyncClient
 
     from app.main import app
-    from auth.db.session import get_auth_session
     from core.db.session import get_read_session, get_session
-    from core.ports.authz import auth_session
 
     async def _override():
         yield fused_db_session
 
     app.dependency_overrides[get_session] = _override
     app.dependency_overrides[get_read_session] = _override
-    app.dependency_overrides[get_auth_session] = _override
-    app.dependency_overrides[auth_session] = _override
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -70,8 +64,6 @@ async def fused_front_client(fused_db_session: AsyncSession) -> Any:
     finally:
         app.dependency_overrides.pop(get_session, None)
         app.dependency_overrides.pop(get_read_session, None)
-        app.dependency_overrides.pop(get_auth_session, None)
-        app.dependency_overrides.pop(auth_session, None)
 
 
 # ---------------------------------------------------------------------------

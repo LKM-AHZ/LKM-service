@@ -31,8 +31,8 @@ _UID3 = uuid.UUID("00000000-0000-7000-8000-000000000003")
 
 
 @pytest.fixture
-async def db(fused_db_session: AsyncSession) -> AsyncSession:
-    """ws authorize 校验需要 auth(user) 存在（融合；business 无 users）。"""
+async def db(fused_db_session: AsyncSession, auth_seam_fused: None) -> AsyncSession:
+    """ws authorize 校验需要 auth(user) 存在（融合 schema + auth HTTP 缝）。"""
     return fused_db_session
 
 

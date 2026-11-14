@@ -15,7 +15,6 @@ from typing import Any
 
 REQUIRED_PORTS: tuple[str, ...] = (
     "authz",
-    "authz_session",
     "snapshot",
     "audit",
     "users",

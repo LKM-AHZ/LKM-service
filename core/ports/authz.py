@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import Depends, Header
@@ -29,14 +29,10 @@ REFRESH_NAME = "admin_refresh"
 ACCESS_TOKEN_MINUTES = settings.admin_access_cookie_minutes
 # 与前台分离的 audience：后台 access cookie 只认本 audience，防被其它会话冒用。
 _ADMIN_AUD = "lkm:admin"
-COOKIE_PATH = f"/{settings.api_prefix.strip('/')}"
+# 当前后台 cookie 路径；旧版写在 /{api_prefix}，auth.admin_router 仍按 _LEGACY_COOKIE_PATH 清理。
+COOKIE_PATH = "/"
 # 危险操作 step-up 2FA 的信任窗口：验证通过后 1 小时内不再重复要求（前台与后台同值）。
 MFA_TRUST_SECONDS = 3600
-
-
-def seam_enabled() -> bool:
-    """鉴权缝（authz HTTP seam）是否启用（拆库后 auth 是唯一真值）。"""
-    return get("authz").seam_enabled()
 
 
 def decode_access_token(token: str) -> Mapping[str, Any]:
@@ -47,8 +43,8 @@ def decode_access_token(token: str) -> Mapping[str, Any]:
 async def resolve_current_user(token: str, db: Any = None) -> CurrentUser:
     """裁决一个令牌对应的当前用户（非 Depends 路径用，如 WebSocket）。
 
-    ``db`` 缺省时由实现自开 auth 会话；调用方若持有可查 users 的会话（融合部署/测试）
-    可传入以复用。
+    app realm 不再持有 auth 库会话：裁决恒经 auth HTTP 缝，``db`` 仅为保留既有
+    调用签名（实现侧忽略）。
     """
     return await get("authz").resolve_current_user(token, db)
 
@@ -115,36 +111,20 @@ def _parse_bearer(
     raise BizError(CommonErr.FORBIDDEN, "Invalid authorization header format")
 
 
-async def auth_session() -> AsyncIterator[Any]:
-    """FastAPI 依赖：提供 auth realm 会话（提交/回滚/关闭由实现负责）。
-
-    单独暴露成依赖对象，是为了让测试能 ``app.dependency_overrides`` 到自己的隔离库
-    （后端路由的鉴权会话不再由调用方 new_session 自持）。生产由 auth 绑定
-    ``auth.db.session.get_auth_session``。
-    """
-    dep = get("authz_session")
-    async for session in dep():
-        yield session
-
-
-async def get_current_user(
-    token: str = Depends(_parse_bearer),
-    db: Any = Depends(auth_session),
-) -> CurrentUser:
+async def get_current_user(token: str = Depends(_parse_bearer)) -> CurrentUser:
     """必选 JWT 认证依赖。"""
-    return await get("authz").resolve_current_user(token, db)
+    return await get("authz").resolve_current_user(token)
 
 
 async def get_optional_user(
     authorization: str | None = Header(None, alias="Authorization"),
-    db: Any = Depends(auth_session),
 ) -> CurrentUser | None:
     """可选 JWT 认证依赖（无令牌/令牌无效均返回 None，不抛错）。"""
     token = _bearer_token(authorization)
     if token is None:
         return None
     try:
-        return await get("authz").resolve_current_user(token, db)
+        return await get("authz").resolve_current_user(token)
     except (BizError, PyJWTError) as exc:
         import logging
 
@@ -172,14 +152,8 @@ def RequireLevel(min_level: str) -> Any:
     return Depends(checker)
 
 
-async def get_current_user_2fa(
-    token: str = Depends(_parse_bearer),
-    cur: CurrentUser = Depends(get_current_user),
-) -> CurrentUser:
-    """前台危险操作依赖：在有效会话之上，另要求本会话已通过 step-up 2FA 且信任未过期。
-
-    校验失败抛 CommonErr.MFA_REQUIRED，前端据此弹 TOTP 验证（POST /auth/2fa/step-up）后重试。
-    """
+def assert_mfa_trusted(token: str) -> None:
+    """校验令牌携带未过期的 step-up 2FA 信任；不通过抛 CommonErr.MFA_REQUIRED。"""
     try:
         payload = decode_access_token(token)
     except (PyJWTError, ValueError) as exc:
@@ -189,9 +163,19 @@ async def get_current_user_2fa(
     mfa_at = payload.get("mfa_at")
     if mfa_at is None:
         raise BizError(CommonErr.MFA_REQUIRED, "MFA required")
-    tried_at = float(mfa_at)
-    if time.time() - tried_at > MFA_TRUST_SECONDS:
+    if time.time() - float(mfa_at) > MFA_TRUST_SECONDS:
         raise BizError(CommonErr.MFA_REQUIRED, "MFA trust expired")
+
+
+async def get_current_user_2fa(
+    token: str = Depends(_parse_bearer),
+    cur: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """前台危险操作依赖：在有效会话之上，另要求本会话已通过 step-up 2FA 且信任未过期。
+
+    校验失败抛 CommonErr.MFA_REQUIRED，前端据此弹 TOTP 验证（POST /auth/2fa/step-up）后重试。
+    """
+    assert_mfa_trusted(token)
     return cur
 
 

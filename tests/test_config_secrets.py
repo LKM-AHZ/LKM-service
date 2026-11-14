@@ -9,6 +9,9 @@ from core.config import Settings
 _SECRETS = {
     "totp_encryption_key": "t" * 48,
     "verification_code_pepper": "v" * 48,
+    # 双形态退役：生产环境必须接出独立 auth 服务
+    "auth_http_url": "http://auth:8001",
+    "auth_http_token": "a" * 48,
 }
 
 

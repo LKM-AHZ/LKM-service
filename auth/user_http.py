@@ -17,8 +17,8 @@ monolith 进程缓存 miss）应跨 HTTP 打到 AUTH 进程自己的读端点，
 - wire 信封（内部、非 ApiResp）：``{"data": <冻结字段 dict|null>, "sv": <int|null>}``。
   ``sv`` 是 AUTH 端按 User.updated_at 派生的来源版本（同 ``user_cache.version_of_updated_at``，
   跨进程可比），供 consumer 以真实来源版本做缓存 CAS，不捏造版本。
-- ``enabled()`` 与 config 同源；URL 配了但 token 空 → seam 不启用（端点 fail-closed、此处
-  fail-open）。此模块仅 auth 内部用、被 auth.snapshot 引用，不新增业务→edge。
+- 双形态退役后 app realm 恒走本 client（生产由配置校验强制内部缝地址/令牌；缺配置时
+  请求 fail-closed）。此模块仅 auth 内部用、被 auth.snapshot 等引用，不新增业务→edge。
 """
 
 from __future__ import annotations
@@ -50,12 +50,7 @@ _client_factory: Any = None
 
 
 class UserHttpUnavailable(Exception):
-    """internal read 不可用/失败：调用方必须 fail-open 回落 DB。"""
-
-
-def enabled() -> bool:
-    """seam 开关：URL 与 token 都配齐才启用（默认双双为空 → False，保持既有直读 DB 行为）。"""
-    return bool(settings.auth_http_url and reveal(settings.auth_http_token))
+    """internal seam 不可用/失败：调用方按各自契约 fail-open（读）或 fail-closed（写/裁决）。"""
 
 
 def _endpoint_path(user_id: uuid.UUID) -> str:
@@ -244,8 +239,7 @@ async def authorize_via_seam(
 
     **鉴权缝 = fail-closed**（与快照读缝的 fail-open 相反）：鉴权“拿不到/异常”必须以拒绝收场，
     不能保守回落本进程（拆库后本就无本地 auth 真值可退）。故任何网络/超时/4xx/5xx/畸形 → 抛
-    ``UserHttpUnavailable``，由 deps 按“不可用即拒”（403）处理。仅当调用方显式配置了 seam
-    （``enabled()``）才走 HTTP；seam 关闭时调用方应回落到其本地路径。
+    ``UserHttpUnavailable``，由 deps 按“不可用即拒”（403）处理。app realm 恒走此缝。
     """
     url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/authz"
     headers = {
@@ -307,7 +301,7 @@ async def grant_via_seam(
     """经 AUTH internal 写端点执行一次单向升权，返回 ``changed``（0=无真实改动/1=已升权并 bump token）。
 
     ``kind`` ∈ {"exam_unlock", "incubation"}（与 ``/auth/internal/grant`` 的 ``_GrantIn.kind`` 同源）。
-    调用方应已先行判断 ``enabled()``（拆库写只有 seam 路径可用）；本函数不带回退本地 DB。
+    本函数不带回退本地 DB。
     """
     url = f"{settings.auth_http_url}{settings.api_prefix}/auth/internal/grant"
     headers = {
