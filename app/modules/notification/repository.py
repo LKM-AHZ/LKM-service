@@ -93,6 +93,21 @@ class NotificationPreferenceRepository(AsyncRepository[NotificationPreference]):
 class NotificationTokenRepository(AsyncRepository[NotificationToken]):
     model = NotificationToken
 
+    async def claim_huawei_token(self, user_id: uuid.UUID, token: str) -> None:
+        """One Huawei device belongs to one account, even across concurrent logins."""
+        await self.db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(f"huawei-push:{token}", 0)
+                )
+            )
+        )
+        await self.hard_delete_where(
+            NotificationToken.token == token,
+            NotificationToken.platform == "huawei",
+            NotificationToken.user_id != user_id,
+        )
+
     async def upsert(
         self,
         *,

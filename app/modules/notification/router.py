@@ -53,7 +53,7 @@ async def notification_status() -> ModuleStatus:
         status="implemented",
         responsibility="站内信：业务事件生成通知（含同类聚合）+ WS 实时推送 + 偏好门控 + 推送 token。",
         next_steps=[
-            "推送 token 的实际下发通道（APNs/FCM）待选型",
+            "HarmonyOS Huawei Push v3 按配置下发；APNs/FCM 下发通道待接入",
             "更多事件源接入（feed 关注、审核结果）",
         ],
     )

@@ -33,8 +33,9 @@ from app.modules.notification.schemas import (
     TokenOut,
 )
 from core.common import PageData, paginate_offset, paginate_pages
+from core.config import settings
 from core.db.repository import DbSession
-from core.err import BizError
+from core.err import BizError, CommonErr
 
 
 class NotificationType(StrEnum):
@@ -192,8 +193,12 @@ async def register_token(
     db: DbSession, user_id: uuid.UUID, token: str, platform: str = "web"
 ) -> TokenOut:
     """注册推送 token：同 (user_id, token) 幂等（刷新 platform）。"""
+    if platform == "huawei" and not settings.huawei_push_enabled:
+        raise BizError(CommonErr.UNAVAILABLE, "Huawei Push is not configured")
     now = datetime.datetime.now(datetime.UTC)
     repo = NotificationTokenRepository(db)
+    if platform == "huawei":
+        await repo.claim_huawei_token(user_id, token)
     await repo.upsert(user_id=user_id, token=token, platform=platform, now=now)
     row = await repo.get_one(
         NotificationToken.user_id == user_id,

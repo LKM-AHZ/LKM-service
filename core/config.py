@@ -231,6 +231,14 @@ class Settings(BaseSettings):
     # ---- notification 域 ----
     # 同类通知聚合窗口（秒）：同一 (收件人, 类型, 触发者, 目标) 的未读通知在此窗口内合并为一条（payload.count 累加）
     notification_aggregate_window_s: float = 3600.0
+    # HarmonyOS NEXT Push Kit v3 uses service-account PS256 JWT (not FCM/OAuth).
+    huawei_push_enabled: bool = False
+    huawei_push_project_id: str = Field(default="", pattern=r"^[0-9]*$")
+    huawei_push_key_id: str = ""
+    huawei_push_sub_account: str = ""
+    huawei_push_private_key: SecretStr = SecretStr("")
+    huawei_push_category: str = "SUBSCRIPTION"
+    huawei_push_test_message: bool = False
 
     # ---- Prefect 编排 ----
     prefect_enabled: bool = False
@@ -368,6 +376,31 @@ class Settings(BaseSettings):
     # 寻址风格：S3/MinIO 常用 path-style，OSS/COS 多用 virtual-host。
     s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
     s3_public_addressing_style: Literal["path", "virtual", "auto"] = "path"
+
+    @model_validator(mode="after")
+    def _huawei_push_configuration(self) -> "Settings":
+        if self.huawei_push_enabled:
+            if not all(
+                (
+                    self.huawei_push_project_id,
+                    self.huawei_push_key_id,
+                    self.huawei_push_sub_account,
+                    reveal(self.huawei_push_private_key),
+                    self.huawei_push_category,
+                )
+            ):
+                raise ValueError(
+                    "Huawei Push requires project/key/sub-account/private key/category"
+                )
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+
+            key = serialization.load_pem_private_key(
+                reveal(self.huawei_push_private_key).encode(), password=None
+            )
+            if not isinstance(key, rsa.RSAPrivateKey):
+                raise ValueError("Huawei Push requires an RSA private key")
+        return self
 
     @model_validator(mode="after")
     def _no_insecure_secrets_outside_dev(self) -> "Settings":

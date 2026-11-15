@@ -380,6 +380,24 @@ class TestService:
         assert await delete_token(db, uid, "tok-1") == 1
         assert await delete_token(db, uid, "tok-1") == 0
 
+    async def test_huawei_device_moves_to_current_account(
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(notif_tasks.settings, "huawei_push_enabled", True)
+        first = await _mk_user(auth_db, "huawei_first")
+        second = await _mk_user(auth_db, "huawei_second")
+        await register_token(db, first, "same-device-token", "huawei")
+        await register_token(db, first, "other-device-token", "huawei")
+        await register_token(db, second, "same-device-token", "huawei")
+        rows = (await db.execute(select(NotificationToken))).scalars().all()
+        assert {(row.user_id, row.token) for row in rows} == {
+            (second, "same-device-token"),
+            (first, "other-device-token"),
+        }
+
 
 class TestConsumeEvents:
     async def test_qa_accept_notifies_answer_author(

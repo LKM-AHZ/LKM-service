@@ -24,6 +24,7 @@ from typing import Any, NamedTuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.notification.huawei import push_to_user
 from app.modules.notification.service import (
     NotificationType,
     create_notification,
@@ -217,6 +218,7 @@ async def notify_from_point_event(
             event_id=event_id,
             version=nid.int,
         )
+        await push_to_user(user_id, payload)
 
 
 register_task(SUB_NOTIFICATION.name, "apply_point_event", notify_from_point_event)
