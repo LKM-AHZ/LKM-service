@@ -116,9 +116,9 @@ def test_settings_actually_reads_the_lkm_prefix() -> None:
     assert "LKM_DB_HOST" in _SETTINGS_ENV
 
 
-def test_backend_and_auth_receive_only_known_variables() -> None:
-    """A. 传给 backend/auth 的 LKM_* 必须是 Settings 字段（否则静默 no-op）。"""
-    for service in ("backend", "auth"):
+def test_services_receive_only_known_variables() -> None:
+    """A. 传给应用服务的 LKM_* 必须是 Settings 字段（否则静默 no-op）。"""
+    for service in ("backend", "auth", "worker-notification"):
         unknown = sorted(
             name
             for name in _settings_consumer_env(service)
@@ -134,11 +134,40 @@ def test_backend_and_auth_receive_only_known_variables() -> None:
 
 def test_non_settings_allowlist_has_no_stale_entries() -> None:
     """允许清单本身不许腐烂：列了却没人传的名字，会成为未来同名拼写的免检通道。"""
-    passed = _settings_consumer_env("backend") | _settings_consumer_env("auth")
+    passed = (
+        _settings_consumer_env("backend")
+        | _settings_consumer_env("auth")
+        | _settings_consumer_env("worker-notification")
+    )
     stale = sorted(name for name in _NON_SETTINGS_ENV if name not in passed)
     assert not stale, (
-        f"_NON_SETTINGS_ENV 里这些变量已不再传给 backend/auth，应删除：{stale}"
+        f"_NON_SETTINGS_ENV 里这些变量已不再传给应用服务，应删除：{stale}"
     )
+
+
+def test_huawei_push_reaches_registration_and_delivery() -> None:
+    """华为推送配置必须同时到达 backend（注册开关）与 worker-notification（发送）。
+
+    backend 只在 enabled=true 时接受 platform=huawei 的 token 注册；实际下发在
+    worker-notification。少传任何一侧都会表现为「注册成功但永远收不到」或
+    「设置已开却注册被拒」，而 Settings 的 extra='ignore' 不会报错。
+    """
+    expected = {
+        "LKM_HUAWEI_PUSH_ENABLED",
+        "LKM_HUAWEI_PUSH_PROJECT_ID",
+        "LKM_HUAWEI_PUSH_KEY_ID",
+        "LKM_HUAWEI_PUSH_SUB_ACCOUNT",
+        "LKM_HUAWEI_PUSH_PRIVATE_KEY",
+        "LKM_HUAWEI_PUSH_CATEGORY",
+        "LKM_HUAWEI_PUSH_TEST_MESSAGE",
+    }
+    for service in ("backend", "worker-notification"):
+        missing = sorted(expected - _settings_consumer_env(service))
+        assert not missing, (
+            f"{service} 缺少华为推送变量：{missing}\n"
+            "compose 的 environment 是逐项白名单（不是 env_file 全量注入），"
+            "Settings 字段存在不代表容器能收到。"
+        )
 
 
 def test_every_compose_knob_is_discoverable() -> None:
