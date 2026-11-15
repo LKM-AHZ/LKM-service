@@ -15,6 +15,7 @@ from app.modules.content.boards.schemas import BoardCreate
 from app.modules.content.boards.service import create_board_ex
 from app.modules.content.schemas import ContentItemCreate
 from app.modules.content.service import create_item, delete_item
+from app.modules.files.models import FileStatus, LibraryFile
 from app.modules.search import service as search_service
 from app.modules.search import sync as search_sync
 from app.modules.search.engines import factory as engine_factory
@@ -123,6 +124,84 @@ async def test_engine_hits_are_backfilled_and_filtered(
     assert [h.id for h in page.items] == [item_id]
 
 
+async def test_engine_searches_all_content_and_files_without_type(
+    db: AsyncSession,
+    auth_db: AsyncSession,
+    auth_seam_realm: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """content_type 为空也走引擎：内容与文件统一命中，可见性一律由 DB 回填裁定。
+
+    DB 里的文案刻意不含检索词——命中只能来自引擎，确保测的是引擎路径而非 PG 兜底。
+    引擎里的旧版本、机密文件、DB 不存在的幽灵必须被 DB 口径过滤掉。
+    """
+    item_id = await _make_item(db, auth_db, title="无关标题", content="正文")
+    uploader = await _au(auth_db, f"f{uuid.uuid4().hex[:8]}")
+    code = f"CN-{uuid.uuid4().hex[:8]}"
+    common = dict(
+        uploader_id=uploader.id,
+        original_name="无关名称.pdf",
+        mime_type="application/pdf",
+        size=1,
+        category_id="math",
+        description="",
+        tags="[]",
+        document_code=code,
+        extracted_text="无关正文",
+    )
+    stale = LibraryFile(
+        **common,
+        stored_name=f"stale-{uuid.uuid4().hex}",
+        version=1,
+        status=FileStatus.APPROVED,
+        classification="public",
+    )
+    current = LibraryFile(
+        **common,
+        stored_name=f"current-{uuid.uuid4().hex}",
+        version=2,
+        status=FileStatus.APPROVED,
+        classification="public",
+    )
+    secret = LibraryFile(
+        **{**common, "document_code": f"SEC-{uuid.uuid4().hex[:8]}"},
+        stored_name=f"secret-{uuid.uuid4().hex}",
+        version=1,
+        status=FileStatus.APPROVED,
+        classification="confidential",
+    )
+    db.add_all([stale, current, secret])
+    await db.flush()
+
+    engine = FakeSearchEngine()
+    for doc_id, content_type in (
+        (item_id, "discussion"),
+        (stale.id, "library_file"),
+        (current.id, "library_file"),
+        (secret.id, "library_file"),
+    ):
+        engine.docs[str(doc_id)] = {
+            "id": str(doc_id),
+            "content_type": content_type,
+            "title": "黎曼猜想",
+        }
+    ghost = str(uuid.uuid4())
+    engine.docs[ghost] = {
+        "id": ghost,
+        "content_type": "discussion",
+        "title": "黎曼猜想幽灵",
+    }
+    monkeypatch.setattr(search_service, "get_engine", lambda: engine)
+
+    page = await search_service.search_items(db, "黎曼猜想")
+
+    # 引擎顺序保留；旧版本、机密文件、DB 不存在的幽灵全部被 DB 口径过滤
+    assert [hit.id for hit in page.items] == [item_id, current.id]
+    assert page.items[1].content_type == "library_file"
+    assert page.items[1].document_code == code
+    assert page.items[1].author_name == uploader.username
+
+
 async def test_engine_failure_falls_back_to_pg(
     db: AsyncSession,
     auth_db: AsyncSession,
@@ -134,11 +213,8 @@ async def test_engine_failure_falls_back_to_pg(
     monkeypatch.setattr(search_service, "get_engine", lambda: engine)
     before = search_engine_fallback_total.labels("fake")._value.get()
 
-    # 必须带 content_type：content_type 为空时检索面**直接走 PG**（文件库要按 DB 审核/密级
-    # 实时过滤，外索引滞后不得绕过），压根不碰引擎，也就谈不上回落（f885cd3 起）。
-    page = await search_service.search_items(
-        db, "费马大定理", content_type="discussion"
-    )
+    # 默认检索（content_type 为空）同样走引擎；引擎异常时必须回落 PG，检索面不可用才是回归。
+    page = await search_service.search_items(db, "费马大定理")
 
     assert page.total == 1  # 结果来自 PG 兜底
     after = search_engine_fallback_total.labels("fake")._value.get()

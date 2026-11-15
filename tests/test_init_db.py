@@ -299,32 +299,39 @@ async def test_auth_metadata_disjoint_from_business_base() -> None:
     assert "users" not in Base.metadata.tables
 
 
-def test_auth_alembic_chain_head() -> None:
-    """alembic_auth 只有一条自包含基线（资料/准入/申请理由增量均已折入）。"""
+def _assert_alembic_chain(ini_name: str, baseline: str) -> None:
+    """迁移链结构不变量：单头、以指定基线为根、父 revision 都存在。
+
+    不把当前 head 写死：基线的历史增量已折入，之后的新改动按增量追加，每次新增
+    revision 都改断言只会制造噪音；链完整性由 ``scripts/check_migrations.py`` 深检。
+    """
     from pathlib import Path
 
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     repo_root = Path(__file__).resolve().parents[1]
-    script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.auth.ini")))
-    assert script.get_current_head() == "0001_auth_baseline"
-    assert len(list(script.walk_revisions())) == 1
-    assert script.get_revision("0001_auth_baseline").down_revision is None
+    script = ScriptDirectory.from_config(Config(str(repo_root / ini_name)))
+    revisions = list(script.walk_revisions())
+
+    assert len(script.get_heads()) == 1, "迁移链应只有一个 head（无分叉）"
+    assert [r.revision for r in revisions if r.down_revision is None] == [baseline]
+
+    known = {r.revision for r in revisions}
+    for rev in revisions:
+        down = rev.down_revision
+        parents = (down,) if isinstance(down, str) else tuple(down or ())
+        assert all(p in known for p in parents), f"{rev.revision} 的父 revision 不存在"
+
+
+def test_auth_alembic_chain_head() -> None:
+    """alembic_auth：单头，自包含基线为根，增量 revision 线性衔接。"""
+    _assert_alembic_chain("alembic.auth.ini", "0001_auth_baseline")
 
 
 def test_business_alembic_chain_head() -> None:
-    """业务链只有一条自包含基线（申请防重索引与 bot 媒体表已折入）。"""
-    from pathlib import Path
-
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
-    repo_root = Path(__file__).resolve().parents[1]
-    script = ScriptDirectory.from_config(Config(str(repo_root / "alembic.ini")))
-    assert script.get_current_head() == "0001_initial"
-    assert len(list(script.walk_revisions())) == 1
-    assert script.get_revision("0001_initial").down_revision is None
+    """业务链：单头，自包含基线为根，增量 revision 线性衔接。"""
+    _assert_alembic_chain("alembic.ini", "0001_initial")
 
 
 async def test_additive_schema_sync_adds_missing_columns_and_indexes() -> None:

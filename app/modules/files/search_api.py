@@ -135,10 +135,16 @@ async def index_doc(db: AsyncSession, file_id: uuid.UUID) -> IndexDoc | None:
 
 
 def select_public_by_ids(ids: list[uuid.UUID]) -> Select[Any]:
+    """按 id 批量取公开文件（引擎命中后的权威回填）。
+
+    与 ``search_select`` 同口径：已审核 + 公开 + 未被更高版本的已审核文件取代。
+    外部索引可能还留着旧版本文档，回填时必须在这里再拦一次。
+    """
     return select(LibraryFile).where(
         LibraryFile.id.in_(ids),
         LibraryFile.status == FileStatus.APPROVED,
         LibraryFile.classification == "public",
+        ~_newer_approved_exists(),
     )
 
 

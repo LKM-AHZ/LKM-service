@@ -6,9 +6,10 @@
   （``simple`` 分词）配 GIN，对英文/数字词做词法匹配并给 ``ts_rank`` 相关度；**pg_trgm 路**
   走 ``ILIKE '%词%'`` 子串匹配（中文在 ``simple`` 分词下只成一个 lexeme，中文子串实际靠
   这一路）。已知限制：trigram 需 ≥3 字符，**2 字中文词**退化为全表扫描（结果仍正确）。
-- ``meilisearch`` / ``opensearch``：命中 id 后**一律回查 DB 权威回填**——索引可能滞后
-  （行已软删/下架），故出参与 PG 路径同源口径。引擎调用失败 **fail-open 回落 PG**
-  （记 ``search_engine_fallback_total``），保证检索面不因外部组件抖动而不可用。
+- ``meilisearch`` / ``opensearch``：内容与文件统一交给引擎检索（含 ``content_type`` 为空的
+  默认检索），命中 id 后**一律回查 DB 权威回填**——索引可能滞后（行已软删/下架/被新版本
+  取代），故出参与 PG 路径同源口径。引擎调用失败 **fail-open 回落 PG**（记
+  ``search_engine_fallback_total``），保证检索面不因外部组件抖动而不可用。
 
 仅暴露已发布内容（``status=published``），匿名可读，与内容列表口径一致。
 
@@ -156,13 +157,26 @@ async def _engine_hits(
         except ValueError:
             logger.warning("引擎返回非 uuid 命中，跳过 id=%r", raw)
 
-    rows = await SearchRepository(db).list_published_by_ids(parsed)
-    by_id = {str(r.id): r for r in rows}
-    # 保持引擎的相关度顺序；被 DB 口径过滤掉的（已软删/下架/草稿）自然缺席
-    ordered = [by_id[str(i)] for i in parsed if str(i) in by_id]
-    names = await _author_map(db, [r.author_id for r in ordered if r.author_id])
+    repo = SearchRepository(db)
+    content_rows = await repo.list_published_by_ids(parsed)
+    file_rows = await repo.public_files_by_ids(parsed)
+    content_map = {r.id: r for r in content_rows}
+    file_map = {r.id: r for r in file_rows}
+    names = await _author_map(
+        db,
+        [r.author_id for r in content_rows if r.author_id]
+        + [r.uploader_id for r in file_rows],
+    )
     return PageData(
-        items=[_to_hit(r, names) for r in ordered],
+        items=[
+            # 保持引擎的相关度顺序；被 DB 口径过滤掉的（已软删/下架/草稿/旧版本/机密
+            # 文件）自然缺席，索引滞后不会绕过可见性判定。
+            _to_hit(content_map[i], names)
+            if i in content_map
+            else _file_hit(file_map[i], names)
+            for i in parsed
+            if i in content_map or i in file_map
+        ],
         total=total,
         page=page,
         pages=paginate_pages(total, limit),
@@ -182,13 +196,10 @@ async def search_items(
         raise BizError(SearchErr.EMPTY_QUERY)
 
     engine = get_engine()
-    # 文件按数据库审核/密级实时过滤；外部索引即使滞后也不能绕过该口径。
-    if content_type is None or content_type == "library_file":
-        return await _pg_hits(
-            db, term, page=page, limit=limit, content_type=content_type
-        )
     if engine is not None:
         try:
+            # 内容与文件都走引擎；回填时按 DB 审核/密级/版本口径实时过滤，
+            # 索引滞后不能绕过可见性判定。
             return await _engine_hits(
                 db, engine, term, page=page, limit=limit, content_type=content_type
             )
