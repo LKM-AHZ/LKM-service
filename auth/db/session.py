@@ -1,11 +1,14 @@
-"""AUTH 独立库会话/引擎工厂（M3.B S1 基建，惰性、monolith 侧不实例化）。
+"""AUTH 独立库会话/引擎工厂（M3.B S1 基建，惰性、默认只有 auth 进程实例化）。
 
 物理拆后 auth 自持库由 auth 进程自己持有专属 engine/sessionmaker。本模块提供该 realm
 的惰性单例工厂，装配规则（贯穿 M3.B 设计原则 2「进程=库边界」）：
-- **monolith 主进程永不实例化/使用本模块**——主进程只有 ``settings.database_url``，
-  不凑 ``settings.auth_database_url``；对 auth 真值的一切读都经 HTTP seam（S3+）。
+- **monolith 主进程默认不实例化**——常规读写都经 HTTP seam（S3+）。**唯一例外**是后台
+  读取面 ``/admin/users``、``/admin/stats``：HTTP 缝只提供按 id 的批量读，列表/聚合需直连
+  auth authoritative，故由 ``app/modules/admin/users_router.py`` 经
+  ``core.ports.audit.new_auth_session`` 在 backend 内开**只读**会话。因此 backend 部署
+  必须注入 ``LKM_AUTH_DB_*``（compose 与 k8s 均已配置）。
 - **auth 进程（``auth.main``）与迁移/tool 在需要自连 auth 库时才** lazy 建引擎。
-- 建池策略复用于 app/db/session.py 的 :func:`create_realm_async_engine`，避免两库漂移。
+- 建池策略复用于 core/db/session.py 的 :func:`create_realm_async_engine`，避免两库漂移。
 """
 
 from __future__ import annotations
