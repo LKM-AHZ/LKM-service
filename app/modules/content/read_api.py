@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,24 @@ class ItemBrief:
     id: uuid.UUID
     title: str
     author_id: uuid.UUID | None
+    # 订阅 fanout 所需的分类轴与可见性（notification 域只拿摘要，不直读 content 表）
+    board_id: uuid.UUID
+    column_id: uuid.UUID | None
+    tags: tuple[str, ...]
+    status: str
+
+
+def _parse_tags(raw: str | None) -> tuple[str, ...]:
+    """``content_items.tags`` 是 JSON 数组文本；坏值/空值一律视为无标签。"""
+    if not raw:
+        return ()
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(t) for t in value if isinstance(t, str) and t.strip())
 
 
 async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
@@ -40,7 +59,15 @@ async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> ItemBrief | None:
     )
     if row is None:
         return None
-    return ItemBrief(id=row.id, title=row.title, author_id=row.author_id)
+    return ItemBrief(
+        id=row.id,
+        title=row.title,
+        author_id=row.author_id,
+        board_id=row.board_id,
+        column_id=row.column_id,
+        tags=_parse_tags(row.tags),
+        status=str(row.status),
+    )
 
 
 async def get_item_info(db: AsyncSession, item_id: uuid.UUID) -> Any:

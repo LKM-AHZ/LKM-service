@@ -33,6 +33,7 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.db.repository import DbSession
 from core.err import BizError
 from core.metrics import search_engine_fallback_total
+from core.ports import interaction as interaction_port
 from core.ports.snapshot import get_user_display_names as _author_map
 
 logger = logging.getLogger(__name__)
@@ -183,28 +184,60 @@ async def _engine_hits(
     )
 
 
+def _filter_hidden(
+    page: PageData[SearchHit], hidden: set[uuid.UUID]
+) -> PageData[SearchHit]:
+    """剔除被 block/mute 作者的命中。
+
+    ``total`` 仍是引擎/DB 的原始计数（近似值）——跨页补位需要重扫，收益不抵复杂度；
+    约束是「不返回被屏蔽项」，列表本身准确。
+    """
+    if not hidden:
+        return page
+    items = [hit for hit in page.items if hit.author_id not in hidden]
+    if len(items) == len(page.items):
+        return page
+    return PageData(
+        items=items, total=page.total, page=page.page, pages=page.pages
+    )
+
+
 async def search_items(
     db: DbSession,
     q: str,
     page: int = 1,
     limit: int = 20,
     content_type: str | None = None,
+    viewer_id: uuid.UUID | None = None,
 ) -> PageData[SearchHit]:
-    """检索已发布内容。空白词抛 422（Query(min_length=1) 拦不住纯空格）。"""
+    """检索已发布内容。空白词抛 422（Query(min_length=1) 拦不住纯空格）。
+
+    ``viewer_id`` 非空时过滤其 block（双向）/ mute（单向）作者的命中；匿名不过滤。
+    """
     term = q.strip()
     if not term:
         raise BizError(SearchErr.EMPTY_QUERY)
+
+    hidden: set[uuid.UUID] = set()
+    if viewer_id is not None:
+        hidden = set(await interaction_port.get_hidden_author_ids(db, viewer_id))
 
     engine = get_engine()
     if engine is not None:
         try:
             # 内容与文件都走引擎；回填时按 DB 审核/密级/版本口径实时过滤，
             # 索引滞后不能绕过可见性判定。
-            return await _engine_hits(
-                db, engine, term, page=page, limit=limit, content_type=content_type
+            return _filter_hidden(
+                await _engine_hits(
+                    db, engine, term, page=page, limit=limit, content_type=content_type
+                ),
+                hidden,
             )
         except Exception:
             search_engine_fallback_total.labels(engine.name).inc()
             logger.exception("外部检索失败，回落 PG 检索 engine=%s", engine.name)
 
-    return await _pg_hits(db, term, page=page, limit=limit, content_type=content_type)
+    return _filter_hidden(
+        await _pg_hits(db, term, page=page, limit=limit, content_type=content_type),
+        hidden,
+    )

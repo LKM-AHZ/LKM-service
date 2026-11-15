@@ -55,11 +55,12 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.config import settings
 from core.db.base import now_iso
 from core.db.repository import DbSession
-from core.err import BizError, ErrCode
+from core.err import BizError, CommonErr, ErrCode
 from core.metrics import post_created_total
 from core.ports import columns as columns_port
 from core.ports import comment as comment_port
 from core.ports import feed as feed_port
+from core.ports import interaction as interaction_port
 from core.ports import points as points_port
 from core.ports import reports as reports_port
 from core.ports.audit import record_audit
@@ -398,7 +399,12 @@ def _now() -> _dt.datetime:
 
 async def like_item(db: DbSession, item_id: uuid.UUID, user_id: uuid.UUID) -> int:
     # 与明细查/写及计数更新保持同一把行锁，重复请求不会同时通过存在性检查。
-    await ContentItemRepository(db).lock_active(item_id)
+    author_id = await ContentItemRepository(db).lock_active(item_id)
+    # block 双向：任一方屏蔽则禁止点赞（mute 不限制互动）
+    if author_id is not None and await interaction_port.is_blocked_either_direction(
+        db, user_id, author_id
+    ):
+        raise BizError(CommonErr.FORBIDDEN, "已被对方屏蔽")
     existing = await ContentLikeRepository(db).get_one_like(
         content_id=item_id, user_id=user_id
     )
@@ -599,6 +605,24 @@ async def list_boards(db: DbSession) -> list[BoardOut]:
 
 async def get_board_ex(db: DbSession, board_id: uuid.UUID) -> Board:
     return await BoardRepository(db).get_or_raise(board_id, BoardErr.BOARD_NOT_FOUND)
+
+
+async def get_board_features(
+    db: DbSession, board_id: uuid.UUID
+) -> dict[str, bool]:
+    """板块资源级功能开关；不存在抛 ``BOARD_NOT_FOUND``（404）。"""
+    board = await get_board_ex(db, board_id)
+    return dict(board.features or {})
+
+
+async def update_board_features(
+    db: DbSession, board_id: uuid.UUID, patch: dict[str, bool]
+) -> dict[str, bool]:
+    """合并写入功能开关（只覆盖请求给出的键），返回合并后的全量。"""
+    board = await get_board_ex(db, board_id)
+    board.features = {**(board.features or {}), **patch}
+    await db.flush()
+    return dict(board.features)
 
 
 async def update_board_ex(

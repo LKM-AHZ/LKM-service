@@ -23,18 +23,25 @@ import uuid
 
 from app.modules.interaction.errors import FollowErr, InteractionErr
 from app.modules.interaction.repository import (
-    BoardFollowRepository,
+    NOTIFY_LEVELS,
+    TARGET_TYPES,
     BoardReadRepository,
+    ContentSubscriptionRepository,
     InteractionContentItemRepository,
     InteractionFavoriteRepository,
     InteractionViewLogRepository,
+    PostWatchRepository,
     UserFollowRepository,
+    UserRelationshipRepository,
+    normalize_target,
 )
 from app.modules.interaction.schemas import (
     FavoriteItem,
     FavoriteState,
     HistoryItem,
+    SubscriptionItem,
     ViewState,
+    WatchItem,
 )
 from core import counters
 from core.cache import (
@@ -47,6 +54,7 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.config import settings
 from core.db.repository import DbSession
 from core.err import BizError
+from core.ports import columns as columns_port
 from core.ports import feed as feed_port
 from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
@@ -107,6 +115,8 @@ async def add_favorite(
     """收藏：重复调用不报错也不重复计数（复合主键兜并发）。"""
     # 幂等早退也要给「即时读数」：用纯 DB 快照会与真正变更分支返回的口径不一致
     count = await _current_bookmark_count(db, content_id)
+    # 收藏即自动 watch（后续评论/点赞会通知该用户）；已有 watch 的提醒偏好保持不变。
+    await PostWatchRepository(db).watch(user_id, content_id)
     if await _is_favorited(db, user_id, content_id):
         return FavoriteState(
             content_id=content_id, favorited=True, bookmark_count=count
@@ -260,6 +270,8 @@ async def follow_user(
     target_snap = await get_user_snapshot(db, user_id=following_id)
     if target_snap is None:
         raise BizError(FollowErr.TARGET_NOT_FOUND, "关注目标用户不存在")
+    if await is_blocked_either_direction(db, follower_id, following_id):
+        raise BizError(InteractionErr.BLOCKED)
 
     created = await UserFollowRepository(db).follow(follower_id, following_id)
     if created and settings.feed_backfill_limit > 0:
@@ -282,31 +294,156 @@ async def unfollow_user(
         await _invalidate_follow_cache(follower_id)
 
 
+async def _validate_subscription_target(
+    db: DbSession, target_type: str, raw_target_id: str
+) -> str:
+    """校验订阅目标并返回归一后的 ``target_id``；非法/不存在分别抛 400/404。"""
+    if target_type not in TARGET_TYPES:
+        raise BizError(InteractionErr.INVALID_TARGET_TYPE)
+    target_type, target_id = normalize_target(target_type, raw_target_id)
+    if not target_id or len(target_id) > 64:
+        raise BizError(InteractionErr.INVALID_TARGET_TYPE)
+
+    if target_type in ("board", "column"):
+        try:
+            parsed = uuid.UUID(target_id)
+        except ValueError:
+            raise BizError(InteractionErr.INVALID_TARGET_TYPE) from None
+        if target_type == "board":
+            exists = await BoardReadRepository(db).get(parsed) is not None
+        else:
+            exists = await columns_port.column_exists(db, parsed)
+        if not exists:
+            raise BizError(InteractionErr.SUBSCRIPTION_TARGET_NOT_FOUND)
+    return target_id
+
+
+async def subscribe_content(
+    db: DbSession,
+    user_id: uuid.UUID,
+    target_type: str,
+    target_id: str,
+    notify_level: str = "all",
+) -> bool:
+    """订阅内容目标（板块/标签/专栏，幂等）：返回是否「新增/复活」。
+
+    - tag 目标 trim + 小写归一后落库；
+    - 板块订阅与板内关注同源：新订阅仍回填最近帖子到物化 feed。
+    """
+    if notify_level not in NOTIFY_LEVELS:
+        raise BizError(InteractionErr.INVALID_TARGET_TYPE, "非法提醒等级")
+    normalized = await _validate_subscription_target(db, target_type, target_id)
+    created = await ContentSubscriptionRepository(db).subscribe(
+        user_id, target_type, normalized, notify_level
+    )
+    if created and target_type == "board" and settings.feed_backfill_limit > 0:
+        await feed_port.backfill_board(
+            db, user_id, uuid.UUID(normalized), settings.feed_backfill_limit
+        )
+    if target_type == "board":
+        await _invalidate_follow_cache(user_id)
+    return created
+
+
+async def unsubscribe_content(
+    db: DbSession, user_id: uuid.UUID, target_type: str, target_id: str
+) -> bool:
+    """取消订阅（幂等）：返回是否真的发生变更；取消立即从 fanout 受众面消失。"""
+    if target_type not in TARGET_TYPES:
+        raise BizError(InteractionErr.INVALID_TARGET_TYPE)
+    _, normalized = normalize_target(target_type, target_id)
+    changed = await ContentSubscriptionRepository(db).unsubscribe(
+        user_id, target_type, normalized
+    )
+    if changed and target_type == "board":
+        keep = set(await get_following_ids(db, user_id))
+        await feed_port.remove_board_items(
+            db, user_id, uuid.UUID(normalized), keep
+        )
+        await _invalidate_follow_cache(user_id)
+    return changed
+
+
+async def list_subscriptions(
+    db: DbSession, user_id: uuid.UUID
+) -> list[SubscriptionItem]:
+    """我的活动订阅列表（新订阅在前）。"""
+    rows = await ContentSubscriptionRepository(db).list_active(user_id)
+    return [
+        SubscriptionItem(
+            target_type=r.target_type,
+            target_id=r.target_id,
+            notify_level=r.notify_level,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 单帖 watch（收藏/评论自动跟进；后续评论、点赞通知 watcher）
+# ---------------------------------------------------------------------------
+
+
+async def watch_post(
+    db: DbSession,
+    user_id: uuid.UUID,
+    content_id: uuid.UUID,
+    notify_level: str | None = None,
+) -> None:
+    """watch 内容（幂等）：内容不存在 → 404。``notify_level=None`` 保留既有偏好。"""
+    if notify_level is not None and notify_level not in NOTIFY_LEVELS:
+        raise BizError(InteractionErr.INVALID_TARGET_TYPE, "非法提醒等级")
+    if not await InteractionContentItemRepository(db).exists_content(content_id):
+        raise BizError(InteractionErr.CONTENT_NOT_FOUND)
+    await PostWatchRepository(db).watch(user_id, content_id, notify_level)
+
+
+async def unwatch_post(
+    db: DbSession, user_id: uuid.UUID, content_id: uuid.UUID
+) -> None:
+    """取消 watch（幂等；内容已删也允许清理）。"""
+    await PostWatchRepository(db).unwatch(user_id, content_id)
+
+
+async def list_watches(
+    db: DbSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
+) -> PageData[WatchItem]:
+    """「我的 watch」分页（join 内容摘要）。"""
+    repo = PostWatchRepository(db)
+    total = await repo.count_for_user(user_id)
+    rows = await repo.list_page(
+        user_id, offset=paginate_offset(page, limit), limit=limit
+    )
+    items = [
+        WatchItem(
+            content_id=r.content_id,
+            content_type=r.content_type,
+            title=r.title,
+            slug=r.slug,
+            board_id=r.board_id,
+            notify_level=r.notify_level,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+    return PageData(
+        items=items, total=total, page=page, pages=paginate_pages(total, limit)
+    )
+
+
 async def follow_board(
     db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
 ) -> None:
-    """follower 关注版块（幂等）。"""
-    target = await BoardReadRepository(db).get(board_id)
-    if target is None:
-        raise BizError(FollowErr.TARGET_NOT_FOUND, "关注版块不存在")
-
-    created = await BoardFollowRepository(db).follow(follower_id, board_id)
-    if created and settings.feed_backfill_limit > 0:
-        await feed_port.backfill_board(
-            db, follower_id, board_id, settings.feed_backfill_limit
-        )
-    await _invalidate_follow_cache(follower_id)
+    """follower 关注版块（幂等）——URL 保留，实现为统一订阅 ``target_type='board'``。"""
+    await subscribe_content(db, follower_id, "board", str(board_id))
 
 
 async def unfollow_board(
     db: DbSession, follower_id: uuid.UUID, board_id: uuid.UUID
 ) -> None:
     """follower 取消关注版块（幂等）。"""
-    changed = await BoardFollowRepository(db).unfollow(follower_id, board_id)
-    if changed:
-        keep = set(await get_following_ids(db, follower_id))
-        await feed_port.remove_board_items(db, follower_id, board_id, keep)
-        await _invalidate_follow_cache(follower_id)
+    await unsubscribe_content(db, follower_id, "board", str(board_id))
 
 
 async def get_following_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
@@ -326,11 +463,15 @@ async def get_following_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID
 
 
 async def get_followed_board_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    """我关注的所有版块 id（缓存，供时间线过滤）。序列化口径同 get_following_ids。"""
+    """我订阅的所有版块 id（缓存，供时间线过滤）。
+
+    版块关注已统一进 ``content_subscriptions``；缓存里存 str、读回转 UUID 的口径同
+    :func:`get_following_ids`。
+    """
 
     async def load() -> list[str]:
-        ids = await BoardFollowRepository(db).list_board_ids(user_id)
-        return [str(i) for i in ids]
+        ids = await ContentSubscriptionRepository(db).list_target_ids(user_id, "board")
+        return list(ids)
 
     raw = await cached_read(_board_ids_key(user_id), TTL_ITEM_S, load)
     return [uuid.UUID(x) for x in (raw or [])]
@@ -360,8 +501,10 @@ async def list_bigv_author_ids(db: DbSession, *, threshold: int) -> list[uuid.UU
 async def list_board_follower_ids(
     db: DbSession, board_id: uuid.UUID, *, limit: int | None = None
 ) -> list[uuid.UUID]:
-    """关注了某版块的 follower id（fanout 受众面，不经缓存）。"""
-    return await BoardFollowRepository(db).list_follower_ids(board_id, limit=limit)
+    """订阅了某版块的用户 id（fanout 受众面，不经缓存）。"""
+    return await ContentSubscriptionRepository(db).list_user_ids(
+        [("board", str(board_id))], limit=limit
+    )
 
 
 async def is_following_user(
@@ -402,3 +545,146 @@ async def list_followed_boards(
         return []
     title_by_id = await BoardReadRepository(db).title_map(ids)
     return [(bid, title_by_id.get(bid, "")) for bid in ids]
+
+
+# ---------------------------------------------------------------------------
+# Block / Mute（账号级用户关系）
+#
+# block 存**单向行**但语义**双向**：任一方向存在 block，双方都互相屏蔽；判定一律走
+# ``is_blocked_either_direction`` / ``get_blocked_ids``（后者合并两个方向）。
+# mute 是单向可见性隐藏：只有发起方看不到对方，对方仍可正常互动。
+#
+# **树洞不接入账号 block**：树洞内容是匿名身份（``treehole_*`` 表用匿名代号），没有可
+# 对应的账号作者，故本节的 block/mute 过滤不下沉到树洞域。
+# ---------------------------------------------------------------------------
+
+
+async def _assert_relation_target(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """校验 block/mute 目标：不能是自己，且目标用户必须存在。"""
+    if user_id == target_id:
+        raise BizError(InteractionErr.CANNOT_RELATE_SELF)
+    if await get_user_snapshot(db, user_id=target_id) is None:
+        raise BizError(InteractionErr.RELATION_TARGET_NOT_FOUND)
+
+
+async def block_user(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """屏蔽用户（幂等）：落 block 行，并**双向**软删双方关注关系。
+
+    - 任一方向的 block 都让对方互相不可见（语义双向、存储单向）；
+    - block 不删除历史点赞/评论（与参考语义一致），只阻止新的互动；
+    - unblock 不自动恢复关注。
+    """
+    await _assert_relation_target(db, user_id, target_id)
+    await UserRelationshipRepository(db).add_relation(user_id, target_id, "block")
+
+    follows = UserFollowRepository(db)
+    await follows.unfollow(user_id, target_id)
+    await follows.unfollow(target_id, user_id)
+    await _invalidate_follow_cache(user_id)
+    await _invalidate_follow_cache(target_id)
+
+
+async def unblock_user(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """取消屏蔽（幂等）：只删本方向的 block 行，不恢复关注。"""
+    await UserRelationshipRepository(db).remove(user_id, target_id, "block")
+
+
+async def mute_user(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """静音用户（幂等，单向）；不限制对方互动。"""
+    await _assert_relation_target(db, user_id, target_id)
+    await UserRelationshipRepository(db).add_relation(user_id, target_id, "mute")
+
+
+async def unmute_user(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> None:
+    """取消静音（幂等）。"""
+    await UserRelationshipRepository(db).remove(user_id, target_id, "mute")
+
+
+async def list_blocked_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """「我屏蔽了谁」——单向列表（不含屏蔽了我的人）。"""
+    return await UserRelationshipRepository(db).list_target_ids(user_id, "block")
+
+
+async def list_muted_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """「我静音了谁」——单向列表。"""
+    return await UserRelationshipRepository(db).list_target_ids(user_id, "mute")
+
+
+async def get_blocked_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """与 ``user_id`` 存在 block 的全部对方 id（**双向合并**，用于过滤）。"""
+    return await UserRelationshipRepository(db).list_blocked_either_direction(user_id)
+
+
+async def get_muted_ids(db: DbSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """``user_id`` 静音的目标 id（单向，用于过滤）。"""
+    return await list_muted_ids(db, user_id)
+
+
+async def get_hidden_author_ids(
+    db: DbSession, user_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """时间线/检索/通知过滤用的隐藏作者集合：block（双向）∪ mute（单向）。"""
+    blocked = set(await get_blocked_ids(db, user_id))
+    blocked.update(await get_muted_ids(db, user_id))
+    return list(blocked)
+
+
+async def is_blocked_either_direction(
+    db: DbSession, user_id: uuid.UUID, other_id: uuid.UUID
+) -> bool:
+    """任一方向存在 block 即为 ``True``。"""
+    return await UserRelationshipRepository(db).is_blocked_either_direction(
+        user_id, other_id
+    )
+
+
+async def relationship_state(
+    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+) -> tuple[bool, bool, bool]:
+    """``(blocked, blocked_by, muted)``：我屏蔽对方 / 对方屏蔽我 / 我静音对方。"""
+    repo = UserRelationshipRepository(db)
+    blocked = await repo.relation_exists(user_id, target_id, "block")
+    blocked_by = await repo.relation_exists(target_id, user_id, "block")
+    muted = await repo.relation_exists(user_id, target_id, "mute")
+    return blocked, blocked_by, muted
+
+
+async def _list_relationship_users(
+    db: DbSession, user_id: uuid.UUID, kind: str
+) -> list[tuple[uuid.UUID, str, str | None]]:
+    ids = await UserRelationshipRepository(db).list_target_ids(user_id, kind)
+    if not ids:
+        return []
+    snaps = await get_user_snapshot_batch(db, user_ids=ids)
+    return [
+        (
+            uid,
+            snaps[uid].display_name if uid in snaps else str(uid),
+            snaps[uid].avatar if uid in snaps else None,
+        )
+        for uid in ids
+    ]
+
+
+async def list_blocked_users(
+    db: DbSession, user_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str, str | None]]:
+    """我屏蔽的用户列表：(user_id, display_name, avatar)。"""
+    return await _list_relationship_users(db, user_id, "block")
+
+
+async def list_muted_users(
+    db: DbSession, user_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str, str | None]]:
+    """我静音的用户列表：(user_id, display_name, avatar)。"""
+    return await _list_relationship_users(db, user_id, "mute")

@@ -36,6 +36,7 @@ from core.db.session import new_worker_session as new_session
 from core.messaging import SUB_NOTIFICATION
 from core.ports import comment as comment_port
 from core.ports import content as content_port
+from core.ports import interaction as interaction_port
 from core.ports import qa as qa_port
 from core.ports.snapshot import get_user_snapshot
 from core.task_registry import register_task
@@ -63,6 +64,27 @@ def _split_ref(ref_id: str) -> tuple[str, uuid.UUID] | None:
         return None
 
 
+async def _watch_targets(
+    db: AsyncSession,
+    item: Any,
+    payload: dict[str, Any],
+    *,
+    exclude: set[uuid.UUID],
+) -> list[_Target]:
+    """单帖 watch 的收件人（``notify_level='none'`` 已在读口排除）。"""
+    user_ids = await interaction_port.list_watch_user_ids(db, item.id)
+    return [
+        _Target(
+            owner_id=uid,
+            kind=NotificationType.POST_WATCH_ACTIVITY,
+            target_id=item.id,
+            payload=dict(payload),
+        )
+        for uid in user_ids
+        if uid not in exclude
+    ]
+
+
 async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_Target]:
     """把行为事件解析为通知目标列表（无法解析/无作者 → 空列表，静默跳过）。"""
     parsed = _split_ref(ref_id)
@@ -70,21 +92,54 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
         return []
     prefix, ref = parsed
 
-    if event == "like" and prefix == "item":
+    if event == "post" and prefix == "item":
+        # 新帖 fanout：命中 board / column / tag 订阅的用户（草稿与待审不通知）
         item = await content_port.item_brief(db, ref)
-        if item is None or item.author_id is None:
+        if item is None or item.author_id is None or item.status != "published":
             return []
+        targets: list[tuple[str, str]] = [("board", str(item.board_id))]
+        if item.column_id is not None:
+            targets.append(("column", str(item.column_id)))
+        targets.extend(("tag", tag) for tag in item.tags)
+        recipients = await interaction_port.list_subscription_user_ids(db, targets)
+        payload = {
+            "title": item.title,
+            "url": f"/content/posts/{item.id}",
+        }
         return [
             _Target(
-                owner_id=item.author_id,
-                kind=NotificationType.CONTENT_LIKED,
+                owner_id=uid,
+                kind=NotificationType.SUBSCRIPTION_NEW_POST,
                 target_id=item.id,
-                payload={
-                    "title": item.title,
-                    "url": f"/content/posts/{item.id}",
-                },
+                payload=dict(payload),
             )
+            for uid in recipients
         ]
+
+    if event == "like" and prefix == "item":
+        item = await content_port.item_brief(db, ref)
+        if item is None:
+            return []
+        base: dict[str, Any] = {
+            "title": item.title,
+            "url": f"/content/posts/{item.id}",
+        }
+        excluded: set[uuid.UUID] = set()
+        targets = []
+        if item.author_id is not None:
+            targets.append(
+                _Target(
+                    owner_id=item.author_id,
+                    kind=NotificationType.CONTENT_LIKED,
+                    target_id=item.id,
+                    payload=dict(base),
+                )
+            )
+            excluded.add(item.author_id)
+        targets.extend(
+            await _watch_targets(db, item, base, exclude=excluded)
+        )
+        return targets
 
     if event == "comment" and prefix == "comment":
         comment = await comment_port.comment_brief(db, ref)
@@ -99,6 +154,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
             "comment_id": str(comment.id),
         }
         targets: list[_Target] = []
+        excluded: set[uuid.UUID] = set()
         if item.author_id is not None:
             targets.append(
                 _Target(
@@ -108,6 +164,7 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
                     payload=dict(base),
                 )
             )
+            excluded.add(item.author_id)
         if comment.parent_id is not None:
             parent = await comment_port.comment_brief(db, comment.parent_id)
             if parent is not None:
@@ -119,6 +176,10 @@ async def _resolve_targets(db: AsyncSession, event: str, ref_id: str) -> list[_T
                         payload=dict(base),
                     )
                 )
+                excluded.add(parent.user_id)
+        targets.extend(
+            await _watch_targets(db, item, base, exclude=excluded)
+        )
         return targets
 
     if event == "qa_accept_notice" and prefix == "answer":
@@ -190,6 +251,9 @@ async def notify_from_point_event(
                     },
                     aggregate_window_s=settings.notification_aggregate_window_s,
                 )
+                if row is None:
+                    # 收件人与 actor 之间存在 block/mute：通知被抑制，不落库也不推送
+                    continue
                 pending.append(
                     (row.user_id, row.id, row.type, dict(row.payload), enabled)
                 )

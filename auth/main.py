@@ -26,6 +26,7 @@ from auth import (
     router_authz,
     router_bot_sso,
     router_challenge,
+    router_internal_tinode,
     router_internal_verify,
     router_jwks,
     router_oauth,
@@ -109,6 +110,8 @@ _AUTH_ROUTERS = [
     router_bot_sso.router,
     # bot 面板统一登录（代验密码）：bot 侧 login 直接打本端点，拆库部署漏挂会恒 404。
     router_internal_verify.router,
+    # Tinode REST 认证桥：Tinode 服务端回调，漏挂会让聊天登录恒失败。
+    router_internal_tinode.router,
     router_oauth.router,
     router_onboarding.router,
     router_passkey.router,

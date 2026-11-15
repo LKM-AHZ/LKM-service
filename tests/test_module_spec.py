@@ -88,6 +88,7 @@ _LEGACY_TASK_MODULES = (
     "app.modules.admin.tasks",
     "app.modules.blog.tasks",
     "app.modules.content.tasks",
+    "app.modules.exam.tasks",
     "app.modules.feed.tasks",
     "app.modules.files.tasks",
     "app.modules.interaction.tasks",

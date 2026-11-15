@@ -20,6 +20,11 @@ async def pending_column_applications(db: AsyncSession) -> tuple[int, Any]:
     return await get("columns_api").pending_column_applications(db)
 
 
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户拥有的专栏数（配额统计用）。"""
+    return await get("columns_api").count_for_user(db, user_id)
+
+
 async def column_titles(
     db: AsyncSession, column_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, str]:

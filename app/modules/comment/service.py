@@ -24,7 +24,9 @@ from app.modules.comment.repository import (
 from app.modules.comment.schemas import ContentCommentCreate
 from core.common import PageData, paginate_offset, paginate_pages
 from core.db.repository import DbSession
+from core.err import BizError, CommonErr
 from core.ports import content as content_port
+from core.ports import interaction as interaction_port
 from core.ports import points as points_port
 from core.ports.snapshot import get_user_display_names as _author_map
 
@@ -102,6 +104,16 @@ async def list_all_comments(
     ]
 
 
+async def _deny_if_blocked(
+    db: DbSession, user_id: uuid.UUID, author_id: uuid.UUID | None
+) -> None:
+    """block 双向：任一方屏蔽即拒绝互动（mute 不限制互动）。"""
+    if author_id is not None and await interaction_port.is_blocked_either_direction(
+        db, user_id, author_id
+    ):
+        raise BizError(CommonErr.FORBIDDEN, "已被对方屏蔽")
+
+
 async def create_comment(
     db: DbSession,
     item_id: uuid.UUID,
@@ -109,14 +121,18 @@ async def create_comment(
     info: ContentCommentCreate,
 ) -> ContentCommentInfo:
     # 同一内容的评论必须串行分配楼层；锁持续到事务提交，含软删楼层也不会重号。
-    await content_port.lock_content_item(db, item_id)
+    author_id = await content_port.lock_content_item(db, item_id)
+    # 树洞为匿名身份，不接入账号 block（过滤只覆盖有账号作者的统一内容表）。
+    await _deny_if_blocked(db, user_id, author_id)
     repo = ContentCommentRepository(db)
     if info.parent_id is not None:
-        await repo.get_one_or_raise(
+        parent = await repo.get_one_or_raise(
             CommentErr.COMMENT_NOT_FOUND,
             ContentComment.id == info.parent_id,
             ContentComment.content_id == item_id,
         )
+        # 回复目标是被回复评论的作者：同样受双向 block 限制
+        await _deny_if_blocked(db, user_id, parent.user_id)
 
     # 楼层号取「含已软删」的最大值 +1：软删后新评论不得复用可见楼层号
     next_floor = (await repo.max_floor_number(item_id) or 0) + 1
@@ -131,6 +147,8 @@ async def create_comment(
         )
     )
     await content_port.bump_comment_count(db, item_id, 1)
+    # 评论即自动 watch 该帖：后续评论/点赞会通知该用户（已有偏好保持不变）
+    await interaction_port.watch_post(db, user_id, item_id)
     await points_port.enqueue_event(db, user_id, "comment", f"comment:{comment.id}")
 
     names = await _author_map(db, [comment.user_id])
@@ -151,6 +169,7 @@ async def like_comment(
     """
     await content_port.lock_content_item(db, item_id)
     comment = await _assert_comment_in_item(db, item_id, comment_id)
+    await _deny_if_blocked(db, user_id, comment.user_id)
     repo = ContentCommentLikeRepository(db)
     if await repo.get_one_like(comment_id=comment_id, user_id=user_id) is not None:
         # 帖子行锁已持有，本事务内读到的 like_count 不会被同帖的并发点赞越过

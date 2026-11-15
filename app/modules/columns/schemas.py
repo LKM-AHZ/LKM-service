@@ -1,9 +1,9 @@
 import datetime
 import json
 import uuid
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 from app.modules.columns.column_models import (
     ColumnApplicationStatus,
@@ -124,3 +124,19 @@ class ColumnPlanData(BaseModel):
     status: str
     tables: dict[str, Any]
     next_steps: list[str]
+
+
+class FeaturesPatch(
+    RootModel[dict[Annotated[str, Field(pattern=r"^[a-z0-9_.-]{1,40}$")], bool]]
+):
+    """``{feature_key: bool}``；键长 1-40、字符集 ``[a-z0-9_.-]``，最多 50 个。
+
+    PATCH 语义为**合并**：只覆盖请求里给出的键，未给出的保持原值；置 false 即关闭。
+    """
+
+    @field_validator("root")
+    @classmethod
+    def _limit_keys(cls, value: dict[str, bool]) -> dict[str, bool]:
+        if len(value) > 50:
+            raise ValueError("features 最多 50 个键")
+        return value

@@ -123,14 +123,21 @@ async def get_timeline(
     物化页合并 ``feed_items``、大 V 作者及所关注版块的实时讨论帖；首页完全没有候选时
     返回 ``None`` → 兜底实时合流（覆盖「刚关注/物化未回填」的用户）。
     """
+    # block（双向）/ mute（单向）在登录用户的所有读路径（物化 + 实时、follow + hot）过滤；
+    # 匿名没有关系可查，不做过滤。
+    hidden = (
+        set(await interaction_port.get_hidden_author_ids(db, user_id))
+        if user_id is not None
+        else set()
+    )
     if mode == "follow" and user_id is not None:
         materialized = await _materialized_timeline(
-            db, user_id=user_id, cursor=cursor, limit=limit
+            db, user_id=user_id, cursor=cursor, limit=limit, hidden=hidden
         )
         if materialized is not None:
             return materialized
     return await _realtime_timeline(
-        db, user_id=user_id, mode=mode, cursor=cursor, limit=limit
+        db, user_id=user_id, mode=mode, cursor=cursor, limit=limit, hidden=hidden
     )
 
 
@@ -143,6 +150,7 @@ async def _collect_page(
     before_id: uuid.UUID | None,
     limit: int,
     rules: list[Any],
+    hidden: set[uuid.UUID],
 ) -> tuple[
     list[FeedItem],
     dict[tuple[str, uuid.UUID], ModerationResult],
@@ -171,8 +179,12 @@ async def _collect_page(
             break
         has_candidates = True
         candidates.sort(key=lambda it: (it.created_at, it.id), reverse=True)
-        batch = candidates[:size]
-        scanned += len(batch)
+        raw = candidates[:size]
+        scanned += len(raw)
+        # 游标必须按**原始批次**推进：被 block/mute 过滤掉的条目也要算进扫描位置，
+        # 否则下一轮会重复取到同一条候选而原地打转。
+        last_scanned = raw[-1]
+        batch = [it for it in raw if it.author_id not in hidden]
         kept, batch_mods = _filter_hidden(batch, rules)
         for it in kept:
             key = (it.item_type, it.id)
@@ -182,7 +194,6 @@ async def _collect_page(
                 mods[key] = batch_mods[key]
                 if len(visible) > limit:
                     break
-        last_scanned = batch[-1]
         scan_time, scan_id = last_scanned.created_at, last_scanned.id
         if len(candidates) < size:
             break
@@ -218,7 +229,12 @@ async def _finish_page(
 
 
 async def _materialized_timeline(
-    db: DbSession, *, user_id: uuid.UUID, cursor: str | None, limit: int
+    db: DbSession,
+    *,
+    user_id: uuid.UUID,
+    cursor: str | None,
+    limit: int,
+    hidden: set[uuid.UUID],
 ) -> FeedResponse | None:
     """物化行与实时补拉合并；首页无候选时返回 ``None`` 以回退。"""
     before_time, before_id = _decode_cursor(cursor)
@@ -248,6 +264,7 @@ async def _materialized_timeline(
         before_id=before_id,
         limit=limit,
         rules=rules,
+        hidden=hidden,
     )
     # 仅首页完全没有候选时才用实时兜底：后续页或「候选全被审校隐藏」
     # 都是物化流中的合法空页，切换读模型会造成分页重复或跳条。
@@ -320,6 +337,7 @@ async def _realtime_timeline(
     mode: str,
     cursor: str | None,
     limit: int,
+    hidden: set[uuid.UUID],
 ) -> FeedResponse:
     """实时多源合流（原实现）：物化未命中时的兜底读路径。"""
     before_time, before_id = _decode_cursor(cursor)
@@ -358,5 +376,6 @@ async def _realtime_timeline(
         before_id=before_id,
         limit=limit,
         rules=rules,
+        hidden=hidden,
     )
     return await _finish_page(db, visible, following_ids, mods, limit, continuation)

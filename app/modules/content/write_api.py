@@ -65,9 +65,11 @@ async def require_content_item(db: AsyncSession, item_id: uuid.UUID) -> None:
     await ContentItemRepository(db).get_or_raise(item_id, ContentErr.CONTENT_NOT_FOUND)
 
 
-async def lock_content_item(db: AsyncSession, item_id: uuid.UUID) -> None:
-    """锁住内容项行并断言存在：同帖并发互动被串行化，软删后不再接受新互动。"""
-    await ContentItemRepository(db).lock_active(item_id)
+async def lock_content_item(
+    db: AsyncSession, item_id: uuid.UUID
+) -> uuid.UUID | None:
+    """锁住内容项行并断言存在，返回作者 id（无作者为 ``None``）。"""
+    return await ContentItemRepository(db).lock_active(item_id)
 
 
 async def bump_comment_count(db: AsyncSession, item_id: uuid.UUID, delta: int) -> int:

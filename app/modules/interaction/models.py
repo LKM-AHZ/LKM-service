@@ -1,16 +1,18 @@
-"""interaction 域模型：收藏 + 浏览记录 + 关注关系（M6.6 / M2）。
+"""interaction 域模型：收藏 + 浏览记录 + 关注关系 + 内容订阅/单帖 watch（M6.6 / M2）。
 
-**关注关系归本域**：``UserFollow``(用户关注) 与 ``BoardFollow``(版块关注) 原属 feed 域，
-现迁入 interaction——蓝图 §3.1 与 §7.2 的**模块目标形态**都把 interaction 定义为「收窄：
-收藏、关注、浏览记录」，迁入后代码与该目标逐字一致；信息流域（feed）只保留时间线生成。
+**关注/订阅归本域**：``UserFollow``(用户关注) 与版块关注原属 feed 域，现迁入 interaction；
+版块关注已统一为 ``ContentSubscription(target_type='board')``，用户关注仍是独立的社交关系。
+蓝图 §3.1 与 §7.2 把 interaction 定义为「收窄：收藏、关注、浏览记录」，本域在此之上承载
+内容订阅与单帖 watch；信息流域（feed）只保留时间线生成。
 
-三张表各自的幂等取法：
+各表幂等取法：
 - ``interaction_favorites`` 复合主键 ``(content_id, user_id)`` —— 天然保证「同一用户对同一
   内容最多一条」（收藏幂等），与 ``content_likes`` 同款取法；
 - ``interaction_view_logs`` 代理主键 + ``(user_id, content_id)`` 唯一约束 —— 重复上报同内容
   走 upsert 只刷新 ``viewed_at``，行数上界 = 用户数 × 内容数（保留策略见 tasks.py）；
-- ``user_follows`` / ``board_follows`` —— **软删墓碑**：唯一约束只看 (follower, target)，
-  取消关注只置 ``deleted_at`` 不删行，故「重新关注」是复活同一行而非插新行。
+- ``user_follows`` / ``content_subscriptions`` / ``post_watches`` —— **软删墓碑**：唯一约束
+  只看 (user, target)，取消订阅/watch 只置 ``deleted_at`` 不删行，重新订阅是复活同一行。
+- ``board_follows`` 已由迁移 0006 并入 ``content_subscriptions(target_type='board')``。
 
 ``user_id`` 一律裸 UUID（S5 拆库后 auth 库才是用户权威，业务库不做物理外键）。
 """
@@ -21,7 +23,7 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint, Uuid
+from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.db.base import (
@@ -104,20 +106,86 @@ class UserFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     )
 
 
-class BoardFollow(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
-    """用户关注版块关系（软删墓碑）：follower 关注 board_id。"""
+class UserRelationship(UUIDPrimaryKeyMixin, Base):
+    """用户间关系：``block``（双向语义，存单向行）与 ``mute``（单向）。
 
-    __tablename__: str = "board_follows"
-    __table_args__: tuple[UniqueConstraint, Index] = (
-        UniqueConstraint("follower_id", "board_id", name="uq_board_follows_pair"),
-        Index("ix_board_follows_board", "board_id"),
+    - 每个方向一行，``UNIQUE(user_id, target_id, kind)`` 保证 block/mute 幂等；
+    - block 的**语义是双向**：任何方向存在 block 行都视为两人互相屏蔽，判定见
+      :meth:`UserRelationshipRepository.is_blocked_either_direction`；
+    - mute 只影响 ``user_id`` 自己看到的内容/通知，不限制对方互动；
+    - ``user_id`` / ``target_id`` 都是裸 UUID（auth 库才是用户权威，业务库不做物理外键）。
+    """
+
+    __tablename__: str = "user_relationships"
+    __table_args__: tuple[Any, ...] = (
+        UniqueConstraint(
+            "user_id", "target_id", "kind", name="uq_user_relationships_kind"
+        ),
+        Index("ix_user_relationships_user_kind", "user_id", "kind"),
+        Index("ix_user_relationships_target_kind", "target_id", "kind"),
     )
 
-    follower_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False
-    )  # S5: auth user_id
-    board_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("boards.id"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
+class ContentSubscription(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
+    """统一内容订阅（软删墓碑）：板块 / 标签 / 专栏。
+
+    - ``target_type`` 取 ``board|tag|column``；``target_id`` 统一存字符串——board/column
+      存 UUID 字符串，tag 存**规范化标签**（trim + 小写）；
+    - ``UNIQUE(user_id, target_type, target_id)`` + 软删墓碑 → 取消订阅后再订阅是复活同一行；
+    - ``notify_level`` 取 ``all|none``，``none`` 表示「不提醒」（订阅仍存在，供列表展示）；
+    - 原 ``board_follows`` 的语义完全被 ``target_type='board'`` 覆盖（迁移 0006 搬迁）。
+    """
+
+    __tablename__: str = "content_subscriptions"
+    __table_args__: tuple[UniqueConstraint, Index] = (
+        UniqueConstraint(
+            "user_id",
+            "target_type",
+            "target_id",
+            name="uq_content_subscriptions_target",
+        ),
+        # fanout：按目标反查订阅者
+        Index("ix_content_subscriptions_target", "target_type", "target_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    notify_level: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="all"
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+
+
+class PostWatch(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
+    """单帖 watch（软删墓碑）：收藏/评论后自动跟进，后续互动通知 watcher。
+
+    ``UNIQUE(user_id, content_id)`` + 软删墓碑保证幂等；``notify_level`` 语义同
+    :class:`ContentSubscription`。内容硬删时随 FK 级联清理。
+    """
+
+    __tablename__: str = "post_watches"
+    __table_args__: tuple[UniqueConstraint, Index] = (
+        UniqueConstraint("user_id", "content_id", name="uq_post_watches_pair"),
+        # 通知 fanout：按内容反查 watcher
+        Index("ix_post_watches_content", "content_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False
+    )
+    notify_level: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="all"
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

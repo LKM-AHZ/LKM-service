@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.quota import router as quota_router
 from app.modules import registry
 from app.ws.router import router as ws_router
 
@@ -10,5 +11,7 @@ for _name in registry.MODULES:
     for _r in registry.routers_of(_name):
         api_router.include_router(_r)
 
-# 非业务模块的横切路由（WebSocket）保持显式挂载。auth 路由只由独立 AUTH 进程提供。
+# 非业务模块的横切路由保持显式挂载：配额（只读）与 WebSocket。
+# auth 路由只由独立 AUTH 进程提供。
+api_router.include_router(quota_router)
 api_router.include_router(ws_router)

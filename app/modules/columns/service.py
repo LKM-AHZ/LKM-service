@@ -249,6 +249,24 @@ async def get_column_by_slug(db: DbSession, slug: str) -> ColumnInfo:
     return ColumnInfo.model_validate(payload)
 
 
+async def get_column_features(
+    db: DbSession, column_id: uuid.UUID
+) -> dict[str, bool]:
+    """专栏资源级功能开关；不存在抛 ``ColumnErr.NOT_FOUND``（404）。"""
+    column = await ColumnRepository(db).get_or_raise(column_id, ColumnErr.NOT_FOUND)
+    return dict(column.features or {})
+
+
+async def update_column_features(
+    db: DbSession, column_id: uuid.UUID, patch: dict[str, bool]
+) -> dict[str, bool]:
+    """合并写入功能开关（只覆盖请求给出的键），返回合并后的全量。"""
+    column = await ColumnRepository(db).get_or_raise(column_id, ColumnErr.NOT_FOUND)
+    column.features = {**(column.features or {}), **patch}
+    await db.flush()
+    return dict(column.features)
+
+
 async def create_post(
     db: DbSession, column_id: uuid.UUID, info: ColumnPostCreate, author_id: uuid.UUID
 ) -> ColumnPostInfo:

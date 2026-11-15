@@ -330,6 +330,12 @@ class TestService:
             NotificationType.CONTENT_COMMENTED,
             NotificationType.COMMENT_REPLIED,
             NotificationType.QA_ANSWER_ACCEPTED,
+            NotificationType.SUBSCRIPTION_NEW_POST,
+            NotificationType.POST_WATCH_ACTIVITY,
+            NotificationType.PROJECT_INVITED,
+            NotificationType.PROJECT_JOIN_APPROVED,
+            NotificationType.PROJECT_JOIN_REJECTED,
+            NotificationType.PROJECT_MEMBER_REMOVED,
             NotificationType.REVIEW_DIGEST,
         }
         assert await is_type_enabled(db, uid, NotificationType.CONTENT_LIKED)

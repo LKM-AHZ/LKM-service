@@ -3,8 +3,9 @@
 
 import datetime
 import uuid
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FavoriteState(BaseModel):
@@ -71,3 +72,68 @@ class FollowBoard(BaseModel):
 
     board_id: uuid.UUID
     title: str
+
+
+# ---- Block / Mute ----
+
+
+class BlockToggle(BaseModel):
+    """block/unblock 操作结果。"""
+
+    blocked: bool
+
+
+class MuteToggle(BaseModel):
+    """mute/unmute 操作结果。"""
+
+    muted: bool
+
+
+class RelationshipState(BaseModel):
+    """当前用户与目标用户的关系：我屏蔽对方 / 对方屏蔽我 / 我静音对方。"""
+
+    blocked: bool
+    blocked_by: bool
+    muted: bool
+
+
+# ---- 统一内容订阅 + 单帖 watch ----
+
+
+class SubscriptionTarget(BaseModel):
+    """订阅/取消订阅目标。
+
+    ``target_type`` 取 ``board|tag|column``；tag 由服务端 trim + 小写归一。
+    """
+
+    target_type: str
+    target_id: str = Field(min_length=1, max_length=255)
+    notify_level: Literal["all", "none"] = "all"
+
+
+class SubscriptionToggle(BaseModel):
+    """订阅/取消订阅操作结果：``subscribed`` 表示当前是否已订阅。"""
+
+    subscribed: bool
+
+
+class SubscriptionItem(BaseModel):
+    """「我的订阅」列表项。"""
+
+    target_type: str
+    target_id: str
+    notify_level: str
+    created_at: datetime.datetime
+
+
+class WatchToggle(BaseModel):
+    """watch/unwatch 操作结果：``watching`` 表示当前是否在 watch。"""
+
+    watching: bool
+
+
+class WatchItem(_ContentSummaryItem):
+    """「我的 watch」列表项。"""
+
+    notify_level: str
+    created_at: datetime.datetime

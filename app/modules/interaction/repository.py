@@ -1,4 +1,4 @@
-"""interaction 域的仓储子类：收藏明细 + 浏览记录 + 关注关系（软删墓碑）+ 内容/板块只读缝。
+"""interaction 域仓储：收藏 + 浏览记录 + 关注/订阅/watch（软删墓碑）+ 内容/板块只读缝。
 
 - 收藏「明细行 + 计数」的计数走原子 ``UPDATE ... RETURNING greatest(count+delta,0)``，
   行不存在返回 ``None``（由 service 转 404）。
@@ -19,14 +19,16 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.modules.interaction.models import (
-    BoardFollow,
+    ContentSubscription,
     InteractionFavorite,
     InteractionViewLog,
+    PostWatch,
     UserFollow,
+    UserRelationship,
 )
 from core.db.base import now_iso
 from core.db.repository import AsyncRepository, DbSession
@@ -298,60 +300,298 @@ class UserFollowRepository(AsyncRepository[UserFollow]):
         )
 
 
-class BoardFollowRepository(AsyncRepository[BoardFollow]):
-    model = BoardFollow
+class UserRelationshipRepository(AsyncRepository[UserRelationship]):
+    """block / mute 关系读写（一行一个方向；block 双向语义由查询侧合并）。"""
+
+    model = UserRelationship
+
+    async def add_relation(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str
+    ) -> None:
+        """幂等落一行（并发撞唯一约束时静默忽略）。"""
+        await self.pg_upsert(
+            {"user_id": user_id, "target_id": target_id, "kind": kind},
+            constraint="uq_user_relationships_kind",
+            do_nothing=True,
+        )
+
+    async def remove(self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str) -> int:
+        """删除该方向的关系行（幂等），返回受影响行数。"""
+        return await self.hard_delete_where(
+            UserRelationship.user_id == user_id,
+            UserRelationship.target_id == target_id,
+            UserRelationship.kind == kind,
+        )
+
+    async def relation_exists(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str
+    ) -> bool:
+        return await self.get_one(
+            UserRelationship.user_id == user_id,
+            UserRelationship.target_id == target_id,
+            UserRelationship.kind == kind,
+        ) is not None
+
+    async def list_target_ids(self, user_id: uuid.UUID, kind: str) -> list[uuid.UUID]:
+        """``user_id`` 主动建立的单向目标 id（如「我屏蔽/我静音了谁」）。"""
+        rows = await self.db.execute(
+            select(UserRelationship.target_id).where(
+                UserRelationship.user_id == user_id,
+                UserRelationship.kind == kind,
+            )
+        )
+        return list(rows.scalars().all())
+
+    async def list_blocked_either_direction(
+        self, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """与 ``user_id`` 存在 block（任一方向）的对方 id（去重）。"""
+        out = await self.db.execute(
+            select(UserRelationship.target_id)
+            .where(
+                UserRelationship.user_id == user_id,
+                UserRelationship.kind == "block",
+            )
+            .union(
+                select(UserRelationship.user_id).where(
+                    UserRelationship.target_id == user_id,
+                    UserRelationship.kind == "block",
+                )
+            )
+        )
+        return list(out.scalars().all())
+
+    async def is_blocked_either_direction(
+        self, user_id: uuid.UUID, other_id: uuid.UUID
+    ) -> bool:
+        row = await self.get_one(
+            UserRelationship.kind == "block",
+            or_(
+                (UserRelationship.user_id == user_id)
+                & (UserRelationship.target_id == other_id),
+                (UserRelationship.user_id == other_id)
+                & (UserRelationship.target_id == user_id),
+            ),
+        )
+        return row is not None
+
+
+TARGET_TYPES: tuple[str, ...] = ("board", "tag", "column")
+NOTIFY_LEVELS: tuple[str, ...] = ("all", "none")
+
+
+def normalize_target(target_type: str, target_id: str) -> tuple[str, str]:
+    """订阅目标归一：tag 做 trim + 小写；board/column 保留原样（UUID 字符串）。"""
+    if target_type == "tag":
+        return target_type, target_id.strip().lower()
+    return target_type, target_id
+
+
+class ContentSubscriptionRepository(AsyncRepository[ContentSubscription]):
+    model = ContentSubscription
 
     async def get_pair(
-        self, follower_id: uuid.UUID, board_id: uuid.UUID
-    ) -> BoardFollow | None:
-        """取 (follower, board) 配对行——**含已软删**。"""
+        self, user_id: uuid.UUID, target_type: str, target_id: str
+    ) -> ContentSubscription | None:
+        """取订阅配对行——**含已软删**（复活判定需要）。"""
         return await self.get_one(
-            BoardFollow.follower_id == follower_id,
-            BoardFollow.board_id == board_id,
+            ContentSubscription.user_id == user_id,
+            ContentSubscription.target_type == target_type,
+            ContentSubscription.target_id == target_id,
             include_deleted=True,
         )
 
-    async def follow(self, follower_id: uuid.UUID, board_id: uuid.UUID) -> bool:
-        """关注版块（幂等）：返回是否属于「新关注/复活」。"""
-        row = await self.get_pair(follower_id, board_id)
-        created = row is None or row.deleted_at is not None
+    async def subscribe(
+        self, user_id: uuid.UUID, target_type: str, target_id: str, notify_level: str
+    ) -> bool:
+        """订阅（幂等）：返回是否属于「新订阅/复活」。活动行则只更新提醒偏好。"""
+        row = await self.get_pair(user_id, target_type, target_id)
         if row is None:
-            await self.create(follower_id=follower_id, board_id=board_id)
-        elif row.deleted_at is not None:
-            await self.update(row, deleted_at=None)
+            await self.create(
+                user_id=user_id,
+                target_type=target_type,
+                target_id=target_id,
+                notify_level=notify_level,
+            )
+            return True
+        created = row.deleted_at is not None
+        if created:
+            await self.update(row, deleted_at=None, notify_level=notify_level)
         else:
-            await self.flush()
+            await self.update(row, notify_level=notify_level)
         return created
 
-    async def unfollow(self, follower_id: uuid.UUID, board_id: uuid.UUID) -> bool:
-        """取关版块（幂等）：仅命中活动行才置墓碑。"""
-        row = await self.get_pair(follower_id, board_id)
+    async def unsubscribe(
+        self, user_id: uuid.UUID, target_type: str, target_id: str
+    ) -> bool:
+        """取消订阅（幂等）：仅命中活动行才置墓碑。"""
+        row = await self.get_pair(user_id, target_type, target_id)
         if row is None or row.deleted_at is not None:
             return False
         await self.update(row, deleted_at=now_iso())
         return True
 
-    async def list_board_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
-        """我关注的所有版块 id（活动行）。"""
+    async def list_active(self, user_id: uuid.UUID) -> list[ContentSubscription]:
+        """我的全部活动订阅（新订阅在前）。"""
+        return await self.get_many(
+            ContentSubscription.user_id == user_id,
+            order_by=(
+                ContentSubscription.created_at.desc(),
+                ContentSubscription.id.desc(),
+            ),
+        )
+
+    async def list_target_ids(
+        self, user_id: uuid.UUID, target_type: str
+    ) -> list[str]:
+        """某类型的活动订阅目标 id（字符串形态）。"""
         rows = await self.db.execute(
-            select(BoardFollow.board_id).where(
-                BoardFollow.follower_id == user_id,
-                BoardFollow.deleted_at.is_(None),
+            select(ContentSubscription.target_id).where(
+                ContentSubscription.user_id == user_id,
+                ContentSubscription.target_type == target_type,
+                ContentSubscription.deleted_at.is_(None),
             )
         )
         return list(rows.scalars().all())
 
-    async def list_follower_ids(
-        self, board_id: uuid.UUID, *, limit: int | None = None
+    async def list_user_ids(
+        self,
+        targets: list[tuple[str, str]],
+        *,
+        limit: int | None = None,
+        require_notify: bool = False,
     ) -> list[uuid.UUID]:
-        """关注了该版块的 follower id（活动行）；``limit`` 语义同用户关注版。"""
-        stmt = select(BoardFollow.follower_id).where(
-            BoardFollow.board_id == board_id,
-            BoardFollow.deleted_at.is_(None),
+        """命中任一目标的订阅者 id（软删行排除）。
+
+        ``require_notify=True`` 时再排除 ``notify_level='none'``——通知 fanout 用它；
+        feed 受众面（订阅即关注）不传，避免「关掉提醒」顺带把内容从时间线剔除。
+        ``targets`` 的 tag 目标须已归一（调用方经 :func:`normalize_target`）。
+        """
+        if not targets:
+            return []
+        pairs = [
+            (ContentSubscription.target_type == target_type)
+            & (ContentSubscription.target_id == target_id)
+            for target_type, target_id in targets
+        ]
+        stmt = select(ContentSubscription.user_id).where(
+            or_(*pairs),
+            ContentSubscription.deleted_at.is_(None),
+        )
+        if require_notify:
+            stmt = stmt.where(ContentSubscription.notify_level == "all")
+        stmt = stmt.distinct()
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+
+class PostWatchRepository(AsyncRepository[PostWatch]):
+    model = PostWatch
+
+    async def get_pair(
+        self, user_id: uuid.UUID, content_id: uuid.UUID
+    ) -> PostWatch | None:
+        """取 watch 配对行——**含已软删**。"""
+        return await self.get_one(
+            PostWatch.user_id == user_id,
+            PostWatch.content_id == content_id,
+            include_deleted=True,
+        )
+
+    async def watch(
+        self,
+        user_id: uuid.UUID,
+        content_id: uuid.UUID,
+        notify_level: str | None = None,
+    ) -> bool:
+        """watch（幂等）：返回是否「新增/复活」。
+
+        ``notify_level=None`` 表示自动 watch（收藏/评论）：已有行的偏好保持不动；
+        显式路由传入等级时才覆盖。
+        """
+        row = await self.get_pair(user_id, content_id)
+        if row is None:
+            await self.create(
+                user_id=user_id,
+                content_id=content_id,
+                notify_level=notify_level or "all",
+            )
+            return True
+        created = row.deleted_at is not None
+        values: dict[str, Any] = {}
+        if created:
+            values["deleted_at"] = None
+        if notify_level is not None and row.notify_level != notify_level:
+            values["notify_level"] = notify_level
+        if values:
+            await self.update(row, **values)
+        else:
+            await self.flush()
+        return created
+
+    async def unwatch(self, user_id: uuid.UUID, content_id: uuid.UUID) -> bool:
+        """取消 watch（幂等）：仅活动行才置墓碑。"""
+        row = await self.get_pair(user_id, content_id)
+        if row is None or row.deleted_at is not None:
+            return False
+        await self.update(row, deleted_at=now_iso())
+        return True
+
+    async def list_watch_user_ids(
+        self, content_id: uuid.UUID, *, limit: int | None = None
+    ) -> list[uuid.UUID]:
+        """该内容的 watcher id（``notify_level='all'`` 的活动行）。"""
+        stmt = select(PostWatch.user_id).where(
+            PostWatch.content_id == content_id,
+            PostWatch.deleted_at.is_(None),
+            PostWatch.notify_level == "all",
         )
         if limit is not None:
             stmt = stmt.limit(limit)
         return list((await self.db.execute(stmt)).scalars().all())
+
+    async def count_for_user(self, user_id: uuid.UUID) -> int:
+        """watch 总数——与 :meth:`list_page` 同口径（排除内容已软删的行）。"""
+        brief = content_port.content_brief_view()
+        return (
+            await self.db.scalar(
+                select(func.count())
+                .select_from(PostWatch)
+                .join(brief, brief.c.id == PostWatch.content_id)
+                .where(
+                    PostWatch.user_id == user_id,
+                    PostWatch.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+
+    async def list_page(
+        self, user_id: uuid.UUID, *, offset: int, limit: int
+    ) -> list[Any]:
+        """「我的 watch」分页（join 内容摘要），按 created_at/content_id 倒序。"""
+        brief = content_port.content_brief_view()
+        stmt = (
+            select(
+                PostWatch.content_id,
+                PostWatch.created_at,
+                PostWatch.notify_level,
+                brief.c.content_type,
+                brief.c.title,
+                brief.c.slug,
+                brief.c.board_id,
+            )
+            .join(brief, brief.c.id == PostWatch.content_id)
+            .where(
+                PostWatch.user_id == user_id,
+                PostWatch.deleted_at.is_(None),
+            )
+            .order_by(PostWatch.created_at.desc(), PostWatch.content_id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list((await self.db.execute(stmt)).all())
 
 
 class BoardReadRepository:

@@ -51,7 +51,7 @@ async def test_merge_deduplicates_and_fills_page_after_hidden_items() -> None:
 
     rules = [Rule(pattern="hide", action="hide")]
     first, _, _, _ = await service._collect_page(
-        fetch, before_time=None, before_id=None, limit=2, rules=rules
+        fetch, before_time=None, before_id=None, limit=2, rules=rules, hidden=set()
     )
     assert [item.id.int for item in first] == [9, 7, 6]
 
@@ -61,6 +61,7 @@ async def test_merge_deduplicates_and_fills_page_after_hidden_items() -> None:
         before_id=first[1].id,
         limit=2,
         rules=rules,
+        hidden=set(),
     )
     assert [item.id.int for item in second] == [6, 5]
 
@@ -85,6 +86,7 @@ async def test_hidden_backlog_has_bounded_scan_and_continuation() -> None:
         before_id=None,
         limit=1,
         rules=[Rule(pattern="hide", action="hide")],
+        hidden=set(),
     )
     assert visible == []
     assert continuation is not None
@@ -117,6 +119,11 @@ async def test_materialized_hidden_only_does_not_fall_back(monkeypatch) -> None:
     monkeypatch.setattr(service, "_load_materialized_page", load_page)
     fallback = AsyncMock()
     monkeypatch.setattr(service, "_realtime_timeline", fallback)
+    monkeypatch.setattr(
+        interaction_port,
+        "get_hidden_author_ids",
+        AsyncMock(return_value=[]),
+    )
     response = await service.get_timeline(
         None, user_id=user_id, mode="follow", cursor=None, limit=2
     )
@@ -145,11 +152,11 @@ async def test_materialized_page_reads_current_rows_each_time(monkeypatch) -> No
 
     monkeypatch.setattr(service, "_load_materialized_page", load_page)
     first = await service._materialized_timeline(
-        None, user_id=user_id, cursor=None, limit=2
+        None, user_id=user_id, cursor=None, limit=2, hidden=set()
     )
     rows[:] = [_item(3)]
     second = await service._materialized_timeline(
-        None, user_id=user_id, cursor=None, limit=2
+        None, user_id=user_id, cursor=None, limit=2, hidden=set()
     )
     assert [it.id.int for it in first.items] == [2]
     assert [it.id.int for it in second.items] == [3]

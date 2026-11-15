@@ -171,6 +171,7 @@ EVENT_CONTRACTS: dict[str, EventContract] = {
         _cron("flush_content_counters", RKEY_CLEANUP),
         _cron("purge_revoked_access_tokens", RKEY_CLEANUP),
         _cron("purge_stale_view_logs", RKEY_CLEANUP),
+        _cron("expire_exam_attempts", RKEY_CLEANUP),
         _cron("fanout_feed_items", RKEY_RECONCILE),
         _cron("reconcile_blog_repos", RKEY_RECONCILE),
         _cron("reconcile_content_counts", RKEY_RECONCILE),

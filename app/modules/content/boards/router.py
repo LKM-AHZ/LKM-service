@@ -14,17 +14,20 @@ from app.modules.content.boards.schemas import (
     BoardCreate,
     BoardOut,
     BoardUpdate,
+    FeaturesPatch,
     ReviewBoardApplicationRequest,
 )
 from app.modules.content.boards.service import (
     ban_user,
     create_board_ex,
     get_board_ex,
+    get_board_features,
     list_my_board_applications,
     review_application,
     submit_application,
     unban_user,
     update_board_ex,
+    update_board_features,
 )
 from app.modules.content.models import Board
 from app.modules.rbac.deps import RequirePermission
@@ -58,6 +61,35 @@ def _status() -> ModuleStatus:
 
 
 router = APIRouter(prefix="/boards", tags=["content", "boards"])
+
+
+@router.get("/{board_id}/features", response_model=ApiResp[dict[str, bool]])
+@respond
+async def read_board_features(
+    board_id: uuid.UUID,
+    db: AsyncSession = Depends(get_read_session),
+) -> dict[str, bool]:
+    """公开读资源级功能开关；板块不存在 404。"""
+    return await get_board_features(db, board_id)
+
+
+@router.patch("/{board_id}/features", response_model=ApiResp[dict[str, bool]])
+@respond
+async def patch_board_features(
+    board_id: uuid.UUID,
+    patch: FeaturesPatch,
+    cur: CurrentUserDep,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, bool]:
+    """板块 owner 或持 ``board.owner_manage`` 的管理员合并写入；不存在 404。
+
+    先取板块再判权，避免 ``check_owner`` 对缺失资源报 403 掩盖 404。
+    """
+    await get_board_ex(db, board_id)
+    await check_owner(
+        db, cur, board_id, Board, "owner_id", Permission.board_owner_manage
+    )
+    return await update_board_features(db, board_id, patch.root)
 
 
 @router.get("/status", response_model=ModuleStatus)

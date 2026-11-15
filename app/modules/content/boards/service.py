@@ -14,6 +14,7 @@ from app.modules.content.service import (
     check_post_allowed,
     create_board_ex,
     get_board_ex,
+    get_board_features,
     is_banned,
     list_boards,
     list_my_board_applications,
@@ -21,6 +22,7 @@ from app.modules.content.service import (
     submit_application,
     unban_user,
     update_board_ex,
+    update_board_features,
 )
 
 # boards 的 "review_application"(审核板块申请) 与 columns 的同名(审核栏目申请)语义不同，
@@ -33,6 +35,7 @@ __all__ = [
     "check_post_allowed",
     "create_board_ex",
     "get_board_ex",
+    "get_board_features",
     "is_banned",
     "list_boards",
     "list_my_board_applications",
@@ -40,4 +43,5 @@ __all__ = [
     "submit_application",
     "unban_user",
     "update_board_ex",
+    "update_board_features",
 ]

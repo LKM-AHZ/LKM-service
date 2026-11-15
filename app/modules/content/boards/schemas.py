@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 
 class BoardCreate(BaseModel):
@@ -96,3 +103,19 @@ class BanRequest(BaseModel):
     user_id: uuid.UUID
     reason: str = Field(default="", max_length=200)
     hours: int = Field(default=7 * 24, ge=1, le=7 * 24)  # 1 小时到 7 天（小时数）
+
+
+class FeaturesPatch(
+    RootModel[dict[Annotated[str, Field(pattern=r"^[a-z0-9_.-]{1,40}$")], bool]]
+):
+    """``{feature_key: bool}``；键长 1-40、字符集 ``[a-z0-9_.-]``，最多 50 个。
+
+    PATCH 语义为**合并**：只覆盖请求里给出的键，未给出的保持原值；置 false 即关闭。
+    """
+
+    @field_validator("root")
+    @classmethod
+    def _limit_keys(cls, value: dict[str, bool]) -> dict[str, bool]:
+        if len(value) > 50:
+            raise ValueError("features 最多 50 个键")
+        return value

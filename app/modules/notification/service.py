@@ -36,6 +36,7 @@ from core.common import PageData, paginate_offset, paginate_pages
 from core.config import settings
 from core.db.repository import DbSession
 from core.err import BizError, CommonErr
+from core.ports import interaction as interaction_port
 
 
 class NotificationType(StrEnum):
@@ -45,6 +46,14 @@ class NotificationType(StrEnum):
     CONTENT_COMMENTED = "content_commented"
     COMMENT_REPLIED = "comment_replied"
     QA_ANSWER_ACCEPTED = "qa_answer_accepted"
+    # 内容订阅（板块/标签/专栏的新帖）与单帖 watch（后续评论/点赞）
+    SUBSCRIPTION_NEW_POST = "subscription_new_post"
+    POST_WATCH_ACTIVITY = "post_watch_activity"
+    # 项目协作（邀请、加入申请审核、成员移除）
+    PROJECT_INVITED = "project_invited"
+    PROJECT_JOIN_APPROVED = "project_join_approved"
+    PROJECT_JOIN_REJECTED = "project_join_rejected"
+    PROJECT_MEMBER_REMOVED = "project_member_removed"
     # 管理员每日待办摘要（系统通知，actor/target 均为 None）
     REVIEW_DIGEST = "review_digest"
 
@@ -61,11 +70,20 @@ async def create_notification(
     target_id: uuid.UUID | None = None,
     payload: dict[str, Any] | None = None,
     aggregate_window_s: float = 3600.0,
-) -> Notification:
+) -> Notification | None:
     """落一条通知（同 actor+target 的未读同类通知在窗口内合并，返回被合并的那条）。
 
     不 commit——与调用方事务同生共死（消费者侧由 tasks.py 提交）。
+
+    **block / mute 抑制**：``actor_id`` 存在时，若收件人与 actor 之间存在 block（双向）
+    或收件人静音了 actor（单向），直接返回 ``None`` 而不落库（连聚合行也不碰）。
     """
+    if actor_id is not None:
+        if await interaction_port.is_blocked_either_direction(db, user_id, actor_id):
+            return None
+        if await interaction_port.is_muted(db, user_id, actor_id):
+            return None
+
     repo = NotificationRepository(db)
     if actor_id is not None and target_id is not None and aggregate_window_s > 0:
         await repo.lock_aggregate_key(

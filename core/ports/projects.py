@@ -24,6 +24,11 @@ async def list_uploadable_projects(
     return await get("projects_read").list_uploadable_projects(db, user_id)
 
 
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户参与的项目数（本人申请或为成员；配额统计用）。"""
+    return await get("projects_read").count_for_user(db, user_id)
+
+
 def member_exists_clause(user_id: uuid.UUID, *, outer_column: Any) -> Any:
     """「该用户是 ``outer_column`` 所指项目的成员」的 ``EXISTS`` 谓词。"""
     return get("projects_read").member_exists_clause(user_id, outer_column=outer_column)

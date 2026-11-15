@@ -16,8 +16,10 @@ from app.modules.search.service import search_items
 from app.modules.search.wire import to_wire
 from core.common import ApiResp, ModuleStatus, PageData, PaginateDep, PaginateParams
 from core.config import settings
+from core.contracts import CurrentUser
 from core.db.session import get_read_session
 from core.err import respond
+from core.ports.authz import get_optional_user
 from core.wire import msgspec_ok
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -43,6 +45,7 @@ async def search(
     content_type: Annotated[str | None, Query(max_length=20)] = None,
     pag: PaginateParams = Depends(PaginateDep()),
     db: AsyncSession = Depends(get_read_session),
+    cur: CurrentUser | None = Depends(get_optional_user),
 ) -> PageData[SearchHit] | Response:
     """检索端点（B6c 扩面）。
 
@@ -51,7 +54,12 @@ async def search(
     路径。两条路径 JSON 等价由 ``tests/test_read_msgspec.py`` 的参数化用例守。
     """
     page = await search_items(
-        db, q, page=pag.page, limit=pag.limit, content_type=content_type
+        db,
+        q,
+        page=pag.page,
+        limit=pag.limit,
+        content_type=content_type,
+        viewer_id=cur.id if cur is not None else None,
     )
     if settings.read_msgspec_enabled:
         return msgspec_ok(to_wire(page), headers={"X-Total": str(page.total)})

@@ -16,6 +16,13 @@ from core.err import (
 class InteractionErr(ErrCode):
     CONTENT_NOT_FOUND = NS_INTERACTION.err(1)
     DUPLICATE_LIKE = NS_INTERACTION.err(2)
+    # block / mute（用户关系）
+    CANNOT_RELATE_SELF = NS_INTERACTION.err(3)
+    RELATION_TARGET_NOT_FOUND = NS_INTERACTION.err(4)
+    BLOCKED = NS_INTERACTION.err(5)
+    # 统一内容订阅：非法 target_type/目标格式，或目标（board/column）不存在
+    INVALID_TARGET_TYPE = NS_INTERACTION.err(6)
+    SUBSCRIPTION_TARGET_NOT_FOUND = NS_INTERACTION.err(7)
 
 
 class FollowErr(ErrCode):
@@ -30,6 +37,11 @@ register(
     {
         InteractionErr.CONTENT_NOT_FOUND: (404, "内容不存在"),
         InteractionErr.DUPLICATE_LIKE: (409, "Duplicate like"),
+        InteractionErr.CANNOT_RELATE_SELF: (400, "不能对自己执行该操作"),
+        InteractionErr.RELATION_TARGET_NOT_FOUND: (404, "目标用户不存在"),
+        InteractionErr.BLOCKED: (403, "已被屏蔽"),
+        InteractionErr.INVALID_TARGET_TYPE: (400, "非法订阅目标"),
+        InteractionErr.SUBSCRIPTION_TARGET_NOT_FOUND: (404, "订阅目标不存在"),
         FollowErr.CANNOT_FOLLOW_SELF: (400, "不能关注自己"),
         FollowErr.TARGET_NOT_FOUND: (404, "关注目标不存在"),
         FollowErr.DUPLICATE_FOLLOW: (409, "已关注该目标"),

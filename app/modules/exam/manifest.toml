@@ -7,3 +7,6 @@ errors = [
 models = [
     "app.modules.exam.models",
 ]
+tasks = [
+    "app.modules.exam.tasks",
+]

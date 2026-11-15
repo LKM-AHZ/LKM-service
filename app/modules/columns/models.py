@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Uuid,
     column,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.modules.columns.column_models import (
@@ -99,6 +101,10 @@ class Column(UUIDPrimaryKeyMixin, Base):
     )
     status: Mapped[ColumnStatus] = mapped_column(
         String(20), nullable=False, default=ColumnStatus.ACTIVE
+    )
+    # 资源级功能开关：``{feature_key: bool}``。
+    features: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso

@@ -29,6 +29,12 @@ async def pending_column_applications(
     return int(row[0]), row[1]
 
 
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户拥有的专栏数（配额统计用）。"""
+    stmt = select(func.count(Column.id)).where(Column.owner_id == user_id)
+    return int(await db.scalar(stmt) or 0)
+
+
 async def column_titles(
     db: AsyncSession, column_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, str]:

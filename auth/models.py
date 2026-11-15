@@ -534,3 +534,23 @@ class UserRole(AuthBase):
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
     )
+
+
+class TinodeLink(AuthBase):
+    """LKM 用户 ↔ Tinode 账号映射（聊天身份桥，见 docs/superpowers/specs 聊天设计）。
+
+    Tinode 是独立聊天服务，账号由它按 ``usr<base64url(64bit)>`` 分配。首登时 LKM 的
+    REST 认证桥返回 ``newacc`` 让 Tinode 建号，Tinode 再回调 ``link`` 把分配到的 uid
+    报回来，落在这张表；此后登录直接返回该 uid，不再建号。账号真身始终在 Tinode 库，
+    这里只存单向映射；删除用户行不级联删 Tinode 账号（治理侧另走 Tinode root API）。
+    """
+
+    __tablename__ = "tinode_links"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    tinode_uid: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )

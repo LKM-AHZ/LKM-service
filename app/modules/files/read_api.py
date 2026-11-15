@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime
+import uuid
 from typing import Any
 
 from sqlalchemy import func, select
@@ -19,6 +20,15 @@ async def count_files(db: AsyncSession, status: str | None = None) -> int:
     stmt = select(func.count(LibraryFile.id))
     if status is not None:
         stmt = stmt.where(LibraryFile.status == status)
+    return int(await db.scalar(stmt) or 0)
+
+
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户未删除的文件数（配额统计用）。"""
+    stmt = select(func.count(LibraryFile.id)).where(
+        LibraryFile.uploader_id == user_id,
+        LibraryFile.status != FileStatus.DELETED,
+    )
     return int(await db.scalar(stmt) or 0)
 
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,11 @@ from core.ports.registry import get
 async def count_files(db: AsyncSession, status: str | None = None) -> int:
     """文件总数；给 ``status`` 时只计该状态。"""
     return await get("files_read").count_files(db, status)
+
+
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户未删除文件数（配额统计用）。"""
+    return await get("files_read").count_for_user(db, user_id)
 
 
 async def pending_files(db: AsyncSession) -> tuple[int, Any]:

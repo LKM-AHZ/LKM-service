@@ -305,6 +305,30 @@ class TestExamService:
         # status 检查在"已通过"守卫之前：同一 attempt 重交 → ATTEMPT_ALREADY_SUBMITTED
         assert exc.value.errcode == ExamErr.ATTEMPT_ALREADY_SUBMITTED
 
+    async def test_legacy_attempt_result_reports_final_status(
+        self,
+        db: AsyncSession,
+        auth_db: AsyncSession,
+        auth_seam_realm: None,
+    ):
+        u = await _mk_au(auth_db)
+        exam_id = await _make_published_exam(db)
+        start = await start_attempt(db, exam_id, u.id)
+        await submit_attempt(
+            db,
+            start.attempt_id,
+            u.id,
+            SubmitAnswersRequest(answers=_correct_answers(start.questions)),
+        )
+        from app.modules.exam.service import get_attempt_result
+
+        result = await get_attempt_result(db, start.attempt_id, u.id)
+        assert result.status == "passed"
+        assert result.passed is True
+        assert result.score == 40
+        # 最终状态才下发解析/答案。
+        assert all(q.correct_answer is not None for q in result.questions)
+
     async def test_submit_forbidden_for_other_user(
         self, db: AsyncSession, auth_db: AsyncSession
     ):
@@ -320,6 +344,14 @@ class TestExamService:
 
 
 class TestExamRoute:
+    async def test_detail_includes_group_assignments(self, client, db):
+        exam_id = await _make_published_exam(db)
+        resp = await client.get(f"/api/v1/exam/{exam_id}")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["question_count"] == 2
+        assert len(data["group_ids"]) == 1
+
     async def test_list_public(self, client, db):
         resp = await client.get("/api/v1/exam")
         assert resp.status_code == 200

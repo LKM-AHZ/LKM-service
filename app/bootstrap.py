@@ -159,6 +159,11 @@ class _ProjectsReadImpl:
 
         return await list_uploadable_projects(db, user_id)
 
+    async def count_for_user(self, db: AsyncSession, user_id: uuid.UUID) -> int:
+        from app.modules.projects.read_api import count_for_user
+
+        return await count_for_user(db, user_id)
+
     def member_exists_clause(self, user_id: uuid.UUID, *, outer_column: Any) -> Any:
         from app.modules.projects.read_api import member_exists_clause
 
@@ -354,6 +359,62 @@ class _InteractionReadImpl:
 
         return await list_board_follower_ids(db, board_id, limit=limit)
 
+    async def get_blocked_ids(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        from app.modules.interaction.read_api import get_blocked_ids
+
+        return await get_blocked_ids(db, user_id)
+
+    async def get_muted_ids(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        from app.modules.interaction.read_api import get_muted_ids
+
+        return await get_muted_ids(db, user_id)
+
+    async def get_hidden_author_ids(
+        self, db: AsyncSession, user_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        from app.modules.interaction.read_api import get_hidden_author_ids
+
+        return await get_hidden_author_ids(db, user_id)
+
+    async def is_blocked_either_direction(
+        self, db: AsyncSession, user_id: uuid.UUID, other_id: uuid.UUID
+    ) -> bool:
+        from app.modules.interaction.read_api import is_blocked_either_direction
+
+        return await is_blocked_either_direction(db, user_id, other_id)
+
+    async def is_muted(
+        self, db: AsyncSession, user_id: uuid.UUID, target_id: uuid.UUID
+    ) -> bool:
+        from app.modules.interaction.read_api import is_muted
+
+        return await is_muted(db, user_id, target_id)
+
+    async def list_subscription_user_ids(
+        self, db: AsyncSession, targets: list[tuple[str, str]]
+    ) -> list[uuid.UUID]:
+        from app.modules.interaction.read_api import list_subscription_user_ids
+
+        return await list_subscription_user_ids(db, targets)
+
+    async def list_watch_user_ids(
+        self, db: AsyncSession, content_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        from app.modules.interaction.read_api import list_watch_user_ids
+
+        return await list_watch_user_ids(db, content_id)
+
+    async def watch_post(
+        self, db: AsyncSession, user_id: uuid.UUID, content_id: uuid.UUID
+    ) -> None:
+        from app.modules.interaction.read_api import watch_post
+
+        await watch_post(db, user_id, content_id)
+
     def favorite_count_subquery(self, outer_column: Any) -> Any:
         from app.modules.interaction.read_api import favorite_count_subquery
 
@@ -539,10 +600,12 @@ class _ContentWriteImpl:
 
         await require_content_item(db, item_id)
 
-    async def lock_content_item(self, db: AsyncSession, item_id: uuid.UUID) -> None:
+    async def lock_content_item(
+        self, db: AsyncSession, item_id: uuid.UUID
+    ) -> uuid.UUID | None:
         from app.modules.content.write_api import lock_content_item
 
-        await lock_content_item(db, item_id)
+        return await lock_content_item(db, item_id)
 
     async def bump_comment_count(
         self, db: AsyncSession, item_id: uuid.UUID, delta: int
@@ -631,6 +694,11 @@ class _ColumnsApiImpl:
 
         return await pending_column_applications(db)
 
+    async def count_for_user(self, db: AsyncSession, user_id: uuid.UUID) -> int:
+        from app.modules.columns.read_api import count_for_user
+
+        return await count_for_user(db, user_id)
+
     async def column_titles(
         self, db: AsyncSession, column_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, str]:
@@ -682,6 +750,11 @@ class _FilesReadImpl:
         from app.modules.files.read_api import count_files
 
         return await count_files(db, status)
+
+    async def count_for_user(self, db: AsyncSession, user_id: uuid.UUID) -> int:
+        from app.modules.files.read_api import count_for_user
+
+        return await count_for_user(db, user_id)
 
     async def pending_files(self, db: AsyncSession) -> tuple[int, Any]:
         from app.modules.files.read_api import pending_files

@@ -22,7 +22,11 @@ async def list_uploadable_projects(
     """用户可上传文件的项目：本人申请的 + 本人为成员的，按创建时间倒序。"""
     member = (
         select(ProjectMember.id)
-        .where(ProjectMember.project_id == Project.id, ProjectMember.user_id == user_id)
+        .where(
+            ProjectMember.project_id == Project.id,
+            ProjectMember.user_id == user_id,
+            ProjectMember.status == "active",
+        )
         .exists()
     )
     rows = (
@@ -35,6 +39,23 @@ async def list_uploadable_projects(
     return [{"id": str(row.id), "title": row.title} for row in rows]
 
 
+async def count_for_user(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """用户参与的项目数（本人申请或为活跃成员；配额统计用）。"""
+    member = (
+        select(ProjectMember.id)
+        .where(
+            ProjectMember.project_id == Project.id,
+            ProjectMember.user_id == user_id,
+            ProjectMember.status == "active",
+        )
+        .exists()
+    )
+    stmt = select(func.count(Project.id)).where(
+        or_(Project.applicant_id == user_id, member)
+    )
+    return int(await db.scalar(stmt) or 0)
+
+
 def member_exists_clause(user_id: uuid.UUID, *, outer_column: Any) -> Any:
     """「该用户是 ``outer_column`` 所指项目的成员」的 ``EXISTS`` 谓词。
 
@@ -45,6 +66,7 @@ def member_exists_clause(user_id: uuid.UUID, *, outer_column: Any) -> Any:
         .where(
             ProjectMember.project_id == outer_column,
             ProjectMember.user_id == user_id,
+            ProjectMember.status == "active",
         )
         .exists()
     )
@@ -70,6 +92,7 @@ async def is_member(
         select(ProjectMember.id).where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == user_id,
+            ProjectMember.status == "active",
         )
     )
     return row is not None

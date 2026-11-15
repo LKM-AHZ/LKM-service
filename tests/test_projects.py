@@ -233,10 +233,14 @@ class TestProjectApplicationService:
             .scalars()
             .all()
         )
-        assert len(members) == 2
+        # 申请人 owner 行 + 申请中的两条贡献成员
+        assert len(members) == 3
         by_name = {m.display_name: m for m in members}
         assert by_name["艾尔"].user_id == member_uid
         assert by_name["外援"].user_id is None
+        owner_row = next(m for m in members if m.user_id == applicant)
+        assert owner_row.role == "owner"
+        assert owner_row.status == "active"
 
         audit = (
             await auth_db.execute(
@@ -368,7 +372,8 @@ class TestProjectReadService:
         projects = await list_projects(db)
         assert len(projects) == 1
         assert projects[0].is_incubated is True
-        assert len(projects[0].members) == 1
+        # owner 成员行 + 申请中的一条贡献成员
+        assert len(projects[0].members) == 2
         detail = await get_project(db, projects[0].id)
         assert detail.title == "P"
 

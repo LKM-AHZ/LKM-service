@@ -7,12 +7,13 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from app.modules.interaction import service as interaction_service
 from app.modules.interaction.schemas import (
+    BlockToggle,
     FavoriteItem,
     FavoriteState,
     FollowBoard,
@@ -20,7 +21,14 @@ from app.modules.interaction.schemas import (
     FollowToggle,
     FollowUser,
     HistoryItem,
+    MuteToggle,
+    RelationshipState,
+    SubscriptionItem,
+    SubscriptionTarget,
+    SubscriptionToggle,
     ViewState,
+    WatchItem,
+    WatchToggle,
 )
 from app.modules.interaction.service import (
     add_favorite,
@@ -104,6 +112,86 @@ async def report_view(
     db: AsyncSession = Depends(get_session),
 ) -> ViewState:
     return await record_view(db, cur.id, content_id)
+
+
+# ---- 统一内容订阅（板块/标签/专栏）----
+
+
+@router.post("/subscriptions", response_model=ApiResp[SubscriptionToggle])
+@respond
+async def subscribe_content_target(
+    body: SubscriptionTarget,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> SubscriptionToggle:
+    await interaction_service.subscribe_content(
+        db, cur.id, body.target_type, body.target_id, body.notify_level
+    )
+    return SubscriptionToggle(subscribed=True)
+
+
+@router.delete("/subscriptions", response_model=ApiResp[SubscriptionToggle])
+@respond
+async def unsubscribe_content_target(
+    body: SubscriptionTarget,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> SubscriptionToggle:
+    await interaction_service.unsubscribe_content(
+        db, cur.id, body.target_type, body.target_id
+    )
+    return SubscriptionToggle(subscribed=False)
+
+
+@router.get(
+    "/me/subscriptions", response_model=ApiResp[ListData[SubscriptionItem]]
+)
+@respond
+async def my_subscriptions(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> dict[str, list[SubscriptionItem]]:
+    return {
+        "items": await interaction_service.list_subscriptions(db, cur.id)
+    }
+
+
+# ---- 单帖 watch ----
+
+
+@router.post("/watches/{content_id}", response_model=ApiResp[WatchToggle])
+@respond
+async def watch_a_post(
+    content_id: uuid.UUID,
+    notify_level: str = Query("all", pattern="^(all|none)$"),
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> WatchToggle:
+    await interaction_service.watch_post(db, cur.id, content_id, notify_level)
+    return WatchToggle(watching=True)
+
+
+@router.delete("/watches/{content_id}", response_model=ApiResp[WatchToggle])
+@respond
+async def unwatch_a_post(
+    content_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> WatchToggle:
+    await interaction_service.unwatch_post(db, cur.id, content_id)
+    return WatchToggle(watching=False)
+
+
+@router.get("/me/watches", response_model=ApiResp[PageData[WatchItem]])
+@respond
+async def my_watches(
+    cur: CurrentUser = Depends(get_current_user),
+    pag: PaginateParams = Depends(PaginateDep()),
+    db: AsyncSession = Depends(get_read_session),
+) -> PageData[WatchItem]:
+    return await interaction_service.list_watches(
+        db, cur.id, page=pag.page, limit=pag.limit
+    )
 
 
 @router.get("/me/history", response_model=ApiResp[PageData[HistoryItem]])
@@ -197,6 +285,100 @@ async def user_follow_status(
         return FollowState(is_following=False)
     following = await interaction_service.is_following_user(db, cur.id, user_id)
     return FollowState(is_following=following)
+
+
+# ---- Block / Mute（账号级关系；树洞为匿名身份，不接入）----
+
+
+@user_follow_router.post("/{user_id}/block", response_model=ApiResp[BlockToggle])
+@respond
+async def block_a_user(
+    user_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> BlockToggle:
+    await interaction_service.block_user(db, cur.id, user_id)
+    return BlockToggle(blocked=True)
+
+
+@user_follow_router.delete("/{user_id}/block", response_model=ApiResp[BlockToggle])
+@respond
+async def unblock_a_user(
+    user_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> BlockToggle:
+    await interaction_service.unblock_user(db, cur.id, user_id)
+    return BlockToggle(blocked=False)
+
+
+@user_follow_router.post("/{user_id}/mute", response_model=ApiResp[MuteToggle])
+@respond
+async def mute_a_user(
+    user_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MuteToggle:
+    await interaction_service.mute_user(db, cur.id, user_id)
+    return MuteToggle(muted=True)
+
+
+@user_follow_router.delete("/{user_id}/mute", response_model=ApiResp[MuteToggle])
+@respond
+async def unmute_a_user(
+    user_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MuteToggle:
+    await interaction_service.unmute_user(db, cur.id, user_id)
+    return MuteToggle(muted=False)
+
+
+@user_follow_router.get("/me/blocked", response_model=ApiResp[ListData[FollowUser]])
+@respond
+async def my_blocked_users(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, list[FollowUser]]:
+    rows = await interaction_service.list_blocked_users(db, cur.id)
+    return {
+        "items": [
+            FollowUser(user_id=uid, display_name=name, avatar=avatar)
+            for uid, name, avatar in rows
+        ]
+    }
+
+
+@user_follow_router.get("/me/muted", response_model=ApiResp[ListData[FollowUser]])
+@respond
+async def my_muted_users(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, list[FollowUser]]:
+    rows = await interaction_service.list_muted_users(db, cur.id)
+    return {
+        "items": [
+            FollowUser(user_id=uid, display_name=name, avatar=avatar)
+            for uid, name, avatar in rows
+        ]
+    }
+
+
+@user_follow_router.get(
+    "/{user_id}/relationship", response_model=ApiResp[RelationshipState]
+)
+@respond
+async def user_relationship(
+    user_id: uuid.UUID,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> RelationshipState:
+    blocked, blocked_by, muted = await interaction_service.relationship_state(
+        db, cur.id, user_id
+    )
+    return RelationshipState(
+        blocked=blocked, blocked_by=blocked_by, muted=muted
+    )
 
 
 @board_follow_router.get("/me/following", response_model=ApiResp[ListData[FollowBoard]])

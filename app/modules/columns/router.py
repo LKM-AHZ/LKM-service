@@ -12,6 +12,7 @@ from app.modules.columns.schemas import (
     ColumnPlanData,
     ColumnPostCreate,
     ColumnPostInfo,
+    FeaturesPatch,
     ReviewResultData,
 )
 from app.modules.columns.service import (
@@ -19,10 +20,12 @@ from app.modules.columns.service import (
     create_post,
     get_application,
     get_column,
+    get_column_features,
     get_column_plan,
     list_applications,
     list_my_column_applications,
     review_application,
+    update_column_features,
 )
 from app.modules.rbac.deps import RequirePermission
 from app.modules.rbac.permissions import Permission
@@ -41,6 +44,32 @@ from core.ports import admin_guard as admin_guard_port
 from core.ports.authz import RequireLevel, get_current_user
 
 router = APIRouter(prefix="/content/columns", tags=["columns"])
+
+
+@router.get("/{column_id}/features", response_model=ApiResp[dict[str, bool]])
+@respond
+async def read_column_features(
+    column_id: uuid.UUID,
+    db: AsyncSession = Depends(get_read_session),
+) -> dict[str, bool]:
+    """公开读资源级功能开关；专栏不存在 404。"""
+    return await get_column_features(db, column_id)
+
+
+@router.patch("/{column_id}/features", response_model=ApiResp[dict[str, bool]])
+@respond
+async def patch_column_features(
+    column_id: uuid.UUID,
+    patch: FeaturesPatch,
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, bool]:
+    """专栏 owner 或持 ``column.owner_publish`` 的管理员合并写入；不存在 404。"""
+    await get_column(db, column_id)
+    await check_owner(
+        db, cur, column_id, Column, "owner_id", Permission.column_owner_publish
+    )
+    return await update_column_features(db, column_id, patch.root)
 
 
 @router.get("/status", response_model=ModuleStatus)

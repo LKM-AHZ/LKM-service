@@ -16,7 +16,7 @@ from sqlalchemy import (
     Uuid,
     column,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import (  # 注意是 db.base 不是 db.models
@@ -214,6 +214,10 @@ class Board(UUIDPrimaryKeyMixin, Base):
         Integer, nullable=False, default=0
     )  # 0=不限
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 资源级功能开关：``{feature_key: bool}``，资源级灰度覆盖模块级 manifest 开关。
+    features: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
     # 乐观锁版本号（蓝图 §6.1）：板块编辑用；语义与 ContentItem.version 一致。
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"

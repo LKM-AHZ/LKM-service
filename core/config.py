@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     files_backup_dir: str = ""  # 独立挂载卷上的本地备份目录
     files_archive_after_days: int = 365
     files_archive_dir: str = ""  # 独立挂载卷上的低频归档目录
+
+    # 统一配额上限（GET /quotas/me）。None = 不限制（默认，不改变既有行为）。
+    quota_files_count: int | None = None
+    quota_projects_count: int | None = None
+    quota_columns_count: int | None = None
+
     redis_url: SecretStr = SecretStr(
         ""  # 空串 = 未启用 Redis
     )
@@ -312,6 +318,10 @@ class Settings(BaseSettings):
     # 一次泄漏同时打穿「读面板」与「写存储」两侧。
     # 未配置 → ``/api/v1/internal/*`` 全部 fail-closed 401，该面不会退化成公网可写存储桶。
     bot_internal_token: SecretStr = SecretStr("")
+    # Tinode REST 认证桥（auth 进程）：Tinode 以 query token 回调
+    # ``/api/v1/auth/internal/tinode/*``，未配置 → 该面 fail-closed 401。
+    # 网关已拦截 ``/api/v1/auth/internal/``，这是内网第二道。
+    tinode_auth_token: SecretStr = SecretStr("")
     # bot 产出媒体的入库约束：单对象上限与保留期（小时，0 = 不自动过期）。
     # 保留期到点后由清理任务删除；对象本身仍受 ``storage`` 后端（Local/S3）生命周期约束。
     bot_media_max_bytes: int = 32 * 1024 * 1024
@@ -452,6 +462,10 @@ class Settings(BaseSettings):
         bot_token = reveal(self.bot_internal_token)
         if bot_token and (len(bot_token) < 32 or _bad(bot_token)):
             insecure.append("bot_internal_token(too short or placeholder)")
+        # Tinode 认证桥同为身份签发面：启用即必须强令牌。
+        tinode_token = reveal(self.tinode_auth_token)
+        if tinode_token and (len(tinode_token) < 32 or _bad(tinode_token)):
+            insecure.append("tinode_auth_token(too short or placeholder)")
         if self.prefect_enabled and (
             not self.prefect_api_url or not self.prefect_deployment
         ):
