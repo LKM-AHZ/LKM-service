@@ -351,6 +351,24 @@ async def test_report_comment_uses_comment_body_as_title(
     assert row.type == "comment"
 
 
+async def test_report_user_uses_display_name_as_title(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    reporter = (await _au(auth_db, "rep_user")).id
+    target = await _au(auth_db, "reported_user")
+
+    await report_content(db, reporter, "user", target.id, "冒充")
+
+    row = (
+        await db.execute(
+            select(AdminReport).where(AdminReport.target_id == str(target.id))
+        )
+    ).scalar_one()
+    assert row.type == "user"
+    assert row.target_title
+    assert row.reporter_id == reporter
+
+
 async def test_report_missing_target_is_404(
     db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
 ) -> None:

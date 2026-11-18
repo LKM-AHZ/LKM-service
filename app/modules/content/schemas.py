@@ -33,6 +33,6 @@ class ContentReportCreate(BaseModel):
     ``target_title`` 刻意**不在入参里**：由后端从内容行回填，见 service.report_content。
     """
 
-    target_type: str = Field(..., pattern="^(post|comment)$")
+    target_type: str = Field(..., pattern="^(post|comment|user)$")
     target_id: uuid.UUID
     reason: str = Field(..., min_length=1, max_length=200)

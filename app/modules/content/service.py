@@ -450,6 +450,12 @@ async def report_content(
     elif target_type == "comment":
         # 评论已拆到 comment 域：正文经端口取，不存在由属主域抛 COMMENT_NOT_FOUND
         title = await comment_port.comment_body(db, target_id)
+    elif target_type == "user":
+        # 用户主页举报：目标标题取展示名快照；身份真值在 auth 库。
+        snapshot = await get_user_snapshot(db, user_id=target_id)
+        if snapshot is None:
+            raise BizError(ContentErr.CONTENT_NOT_FOUND)
+        title = snapshot.display_name
     else:
         raise BizError(ContentErr.UNSUPPORTED_TYPE)
 

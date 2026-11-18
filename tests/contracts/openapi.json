@@ -8079,7 +8079,7 @@
             "type": "string"
           },
           "target_type": {
-            "pattern": "^(post|comment)$",
+            "pattern": "^(post|comment|user)$",
             "title": "Target Type",
             "type": "string"
           }
