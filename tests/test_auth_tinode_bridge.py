@@ -113,6 +113,47 @@ async def test_first_login_creates_account_then_link_writes_mapping(
     assert "newacc" not in again.json()
 
 
+async def test_link_accepts_bare_uid_from_tinode_025(
+    auth_db: AsyncSession, auth_app_client: Client
+) -> None:
+    """Tinode 0.25 的 link 回调给裸 uid；映射原样保存，复登原样返回。"""
+    user = await _mk_user(auth_db, "tinode_bare")
+    secret = _secret(create_access_token(user.id, "normal", "member"))
+
+    linked = await auth_app_client.post(
+        f"{_URL}/link{_q()}",
+        json={
+            "endpoint": "link",
+            "secret": secret,
+            "rec": {"uid": "vQ3UbkFUQsQ", "authlvl": "auth"},
+        },
+    )
+    assert linked.status_code == 200
+    assert linked.json()["rec"]["uid"] == "vQ3UbkFUQsQ"
+
+    again = await auth_app_client.post(
+        f"{_URL}/auth{_q()}", json={"endpoint": "auth", "secret": secret}
+    )
+    assert again.json()["rec"]["uid"] == "vQ3UbkFUQsQ"
+    assert "newacc" not in again.json()
+
+
+async def test_link_rejects_malformed_uid(
+    auth_db: AsyncSession, auth_app_client: Client
+) -> None:
+    user = await _mk_user(auth_db, "tinode_bad_uid")
+    secret = _secret(create_access_token(user.id, "normal", "member"))
+    resp = await auth_app_client.post(
+        f"{_URL}/link{_q()}",
+        json={
+            "endpoint": "link",
+            "secret": secret,
+            "rec": {"uid": "not a uid!", "authlvl": "auth"},
+        },
+    )
+    assert resp.json() == {"err": "malformed"}
+
+
 async def test_account_managed_ops_are_unsupported(auth_app_client: Client) -> None:
     for op in ("gen", "add", "checkunique"):
         resp = await auth_app_client.post(f"{_URL}/{op}{_q()}", json={"endpoint": op})

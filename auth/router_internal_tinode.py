@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 import secrets
 import uuid
 from typing import Any
@@ -39,6 +40,9 @@ from core.secrets import reveal
 router = APIRouter(prefix="/auth/internal/tinode", tags=["auth-internal"])
 
 _LOGIN_PREFIX = "lkm:"
+# Tinode 0.25 的 ``link`` 回调给的是裸 uid（base64url，实测 12 字符），登录响应的
+# ``user`` 才是 ``usr`` + 裸 uid。两版都见过，桥原样存取、不增删前缀，只校验形状。
+_UID_PATTERN = re.compile(r"^(?:usr)?[A-Za-z0-9_-]{10,30}$")
 # Tinode 默认访问模式（官方 REST auth 示例值）：登录用户可 join/read/write/presence，
 # 匿名只有 none。具体房间权限由 Tinode 房间自身 ACL 决定，这里只是账号默认值。
 _DEFAULT_AUTH_ACS = "JRWPS"
@@ -160,7 +164,7 @@ async def tinode_link(
 ) -> dict[str, Any]:
     """建号回调：把 Tinode 分配的 uid 写进映射表（幂等）。"""
     uid = (body.rec.uid if body.rec else None) or ""
-    if not uid.startswith("usr"):
+    if not _UID_PATTERN.fullmatch(uid):
         return {"err": "malformed"}
     try:
         user = await _resolve_lkm_user(db, body.secret)
