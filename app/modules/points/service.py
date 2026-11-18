@@ -201,6 +201,15 @@ async def transfer(
     return LedgerEntry.model_validate(out_entry), LedgerEntry.model_validate(in_entry)
 
 
+def level_for_balance(balance: int) -> tuple[int, int, int]:
+    """``(level, next_level_points, progress_percent)``；100 分一级。"""
+    safe = max(balance, 0)
+    level = safe // 100 + 1
+    floor = (level - 1) * 100
+    progress = int((safe - floor) * 100 / 100)
+    return level, level * 100, min(progress, 100)
+
+
 async def get_balance(db: DbSession, user_id: uuid.UUID) -> int:
     """取用户当前余额（读缓存；缺失按 0）。"""
 

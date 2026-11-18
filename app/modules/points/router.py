@@ -13,6 +13,7 @@ from app.modules.points.service import (
     do_checkin,
     get_balance,
     leaderboard,
+    level_for_balance,
     list_achievements,
     list_exchange_items,
     list_ledger,
@@ -59,7 +60,15 @@ async def my_balance(
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_read_session),
 ) -> BalanceOut:
-    return BalanceOut(user_id=cur.id, balance=await get_balance(db, cur.id))
+    balance = await get_balance(db, cur.id)
+    level, next_level_points, level_progress = level_for_balance(balance)
+    return BalanceOut(
+        user_id=cur.id,
+        balance=balance,
+        level=level,
+        next_level_points=next_level_points,
+        level_progress=level_progress,
+    )
 
 
 @router.get("/me/ledger", response_model=ApiResp[PageData[LedgerEntry]])

@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict
 class BalanceOut(BaseModel):
     user_id: uuid.UUID
     balance: int
+    # 等级由积分余额折算：每 100 分一级，满级进度按当前级内区间计算。
+    level: int = 1
+    next_level_points: int = 100
+    level_progress: int = 0
 
 
 class LedgerEntry(BaseModel):

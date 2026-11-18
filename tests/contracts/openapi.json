@@ -5894,6 +5894,21 @@
             "title": "Balance",
             "type": "integer"
           },
+          "level": {
+            "default": 1,
+            "title": "Level",
+            "type": "integer"
+          },
+          "level_progress": {
+            "default": 0,
+            "title": "Level Progress",
+            "type": "integer"
+          },
+          "next_level_points": {
+            "default": 100,
+            "title": "Next Level Points",
+            "type": "integer"
+          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
