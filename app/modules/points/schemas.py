@@ -72,3 +72,42 @@ class ExchangeItemOut(BaseModel):
     stock: int
     is_virtual: bool
     sort_order: int
+
+
+class CheckInTipOut(BaseModel):
+    title: str
+    content: str
+    is_positive: bool
+
+
+class CheckInFortuneOut(BaseModel):
+    version: int = 1
+    poem: str
+    summary: str
+    summary_detail: str | None = None
+    wish: str
+    love: str
+    study: str
+    career: str
+    health: str
+    lost_item: str
+    lucky_color: str
+    lucky_direction: str
+    lucky_time: str
+    lucky_item: str
+    lucky_action: str
+    avoid_action: str
+    ritual: str
+
+
+class CheckInResultOut(BaseModel):
+    id: uuid.UUID
+    level: int
+    tips: list[CheckInTipOut]
+    fortune_report: CheckInFortuneOut
+    created_at: datetime.datetime
+
+
+class CheckInHistoryItem(BaseModel):
+    date: datetime.date
+    result: CheckInResultOut

@@ -6,6 +6,7 @@ class PointsErr(ErrCode):
     DUPLICATE_REWARD = NS_POINTS.err(2)
     NO_BALANCE_RECORD = NS_POINTS.err(3)
     INVALID_PERIOD = NS_POINTS.err(4)
+    INVALID_CHECKIN_DATE = NS_POINTS.err(5)
 
 
 register(
@@ -14,5 +15,6 @@ register(
         PointsErr.DUPLICATE_REWARD: (409, "该事件积分已发放"),
         PointsErr.NO_BALANCE_RECORD: (404, "暂无积分记录"),
         PointsErr.INVALID_PERIOD: (400, "无效排名周期"),
+        PointsErr.INVALID_CHECKIN_DATE: (400, "签到日期无效"),
     }
 )

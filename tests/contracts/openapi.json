@@ -2546,6 +2546,39 @@
         "title": "ApiResp[ListData[CertificateOut]]",
         "type": "object"
       },
+      "ApiResp_ListData_CheckInHistoryItem__": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListData_CheckInHistoryItem_"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "default": "",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ApiResp[ListData[CheckInHistoryItem]]",
+        "type": "object"
+      },
       "ApiResp_ListData_FollowBoard__": {
         "properties": {
           "code": {
@@ -4221,6 +4254,39 @@
           "message"
         ],
         "title": "ApiResp[TrialOut]",
+        "type": "object"
+      },
+      "ApiResp_Union_CheckInResultOut__NoneType__": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckInResultOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "default": "",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ApiResp[Union[CheckInResultOut, NoneType]]",
         "type": "object"
       },
       "ApiResp_UnreadCountOut_": {
@@ -7053,6 +7119,183 @@
           "issued_at"
         ],
         "title": "CertificateOut",
+        "type": "object"
+      },
+      "CheckInFortuneOut": {
+        "properties": {
+          "avoid_action": {
+            "title": "Avoid Action",
+            "type": "string"
+          },
+          "career": {
+            "title": "Career",
+            "type": "string"
+          },
+          "health": {
+            "title": "Health",
+            "type": "string"
+          },
+          "lost_item": {
+            "title": "Lost Item",
+            "type": "string"
+          },
+          "love": {
+            "title": "Love",
+            "type": "string"
+          },
+          "lucky_action": {
+            "title": "Lucky Action",
+            "type": "string"
+          },
+          "lucky_color": {
+            "title": "Lucky Color",
+            "type": "string"
+          },
+          "lucky_direction": {
+            "title": "Lucky Direction",
+            "type": "string"
+          },
+          "lucky_item": {
+            "title": "Lucky Item",
+            "type": "string"
+          },
+          "lucky_time": {
+            "title": "Lucky Time",
+            "type": "string"
+          },
+          "poem": {
+            "title": "Poem",
+            "type": "string"
+          },
+          "ritual": {
+            "title": "Ritual",
+            "type": "string"
+          },
+          "study": {
+            "title": "Study",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "summary_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary Detail"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "wish": {
+            "title": "Wish",
+            "type": "string"
+          }
+        },
+        "required": [
+          "poem",
+          "summary",
+          "wish",
+          "love",
+          "study",
+          "career",
+          "health",
+          "lost_item",
+          "lucky_color",
+          "lucky_direction",
+          "lucky_time",
+          "lucky_item",
+          "lucky_action",
+          "avoid_action",
+          "ritual"
+        ],
+        "title": "CheckInFortuneOut",
+        "type": "object"
+      },
+      "CheckInHistoryItem": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CheckInResultOut"
+          }
+        },
+        "required": [
+          "date",
+          "result"
+        ],
+        "title": "CheckInHistoryItem",
+        "type": "object"
+      },
+      "CheckInResultOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "fortune_report": {
+            "$ref": "#/components/schemas/CheckInFortuneOut"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "tips": {
+            "items": {
+              "$ref": "#/components/schemas/CheckInTipOut"
+            },
+            "title": "Tips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "level",
+          "tips",
+          "fortune_report",
+          "created_at"
+        ],
+        "title": "CheckInResultOut",
+        "type": "object"
+      },
+      "CheckInTipOut": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "is_positive": {
+            "title": "Is Positive",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "content",
+          "is_positive"
+        ],
+        "title": "CheckInTipOut",
         "type": "object"
       },
       "CloseIn": {
@@ -10094,6 +10337,22 @@
           "items"
         ],
         "title": "ListData[CertificateOut]",
+        "type": "object"
+      },
+      "ListData_CheckInHistoryItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CheckInHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ListData[CheckInHistoryItem]",
         "type": "object"
       },
       "ListData_FollowBoard_": {
@@ -25947,6 +26206,25 @@
         "operationId": "checkin_api_v1_points_checkin_post",
         "parameters": [
           {
+            "description": "补签日期（YYYY-MM-DD）；为空表示今天",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "补签日期（YYYY-MM-DD）；为空表示今天",
+              "title": "Date"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -25986,6 +26264,126 @@
           }
         },
         "summary": "Checkin",
+        "tags": [
+          "points"
+        ]
+      }
+    },
+    "/api/v1/points/checkin/history": {
+      "get": {
+        "operationId": "checkin_history_api_v1_points_checkin_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 2100,
+              "minimum": 2000,
+              "title": "Year",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": true,
+            "schema": {
+              "maximum": 12,
+              "minimum": 1,
+              "title": "Month",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResp_ListData_CheckInHistoryItem__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Checkin History",
+        "tags": [
+          "points"
+        ]
+      }
+    },
+    "/api/v1/points/checkin/today": {
+      "get": {
+        "operationId": "today_checkin_api_v1_points_checkin_today_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResp_Union_CheckInResultOut__NoneType__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Today Checkin",
         "tags": [
           "points"
         ]

@@ -1,9 +1,13 @@
+import datetime
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.points.schemas import (
     AchievementOut,
     BalanceOut,
+    CheckInHistoryItem,
+    CheckInResultOut,
     ExchangeItemOut,
     LeaderboardEntry,
     LedgerEntry,
@@ -12,15 +16,18 @@ from app.modules.points.schemas import (
 from app.modules.points.service import (
     do_checkin,
     get_balance,
+    get_today_checkin,
     leaderboard,
     level_for_balance,
     list_achievements,
+    list_checkin_history,
     list_exchange_items,
     list_ledger,
     list_tasks,
 )
 from core.common import (
     ApiResp,
+    ListData,
     ModuleStatus,
     PageData,
     PaginateDep,
@@ -84,10 +91,38 @@ async def my_ledger(
 @router.post("/checkin", response_model=ApiResp[dict])
 @respond
 async def checkin(
+    date: datetime.date | None = Query(
+        None, description="补签日期（YYYY-MM-DD）；为空表示今天"
+    ),
     cur: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> dict:
-    return await do_checkin(db, cur.id)
+    return await do_checkin(db, cur.id, target_date=date)
+
+
+@router.get("/checkin/today", response_model=ApiResp[CheckInResultOut | None])
+@respond
+async def today_checkin(
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> CheckInResultOut | None:
+    return await get_today_checkin(db, cur.id)
+
+
+@router.get(
+    "/checkin/history", response_model=ApiResp[ListData[CheckInHistoryItem]]
+)
+@respond
+async def checkin_history(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    cur: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_read_session),
+) -> dict:
+    items = await list_checkin_history(
+        db, cur.id, year=year, month=month
+    )
+    return {"items": items}
 
 
 @router.get("/leaderboard", response_model=ApiResp[PageData[LeaderboardEntry]])

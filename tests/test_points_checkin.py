@@ -13,7 +13,11 @@ from app.modules.points.models import (
     UserBehaviorStat,
     UserTaskProgress,
 )
-from app.modules.points.service import do_checkin, get_balance
+from app.modules.points.service import (
+    do_checkin,
+    get_balance,
+    list_checkin_history,
+)
 from tests.conftest import auth_user_uid
 
 
@@ -200,3 +204,40 @@ async def test_checkin_idempotent_streak_not_double_incremented(
     assert r3["today_checked"] is True
     assert r3["checkin_streak"] == 1
     assert await get_balance(db, uid) == 5  # 只发了一次分
+
+
+async def test_checkin_returns_a_deterministic_fortune(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    uid = await _user(auth_db, "checkin_fortune")
+
+    first = await do_checkin(db, uid)
+    result = first["result"]
+    assert result["fortune_report"]["poem"]
+    assert 0 <= result["level"] <= 4
+
+    again = await do_checkin(db, uid)
+    assert again["earned"] == 0
+    assert again["result"]["id"] == result["id"]
+
+
+async def test_backdated_checkin_is_idempotent_and_listed_in_history(
+    db: AsyncSession, auth_db: AsyncSession, auth_seam_realm: None
+) -> None:
+    import datetime
+
+    uid = await _user(auth_db, "checkin_backdate")
+    target = datetime.date.today() - datetime.timedelta(days=3)
+
+    first = await do_checkin(db, uid, target_date=target)
+    assert first["earned"] > 0
+    assert first["backdated"] is True
+
+    again = await do_checkin(db, uid, target_date=target)
+    assert again["earned"] == 0
+
+    items = await list_checkin_history(
+        db, uid, year=target.year, month=target.month
+    )
+    assert [item.date for item in items] == [target]
+    assert str(items[0].result.id) == first["result"]["id"]

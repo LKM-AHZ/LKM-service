@@ -1,6 +1,7 @@
 """积分服务：balance 原子写 + ledger 幂等流水，reward/spend/transfer/排行榜/每日打卡。"""
 
 import datetime
+import hashlib
 import uuid
 from typing import Any
 
@@ -22,6 +23,10 @@ from app.modules.points.repository import (
 from app.modules.points.rules import RULE_DELTAS
 from app.modules.points.schemas import (
     AchievementOut,
+    CheckInFortuneOut,
+    CheckInHistoryItem,
+    CheckInResultOut,
+    CheckInTipOut,
     ExchangeItemOut,
     LeaderboardEntry,
     LedgerEntry,
@@ -467,14 +472,141 @@ async def list_exchange_items(db: DbSession) -> list[ExchangeItemOut]:
     ]
 
 
-async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
+_CHECKIN_POEMS = (
+    "云开见月明，静处听风声。",
+    "行到水穷处，坐看云起时。",
+    "山重水复疑无路，柳暗花明又一村。",
+    "莫听穿林打叶声，何妨吟啸且徐行。",
+    "长风破浪会有时，直挂云帆济沧海。",
+    "海内存知己，天涯若比邻。",
+)
+_CHECKIN_SUMMARIES = (
+    "今日宜稳中求进，先完成一件小事，剩下的会顺起来。",
+    "灵感来得比平时快，适合把想法记下来，稍后再动手。",
+    "把注意力放在手边的事上，今天的分寸感比速度更重要。",
+    "适合与人沟通，一次坦诚的对话能解开旧结。",
+    "留一点空白给自己，休息也是今天的一部分。",
+)
+_CHECKIN_LINES = {
+    "wish": ("心愿有回响", "适合把愿望写下来", "别急着许愿，先看清想要什么"),
+    "love": ("相处融洽，宜表达", "心意被温柔接住", "慢一点回应，给彼此空间"),
+    "study": ("思路清晰，记忆牢", "适合复盘与整理", "换一种方式理解难题"),
+    "career": ("推进顺利，宜合作", "细节决定今天的成果", "先定优先级再开工"),
+    "health": ("状态平稳，多走动", "注意补水与睡眠", "别久坐，给肩颈松绑"),
+    "lost": ("失物在熟悉的地方", "留意常去的位置", "旧物可能带来线索"),
+    "color": ("靛蓝", "暖橙", "松绿", "月白", "赭红"),
+    "direction": ("东南", "正北", "西南", "正东", "西北"),
+    "time": ("午后三时", "清晨", "黄昏", "夜半之前", "正午前后"),
+    "item": ("一支笔", "一枚硬币", "旧书", "钥匙", "一片叶子"),
+    "action": ("整理桌面", "深呼吸三次", "给朋友发条消息", "散步十分钟", "写下一个目标"),
+    "avoid": ("拖延决定", "情绪化表达", "熬夜", "空腹赶路", "在气头上回消息"),
+    "ritual": ("沏一杯热茶，静坐三分钟再开始今天。", "出门前回望一眼房间，把要带的都看一眼。", "把今天最重要的一件事写在纸上。", "听一首熟悉的歌，再进入工作。", "临睡前写一句今天值得记住的事。"),
+}
+
+
+def _pick(items: tuple[str, ...], digest: bytes, offset: int) -> str:
+    return items[digest[offset] % len(items)]
+
+
+def checkin_result_for(user_id: uuid.UUID, day: datetime.date) -> CheckInResultOut:
+    """Deterministic daily draw: same user + day always yields the same slip."""
+    digest = hashlib.sha256(f"{user_id}:{day.isoformat()}".encode()).digest()
+    level = digest[0] % 5
+    lines = _CHECKIN_LINES
+    positive = digest[12] % 2 == 0
+    return CheckInResultOut(
+        id=uuid.uuid5(uuid.NAMESPACE_URL, f"checkin:{user_id}:{day.isoformat()}"),
+        level=level,
+        tips=[
+            CheckInTipOut(
+                title="今日提示",
+                content=(
+                    "适合把计划拆小，逐个完成。"
+                    if positive
+                    else "先处理最要紧的一件事，别让自己被杂事牵着走。"
+                ),
+                is_positive=positive,
+            )
+        ],
+        fortune_report=CheckInFortuneOut(
+            poem=_pick(_CHECKIN_POEMS, digest, 1),
+            summary=_pick(_CHECKIN_SUMMARIES, digest, 2),
+            summary_detail=_pick(_CHECKIN_SUMMARIES, digest, 3),
+            wish=lines["wish"][digest[4] % 3],
+            love=lines["love"][digest[5] % 3],
+            study=lines["study"][digest[6] % 3],
+            career=lines["career"][digest[7] % 3],
+            health=lines["health"][digest[8] % 3],
+            lost_item=lines["lost"][digest[9] % 3],
+            lucky_color=_pick(lines["color"], digest, 10),
+            lucky_direction=_pick(lines["direction"], digest, 11),
+            lucky_time=_pick(lines["time"], digest, 13),
+            lucky_item=_pick(lines["item"], digest, 14),
+            lucky_action=_pick(lines["action"], digest, 15),
+            avoid_action=_pick(lines["avoid"], digest, 16),
+            ritual=_pick(lines["ritual"], digest, 17),
+        ),
+        created_at=datetime.datetime.combine(
+            day, datetime.time.min, tzinfo=datetime.UTC
+        ),
+    )
+
+
+async def get_today_checkin(
+    db: DbSession, user_id: uuid.UUID
+) -> CheckInResultOut | None:
+    stat = await UserBehaviorStatRepository(db).get(user_id)
+    today = datetime.date.today().isoformat()
+    if stat is None or stat.last_checkin_date != today:
+        return None
+    return checkin_result_for(user_id, datetime.date.today())
+
+
+async def list_checkin_history(
+    db: DbSession, user_id: uuid.UUID, *, year: int, month: int
+) -> list[CheckInHistoryItem]:
+    """One month of draws, read from the ledger's check-in refs."""
+    start = datetime.date(year, month, 1)
+    end = (
+        datetime.date(year + 1, 1, 1)
+        if month == 12
+        else datetime.date(year, month + 1, 1)
+    )
+    rows = await PointsLedgerRepository(db).get_many(
+        PointsLedger.user_id == user_id,
+        PointsLedger.reason == "checkin",
+        order_by=PointsLedger.created_at.desc(),
+    )
+    days: set[datetime.date] = set()
+    for row in rows:
+        raw = row.ref_id.rsplit(":", 1)[-1]
+        try:
+            day = datetime.date.fromisoformat(raw)
+        except ValueError:
+            continue
+        if start <= day < end:
+            days.add(day)
+    return [
+        CheckInHistoryItem(date=day, result=checkin_result_for(user_id, day))
+        for day in sorted(days)
+    ]
+
+
+async def do_checkin(
+    db: DbSession, user_id: uuid.UUID, target_date: datetime.date | None = None
+) -> dict:
     """每日打卡：幂等（同日已打返回 today_checked=True, earned=0）。
 
     返回 ``{success, earned, checkin_streak, today_checked}``。非幂等路径推进打卡
     成就（checkin_streak）与打卡任务（t1），并发放 RULE_DELTAS["checkin"] 积分。
     """
-    today = datetime.date.today().isoformat()
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    now_day = datetime.date.today()
+    today = now_day.isoformat()
+    yesterday = (now_day - datetime.timedelta(days=1)).isoformat()
+    day = target_date or now_day
+    if day > now_day:
+        raise BizError(PointsErr.INVALID_CHECKIN_DATE)
+    day_iso = day.isoformat()
     stat_repo = UserBehaviorStatRepository(db)
     stat = await stat_repo.get_locked(user_id)
     if stat is None:
@@ -489,6 +621,39 @@ async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
         )
         stat = await stat_repo.get_locked(user_id)
         assert stat is not None  # 理论上不可达：刚插入或并发方已提交
+    # Backdated draws are paid per target day and never touch the streak.
+    if target_date is not None:
+        result = checkin_result_for(user_id, day)
+        existing = await PointsLedgerRepository(db).get_by_ref(
+            user_id, "checkin", f"{user_id}:{day_iso}"
+        )
+        if existing is not None:
+            return {
+                "success": True,
+                "earned": 0,
+                "checkin_streak": stat.checkin_streak,
+                "today_checked": False,
+                "backdated": True,
+                "result": result.model_dump(mode="json"),
+            }
+        reward_delta = RULE_DELTAS["checkin"]
+        await reward(
+            db,
+            user_id,
+            reward_delta,
+            "checkin",
+            "checkin",
+            f"{user_id}:{day_iso}",
+        )
+        return {
+            "success": True,
+            "earned": reward_delta,
+            "checkin_streak": stat.checkin_streak,
+            "today_checked": False,
+            "backdated": True,
+            "result": result.model_dump(mode="json"),
+        }
+
     today_checked = stat.last_checkin_date == today
     if today_checked:
         return {
@@ -496,6 +661,10 @@ async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
             "earned": 0,
             "checkin_streak": stat.checkin_streak,
             "today_checked": True,
+            "backdated": False,
+            "result": checkin_result_for(user_id, now_day).model_dump(
+                mode="json"
+            ),
         }
 
     stat.checkin_streak = (
@@ -524,4 +693,6 @@ async def do_checkin(db: DbSession, user_id: uuid.UUID) -> dict:
         "earned": reward_delta,
         "checkin_streak": stat.checkin_streak,
         "today_checked": False,
+        "backdated": False,
+        "result": checkin_result_for(user_id, now_day).model_dump(mode="json"),
     }
