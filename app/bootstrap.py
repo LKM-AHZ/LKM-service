@@ -429,6 +429,15 @@ class _ContentReadImpl:
 
         return await item_brief(db, item_id)
 
+    async def list_liked_items(
+        self, db: AsyncSession, user_id: uuid.UUID, *, offset: int, limit: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        from app.modules.content.read_api import list_liked_items
+
+        return await list_liked_items(
+            db, user_id, offset=offset, limit=limit
+        )
+
     async def get_item_info(self, db: AsyncSession, item_id: uuid.UUID) -> Any:
         from app.modules.content.read_api import get_item_info
 

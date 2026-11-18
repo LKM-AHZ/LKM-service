@@ -104,6 +104,18 @@ async def my_favorites(
     return page
 
 
+@router.get("/me/likes", response_model=ApiResp[PageData[FavoriteItem]])
+@respond
+async def my_likes(
+    cur: CurrentUser = Depends(get_current_user),
+    pag: PaginateParams = Depends(PaginateDep()),
+    db: AsyncSession = Depends(get_read_session),
+) -> PageData[FavoriteItem]:
+    return await interaction_service.list_likes(
+        db, cur.id, page=pag.page, limit=pag.limit
+    )
+
+
 @router.post("/views/{content_id}", response_model=ApiResp[ViewState])
 @respond
 async def report_view(

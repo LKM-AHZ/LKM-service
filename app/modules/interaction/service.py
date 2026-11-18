@@ -55,6 +55,7 @@ from core.config import settings
 from core.db.repository import DbSession
 from core.err import BizError
 from core.ports import columns as columns_port
+from core.ports import content as content_port
 from core.ports import feed as feed_port
 from core.ports.snapshot import get_user_snapshot, get_user_snapshot_batch
 
@@ -231,6 +232,21 @@ async def list_history(
     ]
     return PageData(
         items=items, total=total, page=page, pages=paginate_pages(total, limit)
+    )
+
+
+async def list_likes(
+    db: DbSession, user_id: uuid.UUID, page: int = 1, limit: int = 20
+) -> PageData[FavoriteItem]:
+    """我赞过的内容：复用收藏列表的形状，``created_at`` 是点赞时间。"""
+    rows, total = await content_port.list_liked_items(
+        db, user_id, offset=paginate_offset(page, limit), limit=limit
+    )
+    return PageData(
+        items=[FavoriteItem(**row) for row in rows],
+        total=total,
+        page=page,
+        pages=paginate_pages(total, limit),
     )
 
 

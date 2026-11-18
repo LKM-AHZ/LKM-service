@@ -17,6 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.ports.registry import get
 
 
+async def list_liked_items(
+    db: AsyncSession, user_id: uuid.UUID, *, offset: int, limit: int
+) -> tuple[list[dict[str, Any]], int]:
+    """用户赞过的内容摘要分页（按点赞时间倒序）。"""
+    return await get("content_read").list_liked_items(
+        db, user_id, offset=offset, limit=limit
+    )
+
+
 async def item_brief(db: AsyncSession, item_id: uuid.UUID) -> Any:
     """未软删的内容项摘要（``id`` / ``title`` / ``author_id``）；不存在返回 None。"""
     return await get("content_read").item_brief(db, item_id)

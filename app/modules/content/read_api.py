@@ -181,6 +181,59 @@ async def exists_content(db: AsyncSession, content_id: uuid.UUID) -> bool:
     ) is not None
 
 
+async def list_liked_items(
+    db: AsyncSession, user_id: uuid.UUID, *, offset: int, limit: int
+) -> tuple[list[dict[str, Any]], int]:
+    """用户赞过的内容分页（未软删），按点赞时间倒序。
+
+    返回不可变摘要字典，调用方不持有 ORM 行；总数与分页同一条查询口径。
+    """
+    total = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(ContentLike)
+            .join(ContentItem, ContentItem.id == ContentLike.content_id)
+            .where(
+                ContentLike.user_id == user_id,
+                ContentItem.deleted_at.is_(None),
+            )
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            select(
+                ContentItem.id,
+                ContentItem.content_type,
+                ContentItem.title,
+                ContentItem.slug,
+                ContentItem.board_id,
+                ContentLike.created_at,
+            )
+            .join(ContentLike, ContentLike.content_id == ContentItem.id)
+            .where(
+                ContentLike.user_id == user_id,
+                ContentItem.deleted_at.is_(None),
+            )
+            .order_by(ContentLike.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items = [
+        {
+            "content_id": row[0],
+            "content_type": row[1],
+            "title": row[2],
+            "slug": row[3],
+            "board_id": row[4],
+            "created_at": row[5],
+        }
+        for row in rows
+    ]
+    return items, total
+
+
 async def item_counts(
     db: AsyncSession, content_id: uuid.UUID
 ) -> tuple[int, int] | None:
