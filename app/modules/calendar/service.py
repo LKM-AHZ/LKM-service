@@ -546,11 +546,11 @@ async def list_events(
         )
     extra.extend(CalendarEvent.tags.contains([tag]) for tag in normalize_tags(tags))
 
+    # 事件列表/事件选择器只列「我自己的」（不合并订阅来源）。
     events = await _fetch_events(
         db,
         viewer_id=viewer_id,
         owner_id=owner_id,
-        include_subscriptions=owner_id is None,
         window=window,
         extra=extra,
     )
