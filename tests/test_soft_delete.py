@@ -1,4 +1,4 @@
-"""批 4：软删除（内容/评论域 4 表新增 + 既有 starhope/feed 6 表统一到 mixin）。
+"""批 4：软删除（内容/评论域 4 表新增 + 既有 feed 2 表统一到 mixin）。
 
 覆盖三类易回归点：
 
@@ -379,25 +379,6 @@ async def test_notification_target_resolution_skips_soft_deleted(
     item = await _item(db, slug="sd-notif", author=author)
     await delete_item(db, item.id, author)
     assert await _resolve_targets(db, "like", f"item:{item.id}") == []
-
-
-async def test_starhope_mixin_round_trip(db: DB) -> None:
-    """既有 6 表统一到 SoftDeleteMixin 后行为不变（列定义逐字一致 → schema 零 diff）。"""
-    from app.modules.starhope.models import StarHopeFolder
-
-    class FolderRepo(AsyncRepository[StarHopeFolder]):
-        model = StarHopeFolder
-
-    repo = FolderRepo(db)
-    user_id = uuid.uuid4()
-    folder = await repo.create(id=str(uuid.uuid4()), user_id=user_id, name="f")
-    assert repo.soft_delete_column is not None
-
-    await repo.soft_delete(folder)
-    assert await repo.count(StarHopeFolder.user_id == user_id) == 0
-    assert (
-        await repo.count(StarHopeFolder.user_id == user_id, include_deleted=True) == 1
-    )
 
 
 async def test_restore_is_noop_for_model_without_column(db: DB) -> None:

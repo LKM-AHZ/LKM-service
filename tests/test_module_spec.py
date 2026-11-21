@@ -37,7 +37,6 @@ _LEGACY_MODULES = (
     "projects",
     "qa",
     "search",
-    "starhope",
     "treehole",
 )
 
@@ -55,7 +54,6 @@ _LEGACY_ERROR_MODULES = (
     "app.modules.projects.errors",
     "app.modules.qa.errors",
     "app.modules.search.errors",
-    "app.modules.starhope.errors",
     "app.modules.admin.moderation",
     "app.modules.content.articles",
     "app.modules.content.boards",
@@ -83,7 +81,6 @@ _LEGACY_MODEL_MODULES = (
     # 步骤 7：RolePermission 从 admin.models 迁入 rbac 域（表名不变，无需迁移）；
     # rbac 目录名排在 projects 与 search 之间，故此处按清单顺序插入。
     "app.modules.rbac.models",
-    "app.modules.starhope.models",
     "app.modules.treehole.models",
 )
 

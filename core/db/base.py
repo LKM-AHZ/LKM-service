@@ -92,7 +92,7 @@ class UUIDPrimaryKeyMixin:
 class SoftDeleteMixin:
     """软删除混入：``deleted_at`` 非空即视为已删除。
 
-    仅对确有恢复诉求的表混入（内容/评论域 + 既有 starhope/feed）。查询侧过滤由
+    仅对确有恢复诉求的表混入（内容/评论域 + 既有 feed）。查询侧过滤由
     Repository 基类按「模型是否真有该列」动态施加，见 ``app/db/repository.py``。
     列定义与既有手写列逐字一致（``UTCDateTime`` + nullable，无 default/index），
     故替换既有手写列为 mixin 时 schema 零变更。

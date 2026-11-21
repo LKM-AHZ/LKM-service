@@ -8,14 +8,15 @@
 3. **事务归属**：仓储只 flush，**永不 commit**——最外层会话仍是唯一提交主体。
 """
 
+import datetime
 import uuid
 
 import pytest
 
 from app.modules.admin.models import RolePermission
+from app.modules.calendar.models import CalendarEvent
 from app.modules.content.models import Board
 from app.modules.notification.models import Notification, NotificationPreference
-from app.modules.starhope.models import StarHopeFolder
 from core.db.repository import AsyncRepository
 from core.err import BizError, CommonErr
 from tests.conftest import DB
@@ -29,14 +30,25 @@ class PreferenceRepository(AsyncRepository[NotificationPreference]):
     model = NotificationPreference
 
 
-class StarHopeFolderRepository(AsyncRepository[StarHopeFolder]):
-    model = StarHopeFolder
+class CalendarEventRepository(AsyncRepository[CalendarEvent]):
+    model = CalendarEvent
 
 
 class BoardRepository(AsyncRepository[Board]):
     """无 ``deleted_at`` 列的对照模型。"""
 
     model = Board
+
+
+async def _make_event(
+    db: DB, owner_id: uuid.UUID, title: str = "f"
+) -> CalendarEvent:
+    return await CalendarEventRepository(db).create(
+        owner_id=owner_id,
+        title=title,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        end_time=datetime.datetime(2026, 1, 1, 1, tzinfo=datetime.UTC),
+    )
 
 
 async def _make_notification(
@@ -134,51 +146,47 @@ async def test_delete_and_hard_delete_where(db: DB) -> None:
 
 async def test_soft_delete_filters_by_default(db: DB) -> None:
     user_id = uuid.uuid4()
-    folder = await StarHopeFolderRepository(db).create(
-        id=str(uuid.uuid4()), user_id=user_id, name="f"
-    )
-    repo = StarHopeFolderRepository(db)
+    event = await _make_event(db, user_id)
+    repo = CalendarEventRepository(db)
 
-    await repo.soft_delete(folder)
-    assert folder.deleted_at is not None
+    await repo.soft_delete(event)
+    assert event.deleted_at is not None
 
-    assert await repo.get(folder.id) is None
-    assert await repo.get(folder.id, include_deleted=True) is folder
-    assert await repo.count(StarHopeFolder.user_id == user_id) == 0
+    assert await repo.get(event.id) is None
+    assert await repo.get(event.id, include_deleted=True) is event
+    assert await repo.count(CalendarEvent.owner_id == user_id) == 0
     assert (
-        await repo.count(StarHopeFolder.user_id == user_id, include_deleted=True) == 1
+        await repo.count(CalendarEvent.owner_id == user_id, include_deleted=True) == 1
     )
-    assert await repo.exists(StarHopeFolder.user_id == user_id) is False
-    assert await repo.get_many(StarHopeFolder.user_id == user_id) == []
-    assert await repo.get_one(StarHopeFolder.user_id == user_id) is None
+    assert await repo.exists(CalendarEvent.owner_id == user_id) is False
+    assert await repo.get_many(CalendarEvent.owner_id == user_id) == []
+    assert await repo.get_one(CalendarEvent.owner_id == user_id) is None
     with pytest.raises(BizError):
-        await repo.get_or_raise(folder.id, CommonErr.INVALID_INPUT)
+        await repo.get_or_raise(event.id, CommonErr.INVALID_INPUT)
 
 
 async def test_restore_brings_row_back(db: DB) -> None:
     user_id = uuid.uuid4()
-    folder = await StarHopeFolderRepository(db).create(
-        id=str(uuid.uuid4()), user_id=user_id, name="f"
-    )
-    repo = StarHopeFolderRepository(db)
+    event = await _make_event(db, user_id)
+    repo = CalendarEventRepository(db)
 
-    await repo.soft_delete(folder)
-    await repo.restore(folder)
-    assert folder.deleted_at is None
-    assert await repo.get(folder.id) is folder
+    await repo.soft_delete(event)
+    await repo.restore(event)
+    assert event.deleted_at is None
+    assert await repo.get(event.id) is event
 
 
 async def test_soft_delete_where_skips_already_deleted(db: DB) -> None:
     user_id = uuid.uuid4()
-    repo = StarHopeFolderRepository(db)
-    await repo.create(id=str(uuid.uuid4()), user_id=user_id, name="a")
-    await repo.create(id=str(uuid.uuid4()), user_id=user_id, name="b")
+    repo = CalendarEventRepository(db)
+    await _make_event(db, user_id, "a")
+    await _make_event(db, user_id, "b")
 
-    assert await repo.soft_delete_where(StarHopeFolder.user_id == user_id) == 2
+    assert await repo.soft_delete_where(CalendarEvent.owner_id == user_id) == 2
     # 二次调用不再命中原先已删的行（WHERE deleted_at IS NULL）
-    assert await repo.soft_delete_where(StarHopeFolder.user_id == user_id) == 0
+    assert await repo.soft_delete_where(CalendarEvent.owner_id == user_id) == 0
     assert (
-        await repo.count(StarHopeFolder.user_id == user_id, include_deleted=True) == 2
+        await repo.count(CalendarEvent.owner_id == user_id, include_deleted=True) == 2
     )
 
 
@@ -264,12 +272,12 @@ async def test_pg_upsert_update_values_constant(db: DB) -> None:
 
 async def test_repository_never_commits(db: DB) -> None:
     """写路径只 flush：调用后会话事务仍开着，提交主体仍是最外层依赖。"""
-    repo = StarHopeFolderRepository(db)
-    folder = await repo.create(id=str(uuid.uuid4()), user_id=uuid.uuid4(), name="f")
-    await repo.update(folder, name="g")
-    await repo.soft_delete(folder)
-    await repo.soft_delete_where(StarHopeFolder.id == folder.id)
-    await repo.hard_delete_where(StarHopeFolder.id == folder.id)
+    repo = CalendarEventRepository(db)
+    event = await _make_event(db, uuid.uuid4())
+    await repo.update(event, title="g")
+    await repo.soft_delete(event)
+    await repo.soft_delete_where(CalendarEvent.id == event.id)
+    await repo.hard_delete_where(CalendarEvent.id == event.id)
     await PreferenceRepository(db).pg_upsert(
         {"user_id": uuid.uuid4(), "type": "reply", "enabled": True},
         index_elements=["user_id", "type"],

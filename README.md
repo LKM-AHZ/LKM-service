@@ -27,7 +27,7 @@ cp .env.example .env
 - 认证独立服务（M3/S5 拆库 + 源码层拆包）：`users/profiles` 物理迁出业务库，AUTH 独立 ASGI 进程（`auth/main.py`，顶层包 `auth/` 与 `app/` 同级）独立部署；业务域仅经 `core.ports` / `core.contracts` 和 `user:snap` 缓存读身份，auth 实现由 `boot.assemble` 绑定，边界由 import-linter 跨包契约强制。
 - 内容域（content 聚合根）：社区帖子/评论/点赞（同事务维护冗余计数）、分科板块（负责人/禁言/准入）、专栏（申请/审核/文章）、问答、官方文章；只读 GraphQL 聚合。
 - 信息流域（feed）：物化时间线与 fanout；关注用户/板块归属 interaction 域。
-- 其他业务域：博客（Git 托管/星标/评论/Git HTTP）、文件库（上传/审核/下载）、积分/成就/排行榜（事件规则引擎）、考试认证、项目广场、StarHope AI 学习助手。
+- 其他业务域：博客（Git 托管/星标/评论/Git HTTP）、文件库（上传/审核/下载）、积分/成就/排行榜（事件规则引擎）、考试认证、项目广场。
 - 消息与一致性（M1/M4）：可选 Pulsar / RabbitMQ 的消息总线、事务发件箱（outbox）+ relay、按 `event_id` 幂等消费、死信（`system/dlq`）+ 重投、订阅 lag 上报；points 三订阅扇出隔离。装配时校验订阅与 routing key 的精确 topic 映射；非法 envelope 会进入死信，原始字节以 base64 留存供修正重投。
 - 缓存与报表：`user:snap` 双级缓存（L1 进程内有界 TTL/LRU，支持批量读取和失效期间回填校验；L2 Redis 负责版本 CAS + epoch 防复活，singleflight 合并请求，L1 失效经 pub/sub 广播）；`cached_read` 热点缓存按前缀路由，显式失效用短期代次阻止在途旧值回填，跨进程锁关闭时仍正常缓存，锁命令失败立即降级；AUTH 变更事件失效；`user_dim` 离线宽表 ETL 供后台/运营报表（与在线读隔离）。
 - 读热序列化（M5 §6.5.2）：timeline、search、files、notification、interaction 列表在 Pydantic v2 校验后经 msgspec 出端口（`LKM_READ_MSGSPEC_ENABLED`，关闭回退旧路径）；基准 `loadtest/bench_read_serialize.py`。
@@ -66,7 +66,7 @@ cp .env.example .env
 │       │   ├── router.py      # HTTP 参数、会话 Cookie 与响应包装
 │       │   ├── deps.py        # 匿名令牌校验、owner 派生与鉴权依赖
 │       │   └── services/      # letters/conversations/bottles/wishes/reports 业务操作
-│       └── exam/ projects/ starhope/ rbac/ health/
+│       └── exam/ projects/ rbac/ health/
 ├── auth/                      # 认证与用户档案包，只依赖 core，不导入 app/boot
 │   ├── main.py                # 独立 AUTH ASGI 入口
 │   ├── bootstrap.py           # 认证路由、模型、任务、错误码与端口实现登记
@@ -154,7 +154,6 @@ GET  /api/v1/boards/status          # 分科板块模块状态
 | Exam | `/exam` | 考试认证（解锁板块） |
 | Projects | `/projects` | 项目广场 CRUD / 审核 |
 | Points | `/points` | 积分 / 成就 / 排行榜（事件规则引擎） |
-| StarHope | `/starhope` | StarHope AI 学习助手 |
 | Admin | `/admin` | 后台（登录、用户管理） |
 | Admin Auth | `/admin/auth` | 后台认证管理 |
 | Admin Content | `/admin/content` | 后台内容管理 |

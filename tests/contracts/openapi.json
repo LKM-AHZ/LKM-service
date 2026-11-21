@@ -4058,72 +4058,6 @@
         "title": "ApiResp[RuleTestResult]",
         "type": "object"
       },
-      "ApiResp_StarHopePullData_dict__": {
-        "properties": {
-          "code": {
-            "title": "Code",
-            "type": "integer"
-          },
-          "data": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/StarHopePullData_dict_"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "request_id": {
-            "default": "",
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "message"
-        ],
-        "title": "ApiResp[StarHopePullData[dict]]",
-        "type": "object"
-      },
-      "ApiResp_StarHopePushResult_": {
-        "properties": {
-          "code": {
-            "title": "Code",
-            "type": "integer"
-          },
-          "data": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/StarHopePushResult"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "request_id": {
-            "default": "",
-            "title": "Request Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "message"
-        ],
-        "title": "ApiResp[StarHopePushResult]",
-        "type": "object"
-      },
       "ApiResp_SubmitResult_": {
         "properties": {
           "code": {
@@ -8486,6 +8420,270 @@
           "url"
         ],
         "title": "DownloadUrlInfo",
+        "type": "object"
+      },
+      "EventCreate": {
+        "properties": {
+          "background_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "end_time": {
+            "format": "date-time",
+            "title": "End Time",
+            "type": "string"
+          },
+          "icon_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Id"
+          },
+          "is_all_day": {
+            "default": false,
+            "title": "Is All Day",
+            "type": "boolean"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
+          "recurrence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecurrenceIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start_time": {
+            "format": "date-time",
+            "title": "Start Time",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "visibility": {
+            "default": 0,
+            "title": "Visibility",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title",
+          "start_time",
+          "end_time"
+        ],
+        "title": "EventCreate",
+        "type": "object"
+      },
+      "EventUpdate": {
+        "description": "只更新显式提供的字段。\n\n``recurrence`` 显式为 ``null`` 表示清除重复规则（客户端在 frequency=none 时正是\n这么发的），因此不能把「字段缺失」与「值为 null」混为一谈——用\n``model_fields_set`` 判定是否提供。",
+        "properties": {
+          "background_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Id"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Time"
+          },
+          "icon_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Id"
+          },
+          "is_all_day": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is All Day"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
+          "recurrence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecurrenceIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "title": "EventUpdate",
         "type": "object"
       },
       "ExamCreate": {
@@ -12857,6 +13055,91 @@
         "title": "ReadyData",
         "type": "object"
       },
+      "RecurrenceIn": {
+        "properties": {
+          "day_of_month": {
+            "anyOf": [
+              {
+                "maximum": 31.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Of Month"
+          },
+          "days_of_week": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Of Week"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "frequency": {
+            "default": 0,
+            "maximum": 4.0,
+            "minimum": 0.0,
+            "title": "Frequency",
+            "type": "integer"
+          },
+          "interval": {
+            "default": 1,
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Interval",
+            "type": "integer"
+          },
+          "month_of_year": {
+            "anyOf": [
+              {
+                "maximum": 12.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month Of Year"
+          },
+          "occurrences": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrences"
+          }
+        },
+        "title": "RecurrenceIn",
+        "type": "object"
+      },
       "RegistrationOut": {
         "properties": {
           "cancelled_at": {
@@ -12906,6 +13189,74 @@
         "title": "RegistrationOut",
         "type": "object"
       },
+      "RelationshipAliasUpdate": {
+        "description": "``PATCH /stargate/relationships/{id}/alias`` 的请求体。",
+        "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias"
+          }
+        },
+        "title": "RelationshipAliasUpdate",
+        "type": "object"
+      },
+      "RelationshipBlockRequest": {
+        "description": "``POST /stargate/relationships/{id}/block`` 的请求体。",
+        "properties": {
+          "degrade_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degrade To"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          }
+        },
+        "title": "RelationshipBlockRequest",
+        "type": "object"
+      },
+      "RelationshipMuteRequest": {
+        "description": "``POST /stargate/relationships/{id}/mute`` 的请求体。",
+        "properties": {
+          "expires_in": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          }
+        },
+        "title": "RelationshipMuteRequest",
+        "type": "object"
+      },
       "RelationshipState": {
         "description": "当前用户与目标用户的关系：我屏蔽对方 / 对方屏蔽我 / 我静音对方。",
         "properties": {
@@ -12928,6 +13279,20 @@
           "muted"
         ],
         "title": "RelationshipState",
+        "type": "object"
+      },
+      "RelationshipStatusUpdate": {
+        "description": "``PATCH /stargate/relationships/{id}`` 的请求体。",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RelationshipStatusUpdate",
         "type": "object"
       },
       "ReportInput": {
@@ -13576,98 +13941,634 @@
         "title": "SoftDependencies",
         "type": "object"
       },
-      "StarHopePullData_dict_": {
+      "StargateAccountOut": {
+        "description": "``SnAccount`` 的最小子集：desktop 解析要求必填字段均在。",
         "properties": {
-          "items": {
+          "activated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "automated_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Automated Id"
+          },
+          "badges": {
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
-            "title": "Items",
+            "title": "Badges",
             "type": "array"
           },
-          "server_time": {
-            "format": "date-time",
-            "title": "Server Time",
-            "type": "string"
-          },
-          "tombstones": {
-            "items": {
-              "$ref": "#/components/schemas/StarHopeTombstone"
-            },
-            "title": "Tombstones",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items",
-          "tombstones",
-          "server_time"
-        ],
-        "title": "StarHopePullData[dict]",
-        "type": "object"
-      },
-      "StarHopePushData": {
-        "properties": {
-          "deletes": {
-            "items": {
-              "$ref": "#/components/schemas/StarHopeTombstone"
-            },
-            "title": "Deletes",
-            "type": "array"
-          },
-          "upserts": {
+          "contacts": {
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
-            "title": "Upserts",
+            "title": "Contacts",
             "type": "array"
-          }
-        },
-        "required": [
-          "upserts",
-          "deletes"
-        ],
-        "title": "StarHopePushData",
-        "type": "object"
-      },
-      "StarHopePushResult": {
-        "properties": {
-          "server_time": {
+          },
+          "created_at": {
             "format": "date-time",
-            "title": "Server Time",
+            "title": "Created At",
             "type": "string"
           },
-          "synced": {
-            "title": "Synced",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "synced",
-          "server_time"
-        ],
-        "title": "StarHopePushResult",
-        "type": "object"
-      },
-      "StarHopeTombstone": {
-        "properties": {
           "deleted_at": {
-            "format": "date-time",
-            "title": "Deleted At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "is_superuser": {
+            "default": false,
+            "title": "Is Superuser",
+            "type": "boolean"
+          },
+          "language": {
+            "default": "zh_CN",
+            "title": "Language",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nick": {
+            "title": "Nick",
+            "type": "string"
+          },
+          "perk_subscription": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perk Subscription"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/StargateAccountProfileOut"
+          },
+          "region": {
+            "default": "",
+            "title": "Region",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
             "type": "string"
           }
         },
         "required": [
           "id",
-          "deleted_at"
+          "name",
+          "nick",
+          "profile",
+          "created_at",
+          "updated_at"
         ],
-        "title": "StarHopeTombstone",
+        "title": "StargateAccountOut",
+        "type": "object"
+      },
+      "StargateAccountProfileOut": {
+        "description": "``SnAccountProfile`` 的最小子集：必填字段齐全，其余取默认。",
+        "properties": {
+          "active_badge": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Badge"
+          },
+          "background": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background"
+          },
+          "bio": {
+            "default": "",
+            "title": "Bio",
+            "type": "string"
+          },
+          "birthday": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birthday"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "experience": {
+            "default": 0,
+            "title": "Experience",
+            "type": "integer"
+          },
+          "first_name": {
+            "default": "",
+            "title": "First Name",
+            "type": "string"
+          },
+          "gender": {
+            "default": "",
+            "title": "Gender",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_name": {
+            "default": "",
+            "title": "Last Name",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "level": {
+            "default": 0,
+            "title": "Level",
+            "type": "integer"
+          },
+          "leveling_progress": {
+            "default": 0,
+            "title": "Leveling Progress",
+            "type": "number"
+          },
+          "links": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "location": {
+            "default": "",
+            "title": "Location",
+            "type": "string"
+          },
+          "middle_name": {
+            "default": "",
+            "title": "Middle Name",
+            "type": "string"
+          },
+          "picture": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picture"
+          },
+          "pronouns": {
+            "default": "",
+            "title": "Pronouns",
+            "type": "string"
+          },
+          "social_credits": {
+            "default": 100,
+            "title": "Social Credits",
+            "type": "number"
+          },
+          "social_credits_level": {
+            "default": 0,
+            "title": "Social Credits Level",
+            "type": "integer"
+          },
+          "time_zone": {
+            "default": "",
+            "title": "Time Zone",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "username_color": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username Color"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "StargateAccountProfileOut",
+        "type": "object"
+      },
+      "StargateAccountStatusOut": {
+        "description": "``SnAccountStatus`` 兼容出参；``is_online`` 来自 ``/ws/events`` 长连接。",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StargateAccountOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "app_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Identifier"
+          },
+          "attitude": {
+            "default": 0,
+            "title": "Attitude",
+            "type": "integer"
+          },
+          "background": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background"
+          },
+          "cleared_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "idle_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Since"
+          },
+          "is_automated": {
+            "default": false,
+            "title": "Is Automated",
+            "type": "boolean"
+          },
+          "is_customized": {
+            "default": false,
+            "title": "Is Customized",
+            "type": "boolean"
+          },
+          "is_idle": {
+            "default": false,
+            "title": "Is Idle",
+            "type": "boolean"
+          },
+          "is_online": {
+            "default": false,
+            "title": "Is Online",
+            "type": "boolean"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
+          "online_devices": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Online Devices",
+            "type": "array"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "type": {
+            "default": 0,
+            "title": "Type",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "StargateAccountStatusOut",
+        "type": "object"
+      },
+      "StargateFriendOverviewOut": {
+        "description": "``SnFriendOverviewItem`` 兼容出参。",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/StargateAccountOut"
+          },
+          "activities": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Activities",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StargateAccountStatusOut"
+          }
+        },
+        "required": [
+          "account",
+          "status"
+        ],
+        "title": "StargateFriendOverviewOut",
+        "type": "object"
+      },
+      "StargateRelationshipOut": {
+        "description": "``SnRelationship`` 兼容出参。\n\n列表场景中 ``account`` / ``related`` 都填「对方」，``account_id`` /\n``related_id`` 也统一指对方——desktop 的 PATCH/DELETE 等动作都用这两个字段定位目标。\n请求列表则保留真实方向，供前端区分收到的请求与已发出的请求。",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StargateAccountOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "degrade_to_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degrade To Status"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "expired_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expired At"
+          },
+          "related": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StargateAccountOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "related_id": {
+            "title": "Related Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "account_id",
+          "related_id",
+          "status"
+        ],
+        "title": "StargateRelationshipOut",
         "type": "object"
       },
       "SubmitAnswersRequest": {
@@ -18529,6 +19430,1104 @@
         "summary": "Star Blog Series",
         "tags": [
           "blog"
+        ]
+      }
+    },
+    "/api/v1/calendar/countdown": {
+      "get": {
+        "operationId": "countdown_api_v1_calendar_countdown_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "userId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Userid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "take",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Take",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeNotableDays",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Includenotabledays",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Countdown",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/events": {
+      "get": {
+        "operationId": "list_events_api_v1_calendar_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "startTime",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Starttime"
+            }
+          },
+          {
+            "in": "query",
+            "name": "endTime",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Endtime"
+            }
+          },
+          {
+            "in": "query",
+            "name": "accountId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Accountid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "take",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Take",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "post": {
+        "operationId": "create_event_api_v1_calendar_events_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Event",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/events/{event_id}": {
+      "delete": {
+        "operationId": "delete_event_api_v1_calendar_events__event_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Event",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "get": {
+        "operationId": "get_event_api_v1_calendar_events__event_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Event",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "put": {
+        "operationId": "update_event_api_v1_calendar_events__event_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Event Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Event",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/merged": {
+      "get": {
+        "operationId": "merged_api_v1_calendar_merged_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 2100,
+              "minimum": 2000,
+              "title": "Year",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": true,
+            "schema": {
+              "maximum": 12,
+              "minimum": 1,
+              "title": "Month",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "userId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Userid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Merged",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/month": {
+      "get": {
+        "operationId": "month_api_v1_calendar_month_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 2100,
+              "minimum": 2000,
+              "title": "Year",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": true,
+            "schema": {
+              "maximum": 12,
+              "minimum": 1,
+              "title": "Month",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "userId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Userid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeNotableDays",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Includenotabledays",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Month",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/search": {
+      "get": {
+        "operationId": "search_api_v1_calendar_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "in": "query",
+            "name": "accountId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Accountid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "startTime",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Starttime"
+            }
+          },
+          {
+            "in": "query",
+            "name": "endTime",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Endtime"
+            }
+          },
+          {
+            "in": "query",
+            "name": "notableDayTag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Notabledaytag"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "take",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Take",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/subscriptions": {
+      "get": {
+        "operationId": "list_subscriptions_api_v1_calendar_subscriptions_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Subscriptions",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/subscriptions/subscribers": {
+      "get": {
+        "operationId": "list_subscribers_api_v1_calendar_subscriptions_subscribers_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Subscribers",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/subscriptions/{account_id}": {
+      "delete": {
+        "operationId": "unsubscribe_api_v1_calendar_subscriptions__account_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unsubscribe",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "post": {
+        "operationId": "subscribe_api_v1_calendar_subscriptions__account_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Subscribe",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/v1/calendar/tags": {
+      "get": {
+        "operationId": "used_tags_api_v1_calendar_tags_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Used Tags",
+        "tags": [
+          "calendar"
         ]
       }
     },
@@ -28141,33 +30140,18 @@
         ]
       }
     },
-    "/api/v1/starhope/{entity}": {
+    "/api/v1/stargate/friends/overview": {
       "get": {
-        "operationId": "pull_api_v1_starhope__entity__get",
+        "operationId": "friends_overview_api_v1_stargate_friends_overview_get",
         "parameters": [
           {
-            "in": "path",
-            "name": "entity",
-            "required": true,
-            "schema": {
-              "title": "Entity",
-              "type": "string"
-            }
-          },
-          {
             "in": "query",
-            "name": "since",
+            "name": "includeOffline",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
+              "default": false,
+              "title": "Includeoffline",
+              "type": "boolean"
             }
           },
           {
@@ -28192,7 +30176,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResp_StarHopePullData_dict__"
+                  "items": {
+                    "$ref": "#/components/schemas/StargateFriendOverviewOut"
+                  },
+                  "title": "Response Friends Overview Api V1 Stargate Friends Overview Get",
+                  "type": "array"
                 }
               }
             },
@@ -28209,22 +30197,213 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Pull",
+        "summary": "Friends Overview",
         "tags": [
-          "starhope"
+          "stargate-friends"
         ]
       }
     },
-    "/api/v1/starhope/{entity}/sync": {
-      "post": {
-        "operationId": "push_api_v1_starhope__entity__sync_post",
+    "/api/v1/stargate/relationships": {
+      "get": {
+        "operationId": "list_relationships_api_v1_stargate_relationships_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "take",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Take",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StargateRelationshipOut"
+                  },
+                  "title": "Response List Relationships Api V1 Stargate Relationships Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Relationships",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/requests": {
+      "get": {
+        "operationId": "list_friend_requests_api_v1_stargate_relationships_requests_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StargateRelationshipOut"
+                  },
+                  "title": "Response List Friend Requests Api V1 Stargate Relationships Requests Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Friend Requests",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}": {
+      "delete": {
+        "operationId": "delete_relationship_api_v1_stargate_relationships__target_id__delete",
         "parameters": [
           {
             "in": "path",
-            "name": "entity",
+            "name": "target_id",
             "required": true,
             "schema": {
-              "title": "Entity",
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Relationship Api V1 Stargate Relationships  Target Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Relationship",
+        "tags": [
+          "stargate-friends"
+        ]
+      },
+      "patch": {
+        "operationId": "update_relationship_api_v1_stargate_relationships__target_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
               "type": "string"
             }
           },
@@ -28249,7 +30428,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StarHopePushData"
+                "$ref": "#/components/schemas/RelationshipStatusUpdate"
               }
             }
           },
@@ -28260,7 +30439,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResp_StarHopePushResult_"
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Update Relationship Api V1 Stargate Relationships  Target Id  Patch",
+                  "type": "object"
                 }
               }
             },
@@ -28277,9 +30460,679 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Push",
+        "summary": "Update Relationship",
         "tags": [
-          "starhope"
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/alias": {
+      "patch": {
+        "operationId": "update_relationship_alias_api_v1_stargate_relationships__target_id__alias_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelationshipAliasUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Update Relationship Alias Api V1 Stargate Relationships  Target Id  Alias Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Relationship Alias",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/block": {
+      "post": {
+        "operationId": "block_user_api_v1_stargate_relationships__target_id__block_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RelationshipBlockRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Block User Api V1 Stargate Relationships  Target Id  Block Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Block User",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/close-friend": {
+      "delete": {
+        "operationId": "remove_close_friend_api_v1_stargate_relationships__target_id__close_friend_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Remove Close Friend Api V1 Stargate Relationships  Target Id  Close Friend Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Close Friend",
+        "tags": [
+          "stargate-friends"
+        ]
+      },
+      "post": {
+        "operationId": "add_close_friend_api_v1_stargate_relationships__target_id__close_friend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Add Close Friend Api V1 Stargate Relationships  Target Id  Close Friend Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Close Friend",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/friends": {
+      "delete": {
+        "operationId": "cancel_friend_request_api_v1_stargate_relationships__target_id__friends_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Cancel Friend Request Api V1 Stargate Relationships  Target Id  Friends Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Friend Request",
+        "tags": [
+          "stargate-friends"
+        ]
+      },
+      "post": {
+        "operationId": "send_friend_request_api_v1_stargate_relationships__target_id__friends_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Send Friend Request Api V1 Stargate Relationships  Target Id  Friends Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Friend Request",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/friends/accept": {
+      "post": {
+        "operationId": "accept_friend_request_api_v1_stargate_relationships__target_id__friends_accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Accept Friend Request Api V1 Stargate Relationships  Target Id  Friends Accept Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Friend Request",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/friends/decline": {
+      "post": {
+        "operationId": "decline_friend_request_api_v1_stargate_relationships__target_id__friends_decline_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Decline Friend Request Api V1 Stargate Relationships  Target Id  Friends Decline Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decline Friend Request",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/mute": {
+      "post": {
+        "operationId": "mute_user_api_v1_stargate_relationships__target_id__mute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RelationshipMuteRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Mute User Api V1 Stargate Relationships  Target Id  Mute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mute User",
+        "tags": [
+          "stargate-friends"
+        ]
+      }
+    },
+    "/api/v1/stargate/relationships/{target_id}/unmute": {
+      "post": {
+        "operationId": "unmute_user_api_v1_stargate_relationships__target_id__unmute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Unmute User Api V1 Stargate Relationships  Target Id  Unmute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unmute User",
+        "tags": [
+          "stargate-friends"
         ]
       }
     },
