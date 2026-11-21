@@ -586,16 +586,28 @@ async def _assert_relation_target(
 
 
 async def block_user(
-    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+    db: DbSession,
+    user_id: uuid.UUID,
+    target_id: uuid.UUID,
+    *,
+    expires_at: datetime.datetime | None = None,
+    degrade_to_status: int | None = None,
 ) -> None:
     """屏蔽用户（幂等）：落 block 行，并**双向**软删双方关注关系。
 
     - 任一方向的 block 都让对方互相不可见（语义双向、存储单向）；
     - block 不删除历史点赞/评论（与参考语义一致），只阻止新的互动；
-    - unblock 不自动恢复关注。
+    - unblock 不自动恢复关注；
+    - ``expires_at`` 非空表示临时屏蔽，到期按 ``degrade_to_status`` 降级。
     """
     await _assert_relation_target(db, user_id, target_id)
-    await UserRelationshipRepository(db).add_relation(user_id, target_id, "block")
+    await UserRelationshipRepository(db).add_relation(
+        user_id,
+        target_id,
+        "block",
+        expires_at=expires_at,
+        degrade_to_status=degrade_to_status,
+    )
 
     follows = UserFollowRepository(db)
     await follows.unfollow(user_id, target_id)
@@ -612,11 +624,17 @@ async def unblock_user(
 
 
 async def mute_user(
-    db: DbSession, user_id: uuid.UUID, target_id: uuid.UUID
+    db: DbSession,
+    user_id: uuid.UUID,
+    target_id: uuid.UUID,
+    *,
+    expires_at: datetime.datetime | None = None,
 ) -> None:
-    """静音用户（幂等，单向）；不限制对方互动。"""
+    """静音用户（幂等，单向）；不限制对方互动；``expires_at`` 到期自动失效。"""
     await _assert_relation_target(db, user_id, target_id)
-    await UserRelationshipRepository(db).add_relation(user_id, target_id, "mute")
+    await UserRelationshipRepository(db).add_relation(
+        user_id, target_id, "mute", expires_at=expires_at
+    )
 
 
 async def unmute_user(

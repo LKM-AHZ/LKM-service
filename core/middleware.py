@@ -24,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 # 允许的请求方法/暴露头：方法取 REST 全集（含 OPTIONS 预检）；暴露 X-Request-ID 供前端
 # 关联结构化访问日志（见 app.main 的 _log_requests），X-API-Version 供前端/日志确认
-# GraphQL 多端点版本化实际命中的版本。
+# GraphQL 多端点版本化实际命中的版本，X-Total 供裸列表端点（日历）在浏览器里读到分页总数。
 _ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
-_EXPOSE_HEADERS = ["X-Request-ID", "X-API-Version"]
+_EXPOSE_HEADERS = ["X-Request-ID", "X-API-Version", "X-Total"]
 _MAX_AGE_S = 3600
 
 _HSTS_VALUE = "max-age=31536000; includeSubDomains"

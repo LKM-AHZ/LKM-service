@@ -23,6 +23,7 @@ from core.plugins.manifest import ManifestError
 _LEGACY_MODULES = (
     "admin",
     "blog",
+    "calendar",
     "columns",
     "comment",
     "content",
@@ -42,6 +43,7 @@ _LEGACY_MODULES = (
 
 _LEGACY_ERROR_MODULES = (
     "app.modules.blog.errors",
+    "app.modules.calendar.errors",
     "app.modules.columns.errors",
     "app.modules.comment.errors",
     "app.modules.content.errors",
@@ -63,6 +65,7 @@ _LEGACY_MODEL_MODULES = (
     "app.modules.admin.models",
     # 步骤 9 切片 3：博客模型迁出 content（表名不变，无需迁移）
     "app.modules.blog.models",
+    "app.modules.calendar.models",
     # 步骤 9 切片 2：评论模型迁出 content（表名不变，无需迁移）
     "app.modules.columns.models",
     "app.modules.comment.models",

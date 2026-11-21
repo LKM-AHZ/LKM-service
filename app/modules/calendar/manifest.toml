@@ -1,0 +1,8 @@
+# calendar 模块的装配清单：注册项的唯一来源（读取方 app/modules/spec.py）。
+name = "calendar"
+errors = [
+    "app.modules.calendar.errors",
+]
+models = [
+    "app.modules.calendar.models",
+]

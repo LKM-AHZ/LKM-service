@@ -79,6 +79,7 @@ NS_CONTENT = Namespace(17, "content")
 NS_INTERACTION = Namespace(18, "interaction")
 NS_NOTIFICATION = Namespace(19, "notification")
 NS_SEARCH = Namespace(20, "search")
+NS_CALENDAR = Namespace(21, "calendar")
 
 
 class CommonErr(ErrCode):

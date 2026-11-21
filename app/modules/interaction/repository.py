@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.modules.interaction.models import (
     ContentSubscription,
+    FriendRelationship,
     InteractionFavorite,
     InteractionViewLog,
     PostWatch,
@@ -306,13 +307,44 @@ class UserRelationshipRepository(AsyncRepository[UserRelationship]):
     model = UserRelationship
 
     async def add_relation(
-        self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str
+        self,
+        user_id: uuid.UUID,
+        target_id: uuid.UUID,
+        kind: str,
+        *,
+        expires_at: datetime.datetime | None = None,
+        degrade_to_status: int | None = None,
     ) -> None:
-        """幂等落一行（并发撞唯一约束时静默忽略）。"""
+        """幂等落一行（重复时刷新过期/降级字段，空值即恢复永久）。"""
         await self.pg_upsert(
-            {"user_id": user_id, "target_id": target_id, "kind": kind},
+            {
+                "user_id": user_id,
+                "target_id": target_id,
+                "kind": kind,
+                "expires_at": expires_at,
+                "degrade_to_status": degrade_to_status,
+            },
             constraint="uq_user_relationships_kind",
-            do_nothing=True,
+            update_columns=["expires_at", "degrade_to_status"],
+        )
+
+    async def get_relation(
+        self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str
+    ) -> UserRelationship | None:
+        """该方向的单行（含过期字段）。"""
+        return await self.get_one(
+            UserRelationship.user_id == user_id,
+            UserRelationship.target_id == target_id,
+            UserRelationship.kind == kind,
+        )
+
+    async def list_relations(
+        self, user_id: uuid.UUID, kind: str
+    ) -> list[UserRelationship]:
+        """``user_id`` 主动建立的单向关系行。"""
+        return await self.get_many(
+            UserRelationship.user_id == user_id,
+            UserRelationship.kind == kind,
         )
 
     async def remove(self, user_id: uuid.UUID, target_id: uuid.UUID, kind: str) -> int:
@@ -361,6 +393,18 @@ class UserRelationshipRepository(AsyncRepository[UserRelationship]):
         )
         return list(out.scalars().all())
 
+    async def list_block_rows_touching(
+        self, user_id: uuid.UUID
+    ) -> list[UserRelationship]:
+        """与 ``user_id`` 相关的 block 行（任一方向，含过期信息）。"""
+        return await self.get_many(
+            UserRelationship.kind == "block",
+            or_(
+                UserRelationship.user_id == user_id,
+                UserRelationship.target_id == user_id,
+            ),
+        )
+
     async def is_blocked_either_direction(
         self, user_id: uuid.UUID, other_id: uuid.UUID
     ) -> bool:
@@ -374,6 +418,89 @@ class UserRelationshipRepository(AsyncRepository[UserRelationship]):
             ),
         )
         return row is not None
+
+
+class FriendRelationshipRepository(AsyncRepository[FriendRelationship]):
+    """好友关系/请求（一行一个发起方向）。"""
+
+    model = FriendRelationship
+
+    async def get_pair(
+        self, account_id: uuid.UUID, related_id: uuid.UUID
+    ) -> FriendRelationship | None:
+        """指定方向的行（发起人 → 目标）。"""
+        return await self.get_one(
+            FriendRelationship.account_id == account_id,
+            FriendRelationship.related_id == related_id,
+        )
+
+    async def get_between(
+        self, user_id: uuid.UUID, other_id: uuid.UUID
+    ) -> FriendRelationship | None:
+        """两用户之间的好友行（不区分发起方向；不存在返回 None）。"""
+        return await self.get_one(
+            or_(
+                (FriendRelationship.account_id == user_id)
+                & (FriendRelationship.related_id == other_id),
+                (FriendRelationship.account_id == other_id)
+                & (FriendRelationship.related_id == user_id),
+            )
+        )
+
+    async def list_for_user(
+        self, user_id: uuid.UUID, *, statuses: tuple[int, ...] | None = None
+    ) -> list[FriendRelationship]:
+        """与 ``user_id`` 相关的好友行（任一方向），可按状态过滤。"""
+        stmt = select(FriendRelationship).where(
+            or_(
+                FriendRelationship.account_id == user_id,
+                FriendRelationship.related_id == user_id,
+            )
+        )
+        if statuses is not None:
+            stmt = stmt.where(FriendRelationship.status.in_(statuses))
+        rows = await self.db.execute(stmt)
+        return list(rows.scalars().all())
+
+    async def list_pending(
+        self, user_id: uuid.UUID, *, now: datetime.datetime | None = None
+    ) -> list[FriendRelationship]:
+        """与 ``user_id`` 相关的未过期待接受请求（收件 + 已发出）。"""
+        now = now or now_iso()
+        stmt = select(FriendRelationship).where(
+            FriendRelationship.status == 0,
+            or_(
+                FriendRelationship.account_id == user_id,
+                FriendRelationship.related_id == user_id,
+            ),
+            or_(
+                FriendRelationship.expires_at.is_(None),
+                FriendRelationship.expires_at > now,
+            ),
+        )
+        rows = await self.db.execute(stmt)
+        return list(rows.scalars().all())
+
+    async def delete_between(self, user_id: uuid.UUID, other_id: uuid.UUID) -> int:
+        """删除两用户之间的好友行（任一方向）。"""
+        return await self.hard_delete_where(
+            or_(
+                (FriendRelationship.account_id == user_id)
+                & (FriendRelationship.related_id == other_id),
+                (FriendRelationship.account_id == other_id)
+                & (FriendRelationship.related_id == user_id),
+            )
+        )
+
+    async def delete_pending(
+        self, account_id: uuid.UUID, related_id: uuid.UUID
+    ) -> int:
+        """删除指定方向的待接受请求（幂等）。"""
+        return await self.hard_delete_where(
+            FriendRelationship.account_id == account_id,
+            FriendRelationship.related_id == related_id,
+            FriendRelationship.status == 0,
+        )
 
 
 TARGET_TYPES: tuple[str, ...] = ("board", "tag", "column")

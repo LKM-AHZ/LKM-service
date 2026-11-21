@@ -141,6 +141,8 @@ async def ws_events(websocket: WebSocket) -> None:
         # 会无限挂起占住连接。这里用 wait_for 加窗，超时即发 ping 探活——对端已死时
         # send 抛错进入外层 except 清理，僵尸连接不再长期占内存。
         while True:
+            # presence 续期：即使客户端静默，也按心跳节拍每 ≤30s 延长在线键。
+            await manager.touch_presence(user_id)
             try:
                 raw = await asyncio.wait_for(
                     websocket.receive_text(), timeout=_HEARTBEAT_S

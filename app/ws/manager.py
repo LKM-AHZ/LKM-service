@@ -7,6 +7,10 @@ Redis 订阅用常驻后台 task（幂等懒启动，首次 WS 连接时拉起�
 M6.7 泛化：连接表从「按 user_id」扩为「按 user_id → channel」，一次连接可订阅多个通道
 （端点侧按白名单校验，见 router.py）。多 worker/多副本下每个进程各持一份连接表、各自
 订阅同一模式，故扇出正确性完全依赖 Redis 广播（不共享进程内状态）。
+
+**presence**：每个连接在 Redis 里对 ``lkm:{env}:presence:ws|{user_id}`` 计数（INCR/EXPIRE，
+WS 心跳每 ≤30s 续期），断开 DECR；好友概览据此批量 `MGET` 判定在线。Redis 不可用时退化为
+本进程连接表，多副本下只反映本进程（fail-open，与 Redis 广播的降级口径一致）。
 """
 
 import asyncio
@@ -18,6 +22,7 @@ from contextlib import suppress
 from typing import Any, Protocol
 
 from app.ws.broker import CHANNEL_UPLOAD, parse_channel
+from core.cache import make_key
 from core.redis import get_redis
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,14 @@ logger = logging.getLogger(__name__)
 # 单连接发送上限：慢/死客户端（TCP 背压写满发送缓冲）会让 send_text 无限等，而本进程
 # 所有用户共用同一条订阅 task 串行扇出 → 一个卡住的连接会拖住其他所有人的消息
 _SEND_TIMEOUT_S = 5.0
+
+#: presence（在线状态）TTL：WS 循环每 ≤30s 续期一次，留 3 倍余量容忍抖动。
+_PRESENCE_TTL_S = 90
+
+
+def _presence_key(user_id: uuid.UUID) -> str:
+    """在线计数键：多 worker 共享的全局连接数；键过期即视为离线。"""
+    return make_key("presence", "ws", user_id)
 
 
 def _log_sub_task_exit(task: asyncio.Task[Any]) -> None:
@@ -63,21 +76,32 @@ class ConnectionManager:
         channels: Iterable[str] = (CHANNEL_UPLOAD,),
     ) -> None:
         async with self._lock:
+            already = any(
+                ws in conns for conns in self._connections.get(user_id, {}).values()
+            )
             for channel in channels:
                 self._connections[user_id][channel].add(ws)
+        # 连接计数在锁外写 Redis：一个 WS 连接只 INCR 一次（重复 register 不重复计数）。
+        if not already:
+            await self._presence_incr(user_id)
 
     async def unregister(self, user_id: uuid.UUID, ws: Dispatcheable) -> None:
         """摘除连接的全部通道订阅（连接对象不记通道，故遍历）——幂等。"""
+        removed = False
         async with self._lock:
             chans = self._connections.get(user_id)
             if not chans:
                 return
             for channel in list(chans):
-                chans[channel].discard(ws)
+                if ws in chans[channel]:
+                    removed = True
+                    chans[channel].discard(ws)
                 if not chans[channel]:
                     chans.pop(channel, None)
             if not chans:
                 self._connections.pop(user_id, None)
+        if removed:
+            await self._presence_decr(user_id)
 
     async def dispatch(self, user_id: uuid.UUID, channel: str, message: str) -> None:
         """向某用户某通道的所有连接推送同一文本消息。失效连接尽力移除，不阻塞整体。"""
@@ -96,6 +120,74 @@ class ConnectionManager:
                     exc_info=True,
                 )
                 await self.unregister(user_id, ws)
+
+    # ---- presence（在线状态，多 worker 经 Redis 计数共享）----
+
+    def has_local_connection(self, user_id: uuid.UUID) -> bool:
+        """本进程是否持有该用户的活连接（Redis 不可用时的回退判据）。"""
+        return bool(self._connections.get(user_id))
+
+    async def _presence_incr(self, user_id: uuid.UUID) -> None:
+        redis = await get_redis(_presence_key(user_id))
+        if redis is None:
+            return
+        key = _presence_key(user_id)
+        try:
+            pipe = redis.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, _PRESENCE_TTL_S)
+            await pipe.execute()
+        except Exception:
+            logger.debug("presence incr failed user=%s", user_id, exc_info=True)
+
+    async def _presence_decr(self, user_id: uuid.UUID) -> None:
+        redis = await get_redis(_presence_key(user_id))
+        if redis is None:
+            return
+        key = _presence_key(user_id)
+        try:
+            pipe = redis.pipeline()
+            pipe.decr(key)
+            results = await pipe.execute()
+            if int(results[0]) <= 0:
+                await redis.delete(key)
+        except Exception:
+            logger.debug("presence decr failed user=%s", user_id, exc_info=True)
+
+    async def touch_presence(self, user_id: uuid.UUID) -> None:
+        """WS 心跳循环每轮续期；键已丢（INCR 曾失败）则按本连接重建。"""
+        redis = await get_redis(_presence_key(user_id))
+        if redis is None:
+            return
+        key = _presence_key(user_id)
+        try:
+            if not await redis.expire(key, _PRESENCE_TTL_S):
+                await redis.set(key, 1, ex=_PRESENCE_TTL_S)
+        except Exception:
+            logger.debug("presence touch failed user=%s", user_id, exc_info=True)
+
+    async def are_online(self, user_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
+        """批量在线判定：Redis 计数与进程内连接取并集（任一命中即在线）。"""
+        ids = list(dict.fromkeys(user_ids))
+        if not ids:
+            return set()
+        online = {user_id for user_id in ids if self.has_local_connection(user_id)}
+
+        redis = await get_redis(_presence_key(ids[0]))
+        if redis is None:
+            return online
+        try:
+            values = await redis.mget([_presence_key(user_id) for user_id in ids])
+        except Exception:
+            logger.debug("presence mget failed", exc_info=True)
+            return online
+        for user_id, value in zip(ids, values, strict=False):
+            try:
+                if value is not None and int(value) > 0:
+                    online.add(user_id)
+            except (TypeError, ValueError):
+                continue
+        return online
 
     # ---- Redis 订阅驱动（生命周期）----
 

@@ -23,7 +23,14 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, Uuid
+from sqlalchemy import (
+    ForeignKey,
+    Index,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.db.base import (
@@ -128,8 +135,54 @@ class UserRelationship(UUIDPrimaryKeyMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     target_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    # 临时 block/mute：到期后按 degrade_to_status 降级（block → mute），空 = 永久。
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    degrade_to_status: Mapped[int | None] = mapped_column(
+        SmallInteger, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         UTCDateTime, nullable=False, default=now_iso
+    )
+
+
+class FriendRelationship(UUIDPrimaryKeyMixin, Base):
+    """好友关系/请求：一行一个方向（发起人 → 目标）。
+
+    - ``status``：0 待接受、100 好友、200 亲密好友；block/mute 由
+      :class:`UserRelationship` 的独立行走同一套状态阶梯，列表读时合并；
+    - 待接受请求的 ``expires_at`` 到期后不再出现在请求列表；接受时清空；
+    - 接受后保留发起方向，两端列表都由服务层以「对方」身份呈现。
+    """
+
+    __tablename__: str = "friend_relationships"
+    __table_args__: tuple[Any, ...] = (
+        UniqueConstraint(
+            "account_id", "related_id", name="uq_friend_relationships_pair"
+        ),
+        Index(
+            "ix_friend_relationships_account_status", "account_id", "status"
+        ),
+        Index(
+            "ix_friend_relationships_related_status", "related_id", "status"
+        ),
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    related_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    status: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0
+    )
+    alias: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        UTCDateTime, nullable=False, default=now_iso, onupdate=now_iso
     )
 
 
