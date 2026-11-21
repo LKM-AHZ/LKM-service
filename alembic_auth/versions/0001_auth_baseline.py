@@ -12,6 +12,10 @@ Revises:
 ``0003_pending_apply_reason``（``pending_registrations.apply_reason``）同样是「只补既存库」
 的一次性 ``ALTER ... IF NOT EXISTS``：新库的列由下面的 ``create_all`` 直接带出，故压平时
 一并删除，``versions/`` 只留本基线。
+
+2026-11-21 再次压平：``0002_auth_challenges``、``0003_auth_oauth_desktop``、
+``0004_tinode_links`` 三张表/列已由 ``auth_metadata`` 的 ``create_all`` 带出，增量文件
+一并删除；新库直接 ``upgrade head``，旧库按 README 先 ``stamp 0001_auth_baseline``。
 """
 
 from collections.abc import Sequence
